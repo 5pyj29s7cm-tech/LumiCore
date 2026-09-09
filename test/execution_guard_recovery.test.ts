@@ -525,6 +525,31 @@ describe('execution guard recovery', () => {
     expect(String(tasklist.text).length).toBeLessThan(300);
   });
 
+  it('never invents a successful directory read from file metadata or a failed listing', () => {
+    const metadata = JSON.stringify({ name: 'LC-TASK-ORDERS.csv', isDirectory: false, size: 58 });
+    for (const toolRecords of [
+      [],
+      [record({ name: 'desktop_path_info', result: metadata })],
+      [record({ name: 'list_directory', error: 'outside allowed paths', result: '' }), record({ name: 'desktop_path_info', result: metadata })],
+    ]) {
+      const delivery = sanitizeExecutionResponseForDelivery({ text: metadata, finalized: true, blocked: false }, { task: '读取订单并计算总额', toolRecords });
+      expect(delivery.text).not.toMatch(/已读取目录|directory was read|识别到\s*1\s*项/iu);
+    }
+  });
+
+  it('does not turn unconfirmed verification results into a nonexistent approval request', () => {
+    for (const reason of ['The current chat content requires confirmation.', 'waiting_confirmation']) {
+      const delivery = sanitizeExecutionResponseForDelivery({
+        text: '这一步还没有拿到可验证的执行结果，不能说已完成。',
+        finalized: true,
+        blocked: true,
+        reason,
+      }, { task: '生成订单汇总技能' });
+      expect(delivery.blocked).toBe(true);
+      expect(delivery.reason).not.toBe('waiting_confirmation');
+    }
+  });
+
   it('preserves only the exact safe pending-confirmation envelope with path fields', () => {
     clearAllPendingConfirmationsForTests();
     try {

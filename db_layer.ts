@@ -1,4 +1,5 @@
 import sqlite3 from 'sqlite3';
+import { migrateSchema, PERFORMANCE_INDEX_SQL } from './server/db/migrations';
 import fs from 'fs';
 import path from 'path';
 import { createHash } from 'node:crypto';
@@ -77,85 +78,7 @@ function prepareDatabaseRuntime(): string {
 let db: sqlite3.Database | null = null;
 let startupQuickCheckPassed = false;
 
-const PERFORMANCE_INDEX_SQL = [
-  `CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`,
-  `CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`,
-  `CREATE INDEX IF NOT EXISTS idx_memories_user_type_tier ON memories(userId, type, tier)`,
-  `CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(userId, agentId)`,
-  `CREATE INDEX IF NOT EXISTS idx_memory_avatars_user_status ON memory_avatars(userId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_memories_user_parent ON memories(userId, parentId)`,
-  `CREATE INDEX IF NOT EXISTS idx_conversations_user_status ON conversations(userId, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_token_usage_user_ts ON token_usage(userId, timestamp)`,
-  `CREATE INDEX IF NOT EXISTS idx_memories_user_domain ON memories(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_memories_org ON memories(orgId, userId)`,
-  `CREATE INDEX IF NOT EXISTS idx_interactions_user_domain ON interactions(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_interactions_org ON interactions(orgId, userId)`,
-  `CREATE INDEX IF NOT EXISTS idx_interactions_request ON interactions(requestId)`,
-  `CREATE INDEX IF NOT EXISTS idx_interactions_voice_chain ON interactions(contextChainId, captureSessionId, timestamp)`,
-  `CREATE INDEX IF NOT EXISTS idx_conversations_user_domain ON conversations(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_conversations_org ON conversations(orgId, userId)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_tasks_conversation_updated ON conversation_action_tasks(conversationId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_tasks_user_status ON conversation_action_tasks(userId, status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_turns_request_identity ON conversation_action_turns(conversationId, userId, requestId)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_turns_conversation_status ON conversation_action_turns(conversationId, userId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_turns_lease_expiry ON conversation_action_turns(status, leaseExpiresAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_turns_task_updated ON conversation_action_turns(taskId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_action_receipts_task_created ON conversation_action_receipts(taskId, createdAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_idempotency ON conversation_action_receipts(taskId, idempotencyKey, toolName, outcome)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_user_completed ON model_routing_receipts(userId, completedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_conversation_completed ON model_routing_receipts(conversationId, completedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_request ON model_routing_receipts(requestId)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_selected ON model_routing_receipts(selectedProvider, selectedModel, completedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_native_session ON model_routing_receipts(nativeDeviceId, executionSessionId)`,
-  `CREATE INDEX IF NOT EXISTS idx_model_routing_voice_chain ON model_routing_receipts(contextChainId, captureSessionId, completedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_chat_execution_receipts_expiry ON chat_execution_terminal_receipts(expiresAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_read_only_tool_patterns_scope ON read_only_tool_patterns(userId, domain, orgId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_scope_status ON command_center_plans(userId, domain, orgId, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_command_center_plans_due ON command_center_plans(status, nextRunAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_user_status ON autonomous_tasks(userId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_autonomous_tasks_lease ON autonomous_tasks(status, leaseExpiresAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_commit_journal_task ON external_commit_journal(taskId, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_user_status ON external_ai_history_sources(userId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_sources_scope ON external_ai_history_sources(userId, domain, orgId, sourceKind)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_jobs_source_status ON external_ai_history_sync_jobs(sourceId, status, updatedAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_conversations_identity ON external_ai_history_conversations(sourceId, externalConversationId)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_conversations_user_updated ON external_ai_history_conversations(userId, updatedAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_messages_identity ON external_ai_history_messages(sourceId, externalMessageId)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_messages_conversation_time ON external_ai_history_messages(conversationId, messageAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_external_ai_history_attachments_identity ON external_ai_history_attachments(sourceId, externalAttachmentId)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_ai_history_attachments_message ON external_ai_history_attachments(messageId, updatedAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_extension_revisions_identity ON extension_revisions(extensionId, version)`,
-  `CREATE INDEX IF NOT EXISTS idx_extension_revisions_active ON extension_revisions(extensionId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_extension_publishers_status ON extension_publishers(status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_extension_receipts_extension_created ON extension_activation_receipts(extensionId, createdAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_capability_packages_owner_status ON external_capability_packages(ownerUserId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_capability_packages_identity ON external_capability_packages(ownerUserId, capabilityId, version)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_capability_receipts_package_created ON external_capability_receipts(packageRowId, createdAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_external_capability_receipts_owner_action ON external_capability_receipts(ownerUserId, capabilityId, actionId, createdAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_user_domain ON canvas_sessions(userId, domain)`,
-  `CREATE INDEX IF NOT EXISTS idx_canvas_sessions_org ON canvas_sessions(orgId, userId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_status ON org_memberships(userId, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_memberships_org_status ON org_memberships(orgId, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_positions_org_status ON org_positions(orgId, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_rules_org_enabled ON org_work_routing_rules(orgId, enabled, priority)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_work_items_idempotency ON org_work_items(orgId, idempotencyKey)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_items_org_status ON org_work_items(orgId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_items_task ON org_work_items(orgId, taskId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_approvals_org_status ON org_work_approvals(orgId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_approvals_item ON org_work_approvals(orgId, workItemId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_work_handoffs_item ON org_work_handoffs(orgId, workItemId, updatedAt)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_resource_policy_identity ON org_resource_policies(orgId, resourceType, resourceId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_resource_policies_scope ON org_resource_policies(orgId, resourceType, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_resource_grants_resource ON org_resource_grants(orgId, resourceType, resourceId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_resource_grants_subject ON org_resource_grants(orgId, subjectType, subjectId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_credential_references_org_status ON org_credential_references(orgId, status)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_org_devices_branch ON org_devices(branchId)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_devices_org_status ON org_devices(orgId, status, updatedAt)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_kb_articles_org_category ON org_kb_articles(orgId, category, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_org_kb_embeddings_article ON org_kb_embeddings(articleId)`,
-  `CREATE INDEX IF NOT EXISTS idx_notifications_user_ts ON notifications(userId, timestamp)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_log_org_ts ON audit_log(orgId, timestamp)`,
-];
+
 let memoryDB: any = null;
 const SYSTEM_FLAGS_SETTING = '__lumi_system_flags';
 const SYSTEM_SNAPSHOTS_SETTING = '__lumi_system_snapshots';
@@ -177,7 +100,33 @@ type LegacySummaryRepairWriter = (
   complete: (error?: Error | null) => void,
 ) => void;
 
-function parseStoredToolCalls(value: unknown): any[] | undefined {
+function parseScheduledDeliveryMetadata(value: unknown): Record<string, unknown> | undefined {
+  let parsed = value;
+  try { if (typeof parsed === 'string') parsed = JSON.parse(parsed); } catch { return undefined; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const metadata = parsed as Record<string, any>;
+  const safeId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 512;
+  if (!safeId(metadata.executionId) || !safeId(metadata.scheduledTaskId)) return undefined;
+  const result: Record<string, unknown> = { executionId: metadata.executionId, scheduledTaskId: metadata.scheduledTaskId };
+  if (metadata.reminderIds !== undefined) {
+    if (!Array.isArray(metadata.reminderIds) || !metadata.reminderIds.length || metadata.reminderIds.length > 10
+      || !metadata.reminderIds.every(safeId) || new Set(metadata.reminderIds).size !== metadata.reminderIds.length) return undefined;
+    result.reminderIds = metadata.reminderIds;
+  }
+  if (metadata.proactiveVoiceDispatch !== undefined) {
+    const dispatch = metadata.proactiveVoiceDispatch;
+    if (!dispatch || !safeId(dispatch.reservation) || typeof dispatch.reservedAt !== 'string'
+      || !Number.isFinite(Date.parse(dispatch.reservedAt))) return undefined;
+    result.proactiveVoiceDispatch = { reservation: dispatch.reservation, reservedAt: dispatch.reservedAt };
+  }
+  return result;
+}
+
+function parseStoredToolCalls(value: unknown, mode?: string): any[] | string | undefined {
+  if (mode === 'proactive') {
+    const metadata = parseScheduledDeliveryMetadata(value);
+    if (metadata) return JSON.stringify(metadata);
+  }
   let current = value;
   for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
     try {
@@ -189,7 +138,11 @@ function parseStoredToolCalls(value: unknown): any[] | undefined {
   return Array.isArray(current) ? current : undefined;
 }
 
-function serializeStoredToolCalls(value: unknown): string {
+function serializeStoredToolCalls(value: unknown, mode?: string): string {
+  if (mode === 'proactive') {
+    const metadata = parseScheduledDeliveryMetadata(value);
+    if (metadata) return JSON.stringify(metadata);
+  }
   const records = sanitizeToolRecordsForPersistence(value);
   return records?.length ? JSON.stringify(records) : '';
 }
@@ -475,7 +428,7 @@ export function initDatabase(): Promise<void> {
         try {
           await requireSqliteQuickCheck('before');
           await createTables();
-          await migrateSchema();
+          await migrateSchema(db!);
           await migrateRetiredLocalAgentTables();
           await requireSqliteQuickCheck('after');
           await loadMemoryDB();
@@ -495,17 +448,6 @@ export function initDatabase(): Promise<void> {
     throw error;
   });
   return initPromise;
-}
-
-function onAlter(err: Error | null) {
-  if (
-    err &&
-    !err.message.includes('duplicate column name') &&
-    !err.message.includes('already exists') &&
-    !err.message.includes('no such table')
-  ) {
-    console.warn('[DB] Schema migration error:', err.message);
-  }
 }
 
 /**
@@ -610,172 +552,6 @@ async function migrateRetiredLocalAgentTables(): Promise<void> {
   }
 }
 
-// Add missing columns to existing tables (safe on old DB)
-function migrateSchema(): Promise<void> {
-  return new Promise((resolve) => {
-    db!.serialize(() => {
-    // Add 'phone' column to users if it doesn't exist (old DB lacks it)
-    db!.run("ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''", onAlter);
-    // Add 'role' column to interactions if it doesn't exist
-    db!.run("ALTER TABLE interactions ADD COLUMN role TEXT DEFAULT ''", onAlter);
-    // Add 'personality' column to interactions if it doesn't exist
-    db!.run("ALTER TABLE interactions ADD COLUMN personality TEXT DEFAULT ''", onAlter);
-    // Add 'mode' column to interactions if it doesn't exist
-    db!.run("ALTER TABLE interactions ADD COLUMN mode TEXT DEFAULT ''", onAlter);
-    // Add 'toolCalls' column to interactions if it doesn't exist
-    db!.run("ALTER TABLE interactions ADD COLUMN toolCalls TEXT DEFAULT ''", onAlter);
-    // Add 'conversationId' column to interactions if it doesn't exist
-    db!.run("ALTER TABLE interactions ADD COLUMN conversationId TEXT DEFAULT ''", onAlter);
-    // Keep the stable Lumi identity key used by conversations and knowledge.
-    db!.run("ALTER TABLE memories ADD COLUMN agentId TEXT DEFAULT ''", onAlter);
-    // Add location to memories for spatial context
-    db!.run("ALTER TABLE memories ADD COLUMN location TEXT DEFAULT ''", onAlter);
-    // Org: domain + orgId for data classification
-    db!.run("ALTER TABLE memories ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN source TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN channel TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN externalMessageId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN routeSequence INTEGER", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN receivedAt TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN requestId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN nativeDeviceId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN executionSessionId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN nativeClientIdentitySha256 TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN audioInputKind TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN syntheticAudio INTEGER", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN captureSessionId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN sttReceiptId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN contextChainId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN previousRequestId TEXT DEFAULT ''", onAlter);
-    // Add domain + orgId to conversations for personal/work isolation
-    db!.run("ALTER TABLE conversations ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
-    db!.run("ALTER TABLE conversations ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
-    // Durable auto-summary cadence and bounded summary history. -1 marks rows
-    // created before this migration so the manager can infer a safe baseline.
-    db!.run("ALTER TABLE conversations ADD COLUMN summaryChain TEXT DEFAULT '[]'", onAlter);
-    db!.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
-    db!.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
-    db!.run("ALTER TABLE conversation_action_tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'", onAlter);
-    // Preserve the immutable tool-selection provenance across backend restarts.
-    // Never reconstruct this binding from requestId: one request may own both
-    // a preflight route and the actual tool-planning route.
-    db!.run("ALTER TABLE conversation_action_receipts ADD COLUMN modelRoutingReceiptId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE conversation_action_receipts ADD COLUMN executionOrigin TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN conversationId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN requestId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN interactionId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN source TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN nativeDeviceId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN executionSessionId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN nativeClientIdentitySha256 TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN audioInputKind TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN syntheticAudio INTEGER", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN captureSessionId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN sttReceiptId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN contextChainId TEXT NOT NULL DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE model_routing_receipts ADD COLUMN previousRequestId TEXT NOT NULL DEFAULT ''", onAlter);
-    // Canvas sessions: persisted workbench state with personal/work isolation
-    db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
-      id TEXT PRIMARY KEY,
-      userId TEXT NOT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      cards TEXT NOT NULL DEFAULT '[]',
-      edges TEXT NOT NULL DEFAULT '[]',
-      taskText TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      domain TEXT DEFAULT 'personal',
-      orgId TEXT DEFAULT '',
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL
-    )`, onAlter);
-    db!.run("ALTER TABLE canvas_sessions ADD COLUMN edges TEXT NOT NULL DEFAULT '[]'", onAlter);
-    db!.run("ALTER TABLE canvas_sessions ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
-    db!.run("ALTER TABLE canvas_sessions ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE org_kb_articles ADD COLUMN ingestionManifest TEXT NOT NULL DEFAULT '{}'", onAlter);
-    // Add memories table if it doesn't exist
-    db!.run(`CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      userId TEXT NOT NULL,
-      type TEXT NOT NULL,
-      content TEXT NOT NULL,
-      keywords TEXT NOT NULL DEFAULT '[]',
-      confidence REAL NOT NULL DEFAULT 0.5,
-      sourceInteractionId TEXT NOT NULL DEFAULT '',
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL,
-      lastRetrievedAt TEXT,
-      retrieveCount INTEGER NOT NULL DEFAULT 0,
-      tier TEXT NOT NULL DEFAULT 'episodic',
-      perspective TEXT NOT NULL DEFAULT 'owner_trait',
-      importance REAL NOT NULL DEFAULT 0.3,
-      parentId TEXT,
-      agentId TEXT DEFAULT '',
-      nodeType TEXT NOT NULL DEFAULT 'leaf',
-      embedding TEXT,
-      embeddingNamespace TEXT,
-      embeddingContentHash TEXT,
-      domain TEXT DEFAULT 'personal',
-      orgId TEXT DEFAULT ''
-    )`, onAlter);
-    // Memory Avatars are a personal, single-persona feature. They are kept
-    // outside the retired local Agent/team tables so removing team
-    // orchestration cannot remove a user's private memory companion.
-    db!.run(`CREATE TABLE IF NOT EXISTS memory_avatars (
-      id TEXT PRIMARY KEY,
-      userId TEXT NOT NULL,
-      name TEXT NOT NULL,
-      relationshipType TEXT NOT NULL DEFAULT 'close_friend',
-      status TEXT NOT NULL DEFAULT 'active',
-      payload TEXT NOT NULL DEFAULT '{}',
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL
-    )`, onAlter);
-    // Migrate: add new columns to existing memories table
-    db!.run("ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'episodic'", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN perspective TEXT NOT NULL DEFAULT 'owner_trait'", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.3", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN parentId TEXT", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN nodeType TEXT NOT NULL DEFAULT 'leaf'", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN embedding TEXT", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN embeddingNamespace TEXT", onAlter);
-    db!.run("ALTER TABLE memories ADD COLUMN embeddingContentHash TEXT", onAlter);
-    // Add token_usage table if it doesn't exist
-    db!.run(`CREATE TABLE IF NOT EXISTS token_usage (
-      id TEXT PRIMARY KEY,
-      userId TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      model TEXT NOT NULL,
-      promptTokens INTEGER NOT NULL,
-      completionTokens INTEGER NOT NULL,
-      totalTokens INTEGER NOT NULL,
-      mode TEXT DEFAULT 'chat',
-      interactionId TEXT DEFAULT '',
-      timestamp TEXT NOT NULL
-    )`, onAlter);
-    // Add cognitiveIntent and llmWasCalled columns to interactions
-    db!.run("ALTER TABLE interactions ADD COLUMN cognitiveIntent TEXT DEFAULT ''", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN llmWasCalled INTEGER DEFAULT 0", onAlter);
-    db!.run("ALTER TABLE interactions ADD COLUMN completionFeedback TEXT DEFAULT ''", onAlter);
-    // Add reminders table if it doesn't exist
-    db!.run(`CREATE TABLE IF NOT EXISTS reminders (
-      id TEXT PRIMARY KEY,
-      userId TEXT NOT NULL,
-      content TEXT NOT NULL,
-      dueAt TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      sourceInteractionId TEXT NOT NULL DEFAULT '',
-      createdAt TEXT NOT NULL,
-      firedAt TEXT
-    )`, onAlter);
-    // Indexes are recreated here and after every atomic table replacement.
-    for (const sql of PERFORMANCE_INDEX_SQL) db!.run(sql, onAlter);
-      db!.run('SELECT 1', () => resolve());
-    });
-  });
-}
 
 function createTables(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1543,7 +1319,7 @@ async function loadMemoryDB(): Promise<void> {
     role: i.role || '',
     personality: i.personality || i.module || '',
     mode: i.mode || '',
-    toolCalls: parseStoredToolCalls(i.toolCalls),
+    toolCalls: parseStoredToolCalls(i.toolCalls, i.mode),
     conversationId: i.conversationId || '',
     cognitiveIntent: i.cognitiveIntent || '',
     llmWasCalled: i.llmWasCalled ? true : false,
@@ -2207,7 +1983,7 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       name: 'interactions',
       createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', requestId TEXT DEFAULT '', nativeDeviceId TEXT DEFAULT '', executionSessionId TEXT DEFAULT '', nativeClientIdentitySha256 TEXT DEFAULT '', audioInputKind TEXT DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT DEFAULT '', sttReceiptId TEXT DEFAULT '', contextChainId TEXT DEFAULT '', previousRequestId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
       insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.requestId || i.externalMessageId || '', i.nativeDeviceId || '', i.executionSessionId || '', i.nativeClientIdentitySha256 || '', i.audioInputKind || '', i.syntheticAudio === true ? 1 : i.syntheticAudio === false ? 0 : null, i.captureSessionId || '', i.sttReceiptId || '', i.contextChainId || '', i.previousRequestId || '', i.timestamp]),
+      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls, i.mode), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.requestId || i.externalMessageId || '', i.nativeDeviceId || '', i.executionSessionId || '', i.nativeClientIdentitySha256 || '', i.audioInputKind || '', i.syntheticAudio === true ? 1 : i.syntheticAudio === false ? 0 : null, i.captureSessionId || '', i.sttReceiptId || '', i.contextChainId || '', i.previousRequestId || '', i.timestamp]),
     },
     {
       name: 'memories',
@@ -2242,9 +2018,9 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'reminders',
-      createSQL: `CREATE TABLE _temp_reminders (id TEXT PRIMARY KEY, userId TEXT NOT NULL, content TEXT NOT NULL, dueAt TEXT, status TEXT NOT NULL DEFAULT 'pending', sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, firedAt TEXT)`,
-      insertSQL: `INSERT INTO _temp_reminders (id, userId, content, dueAt, status, sourceInteractionId, createdAt, firedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.reminders || []).map((r: any) => [r.id, r.userId, r.content, r.dueAt || null, r.status || 'pending', r.sourceInteractionId || '', r.createdAt, r.firedAt || null]),
+      createSQL: `CREATE TABLE _temp_reminders (id TEXT PRIMARY KEY, userId TEXT NOT NULL, content TEXT NOT NULL, dueAt TEXT, status TEXT NOT NULL DEFAULT 'pending', sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, firedAt TEXT, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '')`,
+      insertSQL: `INSERT INTO _temp_reminders (id, userId, content, dueAt, status, sourceInteractionId, createdAt, firedAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      rows: () => (memoryDB.reminders || []).map((r: any) => [r.id, r.userId, r.content, r.dueAt || null, r.status || 'pending', r.sourceInteractionId || '', r.createdAt, r.firedAt || null, r.domain || 'personal', r.orgId || '']),
     },
     {
       name: 'conversations',

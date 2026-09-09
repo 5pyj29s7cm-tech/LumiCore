@@ -11,7 +11,10 @@ async function setHandler(args: any) {
   const id = `${Date.now()}`;
   timers.set(id, { start: Date.now(), duration: duration * 1000, label });
   return { content: [{ type: 'text' as const, text: JSON.stringify({
-    message: `Timer set: "${label}" for ${duration}s (${(duration/60).toFixed(1)} min)`,
+    message: `Temporary countdown recorded: "${label}" for ${duration}s. No notification will be sent; this record is lost when the skill process stops.`,
+    status: 'temporary_countdown',
+    notificationScheduled: false,
+    persisted: false,
     timerId: id,
     expiresAt: new Date(Date.now() + duration * 1000).toISOString(),
   }, null, 2) }] };
@@ -23,7 +26,7 @@ async function listHandler(_args: any) {
   const result = Array.from(timers.entries()).map(([id, t]) => {
     const elapsed = now - t.start;
     const remaining = Math.max(0, t.duration - elapsed);
-    return { id, label: t.label, total: `${(t.duration/1000).toFixed(0)}s`, remaining: `${(remaining/1000).toFixed(0)}s`, status: remaining <= 0 ? 'DONE' : 'running' };
+    return { id, label: t.label, total: `${(t.duration/1000).toFixed(0)}s`, remaining: `${(remaining/1000).toFixed(0)}s`, status: remaining <= 0 ? 'elapsed' : 'running', notificationScheduled: false, persisted: false };
   });
   return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
 }
@@ -39,7 +42,7 @@ async function cancelHandler(args: any) {
 const server = new McpServer({ name: 'timer', version: '1.0.0' }, { capabilities: { tools: {} } });
 
 server.registerTool('set_timer', {
-  description: 'Set a countdown timer. Returns a timer ID for checking/cancelling.',
+  description: 'Record a temporary countdown for checking/cancelling. Does NOT schedule a notification or alarm. State disappears when this skill process stops; use the main application reminder capability for actual reminders.',
   inputSchema: {
     duration: z.number().describe('Duration in seconds (max 86400 = 24h)'),
     label: z.string().optional().describe('Label for the timer'),

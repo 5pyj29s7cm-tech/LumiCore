@@ -12,6 +12,7 @@ import {
 } from '../../shared/evidence_workflow';
 import { readDB } from '../../db_layer';
 import type { ConversationActionReceiptRow, ConversationActionTaskRow } from '../conversation/action_ledger';
+import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { getWorkTakeoverTask, updateWorkTakeoverTask, type WorkTakeoverTask } from './tasks';
 
 export const EVIDENCE_WORKFLOW_METADATA_KEY = 'evidenceWorkflow';
@@ -36,6 +37,10 @@ function verifiedReceiptRowsForStep(
 ): ConversationActionReceiptRow[] {
   const step = workflow.steps.find(candidate => candidate.id === stepId);
   if (!step) throw new Error(`Evidence workflow step not found: ${stepId}`);
+  // A receipt proves its own target, not any target sharing this tool name.
+  // Legacy steps without a declared target remain incomplete until recovered
+  // with an explicit blueprint; never infer their intent from the result.
+  if (!step.targetIdentity) return [];
   const usedReceiptIds = new Set(
     workflow.steps
       .filter(candidate => candidate.id !== stepId)
@@ -51,6 +56,13 @@ function verifiedReceiptRowsForStep(
       && String(candidate.domain || 'personal') === String(task.domain || 'personal')
       && String(candidate.orgId || '') === String(task.orgId || '')
     ))
+    .filter(candidate => {
+      let context: Record<string, unknown>;
+      try { context = typeof candidate.context === 'string' ? JSON.parse(candidate.context) : candidate.context; }
+      catch { return false; }
+      return candidate.id === task.id
+        || context?.taskId === task.id;
+    })
     .map(candidate => candidate.id));
   const workflowStartedAt = Date.parse(workflow.createdAt);
   return (Array.isArray(db.conversationActionReceipts)
@@ -59,6 +71,7 @@ function verifiedReceiptRowsForStep(
     .filter(receipt => !usedReceiptIds.has(receipt.id))
     .filter(receipt => scopedTaskIds.has(receipt.taskId))
     .filter(receipt => !step.tool || receipt.toolName === step.tool)
+    .filter(receipt => receipt.targetIdentity === step.targetIdentity)
     .filter(receipt => receipt.outcome === 'verified_success')
     .filter(receipt => {
       const createdAt = Date.parse(receipt.createdAt);
@@ -66,15 +79,10 @@ function verifiedReceiptRowsForStep(
         && (!Number.isFinite(workflowStartedAt) || createdAt >= workflowStartedAt);
     })
     .filter(receipt => {
-      try {
-        const envelope = typeof receipt.envelope === 'string'
-          ? JSON.parse(receipt.envelope)
-          : receipt.envelope;
-        return envelope?.status === 'verified_success'
-          && (!envelope?.taskId || envelope.taskId === receipt.taskId);
-      } catch {
-        return false;
-      }
+      const inspected = inspectPersistedToolExecutionReceipt(receipt, {
+        rowTaskId: receipt.taskId, toolName: step.tool || receipt.toolName, outcome: 'verified_success',
+      });
+      return inspected.valid && inspected.explicitlyTerminalVerified;
     })
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
@@ -99,9 +107,8 @@ function resolveVerifiedReceiptIds(input: {
   const eligible = verifiedReceiptRowsForStep(input.task, input.workflow, input.stepId);
   const requested = Array.from(new Set((input.requested || []).map(String).map(value => value.trim()).filter(Boolean)));
   if (requested.length === 0) {
-    const latest = eligible.at(-1);
-    if (!latest) throw new Error(`Evidence workflow step ${input.stepId} has no matching verified action receipt.`);
-    return [latest.id];
+    if (eligible.length !== 1) throw new Error(`Evidence workflow step ${input.stepId} requires one explicit matching verified action receipt (found ${eligible.length}).`);
+    return [eligible[0].id];
   }
   const eligibleIds = new Set(eligible.map(receipt => receipt.id));
   const invalid = requested.filter(receiptId => !eligibleIds.has(receiptId));

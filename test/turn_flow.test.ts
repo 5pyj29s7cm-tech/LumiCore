@@ -317,8 +317,8 @@ describe('Lumi turn flow', () => {
       targetIsLumi: true,
     });
 
-    expect(flow.autoPromoteToAssistant).toBe(true);
-    expect(flow.effectiveOperationMode).toBe('chat');
+    expect(flow.autoPromoteToAssistant).toBe(false);
+    expect(flow.effectiveOperationMode).toBe('assistant');
     expect(flow.selfRepairTurn).toBe(true);
     expect(flow.allowToolUseForTurn).toBe(true);
   });
@@ -530,8 +530,8 @@ describe('Lumi turn flow', () => {
     expect(dispatch.boundary).toBe('work_takeover');
     expect(dispatch.flow.workTakeover.intent).toBe('advance');
     expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(true);
-    expect(dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(dispatch.flow.autoPromoteToAssistant).toBe(false);
+    expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(dispatch.flow.allowToolUseForTurn).toBe(true);
   });
 

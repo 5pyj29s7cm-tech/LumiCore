@@ -39,9 +39,13 @@ import {
 } from './capability_execution_plan';
 import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
+import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
 import { buildActionContract } from './action_contract';
 import type { ToolContext } from '../tools/types';
+import { resolveAcceptedTaskTarget } from '../conversation/task_target_anchor';
+import { resolveAcceptedFilePlan } from '../conversation/task_plan_reference';
+import { isPreservedSourceOutputTool, preservedSourceOutputScope, preservedSourceOutputTools, requestedSingleArtifact } from './artifact_write_scope';
 
 export interface LumiCapabilityPlan extends LumiCapabilitySelection {
   schemaVersion: 1;
@@ -90,6 +94,8 @@ export interface BuildLumiExecutionPipelineInput {
   /** Durable task identity supplied by non-conversation entrances such as scheduler/autonomy execution. */
   taskId?: string;
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
+  /** Only persistence-loaded messages from the authorized conversation. */
+  persistedConversationHistory?: Parameters<typeof resolveAcceptedTaskTarget>[0]['persistedHistory'];
 }
 
 function applyAdditionalForbiddenTools(
@@ -152,12 +158,23 @@ function applyCurrentTurnNoMutationConstraint(
   // the confirmation gate, not the generic read-only filter, prevents the
   // side effect. Ordinary negative commands remain fully read-only.
   if (isExternalCommitConfirmationOnlyRequest(text)) return execution;
+  if (classifySkillAuthoringIntent(text) === 'use') {
+    // A prohibition on creating another run must still forbid run_workflow,
+    // but does not revoke approval of one step in the existing run.
+    // i18n-allow: narrowly scoped workflow run creation prohibition.
+    const withoutNewRunFence = text.replace(/(?:不要|不|别|禁止)\s*(?:再)?(?:创建|新建)\s*(?:新(?:的)?|另一个|另外的)运行/gu, ' ');
+    if (withoutNewRunFence !== text) {
+      execution = applyAdditionalForbiddenTools(execution, ['run_workflow']);
+      text = withoutNewRunFence;
+    }
+  }
+  const preservedOutput = preservedSourceOutputScope(text);
   // "Create this exact file, but do not modify other files / send / publish"
   // is a scoped artifact boundary, not a veto of the requested local write.
   // The artifact route already removes messaging, client-surface and desktop
   // launch tools, while the executor still binds the write to the explicit
   // path supplied in this turn.
-  if (isExplicitArtifactCreationText(text)) return execution;
+  if (isExplicitArtifactCreationText(text) && !preservedOutput) return execution;
   const normalizedIntent = normalizeActionIntent(text);
   // A bounded Lumi client navigation request may explicitly prohibit opening
   // other applications or changing content. That wording is a scope fence,
@@ -187,7 +204,7 @@ function applyCurrentTurnNoMutationConstraint(
   ) return execution;
   if (!hasExplicitNoMutationInstruction(text)) return execution;
   const mutationTools = registry.getCapabilityManifest(undefined, { context: visibilityContext })
-    .filter(entry => (
+    .filter(entry => (!preservedOutput || !isPreservedSourceOutputTool(entry.toolName)) && (
       entry.operation === 'create'
       || entry.operation === 'mutate'
       || entry.sideEffects.some(effect => effect.type !== 'local_read')
@@ -198,7 +215,9 @@ function applyCurrentTurnNoMutationConstraint(
     ...restricted,
     promptOverlay: [
       execution.promptOverlay,
-      'Current-turn read-only boundary: the user explicitly prohibited modification. Read/inspect/answer only; do not create, edit, save, send, submit, control, or mutate any state.',
+      preservedOutput
+        ? 'Preserve the original input file. Read and calculate, then save only the separately requested local output. Do not modify the source or send, submit, launch, or mutate unrelated state.'
+        : 'Current-turn read-only boundary: the user explicitly prohibited modification. Read/inspect/answer only; do not create, edit, save, send, submit, control, or mutate any state.',
     ].join('\n'),
   };
 }
@@ -297,8 +316,25 @@ function applySelectedWorkflowAdapterPolicy(
 export function buildLumiExecutionPipeline(
   input: BuildLumiExecutionPipelineInput,
 ): LumiExecutionPipeline {
-  const turnIntent = input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
-  const decisionText = input.decisionText || turnIntent.flow.routeText;
+  const acceptedPlan = resolveAcceptedFilePlan({ text: input.dispatch.text, history: input.persistedConversationHistory });
+  const effectiveText = acceptedPlan?.text || input.dispatch.text;
+  const dispatched = acceptedPlan
+    ? buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText })
+    : input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
+  const acceptedTaskTarget = resolveAcceptedTaskTarget({
+    text: input.dispatch.text,
+    persistedHistory: input.persistedConversationHistory,
+    previousTask: input.actionTaskState?.taskCapsule,
+  });
+  const turnIntent = {
+    ...dispatched,
+    flow: { ...dispatched.flow, acceptedTaskTarget },
+    promptOverlay: [dispatched.promptOverlay, acceptedPlan
+      ? 'The current user accepted this immediately preceding user-authored file plan: ' + JSON.stringify(acceptedPlan)
+        + '. Execute this goal using current file evidence. Do not merge older task revisions or ask the user to choose an older version. Normal tool authorization and confirmation boundaries still apply.'
+      : ''].filter(Boolean).join('\n'),
+  };
+  const decisionText = acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText;
   const normalizedIntent = normalizeActionIntent(decisionText);
   const visibilityContext = {
     userId: input.dispatch.userId,
@@ -308,7 +344,7 @@ export function buildLumiExecutionPipeline(
       || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
     source: input.dispatch.source || input.dispatch.channel,
   };
-  const trustedActionContinuation = hasTrustedActionContinuation(input);
+  const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
   const legacyExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     text: decisionText,
@@ -338,7 +374,7 @@ export function buildLumiExecutionPipeline(
         visibilityContext,
       ),
       input.registry,
-      input.dispatch.text,
+      effectiveText,
       visibilityContext,
     ),
     input.additionalForbiddenTools,
@@ -368,6 +404,7 @@ export function buildLumiExecutionPipeline(
     turnIntent.flow.workflowHint || turnIntent.flow.specialWorkflow
   )?.requiredTools || [];
   const actionVerificationTools = buildActionContract(decisionText).verificationTools || [];
+  const requestedArtifact = requestedSingleArtifact(effectiveText);
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,
@@ -375,6 +412,8 @@ export function buildLumiExecutionPipeline(
     requiredTools: [
       ...workflowRequiredTools,
       ...actionVerificationTools,
+      ...preservedSourceOutputTools(effectiveText, acceptedTaskTarget),
+      ...(requestedArtifact ? [requestedArtifact.producer, requestedArtifact.reader] : []),
     ],
   });
   // Operation modes and manifest visibility define the authorization ceiling;
@@ -411,7 +450,7 @@ export function buildLumiExecutionPipeline(
     capabilityPlan,
     execution,
     manifest,
-    taskId: input.taskId || input.actionTaskState?.taskId,
+    taskId: input.taskId || (acceptedPlan ? undefined : input.actionTaskState?.taskId),
     sourcePaths: input.actionTaskState?.sourcePaths,
   });
   capabilityPlan.promptOverlay = [

@@ -73,6 +73,8 @@ import { toolRegistry } from '../server/tools/registry';
 import { getOrCreateActiveConversation } from '../server/conversation/manager';
 import { createOrg, addMember, removeMember } from '../server/org/db';
 import { getChatExecution, waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';
+import { upsertUserPreferredLLM } from '../server/llm/user_preferences';
+import { INTENT_CLASSIFIER_MAX_TOKENS, INTENT_CLASSIFIER_TIMEOUT_MS } from '../server/cognition/intent_classifier';
 
 const marker = 'SYNTHETIC_ORG_TERMINAL_CONTENT';
 const outcome = (text = marker) => ({ text, toolCalls: [], usageRecords: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
@@ -278,3 +280,75 @@ it('settles a revoked cancel sidecar once without prematurely finalizing the hel
   expect(h.emitted.filter(([event, payload]) => event === 'agent:response' && payload.requestId === h.requestId)).toHaveLength(1);
   expect(h.acknowledgements.filter(item => item.requestId === controlId)).toHaveLength(1);
 }, 10000);
+
+it('parent cancellation during optional classification never starts the main reply', async () => {
+  const h = await openChat(false);
+  const classifierStarted = deferred();
+  const classifierGate = deferred();
+  unblock.push(classifierGate.resolve);
+  let classifierSignal: AbortSignal | undefined;
+  fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'chat_intent_classifier') {
+      classifierSignal = args[2].signal;
+      classifierStarted.resolve();
+      // Model intentionally ignores abort, exercising the bounded wrapper.
+      await classifierGate.promise;
+      return outcome('{"category":"question","confidence":0.9,"entities":{}}');
+    }
+    return outcome('THIS_MAIN_REPLY_MUST_NOT_START');
+  });
+  await h.send(h.requestId, '请计算 1234.5 × 3.6 - 75.6，只给结果。');
+  await classifierStarted.promise;
+  expect(await client.timeout(5000).emitWithAck('agent:abort_chat', {
+    ...h.scope, requestId: h.requestId,
+  })).toMatchObject({ ok: true });
+  await h.finished;
+  await h.drain();
+  expect(classifierSignal?.aborted).toBe(true);
+  expect(fixture.model).toHaveBeenCalledOnce();
+  expect(fixture.model.mock.calls[0][2]).toMatchObject({ source: 'chat_intent_classifier', noImplicitFailover: true });
+  expect(h.errors).toEqual([]);
+  expect(getChatExecution(h.scope, h.requestId)).toMatchObject({ terminal: true, status: 'cancelled' });
+  expect(JSON.stringify(h.emitted)).not.toContain('THIS_MAIN_REPLY_MUST_NOT_START');
+  classifierGate.resolve();
+}, 10000);
+
+it('a classifier deadline yields to the main reply without narrowing its configured fallback policy', async () => {
+  const h = await openChat(false);
+  upsertUserPreferredLLM(h.userId, {
+    provider: 'relay', model: 'aliyun/deepseek-v4-flash', selectionMode: 'ordered_fallback',
+    fallbackCandidates: [{ provider: 'deepseek', model: 'deepseek-v4-pro' }], allowCloudFallback: true,
+  });
+  const classifierGate = deferred();
+  unblock.push(classifierGate.resolve);
+  let classifierSignal: AbortSignal | undefined;
+  let classifierConfig: any;
+  let mainConfig: any;
+  fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'chat_intent_classifier') {
+      classifierConfig = args[2];
+      classifierSignal = args[2].signal;
+      await classifierGate.promise;
+      return outcome('{"category":"question","confidence":0.9,"entities":{}}');
+    }
+    mainConfig = args[2];
+    return outcome('4368.6');
+  });
+  await h.send(h.requestId, '请计算 1234.5 × 3.6 - 75.6，只给结果。');
+  await h.finished;
+  await h.drain();
+  expect(classifierConfig).toMatchObject({
+    maxTokens: INTENT_CLASSIFIER_MAX_TOKENS, noImplicitFailover: true,
+    attemptTimeouts: { absoluteMs: INTENT_CLASSIFIER_TIMEOUT_MS }, fallbackCandidates: [],
+  });
+  expect(classifierSignal?.aborted).toBe(true);
+  expect(mainConfig).toMatchObject({
+    provider: 'relay', model: 'aliyun/deepseek-v4-flash', selectionMode: 'ordered_fallback',
+    fallbackCandidates: [{ provider: 'deepseek', model: 'deepseek-v4-pro' }], allowCloudFallback: true,
+  });
+  expect(mainConfig.noImplicitFailover).not.toBe(true);
+  expect(mainConfig.signal.aborted).toBe(false);
+  expect(h.errors).toEqual([]);
+  expect(h.emitted.some(([event, payload]) => event === 'agent:response' && payload.text === '4368.6')).toBe(true);
+  classifierGate.resolve();
+}, 15000);

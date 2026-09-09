@@ -179,6 +179,30 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     expect(memory.embedding).toEqual([0, 1]);
   });
 
+  it('advances across bounded backfill batches when the gateway returns a canonical alias', async () => {
+    const uid = 'index-canonical-alias'; configure(uid);
+    const memories = [1, 2, 3].map(n => addMemory({ userId: uid, type: 'fact', content: `alias fixture ${n}`,
+      keywords: ['alias'], confidence: 1, sourceInteractionId: 'index-alias-fixture' }, { generateEmbedding: false, deduplicate: false }));
+    vi.mocked(generateConfiguredEmbedding).mockImplementation(async () => ({ provider: 'openai', model: 'canonical-embedding', route: 'primary', vector: [1, 0] }));
+    try {
+      for (let i = 0; i < 3; i++) expect(await backfillEmbeddings(uid, { limit: 1 })).toBe(1);
+      expect(await backfillEmbeddings(uid, { limit: 1 })).toBe(0);
+      await flushDBOrThrow();
+      for (const m of memories) expect((await querySQL<{ embeddingNamespace: string }>('SELECT embeddingNamespace FROM memories WHERE id=?', [m.id]))[0].embeddingNamespace).toContain('canonical-embedding');
+    } finally { vi.mocked(generateConfiguredEmbedding).mockImplementation(async text => ({ provider: 'openai', model: 'synthetic-embedding', vector: text.includes('football') ? [0, 1] : [1, 0] })); }
+  });
+
+  it('stops maintenance at a provider failure and reports unfinished indexes', async () => {
+    const uid = 'index-rate-limit'; configure(uid);
+    for (let i = 0; i < 4; i++) addMemory({ userId: uid, type: 'fact', content: `rate limit fixture ${i}`,
+      keywords: ['index'], confidence: 1, sourceInteractionId: 'index-limit-fixture' }, { generateEmbedding: false, deduplicate: false });
+    vi.mocked(generateConfiguredEmbedding).mockRejectedValueOnce(new Error('Lumi Official API request failed (429): rate limited'));
+    const progress = { attempted: 0, indexed: 0, failed: 0, stale: 0, remaining: 0, errors: {} };
+    expect(await backfillEmbeddings(uid, { limit: 4, progress })).toBe(0);
+    expect(progress).toMatchObject({ attempted: 1, failed: 1, remaining: 4, errors: { http_429: 1 } });
+    expect(vi.mocked(generateConfiguredEmbedding)).toHaveBeenCalledWith(expect.any(String), uid, expect.objectContaining({ allowFallback: false }));
+  });
+
   it.each(['content', 'owner', 'scope', 'rerank-failure'])('rechecks %s after a delayed rerank', async change => {
     const uid = `rerank-current-${change}`; configure(uid, true);
     const changed = seed(uid, 'banana old candidate');

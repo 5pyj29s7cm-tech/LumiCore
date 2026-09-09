@@ -531,9 +531,10 @@ export function logAudit(entry: {
   entWrite();
 }
 
-export function listAuditLog(orgId: string, limit: number = 50, offset: number = 0): AuditEntry[] {
+export function listAuditLog(orgId: string, limit: number | null = 50, offset: number = 0): AuditEntry[] {
   const entries = (entDB().auditLog || []).filter((e: AuditEntry) => e.orgId === orgId);
-  return entries.sort((a: AuditEntry, b: AuditEntry) => b.timestamp.localeCompare(a.timestamp)).slice(offset, offset + limit);
+  const sorted = entries.sort((a: AuditEntry, b: AuditEntry) => b.timestamp.localeCompare(a.timestamp));
+  return limit === null ? sorted.slice(offset) : sorted.slice(offset, offset + limit);
 }
 
 // ── Domain helpers ───────────────────────────────────────────────────────

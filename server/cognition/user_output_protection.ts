@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { ToolExecutionRecord } from '../tools/types';
+import { toolRecordSucceeded } from './task_execution_ledger';
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from '../regions/packs/cn/user_output_protection_messages';
 import {
   containsInternalExecutionLanguage,
@@ -553,9 +554,8 @@ function humanSummary(
   ];
 
   // i18n-allow -- Chinese screen-tool intent recognition; not user-visible copy.
-  const screen = /(?:screen|capture|screenshot|ocr|vision|屏幕|截图)/iu.test(combined)
-    || DATA_URL_RE.test(raw)
-    || IMAGE_BASE64_FIELD_RE.test(raw);
+  const screen = records.some(record => /^(?:desktop_capture_screen|capture_screen|ocr_screen|screen_capture|desktop_ui_snapshot|computer_use)$/iu.test(record.name)
+    && toolRecordSucceeded(record));
   if (screen) {
     // i18n-allow -- Chinese vision failure recognition; not user-visible copy.
     const visionIncomplete = failed || /(?:ocr|vision|视觉|识别).{0,40}(?:failed|error|unavailable|未完成|失败|不可用)/iu.test(combined);
@@ -569,11 +569,16 @@ function humanSummary(
       : 'The screen image was captured. Raw image data was omitted; I will report only the relevant visible details.';
   }
 
-  const directory = names.some(name => /(?:list_files|list_directory|directory|desktop_files)/iu.test(name))
-    || RAW_DIRECTORY_RE.test(raw);
+  const directoryRecords = records.filter(record => (
+    /^(?:desktop_list_files|list_directory|desktop_files)$/iu.test(String(record.name || ''))
+    && toolRecordSucceeded(record)
+  ));
+  const directory = directoryRecords.length > 0;
   if (directory) {
     const entries: string[] = [];
-    for (const value of values) collectDirectoryEntries(value, entries);
+    // Do not turn a failed listing, a model JSON candidate, or a file's
+    // isDirectory:false metadata into evidence that a directory was read.
+    for (const value of resultValues(directoryRecords)) collectDirectoryEntries(value, entries);
     const visible = entries.slice(0, 5);
     const count = entries.length;
     if (zh) {

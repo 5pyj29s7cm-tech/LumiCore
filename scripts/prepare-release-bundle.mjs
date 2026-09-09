@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyBuildReceipt } from './lib/release-receipt.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -127,6 +128,7 @@ async function main() {
   }
 
   const manifest = await readJson(args.manifest);
+  verifyBuildReceipt(manifest.buildReceipt, manifest.runtime, manifest.artifacts || []);
   if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
     throw new Error(`Manifest has no artifacts: ${args.manifest}`);
   }

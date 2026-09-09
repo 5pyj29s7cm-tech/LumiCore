@@ -89,9 +89,15 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
   const result = await generateSkill(
     {
       description,
+      displayName: String(args.name || '').trim(),
+      signal: context?.executionSignal,
       ...(args.provider ? { provider: args.provider as any } : {}),
       ...(args.model ? { model: String(args.model) } : {}),
       userId: context?.userId || 'skill_gen',
+      conversationId: context?.conversationId,
+      requestId: context?.requestId,
+      domain: context?.domain,
+      orgId: context?.orgId,
     },
     _llmGetters.getDeepSeek,
     _llmGetters.getGemini,
@@ -128,6 +134,7 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
     executable: false,
     installed: false,
     skillName: result.skillName,
+    displayName: String(args.name || '').trim() || result.skillName,
     toolName: result.toolName,
     draftDirectory,
     manifestPath,
@@ -505,24 +512,25 @@ export function registerSkillTools(registry: ToolRegistry): void {
     description:
       'Generate an isolated, non-executable MCP skill draft from an explicit user request. ' +
       'The draft receives static analysis, a permission/side-effect declaration, protocol/type validation, and reproducible lock validation without executing generated code. ' +
-      'It is never scanned or installed automatically; install_skill requires a separate explicit approval.',
+      'It is never scanned or installed automatically; install_skill requires a separate explicit approval. For an explicit request to create a skill, call this directly without mandatory marketplace/external research. Only pure computation on runtime inputs is supported; host reads/writes belong in existing tools composed by a saved workflow.',
     parameters: {
       type: 'object',
       properties: {
         description: {
           type: 'string',
           description:
-            'Natural language description of what the skill should do. Be specific: describe the inputs, the processing logic, error handling, and expected output format.',
+            'Natural language description of pure input-dependent computation. Include inputs, processing logic, error handling, and output format. Never encode observed example results as constants.',
         },
         provider: {
           type: 'string',
-          description: 'LLM provider to use for code generation. Default: deepseek.',
-          enum: ['deepseek', 'qwen', 'openai', 'gemini', 'anthropic'],
+          description: 'Optional explicit provider override. Omit to inherit the current user model and fallback policy, including the official relay.',
+          enum: ['relay', 'deepseek', 'qwen', 'openai', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'ark', 'kimi', 'glm', 'xiaomi'],
         },
         model: {
           type: 'string',
           description: 'Specific model name. Default: inherit the current user selection.',
         },
+        name: { type: 'string', description: 'Exact user-requested display name; retained in the reviewed tool description for discovery and reuse by name.' },
       },
       required: ['description'],
     },
@@ -536,7 +544,7 @@ export function registerSkillTools(registry: ToolRegistry): void {
       operation: 'create',
       risk: 'high',
       sideEffects: [
-        { type: 'external_state_change', scope: 'configured LLM generation request', reversible: false },
+        { type: 'network_read', scope: 'send the requested skill description to the configured model for inference and receive draft source; no publication or installation', reversible: false },
         { type: 'local_write', scope: 'isolated non-executable skill draft in user data', reversible: true },
         { type: 'process_execution', scope: 'dependency lock preparation with lifecycle scripts disabled; generated handler code is not executed', reversible: false },
       ],

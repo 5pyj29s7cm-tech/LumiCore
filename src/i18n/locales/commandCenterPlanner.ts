@@ -2,10 +2,7 @@ import type { Locale } from '../runtime';
 
 const COPY = {
   en: {
-    headerTitle: 'Tasks & pursuits', headerDetail: 'Scheduled plans run in autonomous mode and update from real receipts.',
-    modeRequired: 'You can save plans now. The current mode does not run scheduled tasks automatically. Enable autonomous mode for unattended execution, or use Run for a one-off request.',
-    enableAutonomous: 'Enable autonomous mode', waitingForMode: 'Automatic execution is waiting for autonomous mode.',
-    savedWaitingForMode: 'Plan saved. Automatic execution is waiting for autonomous mode.',
+    headerTitle: 'Tasks & pursuits', headerDetail: 'Scheduled plans follow your background-work settings and update from real receipts.',
     authorizationRequired: 'This plan is paused because its organization authorization is missing or has changed. Review the plan, then authorize it again with your current membership. Existing task receipts are retained.',
     reauthorize: 'Authorize and resume this plan',
     scheduleControlDetail: 'Changing the schedule or resuming a plan calculates its next run from now. Control already-dispatched tasks separately.',
@@ -23,10 +20,7 @@ const COPY = {
     discussPrompt: (title: string, instruction: string) => `Let's discuss “${title}”: ${instruction}`,
   },
   zh: {
-    headerTitle: '任务与追求', headerDetail: '定时计划在自主模式下到点执行，并以真实回执更新状态。',
-    modeRequired: '可以先保存计划。当前模式不会自动执行定时任务；启用自主模式后才能持续后台执行，也可以点击“立即执行”发起单次工作。',
-    enableAutonomous: '启用自主模式', waitingForMode: '自动执行正在等待启用自主模式。',
-    savedWaitingForMode: '计划已保存，自动执行正在等待启用自主模式。',
+    headerTitle: '任务与追求', headerDetail: '定时计划按后台工作设置运行，并以真实回执更新状态。',
     authorizationRequired: '该计划缺少组织授权记录或成员权限已变化，现已暂停。请先核对计划，再用当前成员身份重新授权。已有任务回执会保留。',
     reauthorize: '重新授权并恢复此计划',
     scheduleControlDetail: '修改排程或恢复计划时，从当前时间计算下次执行；已派发的任务需单独暂停或取消。',

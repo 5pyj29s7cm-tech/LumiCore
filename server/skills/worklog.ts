@@ -8,6 +8,8 @@ export interface WorkflowStep {
   name: string;
   args: Record<string, any>;
   resultSummary: string;   // first 200 chars of tool result
+  verified?: boolean;
+  operation?: string;
 }
 
 export interface WorkflowRecord {
@@ -19,6 +21,8 @@ export interface WorkflowRecord {
   timestamp: string;
   domain?: string;
   orgId?: string;
+  conversationId?: string;
+  taskId?: string;
 }
 
 const recentWorkflows: WorkflowRecord[] = [];
@@ -46,13 +50,31 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
 }
 
 /** Get recent workflows (for pattern detection) */
-export function getRecentWorkflows(userId?: string, domain?: string, orgId?: string): WorkflowRecord[] {
+export function getRecentWorkflows(userId?: string, domain?: string, orgId?: string, conversationId?: string, taskId?: string): WorkflowRecord[] {
   return recentWorkflows.filter(w => {
     if (userId && w.userId !== userId) return false;
     if (domain !== undefined && (w.domain || 'personal') !== domain) return false;
     if (orgId !== undefined && (w.orgId || '') !== orgId) return false;
+    if (conversationId !== undefined && w.conversationId !== conversationId) return false;
+    if (taskId !== undefined && w.taskId !== taskId) return false;
     return true;
   });
+}
+
+/** Capture is a scoped proposal, never an assertion that model-only reasoning is executable. */
+export function workflowCaptureBlocker(record: WorkflowRecord): string | null {
+  if (!record.conversationId || !record.taskId) return 'The trace has no verified conversation/task identity. Perform the workflow in this conversation first.';
+  if (!record.toolSequence.length || record.toolSequence.some(step => step.verified !== true)) return 'The trace contains failed or unverified actions and cannot be captured as a reusable workflow.';
+  if (record.toolSequence.every(step => /^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$)/.test(step.name))) return 'Capability discovery alone is not a completed business workflow.';
+  return workflowTransformationBlocker(record.userIntent, record.toolSequence);
+}
+
+export function workflowTransformationBlocker(intent: string, steps: Array<{ operation?: string }>): string | null {
+  // i18n-allow: multilingual computation-intent recognition, not user-visible copy.
+  const transformsData = /计算|汇总|总额|求和|统计|转换|整理|总结|\b(?:calculat\w*|sum|total|aggregat\w*|transform\w*|summari[sz]\w*)\b/iu.test(intent);
+  const onlyReads = steps.length > 0 && steps.every(step => ['observe', 'test'].includes(step.operation || ''));
+  if (transformsData && onlyReads) return 'Only reads were executed; subsequent model computation is not an executable workflow step. Generate and review a pure input-dependent transformation skill, then save a workflow that binds its inputs to the reader output. Do not replay an old total or claim this trace is complete.';
+  return null;
 }
 
 /** Clear all workflows */

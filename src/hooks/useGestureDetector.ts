@@ -93,6 +93,7 @@ export function useGestureDetector(options?: { enabled?: boolean }) {
     const start = async () => {
       try {
         await initMediaPipe();
+        if (!running) return;
 
         const video = document.createElement('video');
         video.setAttribute('playsinline', '');
@@ -104,6 +105,7 @@ export function useGestureDetector(options?: { enabled?: boolean }) {
           height: 360,
           facingMode: 'user',
         });
+        if (!running) { stream.getTracks().forEach(track => track.stop()); stream = null; return; }
         video.srcObject = stream;
         await video.play();
 

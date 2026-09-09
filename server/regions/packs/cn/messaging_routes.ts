@@ -1,3 +1,5 @@
+import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
+import { isRetiredOperationModeRequest } from '../../../cognition/operation_modes';
 /**
  * Feishu Messaging Routes — webhook receiver + send endpoints.
  *
@@ -72,6 +74,7 @@ import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } fr
 import {
   getMessagingJournalEntry,
   recordMessagingIngress,
+  listQueuedMessagingInputs,
   updateMessagingJournal,
 } from '../../../messaging/message_journal';
 import {
@@ -842,6 +845,10 @@ export function createMessagingRoutes(
 ): Router {
   const router = Router();
   const adapter = new FeishuAdapter(feishuConfig);
+  recoverQueuedMessagingInputs('feishu', {
+    enrich: message => enrichFeishuAttachments(message, adapter),
+    reply: (message, text) => adapter.replyMessage(message.messageId, text),
+  }, options);
 
   router.post('/feishu/events', async (req, res) => {
     try {
@@ -872,18 +879,18 @@ export function createMessagingRoutes(
 
       console.log(`[Feishu] Received ${msg.chatType} message ${msg.messageId}`);
 
-      // Respond to Feishu IMMEDIATELY (must be < 1s), process AI reply async
-      res.json({ code: 0 });
+      // Dispatch durably records input before scheduling any asynchronous work.
       dispatchIncomingMessage(msg, {
         enrich: message => enrichFeishuAttachments(message, adapter),
         reply: async (message, text) => {
           return adapter.replyMessage(message.messageId, text);
         },
       }, options);
+      res.json({ code: 0 });
     } catch (err: any) {
       console.error('[Feishu] Event error:', err.message);
       if (!res.headersSent) {
-        res.json({ code: -1, msg: err.message });
+        res.status(503).json({ code: -1, msg: err.message });
       }
     }
   });
@@ -1216,12 +1223,21 @@ function applyPlannedMessagingBinding(
   });
 }
 
+function recoverQueuedMessagingInputs(platform: IncomingMessage['platform'], transport: IncomingMessageTransport, options?: MessagingRouteOptions): void {
+  setImmediate(() => {
+    for (const message of listQueuedMessagingInputs(platform)) {
+      try { dispatchIncomingMessage(message, transport, options); }
+      catch (error: any) { console.warn(`[Messaging] Queued ${platform} input remains pending:`, error?.message || error); }
+    }
+  });
+}
+
 export function dispatchIncomingMessage(
   message: IncomingMessage,
   transport: IncomingMessageTransport,
   options?: MessagingRouteOptions,
 ): boolean {
-  if (!acceptingMessagingIngress) return false;
+  if (!acceptingMessagingIngress) throw new Error('Messaging ingress is stopping; retry this delivery later.');
   const ingressDecision = evaluateMessagingIngress(message);
   if (!ingressDecision.allowed) {
     recordMessagingIngress(message);
@@ -1231,22 +1247,22 @@ export function dispatchIncomingMessage(
     });
     return false;
   }
+  const acceptedBinding = Object.prototype.hasOwnProperty.call(message, 'bindingAuthorization')
+    ? message : captureMessagingOrganization(applyMessagingBinding(message));
+  assertMessagingAuthorization(acceptedBinding);
+  // The inbox is durable before either the lease or the platform success ACK.
+  recordMessagingIngress(acceptedBinding);
   try {
     if (!acceptMessageOnce(message.platform, message.messageId)) {
       console.log(`[Messaging] Ignoring duplicate ${message.platform} message: ${message.messageId}`);
       return false;
     }
   } catch (err: any) {
-    recordMessagingIngress(message);
-    updateMessagingJournal(message, {
-      status: 'delivery_unknown',
-      error: `Delivery ledger unavailable: ${err?.message || err}`,
-    });
     console.error('[Messaging] Delivery ledger unavailable; refusing an untracked remote turn:', err?.message || err);
-    return false;
+    throw err;
   }
 
-  const trackedMessage = registerMessageRouteActivity(captureMessagingOrganization(applyMessagingBinding(message)));
+  const trackedMessage = registerMessageRouteActivity(acceptedBinding);
   recordMessagingIngress(trackedMessage);
   let finalJournalStatus: 'completed' | 'superseded' = 'completed';
   let terminalReplyDurable = false;
@@ -2983,6 +2999,7 @@ export async function processWithPersonality(
       throwIfActionLeaseWasLost();
     }
     let deterministicEntryReply: string | null = callbackReply?.text
+      || (isRetiredOperationModeRequest(requestText) ? buildOperationModeMetaResponse({ text: requestText, operationMode }) : null)
       || (callbackBlockedForExternalCommit
         ? (/[㐀-鿿]/u.test(routingText)
           ? '外部提交已停止：旧消息回调不能生成统一工具回执，请改由受确认和回执约束的工具执行。'
@@ -2996,7 +3013,7 @@ export async function processWithPersonality(
         id: `${requestId}:client-mode`,
         name: 'client_action',
         arguments: {
-          action: 'set_client_mode',
+          action: 'start_meeting_mode',
           mode: directlyAppliedMode,
           // Confirmation authority comes from ToolContext/requestConfirmation,
           // never from a model- or route-authored boolean argument.
@@ -3495,6 +3512,10 @@ export function createWeComRoutes(
 ): Router {
   const router = Router();
   const adapter = new WeComAdapter(config);
+  recoverQueuedMessagingInputs('wecom', {
+    enrich: message => enrichWeComAttachments(message, adapter),
+    reply: async (message, text) => { await adapter.sendMessage(message.chatId, { text, platform: 'wecom' }); },
+  }, options);
 
   // ── GET /wecom/events — URL verification ──
   router.get('/wecom/events', (req, res) => {
@@ -3555,15 +3576,13 @@ export function createWeComRoutes(
 
       console.log(`[WeCom] Received ${msg.chatType} message ${msg.messageId}`);
 
-      // Respond IMMEDIATELY (WeCom requires < 5s)
-      res.type('text/plain').send('success');
-
       dispatchIncomingMessage(msg, {
         enrich: message => enrichWeComAttachments(message, adapter),
         reply: async (message, text) => {
           await adapter.sendMessage(message.chatId, { text, platform: 'wecom' });
         },
       }, options);
+      res.type('text/plain').send('success');
     } catch (err: any) {
       console.error('[WeCom] Event error:', err.message);
       if (!res.headersSent) {

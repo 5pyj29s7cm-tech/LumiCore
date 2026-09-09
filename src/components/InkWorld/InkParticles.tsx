@@ -4,7 +4,6 @@ import * as THREE from 'three';
 
 interface InkParticlesProps {
   syncRate: number;
-  theme: string;
 }
 
 function createDotTexture(): THREE.CanvasTexture {

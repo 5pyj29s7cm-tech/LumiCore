@@ -4,6 +4,7 @@ import type { LLMGetters } from '../autonomy/task_executor';
 import { persistAutonomousTaskQueue } from '../autonomy/task_queue';
 import { dispatchManualCommandCenterPlanTasks } from '../command_center/runtime';
 import { requireAuth, resolveDomain } from '../middleware/auth';
+import { sendDurableMutation } from './durable_mutation';
 import {
   CommandCenterPlanAuthorizationError,
   createCommandCenterPlan,
@@ -19,17 +20,18 @@ export function mountCommandCenterPlanRoutes(router: Router, runtime?: { io: Ser
     res.json({ plans: listCommandCenterPlans({ userId: req.user!.uid, ...scope }) });
   });
 
-  router.post('/command-center/plans', requireAuth, (req, res) => {
+  router.post('/command-center/plans', requireAuth, async (req, res) => {
     try {
       const scope = resolveDomain(req.user!);
       const plan = createCommandCenterPlan({ userId: req.user!.uid, ...scope }, req.body || {});
-      res.status(201).json({ plan });
+      res.status(201);
+      await sendDurableMutation(req, res, { plan }, undefined, { retryable: false });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.put('/command-center/plans/:id', requireAuth, (req, res) => {
+  router.put('/command-center/plans/:id', requireAuth, async (req, res) => {
     try {
       const scope = resolveDomain(req.user!);
       const plan = updateCommandCenterPlan({
@@ -39,7 +41,7 @@ export function mountCommandCenterPlanRoutes(router: Router, runtime?: { io: Ser
         patch: req.body || {},
       });
       if (!plan) return res.status(404).json({ error: 'Plan not found.' });
-      res.json({ plan });
+      await sendDurableMutation(req, res, { plan });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -64,10 +66,10 @@ export function mountCommandCenterPlanRoutes(router: Router, runtime?: { io: Ser
     }
   });
 
-  router.delete('/command-center/plans/:id', requireAuth, (req, res) => {
+  router.delete('/command-center/plans/:id', requireAuth, async (req, res) => {
     const scope = resolveDomain(req.user!);
     const deleted = deleteCommandCenterPlan({ id: req.params.id, userId: req.user!.uid, ...scope });
     if (!deleted) return res.status(404).json({ error: 'Plan not found.' });
-    res.json({ deleted: true });
+    await sendDurableMutation(req, res, { deleted: true }, undefined, { retryable: false });
   });
 }

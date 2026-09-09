@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
 import { apiFetch } from '@/services/apiClient';
-import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { releaseSensorStream, requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { translate } from '@/i18n/runtime';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
+import { VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 
 interface UseWakeWordOptions {
-  /** Socket.IO connection for server-side Qwen ASR wake word detection */
+  /** Socket.IO connection for the selected server-side STT wake detector. */
   socket?: Socket | null;
   /** Porcupine access key (free at https://picovoice.ai) — optional, server-side Qwen ASR is the default */
   accessKey?: string;
@@ -54,12 +55,16 @@ function isWakeProviderUnavailableMessage(message: string): boolean {
   return /required for wake word detection|not configured|no DashScope key|access denied|not in good standing|unauthori[sz]ed|invalid api key|forbidden|401|403/i.test(message || '');
 }
 
-async function hasServerWakeProvider(): Promise<boolean | null> {
+async function hasServerWakeProvider(signal?: AbortSignal): Promise<boolean | null> {
   try {
-    const response = await apiFetch('/api/settings/keys');
+    const response = await apiFetch('/api/voice/active-provider', { signal });
     const status = await response.json().catch(() => ({}));
     if (!response.ok) return null;
-    return Boolean(status.DOUBAO_SPEECH_KEY || status.DASHSCOPE_API_KEY || status.QWEN_API_KEY);
+    if (!status.active || !Object.hasOwn(status.active, 'streamingStt')) return null;
+    const provider = status.active.streamingStt;
+    // A selected official route cannot be satisfied by an unrelated direct key.
+    if (status.pref?.stt === 'relay') return provider === 'relay';
+    return provider === 'ark' || provider === 'qwen';
   } catch {
     return null;
   }
@@ -97,6 +102,8 @@ export function useWakeWord({
   const startInFlightRef = useRef(false);
   const wakeConfigUnavailableRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const captureAbortRef = useRef<AbortController | null>(null);
+  const engineRef = useRef<any>(null);
   const retryAttemptRef = useRef(0);
   const retryScheduledRef = useRef(false);
   const onDetectionRef = useRef(onDetection);
@@ -105,6 +112,7 @@ export function useWakeWord({
   const isCallActiveRef = useRef(isCallActive);
   const onInterruptRef = useRef(onInterrupt);
   const wakeHandlersRef = useRef<{
+    socket?: Socket;
     detected?: (data: { keyword: string; timestamp: string }) => void;
     started?: () => void;
     error?: (data: { message: string }) => void;
@@ -125,8 +133,8 @@ export function useWakeWord({
   const accessKey = propKey || localStorage.getItem(PICOVOICE_ACCESS_KEY_STORAGE) || '';
 
   const removeWakeHandlers = useCallback(() => {
-    const s = socketRef.current;
     const handlers = wakeHandlersRef.current;
+    const s = handlers.socket || socketRef.current;
     if (s) {
       if (handlers.detected) s.off('wake:detected', handlers.detected);
       if (handlers.started) s.off('wake:started', handlers.started);
@@ -136,6 +144,12 @@ export function useWakeWord({
   }, []);
 
   const cleanupAudio = useCallback(() => {
+    captureAbortRef.current?.abort();
+    captureAbortRef.current = null;
+    startInFlightRef.current = false;
+    const engine = engineRef.current;
+    engineRef.current = null;
+    if (engine) { try { void Promise.resolve(engine.release()).catch(() => {}); } catch {} }
     if (processorRef.current) {
       try { processorRef.current.disconnect(); } catch {}
       processorRef.current = null;
@@ -167,7 +181,7 @@ export function useWakeWord({
       retryScheduledRef.current = false;
       setRetryEpoch(value => value + 1);
     }, delayMs);
-    console.warn(`[WakeWord-Qwen] Retrying wake stream in ${delayMs}ms`);
+    console.warn(`[WakeWord-Server] Retrying wake stream in ${delayMs}ms`);
   }, []);
 
   const disable = useCallback(() => {
@@ -183,9 +197,9 @@ export function useWakeWord({
     cleanupAudio();
   }, [cleanupAudio, removeWakeHandlers, clearRetrySchedule]);
 
-  // ── Server-side Qwen ASR wake detection (primary) ──
+  // ── Selected server-side STT wake detection (primary) ──
 
-  const enableQwenWake = useCallback(async () => {
+  const enableServerWake = useCallback(async (signal: AbortSignal) => {
     const s = socketRef.current;
     if (!s?.connected) {
       setError('Socket not connected — retrying...');
@@ -199,26 +213,28 @@ export function useWakeWord({
       return;
     }
 
-    const hasProvider = await hasServerWakeProvider();
+    const hasProvider = await hasServerWakeProvider(signal);
+    if (signal.aborted) return;
     if (hasProvider === false) {
       wakeConfigUnavailableRef.current = true;
       setIsListening(false);
       setIsSupported(false);
-      setError(wakeServiceMissingMessage());
+      setError(wakeServiceUnavailableMessage());
       return;
     }
 
     try {
       setError(null);
-      console.log('[WakeWord-Qwen] Opening microphone...');
+      console.log('[WakeWord-Server] Opening microphone...');
 
       const stream = await requestMicrophoneStream({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
-      });
+      }, signal);
+      if (signal.aborted) { releaseSensorStream('microphone', stream); return; }
       streamRef.current = stream;
-      console.log('[WakeWord-Qwen] Mic opened, setting up AudioContext');
+      console.log('[WakeWord-Server] Mic opened, setting up AudioContext');
 
       const ctx = new AudioContext({ sampleRate: 16000 });
       ctxRef.current = ctx;
@@ -227,7 +243,7 @@ export function useWakeWord({
       processorRef.current = processor;
 
       processor.onaudioprocess = (event) => {
-        if (!enabledRef.current) return;
+        if (signal.aborted || socketRef.current !== s || !s.connected || !enabledRef.current) return;
         const canSend = canSendWakeAudioRef.current;
         if (canSend && !canSend()) return;
         try {
@@ -236,7 +252,7 @@ export function useWakeWord({
           for (let i = 0; i < input.length; i++) {
             pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
           }
-          socketRef.current?.emit('wake:audio', pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
+          s.emit('wake:audio', pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
         } catch { /* ignore */ }
       };
 
@@ -247,12 +263,13 @@ export function useWakeWord({
       removeWakeHandlers();
 
       const onDetected = (data: { keyword: string; timestamp: string }) => {
+        if (signal.aborted || socketRef.current !== s || !enabledRef.current) return;
         const canAccept = canAcceptWakeRef.current;
         if (canAccept && !canAccept()) {
-          console.log('[WakeWord-Qwen] Ignored detection: voice gate closed');
+          console.log('[WakeWord-Server] Ignored detection: voice gate closed');
           return;
         }
-        console.log('[WakeWord-Qwen] Detected:', data.keyword);
+        console.log('[WakeWord-Server] Detected:', data.keyword);
         setLastDetection(data.timestamp);
         onDetectionRef.current?.();
 
@@ -264,7 +281,8 @@ export function useWakeWord({
       };
 
       const onStarted = () => {
-        console.log('[WakeWord-Qwen] Server confirmed, listening');
+        if (signal.aborted || socketRef.current !== s) return;
+        console.log('[WakeWord-Server] Server confirmed, listening');
         clearRetrySchedule(true);
         isListeningRef.current = true;
         setIsListening(true);
@@ -272,7 +290,8 @@ export function useWakeWord({
       };
 
       const onError = (data: { message: string }) => {
-        console.warn('[WakeWord-Qwen] Server error:', data.message);
+        if (signal.aborted) return;
+        console.warn('[WakeWord-Server] Server error:', data.message);
         const message = data.message || '';
         if (isWakeProviderUnavailableMessage(message)) {
           clearRetrySchedule(true);
@@ -297,14 +316,15 @@ export function useWakeWord({
         scheduleRetry();
       };
 
-      wakeHandlersRef.current = { detected: onDetected, started: onStarted, error: onError };
+      wakeHandlersRef.current = { socket: s, detected: onDetected, started: onStarted, error: onError };
       s.on('wake:detected', onDetected);
       s.on('wake:started', onStarted);
       s.on('wake:error', onError);
 
-      console.log('[WakeWord-Qwen] Emitting wake:start');
+      console.log('[WakeWord-Server] Emitting wake:start');
       s.emit('wake:start');
     } catch (err: any) {
+      if (signal.aborted) return;
       cleanupAudio();
       const msg = err.message || 'Failed to start wake word';
       if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
@@ -325,11 +345,12 @@ export function useWakeWord({
 
   // ── Picovoice on-device detection (fallback) ──
 
-  const enablePicovoice = useCallback(async () => {
+  const enablePicovoice = useCallback(async (signal: AbortSignal) => {
     try {
       setError(null);
 
       const { Porcupine, BuiltInKeyword } = await import('@picovoice/porcupine-web');
+      if (signal.aborted) return;
 
       const keywordMap: Record<string, typeof BuiltInKeyword[keyof typeof BuiltInKeyword]> = {
         'Porcupine': BuiltInKeyword.Porcupine,
@@ -340,6 +361,7 @@ export function useWakeWord({
       };
 
       const detectionCallback = (_detection: any) => {
+        if (signal.aborted || !enabledRef.current) return;
         const canAccept = canAcceptWakeRef.current;
         if (canAccept && !canAccept()) return;
         setLastDetection(new Date().toISOString());
@@ -372,6 +394,7 @@ export function useWakeWord({
             { publicPath: '/porcupine_params.pv' },
           );
         } catch {
+          if (signal.aborted) return;
           console.warn(`[WakeWord] Custom keyword "${keyword}" not found, falling back to "Jarvis"`);
           engine = await Porcupine.create(
             accessKey,
@@ -382,11 +405,14 @@ export function useWakeWord({
         }
       }
 
+      if (signal.aborted) { await engine.release(); return; }
+      engineRef.current = engine;
       const stream = await requestMicrophoneStream({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
-      });
+      }, signal);
+      if (signal.aborted) { releaseSensorStream('microphone', stream); return; }
       streamRef.current = stream;
 
       const ctx = new AudioContext({ sampleRate: engine.sampleRate });
@@ -412,6 +438,7 @@ export function useWakeWord({
       setIsListening(true);
       setIsSupported(true);
     } catch (err: any) {
+      if (signal.aborted) return;
       cleanupAudio();
       const msg = err.message || 'Failed to initialize wake word';
       if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
@@ -426,7 +453,6 @@ export function useWakeWord({
 
   const enable = useCallback(async () => {
     if (startInFlightRef.current || isListeningRef.current) return;
-    startInFlightRef.current = true;
 
     // Replace only this socket's stale session. Keep retryAttemptRef intact so
     // repeated provider failures back off instead of reconnecting in a loop.
@@ -434,24 +460,27 @@ export function useWakeWord({
     if (currentSocket?.connected) currentSocket.emit('wake:stop');
     removeWakeHandlers();
     cleanupAudio();
+    startInFlightRef.current = true;
     setIsListening(false);
     isListeningRef.current = false;
+    const controller = new AbortController();
+    captureAbortRef.current = controller;
 
     try {
       if (accessKey) {
         console.log('[WakeWord] Using Picovoice (on-device)');
-        await enablePicovoice();
+        await enablePicovoice(controller.signal);
       } else if (socketRef.current?.connected) {
-        console.log('[WakeWord] Using Qwen ASR (server-side)');
-        await enableQwenWake();
+        console.log('[WakeWord] Using selected STT (server-side)');
+        await enableServerWake(controller.signal);
       } else {
         console.log('[WakeWord] No Picovoice key and socket not connected, waiting...');
         setError('Waiting for connection...');
       }
     } finally {
-      startInFlightRef.current = false;
+      if (captureAbortRef.current === controller) startInFlightRef.current = false;
     }
-  }, [accessKey, cleanupAudio, enablePicovoice, enableQwenWake, removeWakeHandlers]);
+  }, [accessKey, cleanupAudio, enablePicovoice, enableServerWake, removeWakeHandlers]);
 
   // Listen for socket disconnect/reconnect — reset so wake auto-restarts on reconnect
   useEffect(() => {
@@ -460,6 +489,10 @@ export function useWakeWord({
 
     const onDisconnect = () => {
       console.log('[WakeWord] Socket disconnected, resetting...');
+      isListeningRef.current = false;
+      clearRetrySchedule();
+      removeWakeHandlers();
+      cleanupAudio();
       setIsListening(false);
       setError('Connection lost — reconnecting...');
     };
@@ -483,27 +516,39 @@ export function useWakeWord({
     return () => {
       s.off('disconnect', onDisconnect);
       s.off('connect', onConnect);
+      if (wakeHandlersRef.current.socket === s) {
+        if (s.connected) s.emit('wake:stop');
+        removeWakeHandlers();
+        cleanupAudio();
+        isListeningRef.current = false;
+        setIsListening(false);
+      }
     };
-  }, [socket?.id]);
+  }, [socket, socket?.id, cleanupAudio, removeWakeHandlers, clearRetrySchedule]);
 
   useEffect(() => {
     const onKeysChanged = () => {
       wakeConfigUnavailableRef.current = false;
       if (enabledRef.current) {
         setError(null);
-        setTimeout(() => { void enable(); }, 0);
+        disable();
+        setRetryEpoch(value => value + 1);
       }
     };
     window.addEventListener('lumi:keys-changed', onKeysChanged);
-    return () => window.removeEventListener('lumi:keys-changed', onKeysChanged);
-  }, [enable]);
+    window.addEventListener(VOICE_PROVIDER_CHANGED_EVENT, onKeysChanged);
+    return () => {
+      window.removeEventListener('lumi:keys-changed', onKeysChanged);
+      window.removeEventListener(VOICE_PROVIDER_CHANGED_EVENT, onKeysChanged);
+    };
+  }, [disable]);
 
   // Auto-start / stop — includes socket state so it retries when connection becomes available
   useEffect(() => {
     console.log('[WakeWord] State change — enabled:', enabled, 'isListening:', isListening, 'socket:', !!socketRef.current?.connected);
     if (enabled && !isListening && !wakeConfigUnavailableRef.current && !retryScheduledRef.current) {
       enable();
-    } else if (!enabled && isListening) {
+    } else if (!enabled) {
       disable();
     }
   }, [enabled, isListening, enable, disable, socket?.connected, retryEpoch]);

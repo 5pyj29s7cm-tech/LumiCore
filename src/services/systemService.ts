@@ -73,43 +73,33 @@ class SystemService {
   }
   async getVolume(): Promise<number> {
     if (this.isTauri) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        return await invoke<number>('get_system_volume');
-      } catch { /* fallback */ }
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<number>('get_system_volume');
     }
-    return parseFloat(localStorage.getItem('lumi_volume') || '50');
+    throw new Error('System volume requires the desktop app');
   }
 
   async setVolume(level: number): Promise<void> {
+    if (!this.isTauri) throw new Error('System volume requires the desktop app');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_system_volume', { level });
     localStorage.setItem('lumi_volume', String(level));
     document.documentElement.style.setProperty('--lumi-volume', String(level));
-    if (this.isTauri) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_system_volume', { level });
-      } catch { /* web fallback */ }
-    }
   }
 
   async getBrightness(): Promise<number> {
     if (this.isTauri) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        return await invoke<number>('get_screen_brightness');
-      } catch { /* fallback */ }
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<number>('get_screen_brightness');
     }
-    return parseFloat(localStorage.getItem('lumi_brightness') || '85');
+    throw new Error('Screen brightness is unavailable outside the desktop app');
   }
 
   async setBrightness(level: number): Promise<void> {
+    if (!this.isTauri) throw new Error('Screen brightness is unavailable outside the desktop app');
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_screen_brightness', { level });
     localStorage.setItem('lumi_brightness', String(level));
-    if (this.isTauri) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('set_screen_brightness', { level });
-      } catch { /* web fallback */ }
-    }
   }
 
   syncWallpaperDocumentMode(

@@ -1,13 +1,3 @@
-/**
- * Operation modes describe Lumi's execution posture.
- * The desktop presents three permission tiers:
- * - chat: visible conversation posture; model-owned foreground turns may
- *   borrow the Assistant manifest without persisting a mode change
- * - assistant: foreground helper with full local/tool/desktop permissions
- * - autonomous: assistant permissions plus long-running 24h background autonomy
- *
- * Meeting is a voice capture surface, not a fourth permission tier.
- */
 import { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
@@ -30,40 +20,18 @@ export interface OperationModeConfig {
   toolPolicy: ToolPolicy;
 }
 
-export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> = {
-  chat: {
-    id: 'chat',
-    label: 'Chat',
-    labelCN: 'Chat',
-    description: 'Visible conversational posture. A user-present model-owned turn may use the ordinary foreground Assistant manifest without persistently changing the client mode; long-running work uses Autonomy.',
-    promptOverlay: [
-      'You are in chat mode.',
-      'Answer, reason, explain, brainstorm, and help the user decide naturally.',
-      'When the current model-owned turn exposes a foreground capability manifest, decide whether the user wants an answer or real execution and use only that manifest. The visible client may remain in Chat.',
-      'Do not persistently change the client mode merely because semantic routing matched an action. A direct request is enough authorization for ordinary foreground work; hard confirmation and consequence boundaries still apply.',
-      'Use Autonomy only for explicit continuous, unattended, or long-running work.',
-      'When the task can be answered naturally without tools, just answer.',
-    ].join('\n'),
-    toolPolicy: {
-      allowedTools: ['client_get_state', 'client_action'],
-      requireConfirmation: [],
-      forbiddenTools: [],
-      maxIterations: 4,
-    },
-  },
-
-  assistant: {
+const CORE_CONFIG: OperationModeConfig = {
     id: 'assistant',
-    label: 'Assistant',
-    labelCN: 'Assistant',
-    description: 'Foreground assisted execution. The user is present; LumiCore has the same practical tool, browser, app, desktop, file, and skill permissions as Autonomy for requested work, but does not start unattended loops or long autonomous absorption by default.',
+    label: 'Lumi',
+    labelCN: 'Lumi',
+    description: 'One personal core for conversation, requested execution, memory and learning. Background work follows its own authorized schedules and policy.',
     promptOverlay: [
-      'You are in assistant mode.',
-      'Assistant mode is high-permission foreground work: assume the user is present and wants Lumi to proceed when they ask for action.',
+      'You are Lumi, one self-learning personal core. There are no Chat, Assistant, or Autonomous modes to select.',
+      'Respond naturally to conversation; when the user asks for action, use the relevant authorized capabilities and verify the outcome. Preserve context, memory, and task continuity across text and voice.',
       'Use tools, browser control, saved/authorized login sessions, local files, skills, teams, and visible desktop control as needed without per-tool permission chatter.',
       'Ask one short question only when the missing detail would change the target, recipient, account, file, or outcome. Otherwise continue and verify.',
       'For visible desktop work, inspect the active window/screen, use accessible UI controls when available, use the virtual cursor path for raw clicks when helpful, and verify the result before claiming completion.',
-      'Assistant may downshift into pure chat for conversational turns. If a task clearly needs hours of monitoring, background learning, or continuous absorption, switch or ask to switch to Autonomy.',
+      'Learning, reminders and long-running work use their own enabled policies, schedules, budgets and durable checkpoints. Never ask the user to switch modes. A legacy mode value does not authorize unattended work or override confirmations.',
       'Ordinary user-requested messages, comments, replies, non-commercial posts, local deliverables, CAD/application handoffs, and saved/authorized login session reuse can proceed without a separate tool popup.',
       'Stop for explicit confirmation or handoff only at hard boundaries: payments, purchases, transfers, real brokerage orders, ad spend, price/inventory/order changes, first-time login, QR/OTP/captcha/passkey/security verification, account switching, credential storage, third-party authorization, legal filing/signature/final submission, ambiguous high-consequence submit, destructive actions, installs, package changes, git mutations, or privileged system changes.',
       'Stock watch, quote checks, watchlists, alerts, trading plans, and paper trading can run as observational/simulated work; real brokerage orders, cancel-orders, trading passwords, and fund transfers require confirmation.',
@@ -74,31 +42,13 @@ export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> 
       forbiddenTools: [],
       maxIterations: 80,
     },
-  },
+};
 
-  autonomous: {
-    id: 'autonomous',
-    label: 'Autonomy',
-    labelCN: 'Autonomy',
-    description: 'Long-running autonomous execution. Same foreground permissions as Assistant, plus proactive 24h operation, background queues, monitoring, learning, sorting, absorption, and ultra-long task continuation within safety boundaries.',
-    promptOverlay: [
-      'You are in autonomy mode.',
-      'Autonomy has the same practical permissions as assistant mode, plus permission to keep working across long horizons.',
-      'Use the single LumiCore task state, scheduled/continuous monitoring, memory consolidation, learning, folder sorting, and research absorption when useful.',
-      'Ask proactive questions when a missing fact blocks progress, then continue once answered. Do not stop after one sub-step if a safe next step is available.',
-      'For ultra-long tasks, keep durable state, checkpoints, artifacts, blockers, and next actions so Lumi can resume after sleep, restart, or window hiding.',
-      'For visible desktop work, keep progress observable, inspect before acting, use the virtual cursor path when helpful, and verify results.',
-      'Do not spam permission popups for ordinary tools. Hard boundaries still require confirmation or handoff: payments, purchases, transfers, real brokerage orders, ad spend, price/inventory/order changes, first-time login, QR/OTP/captcha/passkey/security verification, account switching, credential storage, third-party authorization, legal filing/signature/final submission, ambiguous high-consequence submit, destructive actions, installs, package changes, git mutations, or privileged system changes.',
-      'Market watch and paper-trading loops may continue; real-money brokerage actions still stop for explicit confirmation.',
-    ].join('\n'),
-    toolPolicy: {
-      allowedTools: ['*'],
-      requireConfirmation: [],
-      forbiddenTools: [],
-      maxIterations: 240,
-    },
-  },
-
+export const OPERATION_MODE_CONFIGS: Record<OperationMode, OperationModeConfig> = {
+  assistant: CORE_CONFIG,
+  // Read-only compatibility aliases, with identical policy and identity.
+  chat: CORE_CONFIG,
+  autonomous: CORE_CONFIG,
   meeting: {
     id: 'meeting',
     label: 'Meeting',
@@ -124,11 +74,13 @@ export function normalizeOperationMode(mode?: string): OperationMode {
  */
 export function buildOperationModeTaxonomyPrompt(): string {
   return [
-    '## Canonical LumiCore operation-mode taxonomy',
-    `LumiCore has exactly ${LUMI_OPERATION_MODE_IDS.length} persistent user-selectable operation/permission modes: ${LUMI_OPERATION_MODE_IDS.join(', ')}.`,
-    `The complete client-state discriminator is ${LUMI_CLIENT_MODE_IDS.join(', ')} only because ${LUMI_MEETING_CAPTURE_SURFACE.id} represents a temporary transcription/capture surface. It is not a fourth permission mode.`,
-    'Internal personality response presets and conversation styles are not operation modes, do not appear as client runtime modes, and never change tool permissions or task ownership.',
-    'Never claim this taxonomy came from a current client-state check unless a successful current-turn client receipt actually exists.',
+    '## Lumi personal core',
+    'Lumi has no user-selectable Chat, Assistant, or Autonomous modes. Conversation, execution, memory and learning belong to one core.',
+    'The assistant wire ID exists only for compatibility. Old chat/autonomous values normalize to the same core and never grant background authorization.',
+    'Meeting is a temporary transcription/capture surface with no per-utterance tools or replies. It is not a permission mode.',
+    'Internal personality response presets and conversation styles do not change tool permissions or task ownership.',
+    'Background activity follows explicit task authorization, enabled workflows, resource budgets and safety boundaries. Do not ask the user to switch modes.',
+    'Do not claim live client state was checked without a successful current-turn receipt.',
   ].join('\n');
 }
 
@@ -159,7 +111,7 @@ export function buildOperationModeToolPolicy(
 ): ToolPolicy {
   const normalized = normalizeOperationMode(mode);
   const fallback = OPERATION_MODE_CONFIGS[normalized].toolPolicy;
-  if (!registry || normalized === 'chat' || normalized === 'meeting') {
+  if (!registry || normalized === 'meeting') {
     return {
       ...fallback,
       allowedTools: [...fallback.allowedTools],
@@ -175,7 +127,7 @@ export function buildOperationModeToolPolicy(
     .filter(entry => (
       !entry.deprecated
       && entry.executable
-      && entry.modes.includes(normalized)
+      && entry.modes.some(mode => normalizeOperationMode(mode) === normalized)
     ));
   const securityOverrides = Object.fromEntries(
     manifest
@@ -223,12 +175,12 @@ export function detectRequestedOperationMode(text: string): OperationMode | null
   const normalized = stripModeCommandCourtesy(normalizeModeCommandText(text));
   if (!normalized) return null;
 
-  for (const mode of LUMI_CLIENT_MODE_IDS) {
+  for (const mode of [LUMI_MEETING_CAPTURE_SURFACE.id]) {
     if (PURE_MODE_COMMAND_RES[mode].test(normalized)) return mode;
   }
 
   if (!MODE_SWITCH_VERB_RE.test(normalized)) return null;
-  for (const mode of [LUMI_MEETING_CAPTURE_SURFACE.id, ...LUMI_OPERATION_MODE_IDS]) {
+  for (const mode of [LUMI_MEETING_CAPTURE_SURFACE.id]) {
     if (MODE_TARGET_RES[mode].test(normalized)) return mode;
   }
   return null;
@@ -236,7 +188,14 @@ export function detectRequestedOperationMode(text: string): OperationMode | null
 
 export function isPureOperationModeSwitchRequest(text: string, mode?: OperationMode | null): boolean {
   const requested = mode || detectRequestedOperationMode(text);
-  return Boolean(requested && PURE_MODE_COMMAND_RES[requested].test(
+  return Boolean(requested === 'meeting' && PURE_MODE_COMMAND_RES.meeting.test(
     stripModeCommandCourtesy(normalizeModeCommandText(text)),
   ));
+}
+
+/** Retired selector commands are explained as conversation, never permission mutations. */
+export function isRetiredOperationModeRequest(text: string): boolean {
+  const normalized = stripModeCommandCourtesy(normalizeModeCommandText(text));
+  return (['chat', 'assistant', 'autonomous'] as const)
+    .some(mode => PURE_MODE_COMMAND_RES[mode].test(normalized));
 }

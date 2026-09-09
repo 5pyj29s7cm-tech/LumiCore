@@ -37,6 +37,7 @@ describe('knowledge retrieval model routing', () => {
     const result = await generateConfiguredEmbedding('semantic retrieval', 'embedding-user');
 
     expect(result).toEqual({
+      route: 'primary',
       provider: 'siliconflow',
       model: 'Qwen/Qwen3-Embedding-4B',
       vector: [0.2, 0.3, 0.4],

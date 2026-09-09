@@ -26,6 +26,7 @@ const blueprints: EvidenceWorkflowStepBlueprint[] = [
     order: 0,
     executionMode: 'automatic',
     tool: 'source_status',
+    targetIdentity: 'synthetic-source',
     requiredEvidence: ['source configuration receipt'],
   },
   {
@@ -35,6 +36,7 @@ const blueprints: EvidenceWorkflowStepBlueprint[] = [
     order: 1,
     executionMode: 'automatic',
     tool: 'source_scan',
+    targetIdentity: 'synthetic-source',
     requiredEvidence: ['query receipt'],
   },
   {
@@ -49,6 +51,8 @@ const blueprints: EvidenceWorkflowStepBlueprint[] = [
 
 function seedVerifiedReceipt(input: {
   userId: string;
+  takeoverTaskId: string;
+  targetIdentity?: string;
   domain?: string;
   orgId?: string;
   toolName: string;
@@ -66,6 +70,7 @@ function seedVerifiedReceipt(input: {
     domain: input.domain || 'personal',
     orgId: input.orgId || '',
     status: 'completed',
+    context: { taskId: input.takeoverTaskId },
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
   });
@@ -77,11 +82,18 @@ function seedVerifiedReceipt(input: {
     requestId: `request-${input.receiptId}`,
     idempotencyKey: `idempotency-${input.receiptId}`,
     toolName: input.toolName,
-    targetIdentity: '',
+    targetIdentity: input.targetIdentity || 'synthetic-source',
     inputDigest: '',
     envelope: JSON.stringify({
+      version: 1,
       status: 'verified_success',
       taskId: actionTaskId,
+      turnId: `turn-${input.receiptId}`,
+      requestId: `request-${input.receiptId}`,
+      idempotencyKey: `idempotency-${input.receiptId}`,
+      targetIdentity: input.targetIdentity || 'synthetic-source',
+      completedAt: input.createdAt,
+      verification: { status: 'verified', basis: 'terminal_verification' },
       toolName: input.toolName,
     }),
     outcome: 'verified_success',
@@ -185,6 +197,7 @@ describe('generic evidence workflow', () => {
     const receiptId = `receipt-persisted-${Date.now()}`;
     seedVerifiedReceipt({
       userId,
+      takeoverTaskId: task.id,
       toolName: 'source_status',
       receiptId,
       createdAt: new Date(Date.now() + 1_000).toISOString(),
@@ -273,6 +286,7 @@ describe('generic evidence workflow', () => {
     const receiptId = `receipt-recovery-${Date.now()}`;
     seedVerifiedReceipt({
       userId,
+      takeoverTaskId: task.id,
       toolName: 'source_status',
       receiptId,
       createdAt: new Date(Date.now() + 1_000).toISOString(),
@@ -302,5 +316,24 @@ describe('generic evidence workflow', () => {
       receiptIds: [],
     });
     expect(recovered.workflow.status).toBe('blocked');
+  });
+
+  it('rejects another task, a different target within this task, and missing target declarations', () => {
+    const userId = `evidence-binding-${Date.now()}`;
+    const task = createWorkTakeoverTask({ userId, category: 'general_work', title: 'Exact target' });
+    startTaskEvidenceWorkflow({ userId, taskId: task.id, definitionId: 'target', blueprints });
+    transitionTaskEvidenceWorkflowStep({ userId, taskId: task.id, stepId: 'source-preflight', status: 'running' });
+    for (const [receiptId, takeoverTaskId, targetIdentity] of [
+      ['wrong-task', 'another-takeover', 'synthetic-source'],
+      ['wrong-target', task.id, 'another-source'],
+    ]) {
+      seedVerifiedReceipt({ userId, takeoverTaskId, targetIdentity, toolName: 'source_status', receiptId, createdAt: new Date(Date.now() + 1000).toISOString() });
+      expect(() => transitionTaskEvidenceWorkflowStep({ userId, taskId: task.id, stepId: 'source-preflight', status: 'completed', receiptIds: [receiptId] })).toThrow(/out-of-scope/);
+    }
+    const noTarget = createWorkTakeoverTask({ userId, category: 'general_work', title: 'Undeclared target' });
+    startTaskEvidenceWorkflow({ userId, taskId: noTarget.id, definitionId: 'legacy', blueprints: blueprints.map(step => ({ ...step, targetIdentity: undefined })) });
+    transitionTaskEvidenceWorkflowStep({ userId, taskId: noTarget.id, stepId: 'source-preflight', status: 'running' });
+    seedVerifiedReceipt({ userId, takeoverTaskId: noTarget.id, toolName: 'source_status', receiptId: 'undeclared', createdAt: new Date(Date.now() + 1000).toISOString() });
+    expect(() => transitionTaskEvidenceWorkflowStep({ userId, taskId: noTarget.id, stepId: 'source-preflight', status: 'completed', receiptIds: ['undeclared'] })).toThrow(/out-of-scope/);
   });
 });

@@ -27,7 +27,7 @@ import { makeLLMCall, makeLLMCallDirect } from './providers';
 import { dispatchLLMCall } from './dispatch';
 import { compileReasoningFailoverCandidates } from './failover_policy';
 import { rerankConfiguredDocuments } from './rerank_provider';
-import { relayConfigured } from '../relay/config';
+import { relayBaseUrl, relayConfigured } from '../relay/config';
 import { listOfficialApiModels, type OfficialApiModelCatalog } from './official_api';
 import {
   DEFAULT_EMBEDDING_MODELS,
@@ -60,12 +60,14 @@ import {
 } from './world_preferences';
 import {
   LUMI_MODEL_ROLE_IDS,
+  LUMI_OFFICIAL_BASE_URL,
   LUMI_OFFICIAL_DEFAULT_MODELS,
   LUMI_OFFICIAL_PROVIDER_ID,
   LUMI_OFFICIAL_ROLE_CAPABILITIES,
   LUMI_OFFICIAL_SUPPORTED_ROLES,
   LUMI_OFFICIAL_UNSUPPORTED_ROLES,
   normalizeLumiOfficialModel,
+  migrateLumiOfficialReasoningDefault,
 } from '../../shared/model_provider_capabilities';
 import { normalizeVoiceModelId } from '../config/voice_preference';
 import { getModelPreferenceRevision } from './model_preference_revision';
@@ -318,7 +320,13 @@ function officialModelForRole(userId: string, role: LumiModelRole, hasUserSelect
     }
   }
   const configured = cleanModel(process.env[envName[role]]);
-  if (configured && !hasUserSelection) return officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+  if (configured && !hasUserSelection) {
+    let officialDeployment = false;
+    try { officialDeployment = !relayBaseUrl() || new URL(relayBaseUrl()).origin === new URL(LUMI_OFFICIAL_BASE_URL).origin; } catch {}
+    return role === 'reasoning' && officialDeployment
+      ? migrateLumiOfficialReasoningDefault(configured)
+      : officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+  }
 
   switch (role) {
     case 'reasoning': {
@@ -509,6 +517,9 @@ export function selectOfficialRoleModel(
   if (availableModels.includes(recommended)) {
     return { model: recommended, selectionReason: 'recommended_default' };
   }
+  // A catalog outage/removal must not silently put the retired reasoning
+  // default back into service by selecting the first alphabetic model.
+  if (role === 'reasoning') return null;
   return availableModels[0]
     ? { model: availableModels[0], selectionReason: 'catalog_fallback' }
     : null;

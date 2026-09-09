@@ -52,8 +52,11 @@ export function selectActiveTaskWidgetState(input: {
   const threads = activeFocusThreads(input.focusThreads);
   const tasks = activeWorkflowTasks(input.tasks);
   const primaryRuntimeTask = runtimeTasks[0];
-  const primaryThread = threads[0];
-  const primaryWorkflowTask = tasks[0];
+  // Pick one identity first. Evidence from another task must not fill this
+  // task's title, blocker or next action just because its own detail is empty.
+  const primaryTaskId = primaryRuntimeTask?.taskId || threads[0]?.taskId || tasks[0]?.id;
+  const primaryThread = threads.find(thread => thread.taskId === primaryTaskId);
+  const primaryWorkflowTask = tasks.find(task => task.id === primaryTaskId);
   const visible = Boolean(primaryRuntimeTask || primaryThread || primaryWorkflowTask || input.workflowActive);
   const status = primaryRuntimeTask?.status
     || primaryThread?.status
@@ -70,7 +73,7 @@ export function selectActiveTaskWidgetState(input: {
     || primaryWorkflowTask?.completionFeedback?.blockers[0]
     || primaryWorkflowTask?.completionFeedback?.incomplete[0]
     || primaryWorkflowTask?.completionFeedback?.nextSteps[0]
-    || input.progressText;
+    || (!primaryTaskId ? input.progressText : '');
   const title = customerVisibleTaskDetail(rawTitle, locale, input.fallbackTitle);
   const detail = customerVisibleTaskBlocker(rawDetail, locale);
   const activeTaskIds = new Set([

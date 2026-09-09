@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dispatchLLMCall, dispatchLLMCallStreaming, type LLMGetters } from '../server/llm/dispatch';
 import { makeLLMCallStreaming } from '../server/llm/providers';
-import { resetCircuit } from '../server/cloud/circuit_breaker';
+import { recordFailure, resetCircuit } from '../server/cloud/circuit_breaker';
 import { resolveAutoLocalModelCandidates } from '../server/llm/local_models';
 
 vi.mock('../server/llm/local_models', async importOriginal => {
@@ -44,6 +44,33 @@ afterEach(() => {
 });
 
 describe('transactional streaming model routing', () => {
+  it.each([false, true])('skips a quarantined local fallback before inference (streaming=%s)', async streaming => {
+    recordFailure('lmstudio', 'hung-backup', new Error('timed out'), { openImmediately: true, cooldownMs: 120_000 });
+    const localCreate = vi.fn();
+    const goodResponse = { choices: [{ message: { content: 'healthy fallback' } }] };
+    const officialCreate = vi.fn(async () => { throw Object.assign(new Error('official forbidden'), { status: 403 }); });
+    const goodCreate = vi.fn(async () => streaming
+      ? (async function* () { yield { choices: [{ delta: { content: 'healthy fallback' } }] }; })()
+      : goodResponse);
+    const config = {
+      provider: 'relay', model: 'official-primary', selectionMode: 'ordered_fallback' as const,
+      fallbackCandidates: [{ provider: 'lmstudio' as const, model: 'hung-backup' }, { provider: 'openai' as const, model: 'healthy-backup' }],
+      allowCloudFallback: true, attemptTimeouts: deadlines,
+    };
+    const clients = getters({ getRelay: () => ({ chat: { completions: { create: officialCreate } } }),
+      getLmStudio: () => ({ chat: { completions: { create: localCreate } } }),
+      getOpenAI: () => ({ chat: { completions: { create: goodCreate } } }),
+    });
+    const messages = [{ role: 'user' as const, content: 'fallback test' }];
+    const result = streaming
+      ? await dispatchLLMCallStreaming(messages, [], config, () => {}, clients)
+      : await dispatchLLMCall(messages, [], config, clients);
+    expect(result.text).toBe('healthy fallback');
+    expect(result.routing.attempts).toContainEqual(expect.objectContaining({ provider: 'lmstudio', model: 'hung-backup', status: 'skipped', reason: 'circuit_open', durationMs: 0 }));
+    expect(localCreate).not.toHaveBeenCalled();
+    expect(goodCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('fails over when a local model returns only whitespace and an empty tool list', async () => {
     vi.mocked(resolveAutoLocalModelCandidates).mockResolvedValueOnce([
       { provider: 'lmstudio', model: 'empty-local', baseUrl: 'http://127.0.0.1:1234' },

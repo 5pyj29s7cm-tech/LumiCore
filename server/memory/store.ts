@@ -14,6 +14,8 @@ import { generateConfiguredEmbedding, getEmbeddingRoute, type EmbeddingResult } 
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 import { isProviderLocalOnly, isStrictPrivacy } from '../config/privacy';
 import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding, memoryEmbeddingInputHash } from './embedding_identity';
+import { isTestMemory } from './provenance';
+import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 
 function getMemoryStore(): Memory[] {
   const db = readDB();
@@ -77,6 +79,13 @@ function dedupeMemoriesInRankOrder(memories: Memory[]): Memory[] {
 /** Bounded cache keyed by user, actual vector space and input text. */
 const embeddingCache = new Map<string, EmbeddingResult>();
 const EMBEDDING_CACHE_MAX = 500;
+// A gateway may return its canonical model name for a configured alias. Keep
+// that identity bound to the exact user/selection, never to a fallback route.
+const resolvedEmbeddingRoutes = new Map<string, { provider: string; model: string }>();
+function embeddingRouteIdentity(userId: string) {
+  const primary = getEmbeddingRoute(userId).primary;
+  return resolvedEmbeddingRoutes.get(JSON.stringify([userId, primary.provider, primary.model])) || primary;
+}
 
 function cacheEmbedding(key: string, result: EmbeddingResult) {
   if (embeddingCache.size >= EMBEDDING_CACHE_MAX) {
@@ -104,6 +113,9 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 function matchesMemoryQueryFilters(memory: Memory, query: MemoryQuery): boolean {
+  if (!query.includeOperationalTraces && isTestMemory(memory)) return false;
+  if (!query.includeSuperseded && memory.conflict?.status === 'resolved'
+    && memory.conflict.resolution === 'prefer_one' && memory.conflict.chosenMemoryId !== memory.id) return false;
   if (query.includeOperationalTraces !== true && isOperationalTraceMemory(memory)) return false;
   if (query.evidenceClasses && !query.evidenceClasses.includes(classifyMemoryEvidence(memory))) return false;
   if (query.userId && memory.userId !== query.userId) return false;
@@ -154,7 +166,7 @@ function embeddingNamespace(result: EmbeddingResult): NonNullable<Memory['embedd
   return { provider: result.provider, model: result.model, dimensions: result.vector.length };
 }
 
-export async function generateEmbeddingWithIdentity(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<EmbeddingResult | null> {
+export async function generateEmbeddingWithIdentity(text: string, userId = 'anonymous', options: { signal?: AbortSignal; allowFallback?: boolean; onError?: (error: unknown) => void } = {}): Promise<EmbeddingResult | null> {
   options.signal?.throwIfAborted();
   const route = getEmbeddingRoute(userId);
   // Only the currently selected primary identity can satisfy a cache read.
@@ -168,9 +180,15 @@ export async function generateEmbeddingWithIdentity(text: string, userId = 'anon
     const result = await generateConfiguredEmbedding(text, userId, options);
     options.signal?.throwIfAborted();
     cacheEmbedding(embeddingCacheKey(userId, result.provider, result.model, text), result);
+    if (result.route === 'primary') {
+      if (resolvedEmbeddingRoutes.size >= EMBEDDING_CACHE_MAX) resolvedEmbeddingRoutes.delete(resolvedEmbeddingRoutes.keys().next().value!);
+      resolvedEmbeddingRoutes.set(JSON.stringify([userId, route.primary.provider, route.primary.model]), { provider: result.provider, model: result.model });
+      cacheEmbedding(routeKey, result);
+    }
     return result;
-  } catch {
+  } catch (error) {
     options.signal?.throwIfAborted();
+    options.onError?.(error);
     return null;
   }
 }
@@ -483,9 +501,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
       .filter(({ score }) => score > 0)
       .sort((a, b) => {
         // Tier priority overrides score within same magnitude
-        const tierDiff = priorityForTier(a.m.tier) - priorityForTier(b.m.tier);
-        if (Math.abs(tierDiff) >= 2) return tierDiff;
-        return b.score - a.score;
+        return b.score - a.score || priorityForTier(a.m.tier) - priorityForTier(b.m.tier);
       });
     memories = scored.map(({ m }) => m);
   } else {
@@ -515,7 +531,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
   const result = memories.slice(0, limit);
 
   // ── Hebbian learning: co-retrieved memories strengthen pairwise associations ──
-  if (q.userId && result.length >= 2) {
+  if (q.recordRetrieval === true && q.userId && result.length >= 2) {
     const resultIds = result.map(m => m.id);
     strengthenAssociations(q.userId, resultIds);
 
@@ -550,7 +566,7 @@ export function queryMemories(q: MemoryQuery): Memory[] {
   }
 
   const uniqueResult = dedupeMemoriesInRankOrder(result);
-  markMemoriesRetrieved(uniqueResult);
+  if (q.recordRetrieval === true) markMemoriesRetrieved(uniqueResult);
 
   return uniqueResult;
 }
@@ -614,7 +630,7 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
       return memory && matchesMemoryQueryFilters(memory, q)
         && memoryEmbeddingInputHash(memory) === candidate.inputHash ? [memory] : [];
     }).slice(0, limit);
-    markMemoriesRetrieved(result);
+    if (q.recordRetrieval === true) markMemoriesRetrieved(result);
     return result;
   };
 
@@ -650,21 +666,48 @@ export async function queryMemoriesVector(q: MemoryQuery): Promise<Memory[]> {
   return publishCurrent(scored);
 }
 
+export interface MemoryIndexProgress { attempted: number; indexed: number; failed: number; stale: number; remaining: number; errors: Record<string, number> }
+
 /** Explicitly migrate missing, legacy or differently configured vector spaces. */
-export async function backfillEmbeddings(userId?: string): Promise<number> {
+type MemoryIndexOptions = { limit?: number; signal?: AbortSignal; domain?: string; orgId?: string; progress?: MemoryIndexProgress };
+export function backfillEmbeddings(userId?: string, options: MemoryIndexOptions = {}): Promise<number> {
+  return runSerializedMutation(`memory_index:${userId || 'all'}`, () => runMemoryIndexBackfill(userId, options));
+}
+async function runMemoryIndexBackfill(userId: string | undefined, options: MemoryIndexOptions): Promise<number> {
   const all = getMemoryStore();
-  const targets = all.filter(m => {
+  const needsIndex = (m: Memory) => {
     if (userId && m.userId !== userId) return false;
-    const primary = getEmbeddingRoute(m.userId).primary;
+    if (!matchesMemoryScope(m, options.domain, options.orgId)) return false;
+    if (isTestMemory(m) || isOperationalTraceMemory(m) || isMemoryAvatarScoped(m) || m.nodeType === 'branch') return false;
+    const primary = embeddingRouteIdentity(m.userId);
     return !hasCurrentMemoryEmbedding(m) || !m.embedding || !m.embeddingNamespace
       || m.embeddingNamespace.provider !== primary.provider
       || m.embeddingNamespace.model !== primary.model
       || m.embeddingNamespace.dimensions !== m.embedding.length;
-  });
+  };
+  const progress = options.progress;
+  const targets = all.filter(needsIndex).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, options.limit ?? Infinity);
   let count = 0;
+  let lastRequestAt = 0;
   for (const m of targets) {
+    options.signal?.throwIfAborted();
+    if (!needsIndex(m)) continue;
+    // Background maintenance shares the official gateway's user-wide quota
+    // with foreground chat. Keep it below 40 requests/minute and stop on the
+    // first provider failure rather than flooding fallback routes.
+    const delay = 1500 - (Date.now() - lastRequestAt);
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    options.signal?.throwIfAborted();
+    lastRequestAt = Date.now();
+    if (progress) progress.attempted++;
     const inputHash = memoryEmbeddingInputHash(m);
-    const result = await generateEmbeddingWithIdentity(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId);
+    const result = await generateEmbeddingWithIdentity(`${m.type}: ${m.content} ${m.keywords.join(' ')}`, m.userId, { signal: options.signal, allowFallback: false, onError: error => {
+      if (!progress) return;
+      const message = error instanceof Error ? error.message : '';
+      const status = message.match(/(?:failed|HTTP)\s*\(?([45]\d\d)/i)?.[1];
+      const code = status ? `http_${status}` : /timed? ?out|timeout/i.test(message) ? 'timeout' : 'provider_error';
+      progress.errors[code] = (progress.errors[code] || 0) + 1;
+    } });
     const current = getMemoryStore().find(memory => memory.id === m.id);
     if (result && current && memoryEmbeddingInputHash(current) === inputHash) {
       current.embedding = result.vector;
@@ -672,12 +715,13 @@ export async function backfillEmbeddings(userId?: string): Promise<number> {
       current.embeddingContentHash = inputHash;
       saveMemoryStore(getMemoryStore());
       count++;
+      if (progress) progress.indexed++;
+    } else if (progress) {
+      if (!result) progress.failed++; else progress.stale++;
     }
-    // Small delay to avoid rate limits
-    if (count % 10 === 0 && count > 0) {
-      await new Promise(r => setTimeout(r, 200));
-    }
+    if (!result) break;
   }
+  if (progress) progress.remaining = getMemoryStore().filter(needsIndex).length;
   return count;
 }
 
@@ -1088,6 +1132,7 @@ export function formatMemoriesForContext(
 
   const lines: string[] = [
     '## Retrieved memory evidence',
+    'When quoting a recalled identifier, marker, path, code or exact location, copy its characters verbatim. Do not decorate, translate, insert spaces, or invent a variant. If uncertain, say so.',
     'Each item below is a recalled candidate from an earlier source, not part of the current user message and not unquestionable truth. The current turn and same-conversation evidence take priority.',
     'Memory confidence describes the stored extraction, not whether a current name, code, person, customer, project, or task is the same entity. Every recalled entity binding starts unconfirmed. A shared word, exact token, name fragment, code prefix, or semantic similarity is retrieval evidence only; never transfer attributes, status, plans, or actions until the user or same-conversation history explicitly establishes the identity. Ask one short clarification when that binding matters.',
     'Owner statements prove that the owner previously said something; owner observations are inferences that may be wrong; shared context is not proof of an owner trait; Lumi narrative describes Lumi and must never be used as evidence about the owner.',

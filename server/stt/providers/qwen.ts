@@ -48,6 +48,9 @@ export function createStream(
   let sessionUpdateSent = false;
   let eventCounter = 0;
   let ending = false;
+  let closed = false;
+  let finishSent = false;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let errorNotified = false;
   let lastPartial = '';
   let endpointSilenceMs = clampEndpointSilenceMs(Number(process.env.QWEN_ASR_SILENCE_MS || 850));
@@ -59,7 +62,7 @@ export function createStream(
   };
 
   const notifyError = (err: Error) => {
-    if (errorNotified || ending) return;
+    if (errorNotified || closed) return;
     errorNotified = true;
     errorCallbacks.forEach(callback => callback(err));
   };
@@ -67,6 +70,21 @@ export function createStream(
   function nextId(): string {
     return `evt_${++eventCounter}_${Date.now()}`;
   }
+
+  const abort = () => {
+    closed = true;
+    ending = true;
+    audioQueue.length = 0;
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = undefined;
+    try { ws.close(); } catch {}
+  };
+
+  const sendFinish = () => {
+    if (closed || finishSent || !ending || !sessionReady || ws.readyState !== WebSocketImpl.OPEN) return;
+    finishSent = true;
+    ws.send(JSON.stringify({ event_id: nextId(), type: 'session.finish' }));
+  };
 
   function sendSessionUpdate(): void {
     if (sessionUpdateSent) return;
@@ -89,12 +107,14 @@ export function createStream(
   }
 
   ws.onopen = () => {
+    if (closed) { try { ws.close(); } catch {} return; }
     logger.info('[Qwen-ASR] WebSocket connected, sending session.update');
     // Configure session: VAD mode, PCM 16kHz mono.
     sendSessionUpdate();
   };
 
   ws.onmessage = (event: MessageEvent) => {
+    if (closed) return;
     const raw = event.data as string;
     try {
       const msg = JSON.parse(raw);
@@ -113,6 +133,7 @@ export function createStream(
             }));
           }
           audioQueue.length = 0;
+          sendFinish();
           break;
 
         case 'input_audio_buffer.speech_started':
@@ -148,7 +169,7 @@ export function createStream(
         }
 
         case 'session.finished':
-          ending = true;
+          abort();
           logger.info('[Qwen-ASR] Session finished');
           break;
 
@@ -170,6 +191,7 @@ export function createStream(
   };
 
   ws.onerror = (event: Event) => {
+    if (closed) return;
     const err = new Error(`Qwen-ASR WebSocket error: ${(event as any).message || event.type || 'unknown'}`);
     recordFailure(PROVIDER, undefined, err);
     logger.error('[Qwen-ASR] WebSocket error:', (event as any).message || event.type || 'unknown');
@@ -177,6 +199,8 @@ export function createStream(
   };
 
   ws.onclose = (event: CloseEvent) => {
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = undefined;
     const err = new Error(`Qwen-ASR closed (code=${event.code}, reason=${event.reason || 'none'})`);
     if (!ending) {
       const classified = classifyCloudError(err, PROVIDER);
@@ -186,9 +210,12 @@ export function createStream(
       notifyError(err);
     }
     logger.info(`[Qwen-ASR] Closed (code=${event.code}, reason=${event.reason || 'none'})`);
+    closed = true;
+    audioQueue.length = 0;
   };
 
   return {
+    abort,
     sendAudio(chunk: Buffer) {
       if (ending) return;
       if (ws.readyState !== WebSocketImpl.OPEN || !sessionReady) {
@@ -202,14 +229,12 @@ export function createStream(
       }));
     },
     end() {
+      if (closed || ending) return;
       ending = true;
-      audioQueue.length = 0;
-      if (ws.readyState === WebSocketImpl.OPEN) {
-        ws.send(JSON.stringify({ event_id: nextId(), type: 'session.finish' }));
-        setTimeout(() => {
-          try { ws.close(); } catch {}
-        }, 500);
-      }
+      // Finishing accepted audio is distinct from abandoning the session.
+      // The handshake drains its queue before sending session.finish.
+      sendFinish();
+      closeTimer = setTimeout(abort, 5_000);
     },
     updateEndpointing(silenceDurationMs: number) {
       endpointSilenceMs = clampEndpointSilenceMs(silenceDurationMs);

@@ -1,5 +1,6 @@
 import {
   isTerminalConversationTaskStatus,
+  isDelegatedActionEvidenceArchive,
   type ConversationTaskStatus,
 } from '../cognition/task_execution_ledger';
 
@@ -113,7 +114,8 @@ export function updateConversationFocusThread(
 ): ConversationFocusThread | null {
   const tasks = Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks as FocusTaskLike[] : [];
   const task = tasks.find(candidate => (
-    candidate.id === input.taskId
+    !isDelegatedActionEvidenceArchive(candidate)
+    && candidate.id === input.taskId
     && candidate.userId === input.userId
     && (!input.domain || candidate.domain === input.domain)
     && (input.domain !== 'work' || !input.orgId || candidate.orgId === input.orgId)
@@ -150,7 +152,8 @@ export function listConversationFocusThreads(
   const tasks = Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks as FocusTaskLike[] : [];
   return tasks
     .filter(task => (
-      task.userId === input.userId
+      !isDelegatedActionEvidenceArchive(task)
+      && task.userId === input.userId
       && (!input.domain || task.domain === input.domain)
       && (input.domain !== 'work' || !input.orgId || task.orgId === input.orgId)
       && (input.includeTerminal || !isTerminalConversationTaskStatus(task.status))

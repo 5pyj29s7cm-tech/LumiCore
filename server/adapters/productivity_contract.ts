@@ -9,6 +9,8 @@ export interface CalendarCreateInput {
 }
 
 export interface CalendarModifyInput {
+  eventId?: string;
+  calendarId?: string;
   subject: string;
   newSubject?: string;
   newStart?: string;
@@ -26,5 +28,5 @@ export interface ProductivityAdapter {
   recentEmails(limit: number): Promise<Record<string, unknown>>;
   createEvent(input: CalendarCreateInput): Promise<Record<string, unknown>>;
   modifyEvent(input: CalendarModifyInput): Promise<Record<string, unknown>>;
-  deleteEvent(input: { subject: string }): Promise<Record<string, unknown>>;
+  deleteEvent(input: { subject: string; eventId?: string; calendarId?: string }): Promise<Record<string, unknown>>;
 }

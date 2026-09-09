@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { socketService } from '@/services/socketService';
+import { isCurrentScopeRequest } from '@/components/scopeRequestGuard';
 
 export type FocusThreadStatus =
   | 'created'
@@ -43,8 +44,7 @@ function sameScope(
   orgId: string,
 ): boolean {
   if (!payload) return false;
-  if (payload.domain && payload.domain !== domain) return false;
-  return domain !== 'work' || !payload.orgId || payload.orgId === orgId;
+  return payload.domain === domain && String(payload.orgId || '') === orgId;
 }
 
 function sortThreads(threads: ConversationFocusThread[]): ConversationFocusThread[] {
@@ -55,10 +55,15 @@ export function useFocusThreads(input: {
   domain: 'personal' | 'work';
   orgId?: string;
   enabled?: boolean;
+  userId?: string;
 }) {
   const { domain, enabled = true } = input;
   const orgId = domain === 'work' ? String(input.orgId || '') : '';
+  const ownerKey = JSON.stringify([input.userId || '', domain, orgId]);
   const [threads, setThreads] = useState<ConversationFocusThread[]>([]);
+  const [threadsOwner, setThreadsOwner] = useState(ownerKey);
+  const activeOwnerRef = useRef(ownerKey);
+  activeOwnerRef.current = ownerKey;
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
   const requestGenerationRef = useRef(0);
@@ -72,20 +77,27 @@ export function useFocusThreads(input: {
     }
     const socket = socketService.connect() as Socket;
     const generation = ++requestGenerationRef.current;
+    const request = { scopeKey: ownerKey, generation };
     setLoading(true);
-    socket.emit('focus:list', { domain, orgId: orgId || undefined }, (response: FocusListResponse = {}) => {
-      if (generation !== requestGenerationRef.current) return;
+    socket.timeout(6_000).emit('focus:list', { domain, orgId: orgId || undefined }, (transportError: Error | null, response: FocusListResponse = {}) => {
+      if (!isCurrentScopeRequest(request, activeOwnerRef.current, requestGenerationRef.current)) return;
       setLoading(false);
-      if (!response.ok || !Array.isArray(response.threads)) {
-        setError(String(response.error || 'focus_list_failed'));
+      if (transportError || !response.ok || !Array.isArray(response.threads) || !sameScope(response, domain, orgId)) {
+        setThreads([]);
+        setError(String(transportError?.message || response.error || 'focus_list_failed'));
         return;
       }
       setError('');
+      setThreadsOwner(ownerKey);
       setThreads(sortThreads(response.threads));
     });
-  }, [domain, enabled, orgId]);
+  }, [domain, enabled, orgId, ownerKey]);
 
   useEffect(() => {
+    requestGenerationRef.current += 1;
+    setThreads([]);
+    setThreadsOwner(ownerKey);
+    setError('');
     if (!enabled || (domain === 'work' && !orgId)) {
       requestGenerationRef.current += 1;
       setThreads([]);
@@ -132,7 +144,7 @@ export function useFocusThreads(input: {
       socket.off('audio:work_progress', scheduleRefresh);
       socket.off('chat:conversation_updated', scheduleRefresh);
     };
-  }, [domain, enabled, orgId, refresh]);
+  }, [domain, enabled, orgId, refresh, ownerKey]);
 
-  return { threads, loading, error, refresh };
+  return { threads: threadsOwner === ownerKey ? threads : [], loading, error, refresh };
 }

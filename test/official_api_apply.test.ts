@@ -12,6 +12,7 @@ import { LUMI_OFFICIAL_SUPPORTED_ROLES, LUMI_OFFICIAL_UNSUPPORTED_ROLES } from '
 import { mountSystemRoutes } from '../server/routes/system_routes';
 import { updateLumiModelConfiguration } from '../server/llm/model_configuration';
 import { readDB, writeDB } from '../db_layer';
+import { recordFailure, resetCircuit } from '../server/cloud/circuit_breaker';
 
 describe('Lumi official API one-click adaptation', () => {
   const requestTimeoutMs = 15_000;
@@ -22,7 +23,7 @@ describe('Lumi official API one-click adaptation', () => {
   const userToken = jwt.sign({ uid: `${userId}-ordinary-user`, username: 'ordinary-test', role: 'user' }, JWT_SECRET);
   let initialVoicePreference: ReturnType<typeof getVoicePreference>;
   const completeCatalogModels = [
-    { id: 'aliyun/qwen-plus', capability: 'chat' },
+    { id: 'aliyun/deepseek-v4-flash', capability: 'chat' },
     { id: 'aliyun/qwen2.5-vl-72b', capability: 'multimodal_chat' },
     { id: 'aliyun/qwen3-vl-flash', capability: 'multimodal_chat' },
     { id: 'aliyun/qwen-image', capability: 'image_generation' },
@@ -80,6 +81,26 @@ describe('Lumi official API one-click adaptation', () => {
     expect(response.status).toBe(403);
   });
 
+  it('reports the selected reasoning model instead of a stale deployment default', async () => {
+    const statusUserId = `${userId}-provider-status`;
+    const statusToken = jwt.sign({ uid: statusUserId, username: 'status-test', role: 'admin' }, JWT_SECRET);
+    const previousEnvironmentModel = process.env.RELAY_REASONING_MODEL;
+    process.env.RELAY_REASONING_MODEL = 'aliyun/qwen-plus';
+    try {
+      for (const model of ['aliyun/deepseek-v4-flash', 'aliyun/kimi-k3']) {
+        updateLumiModelConfiguration(statusUserId, { role: 'reasoning', provider: 'relay', model });
+        const response = await fetch(`${url}/api/llm/providers`, {
+          headers: { Authorization: `Bearer ${statusToken}` }, signal: AbortSignal.timeout(requestTimeoutMs),
+        });
+        expect(response.status).toBe(200);
+        expect((await response.json()).providers.relay.model).toBe(model);
+      }
+    } finally {
+      if (previousEnvironmentModel === undefined) delete process.env.RELAY_REASONING_MODEL;
+      else process.env.RELAY_REASONING_MODEL = previousEnvironmentModel;
+    }
+  });
+
   it('applies only verified official adapters and reports the rest', async () => {
     const response = await fetch(`${url}/api/preferences/official/apply`, {
       method: 'POST',
@@ -104,7 +125,7 @@ describe('Lumi official API one-click adaptation', () => {
     expect(body.skipped.every((item: any) => item.reason === 'adapter_not_available')).toBe(true);
     expect(body.applied).toHaveLength(11);
     expect(body.applied.map((item: any) => item.model)).toEqual([
-      'aliyun/qwen-plus',
+      'aliyun/deepseek-v4-flash',
       'aliyun/qwen2.5-vl-72b',
       'aliyun/qwen3-vl-flash',
       'aliyun/qwen-image',
@@ -186,6 +207,22 @@ describe('Lumi official API one-click adaptation', () => {
     expect(rejected.status).toBe(400);
   });
 
+  it('keeps failed official wake health unavailable until an explicit STT configuration recovery', async () => {
+    const model = 'aliyun/qwen-audio-3.0-asr-flash-streaming';
+    recordFailure('relay-stt', undefined, new Error('synthetic old provider failure'), { openImmediately: true });
+    recordFailure('relay-stt', model, new Error('synthetic old model failure'), { openImmediately: true });
+    try {
+      const before = await fetch(`${url}/api/voice/active-provider`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(requestTimeoutMs) });
+      expect((await before.json()).active.streamingStt).toBeNull();
+      const response = await fetch(`${url}/api/voice/provider`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stt: 'relay', sttModel: model }), signal: AbortSignal.timeout(requestTimeoutMs),
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()).active).toMatchObject({ streamingStt: 'relay', sttModel: model });
+    } finally { resetCircuit('relay-stt'); }
+  });
+
   it('migrates retired namespaces through the catalog and persists the same world model family', async () => {
     const migrationUserId = `${userId}-namespace-migration`;
     const migrationToken = jwt.sign({ uid: migrationUserId, username: 'migration-test', role: 'admin' }, JWT_SECRET);
@@ -246,7 +283,7 @@ describe('Lumi official API one-click adaptation', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.applied).toHaveLength(11);
-    expect(body.roles.reasoning.model).toBe('aliyun/qwen-plus');
+    expect(body.roles.reasoning.model).toBe('aliyun/deepseek-v4-flash');
     expect(body.roles.vision.model).toBe('aliyun/qwen2.5-vl-72b');
     expect(body.roles.world.model).toBe('aliyun/qwen3-vl-flash');
     expect(body.roles.image_generation.model).toBe('aliyun/qwen-image');

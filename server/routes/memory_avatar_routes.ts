@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { getActiveConversation, getMessages } from '../conversation/manager';
 import { requireAuth } from '../middleware/auth';
+import { createRequestAbortController } from '../http/request_abort';
 import { mountMemoryAvatarMediaRoutes } from '../memory_avatar/media_routes';
 import { mountMemoryAvatarPortraitRoutes } from '../memory_avatar/portrait_routes';
 import { createMemoryAvatar, getMemoryAvatar, listMemoryAvatars, archiveMemoryAvatar, updateMemoryAvatar, listMemoryAvatarMaterials, addMemoryAvatarMaterial, removeMemoryAvatarMaterial, MemoryAvatarError } from '../memory_avatar/store';
@@ -55,47 +56,56 @@ export function mountMemoryAvatarRoutes(
     if (!['wechat', 'qq', 'plain'].includes(format)) {
       return res.status(400).json({ error: 'format must be: wechat, qq, or plain' });
     }
-    const { distillPersona } = await import('../memory_avatar/distiller');
-    const result = await distillPersona(
-      {
-        chatLog,
-        format,
-        targetName: typeof targetName === 'string' ? targetName.slice(0, 120) : undefined,
-        relationshipType: typeof relationshipType === 'string' ? relationshipType.slice(0, 40) : undefined,
-        userId: req.user!.uid,
-        audioTranscript: typeof audioTranscript === 'string' ? audioTranscript.slice(0, 20_000) : undefined,
-      },
-      {
-        getDeepSeek: llmGetters.getDeepSeek,
-        getGemini: llmGetters.getGemini,
-        getOpenAI: llmGetters.getOpenAI,
-        getAnthropic: llmGetters.getAnthropic,
-        getQwen: llmGetters.getQwen,
-        getOllama: llmGetters.getOllama,
-        getLmStudio: llmGetters.getLmStudio,
-        getArk: llmGetters.getArk,
-        getXiaomi: llmGetters.getXiaomi,
-        getKimi: llmGetters.getKimi,
-        getGlm: llmGetters.getGlm,
-        getRelay: llmGetters.getRelay,
-      },
-    );
-    return res.json({
-      personalityConfig: result.personalityConfig,
-      seedMemories: result.seedMemories,
-      evidenceMap: result.evidenceMap,
-      relationshipType: result.relationshipType,
-      narrative: result.narrative,
-      inferredName: result.inferredName,
-      summary: {
-        messageCount: chatLog.split('\n').filter((line: string) => line.trim()).length,
-        memoryCount: result.seedMemories.length,
-        cognitiveStyle: result.personalityConfig.personalityVector?.cognitiveStyle,
-        socialStyle: result.personalityConfig.personalityVector?.socialStyle,
-        tone: result.personalityConfig.expressionStyle?.tone,
-        topPhrases: result.personalityConfig.expressionStyle?.vocabularyHints?.slice(0, 5),
-      },
-    });
+    const request = createRequestAbortController(req, res);
+    try {
+      const { distillPersona } = await import('../memory_avatar/distiller');
+      const result = await distillPersona(
+        {
+          chatLog,
+          format,
+          targetName: typeof targetName === 'string' ? targetName.slice(0, 120) : undefined,
+          relationshipType: typeof relationshipType === 'string' ? relationshipType.slice(0, 40) : undefined,
+          userId: req.user!.uid,
+          signal: request.signal,
+          audioTranscript: typeof audioTranscript === 'string' ? audioTranscript.slice(0, 20_000) : undefined,
+        },
+        {
+          getDeepSeek: llmGetters.getDeepSeek,
+          getGemini: llmGetters.getGemini,
+          getOpenAI: llmGetters.getOpenAI,
+          getAnthropic: llmGetters.getAnthropic,
+          getQwen: llmGetters.getQwen,
+          getOllama: llmGetters.getOllama,
+          getLmStudio: llmGetters.getLmStudio,
+          getArk: llmGetters.getArk,
+          getXiaomi: llmGetters.getXiaomi,
+          getKimi: llmGetters.getKimi,
+          getGlm: llmGetters.getGlm,
+          getRelay: llmGetters.getRelay,
+        },
+      );
+      if (request.signal.aborted) return;
+      return res.json({
+        personalityConfig: result.personalityConfig,
+        seedMemories: result.seedMemories,
+        evidenceMap: result.evidenceMap,
+        relationshipType: result.relationshipType,
+        narrative: result.narrative,
+        inferredName: result.inferredName,
+        summary: {
+          messageCount: chatLog.split('\n').filter((line: string) => line.trim()).length,
+          memoryCount: result.seedMemories.length,
+          cognitiveStyle: result.personalityConfig.personalityVector?.cognitiveStyle,
+          socialStyle: result.personalityConfig.personalityVector?.socialStyle,
+          tone: result.personalityConfig.expressionStyle?.tone,
+          topPhrases: result.personalityConfig.expressionStyle?.vocabularyHints?.slice(0, 5),
+        },
+      });
+    } catch (error) {
+      if (!request.signal.aborted) throw error;
+    } finally {
+      request.dispose();
+    }
   }));
 
   router.get('/memory-avatars', requireAuth, (req, res) => {

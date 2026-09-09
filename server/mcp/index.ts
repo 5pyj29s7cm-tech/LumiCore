@@ -29,6 +29,9 @@ import {
 } from './client';
 import type { MCPClientManager, MCPToolDef, MCPServerConfig } from './client';
 import type { ToolCapabilityMetadata, ToolDefinition, ToolContext } from '../tools/types';
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 
 function shortMCPToolName(tool: MCPToolDef): string {
   if (tool.rawName) return tool.rawName;
@@ -264,6 +267,23 @@ function buildRegisteredTool(
     securityLevel: resolveMCPToolSecurity(tool, serverConfig),
     capability,
     parameters: mcpSchemaToParams(tool.inputSchema),
+    ...(serverConfig?.source === 'local' && serverConfig.managedSkill?.origin === 'generated' ? {
+      corroborateTerminalResult: async (record: import('../tools/types').ToolExecutionRecord) => {
+        // Managed identity is host-signed and binds source, locked dependencies,
+        // command and runtime. The MCP manager also checks it before invocation.
+        const identity = mcpManager.assertLocalSkillRuntimeIdentity(tool.serverName);
+        if (JSON.stringify(identity) !== JSON.stringify(serverConfig.managedSkill)
+          || identity.origin !== 'generated' || !identity.reviewHash || !identity.runtime
+          || !record.adapterSettlements?.some(item => item.status === 'fulfilled' && !item.timedOut)) return null;
+        const { validateGeneratedSkillProtocolStructure } = await import('../skills/generator');
+        const source = fs.readFileSync(path.join(identity.runtime.cwd, 'index.ts'), 'utf8');
+        if (validateGeneratedSkillProtocolStructure(source, rawToolName).length) return null;
+        const result = parseReceiptObject(toolRecordTerminalPayload(record));
+        if (result?.status !== 'completed' || !Object.prototype.hasOwnProperty.call(result, 'data')) return null;
+        return { status: 'verified' as const, strategy: 'terminal_receipt' as const,
+          reason: 'The host verified the approved immutable pure-computation runtime and observed its completed invocation. This proves the returned data, not external side effects or domain accuracy.' };
+      },
+    } : {}),
     handler: async (params: Record<string, any>, _ctx: ToolContext) => {
       return mcpManager.callToolForServer(tool.serverName, rawToolName, params, {
         timeoutMs: getToolExecutionTimeoutMs(tool.name),

@@ -136,11 +136,13 @@ registerHandler('lap.task.delegate', async (req, ws) => {
     return;
   }
   updateHeartbeat(request.sessionId);
-  const response = delegateTask(request, session, socketPeerAgentIds.get(ws)?.get(request.sessionId));
-  sendLAPResponse(ws, response, request);
-  if (response.accepted) {
-    console.log(`[LAP] Task delegated: "${request.task.type}" → ${session.peerB.name}`);
-  }
+  // There is no local delegated-task executor. Do not accept work that this
+  // instance cannot run or promise an invented completion time.
+  sendLAPResponse(ws, {
+    accepted: false,
+    taskId: request.task.taskId,
+    reason: 'This instance does not currently execute inbound delegated tasks. Context exchange remains available.',
+  }, request);
 });
 
 registerHandler('lap.task.result', async (req, ws) => {

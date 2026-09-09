@@ -11,6 +11,7 @@ import {
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
 import {
   guardTaskTargetToolCall,
+  type AcceptedTaskTarget,
   type TaskTargetToolCallGuardResult,
 } from '../conversation/task_target_anchor';
 
@@ -229,12 +230,14 @@ export function guardCurrentAppToolCall(input: {
   toolName: string;
   arguments?: Record<string, unknown>;
   toolRecords?: ToolExecutionRecord[];
+  acceptedTaskTarget?: AcceptedTaskTarget;
 }): CurrentAppToolCallGuardResult {
   const targetGuard = guardTaskTargetToolCall({
     taskText: input.taskText,
     toolName: input.toolName,
     arguments: input.arguments,
     toolRecords: input.toolRecords,
+    acceptedTaskTarget: input.acceptedTaskTarget,
   });
   if (!targetGuard.allowed) return targetGuard;
   if (!isCurrentAppExecutionTask(input.taskText)) return targetGuard;

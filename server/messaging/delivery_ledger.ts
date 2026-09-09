@@ -63,8 +63,8 @@ export function acceptMessageOnce(platform: MessagingPlatform, messageId: string
       status: 'processing',
       runtimeId: deliveryRuntimeId,
     };
+    persistReceipts(current);
     receipts = current;
-    persistReceipts(receipts);
     return true;
   }
   current.push({
@@ -74,8 +74,9 @@ export function acceptMessageOnce(platform: MessagingPlatform, messageId: string
     status: 'processing',
     runtimeId: deliveryRuntimeId,
   });
-  receipts = current.slice(-MAX_RECEIPTS);
-  persistReceipts(receipts);
+  const next = current.slice(-MAX_RECEIPTS);
+  persistReceipts(next);
+  receipts = next;
   return true;
 }
 
@@ -84,9 +85,9 @@ export function completeMessageDelivery(platform: MessagingPlatform, messageId: 
   const current = loadReceipts();
   const receipt = current.find(item => item.key === key && item.runtimeId === deliveryRuntimeId);
   if (!receipt) return;
-  receipt.status = 'completed';
-  receipt.updatedAt = now.toISOString();
-  persistReceipts(current);
+  const next = current.map(item => item === receipt ? { ...item, status: 'completed' as const, updatedAt: now.toISOString() } : item);
+  persistReceipts(next);
+  receipts = next;
 }
 
 export function releaseMessageDelivery(platform: MessagingPlatform, messageId: string): void {
@@ -94,8 +95,8 @@ export function releaseMessageDelivery(platform: MessagingPlatform, messageId: s
   const current = loadReceipts();
   const next = current.filter(item => !(item.key === key && item.status === 'processing' && item.runtimeId === deliveryRuntimeId));
   if (next.length === current.length) return;
-  receipts = next;
   persistReceipts(next);
+  receipts = next;
 }
 
 export function resetDeliveryLedgerForTest(): void {

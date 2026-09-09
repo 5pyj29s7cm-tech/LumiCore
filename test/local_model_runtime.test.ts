@@ -193,6 +193,23 @@ describe('local model runtime configuration', () => {
 });
 
 describe('LLM client hot reconfiguration', () => {
+  it('immediately clears the account cooldown when the user updates a relay credential', async () => {
+    const original = process.env.RELAY_API_KEY;
+    const { saveKeys } = await import('../server/config/keys');
+    const { recordFailure, isCircuitClosed, resetCircuit } = await import('../server/cloud/circuit_breaker');
+    try {
+      recordFailure('relay', 'test-account', new Error('403'), { openImmediately: true, cooldownMs: 300_000 });
+      expect(isCircuitClosed('relay', 'test-account')).toBe(false);
+      saveKeys({ RELAY_API_KEY: 'isolated-test-new-relay-key' });
+      expect(isCircuitClosed('relay', 'test-account')).toBe(true);
+    } finally {
+      saveKeys({ RELAY_API_KEY: undefined });
+      if (original === undefined) delete process.env.RELAY_API_KEY;
+      else process.env.RELAY_API_KEY = original;
+      resetCircuit();
+    }
+  });
+
   it('rebuilds cloud clients after a key changes and disables them after removal', async () => {
     const original = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'test-openai-key-one';
@@ -234,6 +251,31 @@ describe('LLM client hot reconfiguration', () => {
     else process.env.RELAY_API_KEY = originalKey;
     if (originalUrl === undefined) delete process.env.RELAY_BASE_URL;
     else process.env.RELAY_BASE_URL = originalUrl;
+  });
+
+  it('uses the same normalized official credential as speech and API clients, with retries owned by routing', async () => {
+    const originalKey = process.env.RELAY_API_KEY;
+    const originalUrl = process.env.RELAY_BASE_URL;
+    try {
+      process.env.RELAY_API_KEY = '  isolated-relay-credential  ';
+      process.env.RELAY_BASE_URL = 'http://127.0.0.1:18001/v1';
+      vi.resetModules();
+      const { createLLMRuntime } = await import('../server/runtime/llm');
+      const { relayApiKey } = await import('../server/relay/config');
+      const runtime = createLLMRuntime();
+      const first = runtime.getRelay();
+      expect(first?.apiKey).toBe(relayApiKey());
+      expect(first?.maxRetries).toBe(0);
+      process.env.RELAY_API_KEY = 'replacement-relay-credential';
+      const second = runtime.getRelay();
+      expect(second).not.toBe(first);
+      expect(second?.apiKey).toBe(relayApiKey());
+    } finally {
+      if (originalKey === undefined) delete process.env.RELAY_API_KEY;
+      else process.env.RELAY_API_KEY = originalKey;
+      if (originalUrl === undefined) delete process.env.RELAY_BASE_URL;
+      else process.env.RELAY_BASE_URL = originalUrl;
+    }
   });
 
   it('does not create an official relay client when its base URL is missing', async () => {

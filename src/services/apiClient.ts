@@ -82,3 +82,13 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     ? lastError
     : new Error('Unable to reach the Lumi local server');
 }
+
+/** A confirmed API result; rejected writes must never become local success. */
+export async function apiJson<T = Record<string, any>>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiFetch(path, init);
+  const data = response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok || data?.ok === false || data?.success === false) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data as T;
+}

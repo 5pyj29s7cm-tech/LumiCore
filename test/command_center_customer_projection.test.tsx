@@ -17,6 +17,11 @@ const source = (relativePath: string) => fs.readFileSync(path.join(process.cwd()
 afterEach(() => resetLocaleForTests());
 
 describe('command-center customer projection', () => {
+  it('preserves workflow identity and server-issued controls', () => {
+    const task = normalizeCommandCenterTask({ id: 'workflow:run-1', kind: 'workflow', title: 'Export', status: 'paused', controls: { canPause: false, canResume: false, canCancel: true } });
+    expect(task?.kind).toBe('workflow');
+    expect(task?.controls).toEqual({ canPause: false, canResume: false, canCancel: true });
+  });
   it('maps machine lifecycle states to localized customer labels', () => {
     expect(customerVisibleTaskStatus('waiting_confirmation', 'en')).toBe('Awaiting confirmation');
     expect(customerVisibleTaskStatus('desktop_target_mismatch', 'en')).toBe('No status yet');

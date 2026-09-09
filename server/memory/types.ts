@@ -121,6 +121,10 @@ export interface MemoryTree {
 }
 
 export interface MemoryQuery {
+  /** Only actual conversational recall should train retrieval associations. */
+  recordRetrieval?: boolean;
+  /** Administrative history may explicitly include superseded/test records. */
+  includeSuperseded?: boolean;
   userId?: string;
   /** Free-text search — matched against keywords and content */
   query?: string;

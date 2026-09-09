@@ -195,11 +195,22 @@ describe('frontend dynamic output path audit', () => {
     expect(read('src/components/HolographicOverlay.tsx')).toContain('isUnverifiedActionClaim');
   });
 
-  it('keeps proactive display and browser-to-server speech requests behind the same gate', () => {
+  it('gates ordinary proactive output and limits the reminder exception to server-verified receipts', () => {
     const source = read('src/components/ProactiveNotifications.tsx');
-    expect(source).toContain('shouldDisplayAgentResponse');
-    expect(source).toContain('shouldSpeakAgentResponse');
-    expect(source).toContain('if (!shouldDisplayAgentResponse(delivery)) return');
+    expect(source).toContain('if (!shouldDisplayAgentResponse(delivery) && !isReminder) return');
+    expect(source).toContain('(isReminder || shouldSpeakAgentResponse(delivery))');
+    expect(source).toContain("const isReminder = taskId === 'reminder_check'");
+    expect(source).toContain("/^proactive_[a-f0-9]{24}$/.test(data.interactionId || '')");
+    expect(source).toContain('isReminder ? { interactionId: data.interactionId }');
+
+    // A well-shaped client ID only permits asking the server. The actual
+    // owner/domain, stored text, durability, cancellation and dedup behavior
+    // is exercised by proactive_voice_delivery.test.tsx against SQLite.
+    const voice = read('server/socket/voice.ts');
+    expect(voice).toContain('claimReminderVoiceDelivery(data.interactionId');
+    expect(voice).toContain('if (data.interactionId !== undefined && !reminder) return');
+    expect(voice).toContain('reminder ? { blocked: false, text: reminder.text');
+    expect(voice).toContain('await reminder.confirmPersisted()');
   });
 
   it('never feeds a raw backend reason into the media workbench error detail', () => {

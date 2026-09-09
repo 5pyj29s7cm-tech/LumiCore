@@ -7,14 +7,8 @@ function source(relativePath: string): string {
 }
 
 describe('focus thread client projection', () => {
-  it('reloads scoped durable focus after reconnect and work events', () => {
-    const hook = source('src/hooks/useFocusThreads.ts');
-    expect(hook).toContain("socket.emit('focus:list', { domain, orgId: orgId || undefined }");
-    expect(hook).toContain("socket.on('connect', refresh)");
-    expect(hook).toContain("socket.on('agent:progress', scheduleRefresh)");
-    expect(hook).toContain("socket.on('audio:work_progress', scheduleRefresh)");
-    expect(hook).not.toContain('userId:');
-  });
+  // Scoped reconnect/timeout/late-response behavior is executed by
+  // src/hooks/frontendScopeContracts.test.tsx rather than source-shape checks.
 
   it('projects active durable focus into the transient task widget instead of the chat stream', () => {
     const chat = source('src/components/AgentChatPage.tsx');

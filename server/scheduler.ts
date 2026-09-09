@@ -3,7 +3,7 @@
 
 import crypto from 'node:crypto';
 import { Server as SocketIOServer } from 'socket.io';
-import { queryMemories, getDueReminders, fireReminder, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped } from './memory';
+import { queryMemories, getDueReminders, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped, type Reminder } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
 import { runDreamCycle } from './memory/dream';
 import { buildTree, ensureBranch, moveNode } from './memory/tree';
@@ -14,6 +14,7 @@ import { runHealthAudit, HealthReport } from './agents/health_audit';
 import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
 import { personalityRegistry } from './personality';
 import { evolvePersonality, generateReviewPrompt } from './personality/evolution';
+import { backfillEmbeddings } from './memory/store';
 import { loadEmotionalState } from './personality/state';
 import { getSameMonthDayPast, getMonthDayFromISO } from './time/utils';
 import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
@@ -30,7 +31,6 @@ import {
 } from './runtime/system_exploration_worker';
 import { getGateConfig, isAutonomousWorkAllowed } from './autonomy/safety_gate';
 import { createRealtimeVoicePrioritySignal } from './autonomy/foreground_activity';
-import { parseStoredOperationMode } from './cognition/operation_modes';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
 import { finalizeLumiResponse } from './cognition/result_finalizer';
@@ -60,6 +60,8 @@ export interface ScheduledDelivery {
   orgId?: string;
   /** Model-authored user-visible text must pass the shared output finalizer. */
   modelGenerated?: boolean;
+  /** Server-owned reminder claims, committed together with the delivery row. */
+  reminderIds?: string[];
 }
 
 type ScheduledTaskResult = string | ScheduledDelivery[] | null;
@@ -1079,7 +1081,7 @@ export class Scheduler {
     executionId: string,
     deliveries: Array<{ deliveryIndex: number; delivery: ScheduledDelivery }>,
     timestamp: string,
-  ): { createdInteractionIds: string[]; createdDeliveryIndexes: Set<number> } {
+  ): { createdInteractionIds: string[]; createdDeliveryIndexes: Set<number>; reminderChanges: Array<{ before: Reminder; after: Reminder }> } {
     const currentDb = readDB();
     const originalInteractions = Array.isArray(currentDb.interactions)
       ? currentDb.interactions
@@ -1087,13 +1089,40 @@ export class Scheduler {
     const candidateDb = {
       ...currentDb,
       interactions: [...originalInteractions],
+      reminders: [...(currentDb.reminders || [])],
     };
     const existingIds = new Set(originalInteractions.map((candidate: any) => candidate.id));
     const createdInteractionIds: string[] = [];
     const createdDeliveryIndexes = new Set<number>();
+    const reminderChanges: Array<{ before: Reminder; after: Reminder }> = [];
+    const claimedReminderIds = new Set<string>();
     for (const { deliveryIndex, delivery } of deliveries) {
       const id = buildScheduledProactiveInteractionId(executionId, deliveryIndex, delivery);
       if (existingIds.has(id)) continue;
+      if (taskId === 'reminder_check' || delivery.reminderIds) {
+        if (taskId !== 'reminder_check' || !delivery.reminderIds?.length) {
+          throw new ScheduledTaskExecutionError('Reminder delivery is missing its server-owned claims.', 'scheduler_delivery_invalid');
+        }
+        const reminders = delivery.reminderIds.map(reminderId => {
+          const reminder = candidateDb.reminders.find((item: Reminder) => item.id === reminderId);
+          if (claimedReminderIds.has(reminderId) || !reminder || reminder.status !== 'pending'
+            || !reminder.dueAt || reminder.dueAt > timestamp
+            || reminder.userId !== delivery.userId
+            || (reminder.domain || 'personal') !== (delivery.domain || 'personal')
+            || (reminder.orgId || '') !== (delivery.orgId || '')) {
+            throw new ScheduledTaskExecutionError('Reminder delivery claims are no longer current or do not match the recipient.', 'scheduler_delivery_invalid');
+          }
+          claimedReminderIds.add(reminderId);
+          const before = { ...reminder };
+          const after = { ...reminder, status: 'fired' as const, firedAt: timestamp };
+          candidateDb.reminders[candidateDb.reminders.indexOf(reminder)] = after;
+          reminderChanges.push({ before, after });
+          return reminder;
+        });
+        // A reminder can be edited between handler selection and delivery.
+        // Construct the message from the same authoritative candidate we commit.
+        delivery.message = `Reminder: ${reminders.map((reminder: Reminder) => reminder.content).join(' | ')}`;
+      }
       existingIds.add(id);
       candidateDb.interactions.push({
         id,
@@ -1106,7 +1135,7 @@ export class Scheduler {
         role: 'assistant',
         personality: 'lumi',
         mode: 'proactive',
-        toolCalls: JSON.stringify({ executionId }),
+        toolCalls: JSON.stringify({ executionId, scheduledTaskId: taskId, ...(delivery.reminderIds ? { reminderIds: delivery.reminderIds } : {}) }),
         domain: delivery.domain || 'personal',
         orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
         timestamp,
@@ -1115,13 +1144,13 @@ export class Scheduler {
       createdDeliveryIndexes.add(deliveryIndex);
     }
     if (createdInteractionIds.length === 0) {
-      return { createdInteractionIds, createdDeliveryIndexes };
+      return { createdInteractionIds, createdDeliveryIndexes, reminderChanges };
     }
     try {
       this.writeDatabase(candidateDb);
     } catch (error) {
       try {
-        this.rollbackProactiveMessageBatch(createdInteractionIds);
+        this.rollbackProactiveMessageBatch(createdInteractionIds, reminderChanges);
       } catch (rollbackError) {
         throw new Error(
           'Atomic proactive delivery persistence failed and its in-memory rollback could not be confirmed.',
@@ -1130,10 +1159,10 @@ export class Scheduler {
       }
       throw error;
     }
-    return { createdInteractionIds, createdDeliveryIndexes };
+    return { createdInteractionIds, createdDeliveryIndexes, reminderChanges };
   }
 
-  private rollbackProactiveMessageBatch(createdInteractionIds: string[]): void {
+  private rollbackProactiveMessageBatch(createdInteractionIds: string[], reminderChanges: Array<{ before: Reminder; after: Reminder }> = []): void {
     if (createdInteractionIds.length === 0) return;
     const rollbackDb = readDB();
     const created = new Set(createdInteractionIds);
@@ -1142,6 +1171,14 @@ export class Scheduler {
     // available to a retry as created=false.
     rollbackDb.interactions = (rollbackDb.interactions || [])
       .filter((candidate: any) => !created.has(candidate.id));
+    // Restore only our claim. Do not resurrect a deleted reminder or overwrite
+    // another user's edit while the asynchronous flush was settling.
+    rollbackDb.reminders = (rollbackDb.reminders || []).map((reminder: Reminder) => {
+      const change = reminderChanges.find(item => item.after.id === reminder.id);
+      return change && reminder.status === change.after.status && reminder.firedAt === change.after.firedAt
+        ? { ...reminder, status: change.before.status, firedAt: change.before.firedAt }
+        : reminder;
+    });
     this.writeDatabase(rollbackDb);
   }
 
@@ -1153,6 +1190,7 @@ export class Scheduler {
     execution: ScheduledInFlightHandler,
   ): Promise<{ deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number }> {
     const summary = { deliveryCount: 0, persistedCount: 0, emittedCount: 0, withheldCount: 0 };
+    if (execution.controller.signal.aborted) throw execution.controller.signal.reason;
     if (!result) return summary;
     if (!Array.isArray(result)) {
       if (!task.quiet) {
@@ -1206,6 +1244,7 @@ export class Scheduler {
         message: safeDelivery.message.trim(),
         domain: safeDelivery.domain === 'work' ? 'work' : 'personal',
         orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId!.trim() : '',
+        ...(safeDelivery.reminderIds ? { reminderIds: [...safeDelivery.reminderIds] } : {}),
       };
       preparedDeliveries.push({
         deliveryIndex,
@@ -1234,17 +1273,18 @@ export class Scheduler {
     const pendingEmissions = preparedDeliveries.filter(item => (
       batch.createdDeliveryIndexes.has(item.deliveryIndex) && !task.quiet && this.io
     ));
-    if (pendingEmissions.length > 0) {
+    if (batch.createdInteractionIds.length > 0) {
       // Never tell the client about a proactive result that exists only in
       // process memory. The strict flush is the delivery evidence boundary.
       const deliveryFlush = this.trackDurableOperation(this.strictFlush(), execution);
       try {
         await this.awaitExecutionPhase(deliveryFlush, execution, 'delivery');
+        if (execution.controller.signal.aborted) throw execution.controller.signal.reason;
       } catch (error) {
         task.persistenceStatus = 'failed';
         task.lastPersistenceError = redactSchedulerDiagnostic(error);
         try {
-          this.rollbackProactiveMessageBatch(batch.createdInteractionIds);
+          this.rollbackProactiveMessageBatch(batch.createdInteractionIds, batch.reminderChanges);
         } catch (rollbackError: any) {
           task.lastPersistenceError = redactSchedulerDiagnostic(
             `${task.lastPersistenceError || 'Delivery persistence failed'}; rollback failed: ${rollbackError}`,
@@ -1272,11 +1312,19 @@ export class Scheduler {
         throw error;
       }
       for (const emission of pendingEmissions) {
+        if (emission.normalized.reminderIds?.some(reminderId => {
+          const expected = batch.reminderChanges.find(item => item.after.id === reminderId)?.after;
+          const current = (readDB().reminders || []).find((item: Reminder) => item.id === reminderId);
+          return !expected || !current || current.status !== 'fired' || current.firedAt !== expected.firedAt
+            || current.userId !== expected.userId || current.content !== expected.content || current.dueAt !== expected.dueAt
+            || (current.domain || 'personal') !== (expected.domain || 'personal') || (current.orgId || '') !== (expected.orgId || '');
+        })) continue;
         const room = emission.normalized.domain === 'work' && emission.normalized.orgId
           ? `user:${emission.normalized.userId}:org:${emission.normalized.orgId}`
           : `user:${emission.normalized.userId}:personal`;
         this.io!.to(room).emit('agent:proactive', {
           taskId: task.id,
+          interactionId: buildScheduledProactiveInteractionId(plan.taskId, emission.deliveryIndex, emission.normalized),
           message: emission.normalized.message,
           domain: emission.normalized.domain,
           orgId: emission.normalized.orgId,
@@ -2051,6 +2099,39 @@ export class Scheduler {
 
 export const scheduler = new Scheduler();
 
+/** Select due reminders only; the scheduler owns their atomic delivery commit. */
+export function createReminderCheckTask(): ScheduledTask {
+  return {
+    id: 'reminder_check',
+    cron: 'every_1m',
+    lastRun: null,
+    executionClass: 'proactive_delivery',
+    handler: async () => {
+      const due = getDueReminders();
+      const grouped = new Map<string, ScheduledDelivery>();
+      for (const reminder of due) {
+        const domain = reminder.domain || 'personal';
+        // Malformed work scope must never be downgraded to personal delivery.
+        if (!['personal', 'work'].includes(domain) || (domain === 'work' && !reminder.orgId)) continue;
+        const orgId = domain === 'work' ? reminder.orgId || '' : '';
+        const key = JSON.stringify([reminder.userId, domain, orgId]);
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.message += ` | ${reminder.content}`;
+          existing.reminderIds!.push(reminder.id);
+        } else grouped.set(key, {
+          userId: reminder.userId,
+          message: `Reminder: ${reminder.content}`,
+          domain: domain as 'personal' | 'work',
+          orgId,
+          reminderIds: [reminder.id],
+        });
+      }
+      return grouped.size > 0 ? [...grouped.values()] : null;
+    },
+  };
+}
+
 /**
  * Register built-in proactive tasks.
  * Accepts LLM provider getters so consolidation and self-reflection can call the LLM.
@@ -2127,34 +2208,8 @@ export function registerScheduledTasks(
     },
   });
 
-  // Reminder check-in (every 5 min) — checks all users' reminders
-  scheduler.register({
-    id: 'reminder_check',
-    cron: 'every_5m',
-    lastRun: null,
-    executionClass: 'proactive_delivery',
-    handler: async () => {
-      const due = getDueReminders();
-      if (due.length > 0) {
-        const grouped = new Map<string, ScheduledDelivery>();
-        for (const reminder of due) {
-          const domain = reminder.domain === 'work' && reminder.orgId ? 'work' : 'personal';
-          const key = `${reminder.userId}:${domain}:${reminder.orgId || ''}`;
-          const existing = grouped.get(key);
-          if (existing) existing.message += ` | ${reminder.content}`;
-          else grouped.set(key, {
-            userId: reminder.userId,
-            message: `Reminder: ${reminder.content}`,
-            domain,
-            orgId: domain === 'work' ? reminder.orgId : '',
-          });
-        }
-        for (const r of due) fireReminder(r.id);
-        return [...grouped.values()];
-      }
-      return null;
-    },
-  });
+  // One existing scheduler, with minute-level reminder checks and no model call.
+  scheduler.register(createReminderCheckTask());
 
   // Memory decay — value-modulated tier-based decay for all users (every 6h)
   scheduler.register({
@@ -2449,6 +2504,14 @@ Output ONLY the reflection — no preamble, no labels.`;
       return null;
     },
   });
+
+  // Repair old or changed embedding spaces in bounded batches. Missing indexes
+  // must not leave historical memories permanently dependent on exact keywords.
+  scheduler.register({ id: 'memory_index_backfill', cron: 'every_1h', quiet: true, lastRun: null,
+    executionClass: 'maintenance', handler: async () => {
+      for (const userId of getAllUserIds()) await backfillEmbeddings(userId, { limit: 40 });
+      return null;
+    } });
 
   // Memory tree auto-organize (every 6h) — LLM groups orphan leaves into topic branches
   scheduler.register({
@@ -3431,13 +3494,8 @@ Output ONLY the prediction message — no preamble, no labels.`;
       for (const userId of userIds) {
         if (context?.signal.aborted) break;
         try {
-          // Check if user has autonomous mode enabled
-          const db = readDB();
-          const modeSetting = (db.settings || []).find((s: any) =>
-            s.key === `op_mode_${userId}`
-          );
-          const mode = modeSetting ? parseStoredOperationMode(modeSetting.value) : 'assistant';
-          if (mode !== 'autonomous') continue;
+          // Background work is governed by the user's workflow policy, not a UI mode.
+          if (!getGateConfig(userId).autoProcessEnabled) continue;
 
           // Generate tasks
           const { generateAutonomousTasks } = await import('./autonomy/task_generator');

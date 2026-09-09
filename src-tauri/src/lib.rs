@@ -2012,13 +2012,73 @@ fn resolve_desktop_item_fuzzy(target: &str) -> Option<PathBuf> {
 
 #[cfg(all(test, target_os = "windows"))]
 mod app_query_tests {
-    use super::normalize_app_query;
+    use super::{
+        normalize_app_query, resolve_app_definition, search_app_definitions,
+        windows_app_definitions, WindowsAppDefinition,
+    };
 
     #[test]
     fn strips_desktop_location_words_without_shortening_the_app_name() {
         assert_eq!(normalize_app_query("打开桌面上的网易云音乐"), "网易云音乐");
         assert_eq!(normalize_app_query("桌面的网易云音乐软件"), "网易云音乐");
         assert_eq!(normalize_app_query("打开微信消息值守"), "微信消息值守");
+    }
+
+    #[test]
+    fn bilingual_search_finds_the_same_known_application_once() {
+        let definitions = windows_app_definitions();
+        for query in ["计算器 Calculator", "计算器 / Calculator", "Calculator（计算器）"] {
+            let matches = search_app_definitions(query, &definitions);
+            assert_eq!(matches.len(), 1, "query: {query}");
+            assert_eq!(matches[0].app_id, "calculator");
+        }
+        // Broader discovery must not silently broaden direct launch matching.
+        assert!(resolve_app_definition("计算器 Calculator").is_none());
+    }
+
+    #[test]
+    fn complete_application_names_with_spaces_take_precedence_over_fragments() {
+        let definitions = vec![
+            WindowsAppDefinition {
+                app_id: "visual_studio_code",
+                label: "Visual Studio Code",
+                aliases: vec!["VS Code"],
+                executable_names: vec!["Code.exe"],
+                fixed_paths: vec![],
+            },
+            WindowsAppDefinition {
+                app_id: "studio",
+                label: "Studio",
+                aliases: vec!["Studio"],
+                executable_names: vec![],
+                fixed_paths: vec![],
+            },
+        ];
+        let matches = search_app_definitions("Visual Studio Code", &definitions);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].app_id, "visual_studio_code");
+        let alias_matches = search_app_definitions("VS Code", &definitions);
+        assert_eq!(alias_matches.len(), 1);
+        assert_eq!(alias_matches[0].app_id, "visual_studio_code");
+    }
+
+    #[test]
+    fn ambiguous_search_returns_all_candidates_without_picking_a_launch_target() {
+        let definitions = windows_app_definitions();
+        let matches = search_app_definitions("计算器 Notepad", &definitions);
+        let ids: Vec<_> = matches.iter().map(|item| item.app_id).collect();
+        assert!(ids.contains(&"calculator"));
+        assert!(ids.contains(&"notepad"));
+        assert_eq!(ids.len(), 2);
+        assert!(resolve_app_definition("计算器 Notepad").is_none());
+    }
+
+    #[test]
+    fn empty_or_unrelated_search_terms_do_not_match_every_application() {
+        let definitions = windows_app_definitions();
+        for query in ["", "  ", " / | （） ", "c", "CalculatorHelper"] {
+            assert!(search_app_definitions(query, &definitions).is_empty(), "query: {query}");
+        }
     }
 }
 
@@ -2335,6 +2395,38 @@ fn app_query_matches_definition(query: &str, def: &WindowsAppDefinition) -> bool
             .executable_names
             .iter()
             .any(|name| normalized == compact_app_text(name))
+}
+
+#[cfg(target_os = "windows")]
+fn search_app_definitions<'a>(
+    query: &str,
+    definitions: &'a [WindowsAppDefinition],
+) -> Vec<&'a WindowsAppDefinition> {
+    let exact: Vec<_> = definitions
+        .iter()
+        .filter(|def| app_query_matches_definition(query, def))
+        .collect();
+    // Preserve complete names such as "Visual Studio Code" before considering
+    // alternate keywords. This only broadens discovery, never direct launch.
+    if !exact.is_empty() {
+        return exact;
+    }
+    let terms: Vec<_> = query
+        .split(|ch: char| {
+            ch.is_whitespace()
+                || matches!(ch, '/' | ',' | '，' | '、' | ';' | '；' | '|' | '(' | ')' | '（' | '）')
+        })
+        .filter(|term| !term.is_empty())
+        .take(16)
+        .map(normalize_app_query)
+        .filter(|term| term.chars().count() >= 2)
+        .collect();
+    // Multiple different app aliases remain multiple candidates. Selection
+    // and target verification stay with the existing open/execute boundary.
+    definitions
+        .iter()
+        .filter(|def| terms.iter().any(|term| app_query_matches_definition(term, def)))
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -2676,10 +2768,7 @@ fn list_windows_native_apps(query: Option<&str>, limit: usize) -> Vec<NativeAppE
     let definitions = windows_app_definitions();
     let mut candidates = Vec::new();
     if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
-        for def in definitions
-            .iter()
-            .filter(|def| app_query_matches_definition(q, def))
-        {
+        for def in search_app_definitions(q, &definitions) {
             candidates.extend(candidates_for_definition(def));
         }
         candidates.extend(generic_windows_launch_candidates(Some(q)));
@@ -6442,7 +6531,10 @@ pub fn run() {
             let window = app.get_webview_window("main").unwrap();
             let reg = app.global_shortcut();
             if let Err(error) =
-                reg.on_shortcut(WINDOW_TOGGLE_SHORTCUT, move |app, _shortcut, _event| {
+                reg.on_shortcut(WINDOW_TOGGLE_SHORTCUT, move |app, _shortcut, event| {
+                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        return;
+                    }
                     let wallpaper_enabled = app
                         .state::<Mutex<WallpaperState>>()
                         .lock()

@@ -253,7 +253,7 @@ describe('Lumi client self model', () => {
       'autonomy_register_workflow',
     ]));
     expect(backgroundRuntime?.notes).toContain('hidden-to-background');
-    expect(backgroundRuntime?.notes).toContain('autonomous workflow execution');
+    expect(backgroundRuntime?.notes).toContain('Background tasks follow authorized workflows');
   });
 
   it('normalizes user-facing surface names to client target ids', () => {

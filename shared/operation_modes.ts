@@ -1,46 +1,8 @@
-/**
- * Canonical LumiCore operation-mode taxonomy shared by the desktop and server.
- *
- * Only the three entries in `LUMI_OPERATION_MODE_IDS` are persistent,
- * user-selectable permission postures. Meeting is a temporary capture surface;
- * it may appear in client state while capture is active, but it is not a
- * fourth permission tier.
- */
-export const LUMI_OPERATION_MODE_IDS = ['chat', 'assistant', 'autonomous'] as const;
+/** Single Lumi core; meeting is a temporary capture surface, never a permission tier. */
+export const LUMI_OPERATION_MODE_IDS = ['assistant'] as const;
 
-export type LumiOperationMode = (typeof LUMI_OPERATION_MODE_IDS)[number];
-
-export interface LumiOperationModeDefinition {
-  id: LumiOperationMode;
-  permissionTier: 1 | 2 | 3;
-  executionPosture: 'conversation_first' | 'foreground_execution' | 'continuous_execution';
-  persistent: true;
-  continuous: boolean;
-}
-
-export const LUMI_OPERATION_MODE_DEFINITIONS: readonly LumiOperationModeDefinition[] = [
-  {
-    id: 'chat',
-    permissionTier: 1,
-    executionPosture: 'conversation_first',
-    persistent: true,
-    continuous: false,
-  },
-  {
-    id: 'assistant',
-    permissionTier: 2,
-    executionPosture: 'foreground_execution',
-    persistent: true,
-    continuous: false,
-  },
-  {
-    id: 'autonomous',
-    permissionTier: 3,
-    executionPosture: 'continuous_execution',
-    persistent: true,
-    continuous: true,
-  },
-] as const;
+// Legacy wire values remain accepted by older clients; they never select permissions.
+export type LumiOperationMode = 'chat' | 'assistant' | 'autonomous';
 
 export const LUMI_MEETING_CAPTURE_SURFACE = {
   id: 'meeting',
@@ -59,7 +21,7 @@ export const LUMI_CLIENT_MODE_IDS = [
 ] as const;
 
 export function isLumiOperationMode(value: unknown): value is LumiOperationMode {
-  return LUMI_OPERATION_MODE_IDS.includes(value as LumiOperationMode);
+  return value === 'assistant';
 }
 
 export function isLumiClientMode(value: unknown): value is LumiClientMode {
@@ -68,16 +30,5 @@ export function isLumiClientMode(value: unknown): value is LumiClientMode {
 
 export function normalizeLumiClientMode(value: unknown): LumiClientMode {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (isLumiClientMode(normalized)) return normalized;
-  if (normalized === 'music' || normalized === 'desktop_control' || normalized === 'terminal') {
-    return 'assistant';
-  }
-  return 'assistant';
-}
-
-export function getLumiOperationModeDefinition(
-  value: unknown,
-): LumiOperationModeDefinition | null {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return LUMI_OPERATION_MODE_DEFINITIONS.find(definition => definition.id === normalized) || null;
+  return normalized === 'meeting' ? 'meeting' : 'assistant';
 }

@@ -225,7 +225,7 @@ export function OrgPortal({
   }
 
   if (isConnected) {
-    return <OrgHub />;
+    return <OrgHub key={`${user?.uid || ''}:${orgConnection.orgId}`} />;
   }
 
   // Not connected — choose join or create

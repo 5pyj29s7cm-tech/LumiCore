@@ -4,6 +4,7 @@
  */
 import { readDB, writeDB } from '../../db_layer';
 import { logger } from '../../logger';
+import { CN_TIMER_SKILL_METADATA } from '../regions/packs/cn/skill_messages';
 
 const SUPPORTED_LANGS = ['zh', 'en'];
 const FIELDS_TO_TRANSLATE = ['displayName', 'description', 'setupNote'] as const;
@@ -193,10 +194,7 @@ const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {
     displayName: '股票助手',
     description: 'A 股行情、K 线、板块、新闻、交易计划和模拟盘记录工具。用于学习和演练，不提供投资建议、不连接券商下单。',
   },
-  'skill-timer': {
-    displayName: '计时提醒',
-    description: '设置倒计时、计时器和桌面提醒。',
-  },
+  'skill-timer': CN_TIMER_SKILL_METADATA,
   'skill-translator': {
     displayName: '翻译助手',
     description: '支持多语言互译，并可自动检测源语言。',

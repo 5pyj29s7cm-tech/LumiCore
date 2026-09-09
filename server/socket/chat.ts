@@ -1,10 +1,13 @@
+import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
 /**
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
+import { TASK_TARGET_HISTORY_LIMIT } from '../conversation/task_target_anchor';
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
-import { NormalizedMessage, makeLLMCall, makeLLMCallStreaming, StreamCallback } from "../llm/providers";
+import { NormalizedMessage, makeLLMCall, StreamCallback } from "../llm/providers";
+import { runConversationTurn } from '../llm/conversation_turn';
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
@@ -36,7 +39,7 @@ import { trustedContinuationEvidenceTools } from "../cognition/tool_router";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
-import { finalizeLumiResponse } from "../cognition/result_finalizer";
+import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../cognition/result_finalizer";
 import { buildForegroundTaskCompletionFeedback } from "../cognition/acceptance_evidence";
 import { normalizeCompletionFeedbackForPersistence } from "../conversation/completion_feedback";
 import {
@@ -62,12 +65,7 @@ import {
   shouldForwardPreFinalizationProgress,
 } from "../cognition/response_delivery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
-import {
-  getExplicitSentenceCountConstraint,
-  sentenceCountCorrectionInstruction,
-} from "../cognition/response_constraints";
 import { buildTextReplyStyleOverlay } from '../cognition/reply_style';
-import { CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION } from "../i18n/response_recovery_messages";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import {
   persistLumiPostTurnLearning,
@@ -99,13 +97,13 @@ import {
   resolveAcceptedTurnConfirmation,
   runAfterAcceptedUserTurnAdmission,
 } from './action_turn_durability';
-import { queryMemories, queryMemoriesVector, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
+import { queryMemories, queryMemoriesVector, addMemory, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay, generateSystemPrompt } from "../personality/engine";
 import { personalityRegistry } from "../personality";
 import { getMemoryAvatar, buildMemoryAvatarContext } from '../memory_avatar/store';
 import { captureMemoryAvatarAuthorization } from '../memory_avatar/lifecycle';
-import { lightweightEvolve } from "../personality/evolution";
+
 import {
   getOrCreateConversationForTurn,
   addMessage,
@@ -150,7 +148,7 @@ import {
 } from "../conversation/execution_facts";
 import { resolveExactConversationCorrection } from "../conversation/exact_correction";
 import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
-import { ensureBranch } from "../memory/tree";
+
 import { retrieveChunks } from "../agents/rag";
 import { runRetrievalRequest } from "../llm/retrieval_request";
 import { getSensory } from "./shared";
@@ -184,6 +182,7 @@ import {
   buildDeterministicWorkTaskStatusCommand,
 } from "../cognition/quick_commands";
 import { classifyRuntimeWorkIntent } from '../cognition/runtime_work_intent';
+import { callIntentClassifier } from '../cognition/intent_classifier';
 import { recordTokenUsage } from "../llm/token_tracker";
 import { searchKnowledgeBase } from "../org/kb";
 import { buildProfessionOverlay } from "../autonomy/professions";
@@ -805,6 +804,16 @@ export function registerChatHandler(
     const nativeRequestBinding = buildSocketNativeRequestBinding(socket);
     let pendingConfirmation: Awaited<ReturnType<typeof getPendingConfirmationDurably>> = null;
     let pendingConfirmationPrompt = '';
+    // Execution evidence belongs to the request, including when a later model
+    // call is cancelled. Keep it reachable by the outer terminal boundary.
+    const requestToolRecords: ToolExecutionRecord[] = [];
+    let requestTaskId: string | undefined;
+    let collectRequestTerminalRecords = () => requestToolRecords;
+    const rememberRequestToolRecord = (record: ToolExecutionRecord) => {
+      if (!record?.name) return;
+      if (record.id && requestToolRecords.some(item => item.id === record.id)) return;
+      requestToolRecords.push(record);
+    };
     console.log('[ChatHandler] uid:', uid, 'agentId:', requestedAgentId || 'lumi', 'source:', source);
 
     // UI scope hints cannot turn an invalid work credential into personal access.
@@ -857,10 +866,6 @@ export function registerChatHandler(
     const callAuthorizedModel = (...args: Parameters<typeof makeLLMCall>) => {
       turnAuthorization.assertCurrent();
       return makeLLMCall(...args);
-    };
-    const streamAuthorizedModel = (...args: Parameters<typeof makeLLMCallStreaming>) => {
-      turnAuthorization.assertCurrent();
-      return makeLLMCallStreaming(...args);
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;
@@ -2017,6 +2022,23 @@ export function registerChatHandler(
         return;
       }
       conversation = refreshedConversation;
+      // Explicit memory edits own a durable turn without entering task/tool planning.
+      if (!isMemoryAvatar && isExplicitMemoryRequest(visibleUserText)) {
+        const receipt = await persistTurnMemory({ userId: uid, domain: resolvedDomain, orgId: resolvedOrgId,
+          userText: visibleUserText, channel: 'chat', source: eventSource, requestId, conversationId: conversation.id,
+          agentId: conversationAgentId, authorization: turnAuthorization, signal: abortController.signal, llmGetters });
+        await commitDeterministicTerminal({
+          payload: { text: receipt.text, agentName: 'Lumi', finalized: true, blocked: receipt.status === 'failed',
+            reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved' },
+          persistAssistantMessage: () => addMessageIdempotent({ userId: uid, agentId: conversationAgentId,
+            conversationId: conversation.id, role: 'assistant', content: receipt.text, domain: resolvedDomain,
+            orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'memory',
+            llmWasCalled: true, requestId, skipActionContinuation: true }),
+          errorContext: 'Explicit memory terminal',
+        });
+        await releaseChatSession();
+        return;
+      }
       resolvedTaskRelation = resolveActiveTaskMessageRelation(
         visibleUserText,
         conversation.actionContinuationState,
@@ -2581,6 +2603,7 @@ export function registerChatHandler(
         orgId: resolvedOrgId,
         useVector: true,
         evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
+        recordRetrieval: true,
         signal,
       }), abortController.signal);
       turnAuthorization.assertCurrent();
@@ -2735,7 +2758,7 @@ export function registerChatHandler(
       }
 
       const persistedConversationHistory = conversationId
-        ? getMessages(conversationId, 18).filter(record => !(
+        ? getMessages(conversationId, TASK_TARGET_HISTORY_LIMIT).filter(record => !(
             record.role === 'user'
             && (
               record.requestId === requestId
@@ -2885,6 +2908,7 @@ export function registerChatHandler(
         registry: toolRegistry,
         personalityToolPolicy: personality.toolPolicy,
         actionTaskState: conversation?.actionContinuationState,
+        persistedConversationHistory,
         pendingAssistantOfferContext,
         isSanctuary: isMemoryAvatar,
         traceText: currentTurnDecisionText,
@@ -3307,6 +3331,7 @@ export function registerChatHandler(
         lane: capabilitySelection.lane,
         preferredTools: capabilitySelection.preferredTools,
         pinnedTools: pinnedContinuationTools,
+        requiredTools: executionPipeline.modelToolProjection.requiredToolNames,
       });
       const toolSessionActive = !isMemoryAvatar && executionPipeline.executionRequested
         && modelToolProjection.toolNames.length > 0;
@@ -3425,6 +3450,7 @@ export function registerChatHandler(
         return;
       }
       const durableTaskId = actionTaskExecution.state?.taskId;
+      requestTaskId = durableTaskId;
       if (structuredMediaRequest && actionTaskExecution.state?.taskId) {
         const structuredMediaRecoveryCall = buildStructuredMediaDeterministicToolRecoveryCall(
           structuredMediaRequest,
@@ -3506,6 +3532,7 @@ export function registerChatHandler(
       const taskAwareRecords = (records: ToolExecutionRecord[]) => (
         coalesceToolExecutionRecords([...priorTaskRecords, ...records])
       );
+      collectRequestTerminalRecords = () => withDesktopExecutionReceipt(requestToolRecords, desktopExecutionTracker);
       if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
         effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(uid, visibleUserText, { domain: resolvedDomain, orgId: resolvedOrgId });
       }
@@ -3608,6 +3635,7 @@ export function registerChatHandler(
             currentTurnExecutionRequested: executionPipeline.executionRequested,
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: visibleUserText,
+            acceptedTaskTarget: turnFlow.acceptedTaskTarget,
             requestConfirmation: requestToolConfirmation,
             executionSignal: abortController.signal,
             isCancelled: isChatCancelled,
@@ -3862,6 +3890,7 @@ export function registerChatHandler(
             currentTurnExecutionRequested: executionPipeline.executionRequested,
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: confirmedTask,
+            acceptedTaskTarget: turnFlow.acceptedTaskTarget,
             toolPolicy: modelCapabilityPolicy,
             modelToolProjection,
           },
@@ -3873,6 +3902,9 @@ export function registerChatHandler(
                 reason: 'The one-time confirmation expired before execution.',
               },
         });
+        confirmedRecord.executionOrigin = 'confirmed_action_resume';
+        rememberRequestToolRecord(confirmedRecord);
+        if (isChatCancelled()) throw new DOMException('Chat confirmation execution cancelled', 'AbortError');
         if (!isDirectDesktopTool(confirmedRecord.name)) {
           emitToolLifecycle({
             correlationId: confirmedRecord.id || `chat-confirmed-${Date.now()}`,
@@ -3889,12 +3921,23 @@ export function registerChatHandler(
         let confirmationRecords: ToolExecutionRecord[] = [confirmedRecord];
         let confirmationLlmWasCalled = false;
         let confirmationCompletionGuard: LLMResult['completionGuard'];
-        let candidate = toolRecordSucceeded(confirmedRecord)
+        const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
+          taskText: confirmedTask,
+          responseText: '',
+          toolRecords: taskAwareRecords([confirmedRecord]),
+          source: 'chat_confirmation',
+          flow: { ...turnFlow, routeText: confirmedTask },
+          taskId: durableTaskId,
+          requestId,
+        });
+        let candidate = completedConfirmedAction?.text || (toolRecordSucceeded(confirmedRecord)
           ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
           : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
               confirmedRecord.error || confirmedRecord.result,
-            );
+            ));
         if (
+          !completedConfirmedAction
+          &&
           confirmedStepNeedsContinuation(
             confirmedTask,
             taskAwareRecords([confirmedRecord]),
@@ -3921,6 +3964,7 @@ export function registerChatHandler(
               ...reasoningRoutePolicy,
             },
             record => {
+              rememberRequestToolRecord(record);
               if (!record?.name || isDirectDesktopTool(record.name)) return;
               emitToolLifecycle({
                 correlationId: record.id || `chat-confirmation-resume-${Date.now()}`,
@@ -3961,9 +4005,10 @@ export function registerChatHandler(
               currentTurnExecutionRequested: executionPipeline.executionRequested,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: confirmedTask,
+              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
-              priorToolRecords: [confirmedRecord],
+              priorToolRecords: taskAwareRecords([confirmedRecord]),
               desktopExecutionTracker,
             },
             llmGetters.getOllama,
@@ -3974,6 +4019,7 @@ export function registerChatHandler(
             llmGetters.getGlm,
             llmGetters.getRelay,
           );
+          if (isChatCancelled()) throw new DOMException('Chat confirmation continuation cancelled', 'AbortError');
           for (const usage of continuation.usageRecords) {
             recordTokenUsage(uid, usage.provider, usage.model, {
               promptTokens: usage.promptTokens,
@@ -3992,9 +4038,11 @@ export function registerChatHandler(
             mode: 'chat',
             timestamp: new Date().toISOString(),
           });
-          confirmationRecords = continuation.toolCalls?.length
-            ? continuation.toolCalls
-            : [confirmedRecord];
+          confirmationRecords = coalesceToolExecutionRecords([
+            confirmedRecord,
+            ...requestToolRecords,
+            ...(continuation.toolCalls || []),
+          ]);
           confirmationCompletionGuard = continuation.completionGuard;
           candidate = pendingConfirmationCreatedThisTurn
             ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
@@ -4190,7 +4238,7 @@ export function registerChatHandler(
       let responseText = '';
       let completionGuard: LLMResult['completionGuard'];
       let llmWasCalled = false;
-      const allToolRecords: ToolExecutionRecord[] = [];
+      const allToolRecords = requestToolRecords;
       // Keep the same token-budgeted conversation that drove the normal turn
       // available to the one-shot execution recovery. Falling back to only the
       // latest task makes the recovery model forget constraints and prior user
@@ -4213,20 +4261,18 @@ export function registerChatHandler(
         llmModel: activeModel,
         isLLMAvailable: true,
       };
-      // LLM classifier for ambiguous intents — fast tiny call (50 tokens max)
+      // Optional classification gets one bounded attempt; the main reply keeps
+      // the user's full routing policy and cannot wait on classifier failover.
       const llmClassifier = async (prompt: string, userText: string): Promise<string> => {
         const messages: NormalizedMessage[] = [
           { role: 'system', content: prompt },
           { role: 'user', content: userText, sourceMessageId: acceptedUserMessageId },
         ];
-        const result = await callAuthorizedModel(
-          messages,
-          [],
+        const result = await callIntentClassifier(
           {
             provider: activeProvider,
             model: activeModel,
             userId: uid,
-            maxTokens: 60,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
             signal: abortController.signal,
@@ -4237,13 +4283,22 @@ export function registerChatHandler(
             // discriminator used by request-only acceptance evidence.
             source: 'chat_intent_classifier',
           },
-          llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-          llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+          classifierConfig => callAuthorizedModel(
+            messages,
+            [],
+            classifierConfig,
+            llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
+            llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+          ),
         );
-        return result.text || '{"category":"unknown","confidence":0.5,"entities":{}}';
+        return result.text;
       };
 
       const cognition = await processInput(text, cognitiveCtx, llmClassifier);
+      // Local classification fallback is allowed after its own short deadline,
+      // but must never swallow cancellation/revocation of the parent chat turn.
+      abortController.signal.throwIfAborted();
+      turnAuthorization.assertCurrent();
       console.log('[ChatHandler] cognition result:', cognition.intent.category, 'directToolExecuted:', cognition.directToolExecuted, 'responseText:', cognition.responseText?.slice(0, 100));
 
       // ── Sentiment analysis: detect emotional charge in user input ──
@@ -4304,10 +4359,8 @@ export function registerChatHandler(
 
         try {
           console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', toolSessionActive ? 'active' : 'conversation');
-          const streamChunks: string[] = [];
           const onChunk: StreamCallback = (chunk) => {
-            streamChunks.push(chunk);
-            if (!deferCompletionStream) {
+            if (!deferCompletionStream && !isExplicitMemoryRequest(text)) {
               const safeText = chatTextGate.push(chunk);
               if (safeText) {
                 emitAgent("agent:chunk", { text: safeText, agentName: personality.name });
@@ -4317,61 +4370,30 @@ export function registerChatHandler(
 
           // Sanctuary agents get zero tool access — they can only talk
           if (!toolSessionActive) {
-            const response = await streamAuthorizedModel(
+            const response = await runConversationTurn({
               messages,
-              [],
-              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
+              config: { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
               onChunk,
-              llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-              llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-            );
+              getters: llmGetters,
+              isCancelled: isChatCancelled,
+              assertCurrent: () => turnAuthorization.assertCurrent(),
+              taskText: text,
+            });
 
-            responseText = response.text || streamChunks.join('') || '';
+            responseText = response.text;
+            completionGuard = response.completionGuard;
             llmWasCalled = true;
-            if (response.usage) {
-              recordTokenUsage(uid, response.routing?.selectedProvider || activeProvider, response.routing?.selectedModel || activeModel, {
-                promptTokens: response.usage.promptTokens,
-                completionTokens: response.usage.completionTokens,
-                totalTokens: response.usage.totalTokens,
+            for (const usage of response.usageRecords) {
+              recordTokenUsage(uid, usage.provider, usage.model, {
+                promptTokens: usage.promptTokens,
+                completionTokens: usage.completionTokens,
+                totalTokens: usage.totalTokens,
               }, interactionId);
             }
-            const sentenceConstraint = getExplicitSentenceCountConstraint(text, responseText);
-            if (response.streamIncomplete || (sentenceConstraint && sentenceConstraint.actual !== sentenceConstraint.expected)) {
-              const recoveryInstruction = sentenceConstraint
-                ? sentenceCountCorrectionInstruction(sentenceConstraint.expected)
-                : CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION;
-              const corrected = await streamAuthorizedModel(
-                [
-                  ...messages,
-                  { role: 'assistant', content: responseText },
-                  { role: 'user', content: recoveryInstruction },
-                ],
-                [],
-                { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
-                () => {},
-                llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-                llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-              );
-              const correctedText = String(corrected.text || '').trim();
-              const correctedConstraint = getExplicitSentenceCountConstraint(text, correctedText);
-              if (
-                correctedText
-                && (!sentenceConstraint || correctedConstraint?.actual === correctedConstraint.expected)
-              ) {
-                responseText = correctedText;
-              }
-              if (corrected.usage) {
-                recordTokenUsage(uid, corrected.routing?.selectedProvider || activeProvider, corrected.routing?.selectedModel || activeModel, {
-                  promptTokens: corrected.usage.promptTokens,
-                  completionTokens: corrected.usage.completionTokens,
-                  totalTokens: corrected.usage.totalTokens,
-                }, interactionId);
-              }
-            }
-            const totalUsage = response.usage?.totalTokens || 0;
+            const totalUsage = response.usageRecords.reduce((sum, usage) => sum + (usage.totalTokens || 0), 0);
             if (turnAuthorization.isCurrent()) socket.emit('token:usage_update', {
               userId: uid,
-              provider: response.routing?.selectedProvider || activeProvider,
+              provider: response.usageRecords.at(-1)?.provider || activeProvider,
               totalTokens: totalUsage,
               mode: 'chat',
               timestamp: new Date().toISOString(),
@@ -4444,6 +4466,8 @@ export function registerChatHandler(
               currentTurnExecutionRequested: executionPipeline.executionRequested,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
+              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+              priorToolRecords: priorTaskRecords,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               desktopExecutionTracker,
               ...(toolSessionActive ? { requestConfirmation: requestToolConfirmation } : {}),
@@ -4581,6 +4605,7 @@ export function registerChatHandler(
             record => {
               // Preserve terminal receipts independently from the provider
               // result; a late provider error must not erase tool evidence.
+              rememberRequestToolRecord(record);
               recordTool(record);
               if (isDirectDesktopTool(record.name)) return;
               const toolPayload = {
@@ -4635,6 +4660,7 @@ export function registerChatHandler(
               currentTurnExecutionRequested: executionPipeline.executionRequested,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
+              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               priorToolRecords,
               desktopExecutionTracker,
@@ -4746,7 +4772,8 @@ export function registerChatHandler(
             toolRecords: taskAwareRecords(allToolRecords),
             blocked: finalResponse.blocked,
             reason: finalResponse.reason,
-            status: pendingConfirmationCreatedThisTurn ? 'waiting_confirmation' : undefined,
+            status: pendingConfirmationCreatedThisTurn || finalResponse.reason === 'waiting_confirmation'
+              ? 'waiting_confirmation' : finalResponse.reason === 'workflow_running' ? 'executing' : undefined,
           })
         : undefined;
       const trustedConfirmationRequestText = pendingConfirmationCreatedThisTurn
@@ -4935,129 +4962,11 @@ export function registerChatHandler(
       await releaseChatSession();
       if (!turnAuthorization.isCurrent()) return;
 
-      // Auto-learn from corrections: when user corrects Lumi, extract high-confidence memories
-      const correctionPatterns = [/不是/, /不对/, /错了/, /wrong/i, /incorrect/i, /actually/i, /no,?\s/i, /你弄错了/, /不是这样的/];
-      const isCorrection = correctionPatterns.some(p => p.test(text));
-      if (allowAdaptiveLearning && resolvedDomain === 'personal' && isCorrection && responseText && !finalResponse.blocked) {
-        try {
-          const corrected = await runAuthorizedEnrichment(turnAuthorization, signal => extractMemories(
-            { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches: [], signal },
-            llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-            llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-          ));
-          turnAuthorization.assertCurrent();
-          for (const mem of corrected.memories) {
-            addMemory({
-              userId: uid, type: mem.type, content: mem.content,
-              keywords: mem.keywords, confidence: Math.min((mem.confidence || 0.5) + 0.2, 1.0),
-              sourceInteractionId: interactionId, agentId: conversationAgentId,
-            } as any, { domain: resolvedDomain, orgId: resolvedOrgId, source: 'chat' });
-          }
-          console.log(`[ChatHandler] Correction learned: ${corrected.memories.length} memories with boosted confidence`);
-
-          // Real-time identity correction: when user contradicts a claim Lumi makes about the user
-          // (e.g. "我不做自动驾驶" → remove from coreMotivation immediately, no 7-day wait)
-          try {
-            const identityCheck = await callAuthorizedModel(
-              [
-                {
-                  role: 'system',
-                  content: `Detect identity corrections. Lumi's stable coreMotivation:\n"${personalityConfig.coreMotivation}"\nLumi's owner-specific growthState: ${JSON.stringify((personalityConfig as any).growthState || {})}\n\nUser said: "${text}"\nLumi said: "${responseText.slice(0, 300)}"\n\nIs the user denying something Lumi believes about them (interest, trait, name, profession)? If YES, return JSON: {"correctsIdentity": true, "removeInterest": "exact contradicted growth/core phrase to remove", "rewriteMotivation": "rewrite coreMotivation only if the false claim is inside coreMotivation, otherwise null"}. If NO, return {"correctsIdentity": false}.\nReturn ONLY JSON.`,
-                },
-              ],
-              [],
-              { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, maxTokens: 300, ...reasoningRoutePolicy },
-              llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-              llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-            );
-            turnAuthorization.assertCurrent();
-            const identityResult = JSON.parse((identityCheck.text || '').replace(/```json|```/g, '').trim() || '{}');
-            if (identityResult.correctsIdentity) {
-              const removed = await personalityRegistry.correctIdentity(personalityId, {
-                removeInterest: identityResult.removeInterest || undefined,
-                removeFromMotivation: identityResult.removeInterest || undefined,
-                newMotivation: identityResult.rewriteMotivation || undefined,
-              }, uid);
-              if (removed) {
-                console.log(`[ChatHandler] Identity corrected in real-time: removed "${identityResult.removeInterest}"`);
-              }
-            }
-          } catch (idErr: any) {
-            console.warn('[ChatHandler] Identity correction check failed:', idErr.message);
-          }
-        } catch (err: any) { console.warn('[ChatHandler] Correction extraction failed:', err.message); }
-      }
-
-      // Lightweight per-conversation evolution — micro-shifts after meaningful chats
-      if (!turnAuthorization.isCurrent()) return;
-      // Fires if enough owner_trait memories have accumulated, no 7-day wait needed
-      if (allowAdaptiveLearning && resolvedDomain === 'personal' && responseText && !finalResponse.blocked && cognition.intent.category !== 'command' && !personalityRegistry.isEvolutionFrozen(personalityId, uid)) {
-        try {
-          const evolutionConfig = personalityRegistry.getEvolutionConfig(personalityId, uid);
-          const step = await lightweightEvolve(
-            personalityConfig as any,
-            uid,
-            evolutionConfig,
-            llmGetters.getDeepSeek,
-            llmGetters.getGemini,
-            llmGetters.getOpenAI,
-            llmGetters.getAnthropic,
-            llmGetters.getQwen,
-            undefined,
-            llmGetters.getOllama,
-            llmGetters.getLmStudio,
-            llmGetters.getArk,
-            llmGetters.getXiaomi,
-            llmGetters.getKimi,
-            llmGetters.getGlm,
-            llmGetters.getRelay,
-          );
-          turnAuthorization.assertCurrent();
-          if (step) {
-            personalityRegistry.applyEvolution(personalityId, step, { userId: uid });
-            console.log(`[ChatHandler] Lightweight evolution: v${step.version}, ${step.mutations.length} mutation(s)`);
-          }
-        } catch (evErr: any) {
-          console.warn('[ChatHandler] Lightweight evolution failed:', evErr.message);
-        }
-      }
-
-      // Async memory extraction — skip trivial/command messages to reduce noise
-      const skipExtractionCategories = ['command', 'file', 'unknown'];
-      if (allowAdaptiveLearning && turnAuthorization.isCurrent() && text.length >= 10 && !finalResponse.blocked && !skipExtractionCategories.includes(cognition.intent.category)) {
-      const branchNodes = queryMemories({ userId: uid, nodeType: 'branch', limit: 50, domain: resolvedDomain, orgId: resolvedOrgId });
-      const treeBranches = branchNodes.map(b => b.content);
-      const locationTag = sensory.locationTag || undefined;
-      void runtimeBackgroundWork.track(runAuthorizedEnrichment(turnAuthorization, signal => extractMemories(
-        { userMessage: text, assistantResponse: responseText, existingMemories: relevantMemories.map(m => m.content), provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, treeBranches, locationTag, signal },
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-      )).then(extracted => {
-        if (!turnAuthorization.isCurrent()) return;
-        for (const mem of extracted.memories) {
-          let parentId: string | null = null;
-          if ((mem as any).branchHint) {
-            const branch = ensureBranch(uid, (mem as any).branchHint, conversationAgentId, null, { domain: resolvedDomain, orgId: resolvedOrgId });
-            parentId = branch.id;
-          }
-          addMemory({
-            userId: uid, type: mem.type, content: mem.content,
-            keywords: mem.keywords, confidence: mem.confidence, sourceInteractionId: interactionId,
-            agentId: conversationAgentId,
-          } as any, { parentId, location: locationTag, domain: resolvedDomain, orgId: resolvedOrgId, source: 'chat' });
-        }
-        for (const rem of extracted.reminders) {
-          addReminder({
-            userId: uid,
-            content: rem.content,
-            dueAt: rem.dueAt,
-            sourceInteractionId: interactionId,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-          });
-        }
-      }).catch(err => console.error('[Memory] Extraction failed:', err)));
-      }
+      if (allowAdaptiveLearning && !finalResponse.blocked) scheduleTurnMemory({
+        userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, userText: text,
+        channel: 'chat', source: eventSource, requestId, conversationId,
+        agentId: conversationAgentId, authorization: turnAuthorization, llmGetters,
+      });
 
       // Update emotional state — reconnect if user was away for a while
       if (!turnAuthorization.isCurrent()) return;
@@ -5118,12 +5027,14 @@ export function registerChatHandler(
     } catch (error: any) {
       if (isChatCancelled() || error?.name === 'AbortError') {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
-        cancelConversationActionExecution(
-          selectedConversationId,
-          uid,
-          'Cancelled by the user.',
-          requestId,
-        );
+        const cancelledRecords = collectRequestTerminalRecords();
+        const cancelledFeedback = requestTaskId ? buildForegroundTaskCompletionFeedback({
+          taskId: requestTaskId,
+          taskLabel: visibleUserText,
+          toolRecords: cancelledRecords,
+          status: 'cancelled',
+          reason: 'Cancelled by the user; completed steps remain recorded.',
+        }) : undefined;
         await commitDeterministicTerminal({
           payload: {
             text: cancelledText,
@@ -5131,6 +5042,7 @@ export function registerChatHandler(
             finalized: true,
             blocked: false,
             reason: 'cancelled',
+            completionFeedback: cancelledFeedback,
           },
           persistAssistantMessage: () => addMessageIdempotent({
             userId: uid,
@@ -5145,7 +5057,14 @@ export function registerChatHandler(
             cognitiveIntent: 'task_cancelled',
             llmWasCalled: true,
             requestId,
-            skipActionContinuation: true,
+            toolCalls: cancelledRecords.length ? cancelledRecords : undefined,
+            completionFeedback: cancelledFeedback,
+            ...(requestTaskId ? { terminalTaskDisposition: {
+              outcome: 'cancelled' as const,
+              taskId: requestTaskId,
+              requestId,
+              reason: 'Cancelled by the user; completed steps remain recorded.',
+            } } : {}),
           }),
           publishAfter: () => emitConversationUpdated({
             conversationId: selectedConversationId,
@@ -5165,6 +5084,14 @@ export function registerChatHandler(
         : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE'
         ? CN_VOICE_WORK_MESSAGES.modelRoutesUnavailable
         : CN_VOICE_WORK_MESSAGES.processingFailed;
+      const failedRecords = collectRequestTerminalRecords();
+      const failedFeedback = requestTaskId ? buildForegroundTaskCompletionFeedback({
+        taskId: requestTaskId,
+        taskLabel: visibleUserText,
+        toolRecords: failedRecords,
+        blocked: true,
+        reason: String(publicError.reason || 'chat_execution_failed'),
+      }) : undefined;
       await commitDeterministicTerminal({
         payload: {
           text: failureText,
@@ -5172,6 +5099,7 @@ export function registerChatHandler(
           finalized: true,
           blocked: true,
           reason: String(publicError.reason || 'chat_execution_failed'),
+          completionFeedback: failedFeedback,
         },
         persistAssistantMessage: () => addMessageIdempotent({
           userId: uid,
@@ -5186,6 +5114,14 @@ export function registerChatHandler(
           cognitiveIntent: String(publicError.code || 'CHAT_EXECUTION_FAILED').toLowerCase(),
           llmWasCalled: false,
           requestId,
+          toolCalls: failedRecords.length ? failedRecords : undefined,
+          completionFeedback: failedFeedback,
+          ...(requestTaskId ? { terminalTaskDisposition: {
+            outcome: 'blocked' as const,
+            taskId: requestTaskId,
+            requestId,
+            reason: String(publicError.reason || 'chat_execution_failed'),
+          } } : {}),
         }),
         publishAfter: () => emitConversationUpdated({
           conversationId: selectedConversationId,

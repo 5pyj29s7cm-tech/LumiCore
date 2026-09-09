@@ -87,12 +87,20 @@ const GENERATED_SKILL_REQUIRED_FILES = [
 export interface SkillGenerateRequest {
   /** Natural language description of what the skill should do */
   description?: string;
+  /** User-facing name retained in the reviewed tool description and manifest. */
+  displayName?: string;
   /** Existing workflows to learn from */
   workflows?: WorkflowRecord[];
   /** LLM provider to use */
   provider?: UserLLMProvider;
   model?: string;
   userId?: string;
+  /** Server-owned parent turn identity, retained for nested model diagnostics. */
+  conversationId?: string;
+  requestId?: string;
+  domain?: string;
+  orgId?: string;
+  signal?: AbortSignal;
 }
 
 export interface SkillGenerateResult {
@@ -129,47 +137,26 @@ export interface GeneratedSkillDraftReview {
   requiresUserApproval: true;
 }
 
-const GENERATE_PROMPT = `You are a Skill SDK generator for LumiCore. Your job is to create a reviewable MCP (Model Context Protocol) server tool that performs only pure computation or in-memory data transformation.
+const GENERATE_PROMPT = `Generate one compact pure-computation Lumi skill draft.
+Output exactly two fenced blocks: first a json block containing skillName (kebab-case), toolName (snake_case), toolDescription, inputSchema (JSON schema); then a typescript block containing the callback body as ordinary source code. Do not JSON-encode the code.
+The host creates packaging, documentation and review metadata. Read args; assign a JSON-encoded string to the existing result variable. No outer return, imports, exports, file/network/process/environment access, globals, eval, dynamic code, hidden tool execution or prototype access. Keep code concise. Never hardcode example inputs or results. Reject missing or invalid input explicitly; numeric validation must consume the entire input, not just a numeric prefix. If external side effects are needed, return an empty code block. Code is reviewed and never executed before approval.
 
-## Context
-Lumi has learned a repeatable workflow by observing tool execution patterns. Encode only the pure, deterministic data-transformation portion as a standalone MCP tool.
+{inputDescription}`;
 
-## Input
-{inputDescription}
-
-## Output Requirements
-Output ONLY a JSON object with these fields:
-
-{
-  "skillName": "lowercase-kebab-case-name",
-  "toolName": "snake_case_tool_name",
-  "toolDescription": "1-2 sentence description of what this tool does",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "paramName": { "type": "string", "description": "what this param is" }
-    },
-    "required": ["paramName"]
-  },
-  "handlerCode": "The COMPLETE TypeScript body placed inside the single async MCP tool callback. It may only calculate from args and transform in-memory JSON-compatible data. It MUST set the existing variable named 'result' to a string. Example:\\n  const values = Array.isArray(args.values) ? args.values.map(Number) : [];\\n  const total = values.reduce((sum, value) => sum + value, 0);\\n  result = JSON.stringify({{ total }});",
-  "permissions": [],
-  "sideEffects": [],
-  "risk": "low",
-  "readme": "Markdown documentation: what the skill does, usage example, parameters, output format"
+/** Decode the transport only. Never rewrite escapes or repair source semantics. */
+export function parseGeneratedSkillResponse(text: string): Record<string, any> {
+  const blocks = text.trim().match(/^```json\s*\r?\n([\s\S]*?)\r?\n```\s*```(?:typescript|ts)\s*\r?\n([\s\S]*?)\r?\n```$/i);
+  if (blocks) {
+    const metadata = JSON.parse(blocks[1]);
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid skill metadata');
+    return { ...metadata, handlerCode: blocks[2] };
+  }
+  // Existing model adapters may still return the previous all-JSON protocol.
+  const json = text.trim().replace(/^```json\s*\r?\n/i, '').replace(/\r?\n```$/, '');
+  const parsed = JSON.parse(json);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid skill draft JSON');
+  return parsed;
 }
-
-## Guidelines
-- The skillName should be short and descriptive (max 3 words, kebab-case)
-- Generated handlers are restricted to pure computation and in-memory data transformation. If the request needs files, network, processes, environment access, desktop control, or another host capability, do not generate a skill for it.
-- handlerCode MUST be real executable TypeScript, not a description. It is reviewed as source and is never executed before approval.
-- Keep inputSchema focused: only parameters that change between invocations
-- Do not use import, require, eval, Function, dynamic import, process, globalThis, global, Deno, Bun, fetch, WebSocket, filesystem, network, shell/process APIs, environment APIs, computed property access, constructor/prototype escape, or hidden nested tool execution
-- permissions and sideEffects MUST both be empty arrays; generated skills are reviewed drafts and are never installed automatically
-- Always set 'result' to a string before the function returns
-- For async operations, use 'await' — the handler is an async function
-- Do NOT include 'import' statements or 'export' — those are added automatically
-
-JSON output:`;
 
 const SKILL_TEMPLATE = `/**
  * Auto-generated Lumi Skill: {skillName}
@@ -255,6 +242,7 @@ export async function generateSkill(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<SkillGenerateResult> {
+  request.signal?.throwIfAborted();
   // Build input description for LLM
   let inputDescription = '';
 
@@ -283,7 +271,8 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
     return { success: false, error: 'No workflows or description provided' };
   }
 
-  const prompt = GENERATE_PROMPT.replace('{inputDescription}', inputDescription);
+  const prompt = GENERATE_PROMPT.replace('{inputDescription}', () => inputDescription)
+    + '\n\n' + generatedSkillAuthoringContract();
 
   const messages: NormalizedMessage[] = [
     { role: 'user', content: prompt },
@@ -294,13 +283,19 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
   const model = request.model || preferred.model;
   const explicitModelOverride = Boolean(request.provider || request.model);
   const routeConfig = {
+    signal: request.signal,
     provider,
     model,
     userId: request.userId || 'skill_gen',
+    conversationId: request.conversationId,
+    requestId: request.requestId,
+    domain: request.domain,
+    orgId: request.orgId,
     selectionMode: explicitModelOverride ? 'pinned' as const : preferred.selectionMode,
     fallbackCandidates: explicitModelOverride ? [] : preferred.fallbackCandidates,
     allowCloudFallback: explicitModelOverride ? false : preferred.allowCloudFallback,
     source: 'skill_generator',
+    thinkingMode: 'disabled' as const,
   };
   let generatedSkillStagingDir = '';
   let generatedPublishedDraftDir = '';
@@ -309,7 +304,7 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
     const response = await makeLLMCall(
       messages,
       [],
-      { ...routeConfig, maxTokens: 2048 },
+      { ...routeConfig, maxTokens: 4096 },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -325,49 +320,13 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
     );
 
     const text = response.text || '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { success: false, error: 'LLM did not return valid JSON', generatedCode: text };
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = parseGeneratedSkillResponse(text);
+    request.signal?.throwIfAborted();
+    const displayName = String(request.displayName || '').trim().slice(0, 160);
+    if (displayName) parsed.toolDescription = `${displayName}: ${String(parsed.toolDescription || parsed.toolName || '')}`;
 
     if (!parsed.skillName || !parsed.toolName) {
       return { success: false, error: 'Missing skillName or toolName in generated output', generatedCode: text };
-    }
-
-    if (!parsed.handlerCode || typeof parsed.handlerCode !== 'string' || parsed.handlerCode.trim().length === 0) {
-      // If LLM returned old field name (handlerLogic), retry with explicit conversion prompt
-      if (parsed.handlerLogic && typeof parsed.handlerLogic === 'string') {
-        console.warn('[SkillGen] LLM returned handlerLogic instead of handlerCode — retrying with conversion prompt');
-        const conversionMessages: NormalizedMessage[] = [
-          { role: 'user', content: `Turn this handler logic description into a pure TypeScript data-transform body for the single async MCP callback. The body may only calculate from 'args' (Record<string, any>) and must set the existing variable named "result" to a string. Do not use files, network, processes, environment access, dynamic code, imports, or computed property access.\n\nLogic:\n${parsed.handlerLogic}\n\nReturn ONLY a JSON object: {"handlerCode": "// the pure computation code here"}` },
-        ];
-        try {
-          const convResponse = await makeLLMCall(
-            conversionMessages, [],
-            { ...routeConfig, maxTokens: 2048 },
-            getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-            getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
-          );
-          const convText = convResponse.text || '';
-          const convJson = convText.match(/\{[\s\S]*\}/);
-          if (convJson) {
-            const convParsed = JSON.parse(convJson[0]);
-            if (convParsed.handlerCode && typeof convParsed.handlerCode === 'string') {
-              parsed.handlerCode = convParsed.handlerCode;
-              console.log('[SkillGen] Successfully converted handlerLogic → handlerCode');
-            }
-          }
-        } catch (e: any) {
-          console.warn('[SkillGen] handlerLogic conversion retry failed:', e.message);
-        }
-      }
-
-      // If still no handlerCode after retry, fail
-      if (!parsed.handlerCode || typeof parsed.handlerCode !== 'string' || parsed.handlerCode.trim().length === 0) {
-        return { success: false, error: 'LLM did not return handlerCode', generatedCode: text };
-      }
     }
 
     // Build the skill draft. Generated code never enters the active skill
@@ -377,7 +336,11 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
     if (fs.existsSync(installedSkillDir) || mcpManager.getConfig()[skillName]) {
       return { success: false, error: `Skill "${skillName}" is already installed. Remove it before generating a replacement draft.`, directory: installedSkillDir };
     }
-    generatedSkillStagingDir = path.join(os.tmpdir(), `lumi-skill-generate-${skillName}-${process.pid}-${Date.now()}`);
+    // Keep the unpublished staging area on the data volume so the final atomic
+    // rename also works when user data is on a different drive from OS temp.
+    const stagingRoot = path.join(path.dirname(SKILL_DRAFTS_DIR), 'skill-draft-staging');
+    fs.mkdirSync(stagingRoot, { recursive: true });
+    generatedSkillStagingDir = fs.mkdtempSync(path.join(stagingRoot, `${skillName}-`));
     const skillDir = generatedSkillStagingDir;
 
     const generatedFrom = request.workflows
@@ -386,197 +349,89 @@ ${topTools(allTools).map(t => `- ${t.name} (${t.count}x)`).join('\n')}
 
     const now = new Date().toISOString();
 
-    // Build the executable handler function from LLM-generated code
-    const handlerCode = buildHandlerFunction(parsed.handlerCode, parsed.inputSchema);
-
-    // Build the input schema as a Zod-compatible object literal for the template
     const schemaLiteral = buildSchemaLiteral(parsed.inputSchema);
-
-    // Fill templates
-    let indexTs = SKILL_TEMPLATE
+    const renderSource = () => SKILL_TEMPLATE
       .replace(/{skillName}/g, skillName)
-      .replace(/{toolName}/g, parsed.toolName)
-      .replace(/{toolDescription}/g, escapeTsSingleQuoted(parsed.toolDescription || parsed.toolName))
+      .replace(/{toolName}/g, () => parsed.toolName)
+      .replace(/{toolDescription}/g, () => escapeTsSingleQuoted(parsed.toolDescription || parsed.toolName))
       .replace(/{timestamp}/g, now)
-      .replace('{handlerCode}', handlerCode)
-      .replace('{inputSchema}', schemaLiteral);
-
-    let review = buildGeneratedSkillDraftReview({
-      source: indexTs,
-      generatedAt: now,
-      declaredPermissions: parsed.permissions,
-      declaredSideEffects: parsed.sideEffects,
-      declaredRisk: parsed.risk,
-      validationPassed: false,
-    });
-    if (!review.staticCheck.passed) {
-      return {
-        success: false,
-        skillName,
-        toolName: parsed.toolName,
-        generatedCode: indexTs,
-        error: `Static skill review failed: ${review.staticCheck.findings.join(' | ')}`,
-      };
-    }
-    let packageJson = buildDraftPackageJson({
-      skillName,
-      toolDescription: parsed.toolDescription || '',
-      generatedFrom,
-      generatedAt: now,
-      review,
-    });
-
-    const readme = (parsed.readme || `# ${skillName}\n\n${parsed.toolDescription}`);
-
-    // Write files
-    if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, 'package.json'), packageJson);
-    fs.writeFileSync(path.join(skillDir, 'index.ts'), indexTs);
-    fs.writeFileSync(path.join(skillDir, 'README.md'), readme);
-
-    console.log(`[SkillGen] Generated skill "${skillName}" at ${skillDir}`);
-
-    // Resolve and lock dependencies without running package lifecycle scripts.
-    // No compiler or generated runtime is started in this staging directory.
-    await createSkillDependencyLock(skillDir);
-    const lockfilePath = path.join(skillDir, 'package-lock.json');
-    const lockfileSource = fs.readFileSync(lockfilePath, 'utf8');
-    ({ packageJson, review } = assembleReviewedDraftPackage({
-      skillName,
-      toolDescription: parsed.toolDescription || '',
-      generatedFrom,
-      generatedAt: now,
-      source: indexTs,
-      lockfileSource,
-      review,
-    }));
-    fs.writeFileSync(path.join(skillDir, 'package.json'), packageJson);
-
-    const draftDir = allocateDraftDirectory(skillName, now);
-    fs.mkdirSync(path.dirname(draftDir), { recursive: true });
-    fs.renameSync(skillDir, draftDir);
-    generatedSkillStagingDir = '';
-    generatedPublishedDraftDir = draftDir;
-
-    // Runtime smoke test — verify the process can start
-    let validation = await validateGeneratedSkillDraftForInstall(draftDir);
-    const firstTypeError = validation.errors.find(error => (
-      error.startsWith('TypeScript validation failed:')
-    ));
-
-    if (!validation.valid && firstTypeError) {
-      console.warn(`[SkillGen] Type-check failed for "${skillName}", retrying with error feedback...`);
-
-      // Retry: feed errors back to LLM
-      const retryPrompt = `Fix the TypeScript errors in this handler code.
-
-## Original description
-${inputDescription}
-
-## Errored handler code
-${parsed.handlerCode}
-
-## TypeScript errors
-${firstTypeError}
-
-Return ONLY a JSON object with "handlerCode" (the fixed code body).`;
-
-      try {
-        const retryMessages: NormalizedMessage[] = [
-          { role: 'user', content: retryPrompt },
-        ];
-        const retryResponse = await makeLLMCall(
-          retryMessages, [],
-          { ...routeConfig, maxTokens: 2048 },
-          getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-          getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
-        );
-
-        const retryText = retryResponse.text || '';
-        const retryJson = retryText.match(/\{[\s\S]*\}/);
-        if (retryJson) {
-          const retryParsed = JSON.parse(retryJson[0]);
-          const fixedCode = retryParsed.handlerCode;
-          if (fixedCode && typeof fixedCode === 'string') {
-            const fixedHandler = buildHandlerFunction(fixedCode, parsed.inputSchema);
-            const fixedIndexTs = SKILL_TEMPLATE
-              .replace(/{skillName}/g, skillName)
-              .replace(/{toolName}/g, parsed.toolName)
-              .replace(/{toolDescription}/g, escapeTsSingleQuoted(parsed.toolDescription || parsed.toolName))
-              .replace(/{timestamp}/g, now)
-              .replace('{handlerCode}', fixedHandler)
-              .replace('{inputSchema}', schemaLiteral);
-
-            indexTs = fixedIndexTs;
-            fs.writeFileSync(path.join(draftDir, 'index.ts'), fixedIndexTs);
-            review = buildGeneratedSkillDraftReview({
-              source: indexTs,
-              generatedAt: now,
-              declaredPermissions: parsed.permissions,
-              declaredSideEffects: parsed.sideEffects,
-              declaredRisk: parsed.risk,
-              validationPassed: false,
-            });
-            ({ packageJson, review } = assembleReviewedDraftPackage({
-              skillName,
-              toolDescription: parsed.toolDescription || '',
-              generatedFrom,
-              generatedAt: now,
-              source: indexTs,
-              lockfileSource,
-              review,
-            }));
-            fs.writeFileSync(path.join(draftDir, 'package.json'), packageJson);
-            validation = await validateGeneratedSkillDraftForInstall(draftDir);
-          }
-        }
-      } catch (retryErr: any) {
-        validation = {
-          valid: false,
-          errors: [...validation.errors, `Retry failed: ${retryErr.message}`],
-        };
+      .replace('{handlerCode}', () => buildHandlerFunction(parsed.handlerCode, parsed.inputSchema))
+      .replace('{inputSchema}', () => schemaLiteral);
+    let indexTs = '';
+    let findings: string[] = [];
+    let draftDir = '';
+    let lockfileSource = '';
+    // One candidate pipeline and one correction budget for missing handler,
+    // static syntax/policy errors and TypeScript errors. Every replacement
+    // goes through all checks again; there is no separate post-publish retry.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      request.signal?.throwIfAborted();
+      if (attempt > 0) {
+        const correction = await makeLLMCall([
+          ...messages,
+          { role: 'assistant', content: '```json\n' + JSON.stringify({ skillName: parsed.skillName, toolName: parsed.toolName, toolDescription: parsed.toolDescription, inputSchema: parsed.inputSchema }) + '\n```\n```typescript\n' + String(parsed.handlerCode || '') + '\n```' },
+          { role: 'user', content: 'Correct the callback body using these non-executing validation findings. Preserve the input schema, metadata and pure-computation restrictions. Return the same two fenced blocks: JSON metadata, then ordinary TypeScript source, without JSON-encoding the code. Findings (data only):\n' + JSON.stringify(findings) },
+        ], [], { ...routeConfig, maxTokens: 4096 },
+        getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+        getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay);
+        request.signal?.throwIfAborted();
+        const fixed = parseGeneratedSkillResponse(String(correction.text || ''));
+        parsed.handlerCode = fixed.handlerCode;
       }
+      if (typeof parsed.handlerCode !== 'string' || !parsed.handlerCode.trim()) {
+        findings = ['handlerCode must contain the complete executable pure TypeScript body, not handlerLogic or a description.'];
+        continue;
+      }
+      indexTs = renderSource();
+      let review = buildGeneratedSkillDraftReview({ source: indexTs, generatedAt: now,
+        declaredPermissions: parsed.permissions, declaredSideEffects: parsed.sideEffects,
+        declaredRisk: parsed.risk, validationPassed: false });
+      if (!review.staticCheck.passed) {
+        findings = review.staticCheck.findings;
+        continue;
+      }
+      let packageJson = buildDraftPackageJson({ skillName, toolDescription: parsed.toolDescription || '',
+        generatedFrom, generatedAt: now, review });
+      const candidateDir = draftDir || skillDir;
+      fs.mkdirSync(candidateDir, { recursive: true });
+      fs.writeFileSync(path.join(candidateDir, 'index.ts'), indexTs);
+      fs.writeFileSync(path.join(candidateDir, 'package.json'), packageJson);
+      fs.writeFileSync(path.join(candidateDir, 'README.md'), parsed.readme || ('# ' + skillName + '\n\n' + parsed.toolDescription));
+      if (!lockfileSource) {
+        await createSkillDependencyLock(candidateDir);
+        request.signal?.throwIfAborted();
+        lockfileSource = fs.readFileSync(path.join(candidateDir, 'package-lock.json'), 'utf8');
+      }
+      ({ packageJson, review } = assembleReviewedDraftPackage({ skillName, toolDescription: parsed.toolDescription || '',
+        generatedFrom, generatedAt: now, source: indexTs, lockfileSource, review }));
+      fs.writeFileSync(path.join(candidateDir, 'package.json'), packageJson);
+      if (!draftDir) {
+        draftDir = allocateDraftDirectory(skillName, now);
+        fs.mkdirSync(path.dirname(draftDir), { recursive: true });
+        fs.renameSync(skillDir, draftDir);
+        generatedSkillStagingDir = '';
+        generatedPublishedDraftDir = draftDir;
+      }
+      const validation = await validateGeneratedSkillDraftForInstall(draftDir);
+      request.signal?.throwIfAborted();
+      if (!validation.valid || !validation.review || !validation.validatedDirectory) {
+        findings = validation.errors;
+        continue;
+      }
+      try { fs.rmSync(validation.validatedDirectory, { recursive: true, force: true }); } catch {}
+      ({ packageJson, review } = assembleReviewedDraftPackage({ skillName, toolDescription: parsed.toolDescription || '',
+        generatedFrom, generatedAt: now, source: indexTs, lockfileSource, review: validation.review }));
+      fs.writeFileSync(path.join(draftDir, 'package.json'), packageJson);
+      const finalManifestValidation = validateGeneratedDraftManifest(draftDir, skillName);
+      if (finalManifestValidation.errors.length || computeGeneratedSkillArtifactHash(indexTs, packageJson, lockfileSource) !== review.contentHash) {
+        throw new Error('Final generated draft integrity check failed: ' + finalManifestValidation.errors.join(' | '));
+      }
+      generatedPublishedDraftDir = '';
+      return { success: true, skillName, toolName: parsed.toolName, directory: draftDir,
+        status: 'draft', review, generatedCode: indexTs };
     }
-
-    if (!validation.valid || !validation.review || !validation.validatedDirectory) {
-      return {
-        success: false,
-        skillName,
-        toolName: parsed.toolName,
-        generatedCode: indexTs,
-        error: validation.errors.join(' | '),
-      };
-    }
-
-    try { fs.rmSync(validation.validatedDirectory, { recursive: true, force: true }); } catch {}
-    ({ packageJson, review } = assembleReviewedDraftPackage({
-      skillName,
-      toolDescription: parsed.toolDescription || '',
-      generatedFrom,
-      generatedAt: now,
-      source: indexTs,
-      lockfileSource,
-      review: validation.review,
-    }));
-    fs.writeFileSync(path.join(draftDir, 'package.json'), packageJson);
-    const finalManifestValidation = validateGeneratedDraftManifest(draftDir, skillName);
-    if (
-      finalManifestValidation.errors.length > 0
-      || computeGeneratedSkillArtifactHash(indexTs, packageJson, lockfileSource) !== review.contentHash
-    ) {
-      throw new Error(`Final generated draft integrity check failed: ${finalManifestValidation.errors.join(' | ')}`);
-    }
-    generatedPublishedDraftDir = '';
-
-    return {
-      success: true,
-      skillName,
-      toolName: parsed.toolName,
-      directory: draftDir,
-      status: 'draft',
-      review,
-      generatedCode: indexTs,
-    };
+    return { success: false, skillName, toolName: parsed.toolName, generatedCode: indexTs,
+      error: 'Skill validation failed after one correction: ' + findings.join(' | ') };
   } catch (err: any) {
     console.error('[SkillGen] Generation failed:', err);
     return { success: false, error: err.message };
@@ -981,6 +836,19 @@ const GENERATED_SKILL_PURE_INSTANCE_CALLS = new Set([
   'values',
 ]);
 
+/** The model and validator use the same call allowlists. */
+export function generatedSkillAuthoringContract(): string {
+  return [
+    'Callback language restrictions enforced by the host:',
+    'The host already declares let result. Finish with result = JSON.stringify(...). Never declare result with const/let/var, never redeclare args, and never return from the outer callback.',
+    'Use bounded array transforms (map/filter/reduce), not for/while/do loops, recursion or new constructors. Pure helpers declared as const name = (...) => ... may be called after their declaration; no mutable function variables or callback arguments invoked as functions. Synchronous arrow callbacks may return. For invalid input throw a descriptive string, not new Error or a success result. No try/catch. Fixed non-reserved string properties and nonnegative integer indexes are allowed; dynamic bracket selectors are not: use .at(index) for variable array reads. Regex literals may call .test(value). Do not use push/sort.',
+    'Callable globals: ' + [...GENERATED_SKILL_PURE_GLOBAL_CALLS].join(', '),
+    'Callable static methods: ' + Object.entries(GENERATED_SKILL_PURE_STATIC_CALLS).flatMap(([owner, methods]) => [...methods].map(method => `${owner}.${method}`)).join(', '),
+    'Callable instance methods: ' + [...GENERATED_SKILL_PURE_INSTANCE_CALLS].join(', '),
+    'Reserved fragments forbidden in constant strings and property names: ' + GENERATED_SKILL_DANGEROUS_STRING_FRAGMENTS.join(', '),
+  ].join('\n');
+}
+
 const GENERATED_SKILL_DANGEROUS_STRING_FRAGMENTS = [
   '__proto__',
   'constructor',
@@ -1000,6 +868,23 @@ function generatedSkillStringIsDangerous(value: string): boolean {
   return GENERATED_SKILL_DANGEROUS_STRING_FRAGMENTS.some(fragment => normalized.includes(fragment));
 }
 
+class GeneratedCallbackScope extends Set<string> {
+  readonly functions: Set<string>;
+  constructor(parent: Iterable<string> = []) {
+    super(parent);
+    this.functions = new Set(parent instanceof GeneratedCallbackScope ? parent.functions : []);
+  }
+}
+
+function isGeneratedStaticDataAccess(node: ts.ElementAccessExpression): boolean {
+  const key = node.argumentExpression && unwrapGeneratedExpression(node.argumentExpression);
+  if (!key) return false;
+  if (ts.isNumericLiteral(key)) return Number.isSafeInteger(Number(key.text)) && Number(key.text) >= 0;
+  return (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key))
+    && !GENERATED_SKILL_FORBIDDEN_PROPERTIES.has(key.text)
+    && !generatedSkillStringIsDangerous(key.text);
+}
+
 function isGeneratedLocalWriteTarget(expression: ts.Expression, scope: Set<string>): boolean {
   const value = unwrapGeneratedExpression(expression);
   if (ts.isIdentifier(value)) return scope.has(value.text);
@@ -1016,7 +901,7 @@ function isGeneratedAssignmentOperator(kind: ts.SyntaxKind): boolean {
 
 function addGeneratedBindingNames(
   name: ts.BindingName,
-  scope: Set<string>,
+  scope: GeneratedCallbackScope,
   findings: Set<string>,
 ): void {
   if (ts.isIdentifier(name)) {
@@ -1024,6 +909,7 @@ function addGeneratedBindingNames(
       generatedSkillFinding(findings, `Generated skill callback cannot shadow reserved binding ${name.text}.`);
       return;
     }
+    scope.functions.delete(name.text);
     scope.add(name.text);
     return;
   }
@@ -1038,7 +924,7 @@ function addGeneratedBindingNames(
 
 function validateGeneratedCallbackExpression(
   expression: ts.Expression,
-  scope: Set<string>,
+  scope: GeneratedCallbackScope,
   findings: Set<string>,
 ): void {
   const value = unwrapGeneratedExpression(expression);
@@ -1118,7 +1004,7 @@ function validateGeneratedCallbackExpression(
     return;
   }
   if (ts.isElementAccessExpression(value)) {
-    generatedSkillFinding(findings, 'Computed property access is not allowed in generated skill callbacks.');
+    if (!isGeneratedStaticDataAccess(value)) generatedSkillFinding(findings, 'Computed property access is not allowed in generated skill callbacks: ' + value.getText().slice(0, 120) + '. Use a fixed safe key or .at(index) for array reads.');
     validateGeneratedCallbackExpression(value.expression, scope, findings);
     if (value.argumentExpression) validateGeneratedCallbackExpression(value.argumentExpression, scope, findings);
     return;
@@ -1127,10 +1013,12 @@ function validateGeneratedCallbackExpression(
     let allowed = false;
     const callee = unwrapGeneratedExpression(value.expression);
     if (ts.isIdentifier(callee)) {
-      allowed = !scope.has(callee.text) && GENERATED_SKILL_PURE_GLOBAL_CALLS.has(callee.text);
+      allowed = scope.functions.has(callee.text)
+        || (!scope.has(callee.text) && GENERATED_SKILL_PURE_GLOBAL_CALLS.has(callee.text));
     } else if (ts.isPropertyAccessExpression(callee)) {
       const receiver = unwrapGeneratedExpression(callee.expression);
       const method = callee.name.text;
+      if (ts.isRegularExpressionLiteral(receiver) && method === 'test') allowed = true;
       if (ts.isIdentifier(receiver) && !scope.has(receiver.text)) {
         allowed = GENERATED_SKILL_PURE_STATIC_CALLS[receiver.text]?.has(method) === true;
       }
@@ -1140,7 +1028,7 @@ function validateGeneratedCallbackExpression(
       }
     }
     if (!allowed) {
-      generatedSkillFinding(findings, 'Generated skill callback contains a non-whitelisted function or method call.');
+      generatedSkillFinding(findings, 'Generated skill callback contains a non-whitelisted function or method call: ' + callee.getText().slice(0, 120));
       validateGeneratedCallbackExpression(callee, scope, findings);
     }
     for (const argument of value.arguments) {
@@ -1167,7 +1055,7 @@ function validateGeneratedCallbackExpression(
     if (value.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)) {
       generatedSkillFinding(findings, 'Nested async callbacks are not allowed in generated skill callbacks.');
     }
-    const childScope = new Set(scope);
+    const childScope = new GeneratedCallbackScope(scope);
     for (const parameter of value.parameters) {
       addGeneratedBindingNames(parameter.name, childScope, findings);
       if (parameter.initializer) validateGeneratedCallbackExpression(parameter.initializer, scope, findings);
@@ -1245,20 +1133,31 @@ function validateGeneratedCallbackExpression(
 
 function validateGeneratedVariableDeclarationList(
   declarationList: ts.VariableDeclarationList,
-  scope: Set<string>,
+  scope: GeneratedCallbackScope,
   findings: Set<string>,
 ): void {
   for (const declaration of declarationList.declarations) {
+    const pureHelper = Boolean((declarationList.flags & ts.NodeFlags.Const)
+      && ts.isIdentifier(declaration.name) && declaration.initializer
+      && ts.isArrowFunction(unwrapGeneratedExpression(declaration.initializer)));
+    const findingsBefore = findings.size;
     if (declaration.initializer) {
-      validateGeneratedCallbackExpression(declaration.initializer, scope, findings);
+      const initializerScope = new GeneratedCallbackScope(scope);
+      // Prevent a shadowed recursive binding from resolving to an outer helper.
+      if (ts.isIdentifier(declaration.name) && ts.isArrowFunction(unwrapGeneratedExpression(declaration.initializer))) {
+        initializerScope.delete(declaration.name.text);
+        initializerScope.functions.delete(declaration.name.text);
+      }
+      validateGeneratedCallbackExpression(declaration.initializer, initializerScope, findings);
     }
     addGeneratedBindingNames(declaration.name, scope, findings);
+    if (pureHelper && findings.size === findingsBefore && ts.isIdentifier(declaration.name)) scope.functions.add(declaration.name.text);
   }
 }
 
 function validateGeneratedCallbackStatement(
   statement: ts.Statement,
-  scope: Set<string>,
+  scope: GeneratedCallbackScope,
   findings: Set<string>,
 ): void {
   if (ts.isVariableStatement(statement)) {
@@ -1275,14 +1174,14 @@ function validateGeneratedCallbackStatement(
   }
   if (ts.isIfStatement(statement)) {
     validateGeneratedCallbackExpression(statement.expression, scope, findings);
-    validateGeneratedCallbackStatement(statement.thenStatement, new Set(scope), findings);
+    validateGeneratedCallbackStatement(statement.thenStatement, new GeneratedCallbackScope(scope), findings);
     if (statement.elseStatement) {
-      validateGeneratedCallbackStatement(statement.elseStatement, new Set(scope), findings);
+      validateGeneratedCallbackStatement(statement.elseStatement, new GeneratedCallbackScope(scope), findings);
     }
     return;
   }
   if (ts.isBlock(statement)) {
-    validateGeneratedCallbackStatements(statement.statements, new Set(scope), findings);
+    validateGeneratedCallbackStatements(statement.statements, new GeneratedCallbackScope(scope), findings);
     return;
   }
   if (
@@ -1312,16 +1211,31 @@ function validateGeneratedCallbackStatement(
 
 function validateGeneratedCallbackStatements(
   statements: readonly ts.Statement[],
-  initialScope: Set<string>,
+  initialScope: GeneratedCallbackScope,
   findings: Set<string>,
 ): void {
-  const scope = new Set(initialScope);
+  const scope = new GeneratedCallbackScope(initialScope);
+  const hideBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      scope.delete(name.text);
+      scope.functions.delete(name.text);
+    } else for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) hideBinding(element.name);
+    }
+  };
+  // Lexical shadows apply to the whole block, including closures declared
+  // before the shadow. Do not misclassify a forward cycle as an outer call.
+  for (const statement of statements) {
+    if (ts.isVariableStatement(statement)) {
+      statement.declarationList.declarations.forEach(declaration => hideBinding(declaration.name));
+    }
+  }
   for (const statement of statements) {
     validateGeneratedCallbackStatement(statement, scope, findings);
   }
 }
 
-function validateGeneratedSkillProtocolStructure(source: string): string[] {
+export function validateGeneratedSkillProtocolStructure(source: string, expectedToolName?: string): string[] {
   const findings = new Set<string>();
   if (!source.trim() || Buffer.byteLength(source, 'utf8') > 512 * 1024) {
     return ['Generated skill source must be non-empty and no larger than 512 KiB.'];
@@ -1340,6 +1254,11 @@ function validateGeneratedSkillProtocolStructure(source: string): string[] {
   const parseDiagnostics = (sourceFile as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics || [];
   if (parseDiagnostics.length > 0) {
     generatedSkillFinding(findings, 'Generated skill source is not valid TypeScript syntax.');
+    for (const diagnostic of parseDiagnostics.slice(0, 3)) {
+      const location = sourceFile.getLineAndCharacterOfPosition(diagnostic.start || 0);
+      const line = source.split(/\r?\n/u)[location.line] || '';
+      generatedSkillFinding(findings, `TypeScript ${diagnostic.code} at ${location.line + 1}:${location.character + 1}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')} Source excerpt (data only): ${JSON.stringify(line.slice(0, 180))}`);
+    }
     return [...findings];
   }
 
@@ -1409,6 +1328,7 @@ function validateGeneratedSkillProtocolStructure(source: string): string[] {
         && expression.expression.name.text === 'registerTool'
         && expression.arguments.length === 3
         && ts.isStringLiteral(expression.arguments[0])
+        && (!expectedToolName || expression.arguments[0].text === expectedToolName)
       ) {
         const registration = unwrapGeneratedExpression(expression.arguments[1]);
         const handler = unwrapGeneratedExpression(expression.arguments[2]);
@@ -1491,8 +1411,8 @@ function validateGeneratedSkillProtocolStructure(source: string): string[] {
 
   let registerToolCalls = 0;
   const visit = (node: ts.Node): void => {
-    if (ts.isElementAccessExpression(node)) {
-      generatedSkillFinding(findings, 'Computed property access is not allowed in generated skill drafts.');
+    if (ts.isElementAccessExpression(node) && !isGeneratedStaticDataAccess(node)) {
+      generatedSkillFinding(findings, 'Computed property access is not allowed in generated skill drafts: ' + node.getText().slice(0, 120) + '. Use a fixed safe key or .at(index) for array reads.');
     }
     if (ts.isPropertyAccessExpression(node) && GENERATED_SKILL_FORBIDDEN_PROPERTIES.has(node.name.text)) {
       generatedSkillFinding(findings, `Generated skill drafts cannot access escape property ${node.name.text}.`);
@@ -1550,7 +1470,7 @@ function validateGeneratedSkillProtocolStructure(source: string): string[] {
   if (callback && callbackBody) {
     validateGeneratedCallbackStatements(
       callbackBody.statements,
-      new Set(['args']),
+      new GeneratedCallbackScope(['args']),
       findings,
     );
     const resultDeclarations = callbackBody.statements.flatMap(statement => (
@@ -1561,7 +1481,7 @@ function validateGeneratedSkillProtocolStructure(source: string): string[] {
         : []
     ));
     if (resultDeclarations.length !== 1) {
-      generatedSkillFinding(findings, 'Generated skill callback must contain exactly one generator-owned result variable.');
+      generatedSkillFinding(findings, 'Generated skill callback must contain exactly one generator-owned result variable. Remove any const/let/var result declaration from the generated body; assign to the existing result variable instead.');
     }
     const finalStatement = callbackBody.statements[callbackBody.statements.length - 1];
     if (!finalStatement || !isExactToolResultReturn(finalStatement)) {
@@ -1926,8 +1846,8 @@ function buildDraftPackageJson(input: {
 }): string {
   return PACKAGE_TEMPLATE
     .replace(/{skillName}/g, input.skillName)
-    .replace(/{toolDescription}/g, escapeJsonString(input.toolDescription))
-    .replace(/{generatedFrom}/g, escapeJsonString(input.generatedFrom))
+    .replace(/{toolDescription}/g, () => escapeJsonString(input.toolDescription))
+    .replace(/{generatedFrom}/g, () => escapeJsonString(input.generatedFrom))
     .replace(/{installedAt}/g, input.generatedAt)
     .replace('{draftReview}', JSON.stringify(input.review));
 }
@@ -2198,7 +2118,7 @@ function topTools(steps: WorkflowStep[]): { name: string; count: number }[] {
     .map(([name, count]) => ({ name, count }));
 }
 
-function buildHandlerFunction(handlerCode: string, inputSchema: any): string {
+export function buildHandlerFunction(handlerCode: string, inputSchema: any): string {
   const props = inputSchema?.properties || {};
   const paramNames = Object.keys(props);
 
@@ -2221,6 +2141,8 @@ ${destructure}
   // ── Generated implementation ──
 ${indentedBody}
 
+  result = JSON.stringify({ status: 'completed', data: JSON.parse(result) });
+
   return {
     content: [{ type: 'text', text: result }],
   };
@@ -2237,16 +2159,6 @@ function sanitizeHandlerBody(handlerCode: string, paramNames: string[]): string 
     .replace(/```\s*$/i, '')
     .split('\n')
     .filter(line => !duplicateDestructure?.test(line))
-    .map(line => {
-      const trimmed = line.trim();
-      if (/^return\s+result\s*;?$/.test(trimmed)) return '';
-      const valueReturn = trimmed.match(/^return\s+(.+);$/);
-      if (valueReturn && !trimmed.includes('content:')) {
-        const indent = line.match(/^\s*/)?.[0] || '';
-        return `${indent}result = String(${valueReturn[1]});\n${indent}return { content: [{ type: 'text', text: result }] };`;
-      }
-      return line;
-    })
     .join('\n')
     .trim();
 }
@@ -2287,9 +2199,10 @@ function escapeRegExp(value: string): string {
 }
 
 function escapeTsSingleQuoted(value: string): string {
-  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
 function escapeJsonString(value: string): string {
-  return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return JSON.stringify(String(value || '')).slice(1, -1);
 }

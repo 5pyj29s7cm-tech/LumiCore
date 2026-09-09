@@ -131,6 +131,12 @@ describe('Lumi learning interface', () => {
       goal: base.goal,
       domain: base.domain,
       tools: [],
+    }).resolution.decision).not.toBe('reuse_learned_route');
+    expect(buildSelfExtensionPlan({
+      userId,
+      goal: base.goal,
+      domain: base.domain,
+      tools: [{ name: 'verified_probe_tool', description: 'Verified probe', parameters: {}, permission: 'user', securityLevel: 'safe', handler: async () => 'synthetic' }],
     }).resolution.decision).toBe('reuse_learned_route');
   });
 

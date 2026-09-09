@@ -1,5 +1,34 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 
+/** Read/search verbs in an explicitly forbidden clause are not requests.
+ * Keep the original user message for the model and side-effect authorization.
+ * This projection is only for matching action-shaped lookup language.
+ */
+export function withoutNegatedLookupClauses(value: string): string {
+  if (isExplicitArtifactCreationText(value)) return value;
+  if (/(?:内容(?:是|为)?|正文|以下文字|with\s+(?:this|the|following)\s+content)\s*[:：]/iu.test(value)) return value; // i18n-allow: preserve explicit data payloads.
+
+  return String(value || '').split(/([，,。！？!?；;\n]|\.(?=\s|$))/u).map(clause => { // i18n-allow: multilingual clause boundaries.
+    const parts = clause.split(/((?:但是|不过|但)|\b(?:but|instead)\b)/iu); // i18n-allow: preserve a following affirmative instruction.
+    const head = parts[0];
+    if (/^\s*(?:(?:请|也|并且|并|且)\s*)?(?:不要|别|无需|不需要|不用|禁止|请勿)|^\s*(?:please\s+)?(?:do\s+not|don't|never|no\s+need\s+to)\b/iu.test(head) // i18n-allow: negated lookup clause recognition.
+      && /搜索|查找|查阅|读取|查看|浏览|查询|\b(?:search|look\s*up|read|browse|fetch|inspect)\b/iu.test(head)) { // i18n-allow: read-only lookup verbs.
+      parts[0] = ' ';
+    }
+    return parts.join('');
+  }).join('');
+}
+
+/** An unbound question about recalled facts is conversation, not file creation. */
+export function isStoredMemoryRecallQuestion(value: string): boolean {
+  const text = withoutNegatedLookupClauses(value).trim();
+  if (!/^(?:(?:lumi|露米)[，,：:\s]*)?(?:你(?:还)?记得|还记不记得|你还记不记得|do\s+you\s+(?:still\s+)?remember|can\s+you\s+recall)/iu.test(text)) return false; // i18n-allow: explicit memory recall questions.
+  if (!/[？?]|(?:吗|么|呢)(?:[，,。\s]|$)/u.test(text)) return false; // i18n-allow: distinguish questions from remember-to-do instructions.
+  const laterClauses = text.split(/[？?，,。；;\n]/u).slice(1); // i18n-allow: preserve mixed recall/action requests.
+  if (laterClauses.some(clause => /^\s*(?:(?:请|再|然后|帮我|但|但是|直接|现在)\s*)*(?:搜索|查找|找一下|读取|查看|检查|打开|创建|生成|保存|写入|修改|删除|运行|执行|发送|安装|播放)|^\s*(?:(?:please|then|but|also|now)\s+)*(?:search|find|read|check|inspect|open|create|generate|save|write|modify|delete|run|execute|send|install|play)\b/iu.test(clause))) return false; // i18n-allow: explicit positive action in a separate clause.
+  return normalizeActionIntent(text).kind === 'none';
+}
+
 export type NormalizedActionIntentKind =
   | 'none'
   | 'external_ai_history'
@@ -111,10 +140,7 @@ const REGISTERED_CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: 
   });
 
 const CLIENT_SURFACE_RULES: ReadonlyArray<{ pattern: RegExp; target: string; action: string }> = [
-  { pattern: /(?:自主模式|autonomy|autonomous\s*mode)/iu, target: 'autonomous', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
-  { pattern: /(?:助理模式|assistant\s*mode)/iu, target: 'assistant', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
-  { pattern: /(?:聊天模式|chat\s*mode)/iu, target: 'chat', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
-  { pattern: /(?:会议模式|meeting\s*mode)/iu, target: 'meeting', action: 'set_client_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
+  { pattern: /(?:会议模式|meeting\s*mode)/iu, target: 'meeting', action: 'start_meeting_mode' }, // i18n-allow: Multilingual Lumi mode aliases.
   { pattern: /(?:聊天界面|聊天窗口|聊天面板|侧边聊天|side\s*chat|chat\s*(?:window|panel)?)/iu, target: 'chat', action: 'open_chat' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:中枢世界|中枢|世界视图|nexus|world\s*view)/iu, target: 'nexus', action: 'open_nexus' }, // i18n-allow: Multilingual Lumi surface aliases.
   { pattern: /(?:技能大厅|技能中心|skill\s*(?:hall|center))/iu, target: 'skills', action: 'open_skills' }, // i18n-allow: Multilingual Lumi surface aliases.
@@ -743,7 +769,14 @@ function externalAiHistoryRead(text: string): NormalizedActionIntent | null {
   };
 }
 
+/** A reply destination is not the material the user asked us to read. */
+export function withoutChatReplyDestination(text: string): string {
+  // i18n-allow: multilingual reply-destination input recognition.
+  return text.replace(/(?:在|到)\s*(?:本|当前|这个)?(?:聊天|对话)(?:窗口|界面)?(?:中|里)?\s*(?:直接)?(?:返回|回复|回答|展示|显示|给出|输出)|\b(?:return|reply|respond|display|output|show)\b[^,.;\n]{0,35}\b(?:in|to)\s+(?:the\s+)?(?:chat|conversation)\b/giu, ' ');
+}
+
 function inboundMessageRead(text: string): NormalizedActionIntent | null {
+  text = withoutChatReplyDestination(text);
   if (isExplicitArtifactCreationText(text)) return null;
   const inboundPatterns = [ // i18n-allow: Chinese inbound-message semantic-role recognition; not user-visible copy.
     /^(?!(?:看|查|读|告诉我))([^\s，。！？!?]{1,24}?)\s*(?:最近|刚刚|刚才)?\s*给我发(?:了)?(?:的)?(?:什么|哪些)?\s*(?:消息|内容|微信)/u, // i18n-allow: Chinese inbound-message semantic-role recognition.
@@ -923,7 +956,7 @@ function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null
 }
 
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
-  const text = currentTurnText(value);
+  const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
   const correctedInstruction = extractActionableCorrectionInstruction(text);
   if (correctedInstruction) {

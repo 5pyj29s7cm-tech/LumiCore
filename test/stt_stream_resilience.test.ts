@@ -41,6 +41,18 @@ afterEach(() => {
 });
 
 describe('realtime STT recovery', () => {
+  it('aborts the provider immediately on hangup instead of requesting a final transcript', () => {
+    const provider = new FakeStreamingSession();
+    const abort = vi.fn();
+    const session = createResilientStreamingSession(
+      { provider: 'qwen', language: 'zh', interimResults: true },
+      { createSession: () => Object.assign(provider, { abort }) },
+    );
+    const result = vi.fn(); session.onResult(result);
+    session.end(); provider.emitResult({ text: 'late final', isFinal: true });
+    expect(abort).toHaveBeenCalledOnce(); expect(provider.ended).toBe(false);
+    expect(result).not.toHaveBeenCalled();
+  });
   it('buffers audio during a short disconnect and replays it once', () => {
     vi.useFakeTimers();
     const first = new FakeStreamingSession();

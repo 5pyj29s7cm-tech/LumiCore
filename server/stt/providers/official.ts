@@ -308,6 +308,8 @@ export function createStream(
   const taskId = randomUUID();
   const resultCallbacks: Array<(result: STTResult) => void> = [];
   const errorCallbacks: Array<(error: Error) => void> = [];
+  const readyCallbacks: Array<() => void> = [];
+  const closeCallbacks: Array<() => void> = [];
   const pendingAudio: Buffer[] = [];
   let pendingBytes = 0;
   let sessionReady = false;
@@ -317,16 +319,24 @@ export function createStream(
   let errorNotified = false;
   let lastPartial = '';
   let finalEmitted = false;
+  let closeNotified = false;
+  const notifyClose = () => {
+    if (closeNotified) return;
+    closeNotified = true;
+    closeCallbacks.forEach(callback => callback());
+  };
   let endpointSilenceMs = clampEndpointSilenceMs(Number(process.env.RELAY_STT_SILENCE_MS || 850));
   const abort = () => {
     if (closed) return;
     closed = true;
     pendingAudio.length = 0;
     pendingBytes = 0;
+    options.signal?.removeEventListener('abort', abort);
     const error = asError(options.signal?.reason || new DOMException('STT aborted', 'AbortError'));
     // User cancellation is not evidence that the cloud provider is unhealthy.
     errorCallbacks.forEach(callback => callback(error));
     try { ws.terminate(); } catch { try { ws.close(); } catch {} }
+    notifyClose();
   };
   options.signal?.addEventListener('abort', abort, { once: true });
 
@@ -365,20 +375,22 @@ export function createStream(
   });
 
   ws.on('message', (raw: WebSocket.RawData, isBinary: boolean) => {
-    if (isBinary) return;
+    if (closed || isBinary) return;
     try {
       const parsed = parseOfficialSttMessage(JSON.parse(String(raw)), model, taskId);
-      if (parsed.event === 'task-started') {
-        sessionReady = true;
-        recordSuccess(PROVIDER, model);
-        for (const chunk of pendingAudio.splice(0)) sendAudio(chunk);
-        pendingBytes = 0;
-        if (endRequested) sendFinish();
-        return;
-      }
       if (parsed.error) {
         notifyError(parsed.error);
         try { ws.close(); } catch {}
+        return;
+      }
+      if (parsed.event === 'task-started') {
+        if (sessionReady) return;
+        sessionReady = true;
+        recordSuccess(PROVIDER, model);
+        readyCallbacks.forEach(callback => callback());
+        for (const chunk of pendingAudio.splice(0)) sendAudio(chunk);
+        pendingBytes = 0;
+        if (endRequested) sendFinish();
         return;
       }
       if (parsed.result) {
@@ -408,6 +420,7 @@ export function createStream(
         }
         closed = true;
         try { ws.close(1000, 'task finished'); } catch {}
+        notifyClose();
       }
     } catch (error) {
       notifyError(new Error(`Lumi Official API STT returned an invalid event: ${safeErrorMessage(asError(error).message)}`));
@@ -427,9 +440,11 @@ export function createStream(
       notifyError(new Error(`Lumi Official API STT closed before completion (code=${code}, reason=${safeErrorMessage(reason?.toString())})`));
     }
     closed = true;
+    notifyClose();
   });
 
   return {
+    abort,
     sendAudio(chunk: Buffer) {
       if (closed || endRequested || !chunk?.length) return;
       const buffer = Buffer.from(chunk);
@@ -459,6 +474,14 @@ export function createStream(
     },
     onResult(callback) { resultCallbacks.push(callback); },
     onError(callback) { errorCallbacks.push(callback); },
+    onReady(callback) {
+      readyCallbacks.push(callback);
+      if (sessionReady && !closed) callback();
+    },
+    onClose(callback) {
+      closeCallbacks.push(callback);
+      if (closeNotified) callback();
+    },
   };
 }
 

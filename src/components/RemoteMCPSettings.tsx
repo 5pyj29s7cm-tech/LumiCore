@@ -3,25 +3,26 @@ import { Satellite, Plus, Trash2, Save, Globe, ExternalLink } from 'lucide-react
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
+import { apiJson } from '../services/apiClient';
 
 interface RemoteDevice {
   name: string;
   url: string;
 }
 
-export function RemoteMCPSettings({ t }: { t?: any }) {
+export function RemoteMCPSettings({ t = {} }: { t?: any }) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const fetchDevices = async () => {
     try {
-      const res = await fetch('/api/remote-devices');
-      const data = await res.json();
+      const data = await apiJson('/api/remote-devices');
       const map = data.devices || {};
       setDevices(Object.entries(map).map(([name, url]) => ({ name, url: url as string })));
-    } catch {
-      // ignore
+    } catch (error: any) {
+      toast.error(error?.message || 'Remote devices could not be loaded');
     } finally {
       setLoading(false);
     }
@@ -30,6 +31,8 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
   useEffect(() => { fetchDevices(); }, []);
 
   const saveDevices = async (list: RemoteDevice[]) => {
+    if (saving) return;
+    setSaving(true);
     const map: Record<string, string> = {};
     for (const d of list) {
       if (d.name.trim() && d.url.trim()) {
@@ -37,7 +40,7 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
       }
     }
     try {
-      await fetch('/api/remote-devices', {
+      await apiJson('/api/remote-devices', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ devices: map }),
@@ -47,6 +50,8 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
       toast.success(t.remoteDeviceEndpointsSaved || 'Remote device endpoints saved');
     } catch (err: any) {
       toast.error(`${t.failedToSaveEndpoints || 'Failed to save'}: ${err.message}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -56,6 +61,7 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
   };
 
   const removeRow = (idx: number) => {
+    setEditing(true);
     setDevices(prev => prev.filter((_, i) => i !== idx));
   };
 
@@ -92,7 +98,7 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
           <Satellite size={32} className="text-white/45 mx-auto mb-4" />
           <p className="text-white/40 font-bold uppercase tracking-widest text-sm">{t.noRemoteDevices || 'No remote devices configured'}</p>
           <p className="text-white/45 text-xs mt-2">{t.addRemoteDeviceHint || 'Add a device to let it call Lumi tools via MCP'}</p>
-          <Button onClick={addRow} className="mt-6 bg-celestial-saturn text-black rounded-full px-6 py-3 font-bold text-sm hover:scale-105 transition-transform">
+          <Button disabled={saving} onClick={addRow} className="mt-6 bg-celestial-saturn text-black rounded-full px-6 py-3 font-bold text-sm hover:scale-105 transition-transform">
             <Plus size={16} className="mr-1" /> {t.addDevice || 'Add Device'}
           </Button>
         </div>
@@ -111,6 +117,7 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
                     </div>
                     {editing ? (
                       <Input
+                        disabled={saving}
                         value={device.name}
                         onChange={e => updateRow(i, 'name', e.target.value)}
                         placeholder={t.deviceNamePlaceholder || 'Device name (e.g. xiaozhi)'}
@@ -121,7 +128,8 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
                     )}
                   </div>
                   {editing ? (
-                    <Input
+                      <Input
+                        disabled={saving}
                       value={device.url}
                       onChange={e => updateRow(i, 'url', e.target.value)}
                       placeholder={t.deviceURLPlaceholder || 'wss://device-url/mcp/?token=...'}
@@ -143,6 +151,7 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
                 </div>
 
                 <Button
+                  disabled={saving}
                   onClick={() => removeRow(i)}
                   className="bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs font-bold uppercase tracking-widest px-3 h-9 rounded-xl flex-shrink-0"
                 >
@@ -154,21 +163,20 @@ export function RemoteMCPSettings({ t }: { t?: any }) {
 
           <div className="flex items-center gap-3">
             <Button
+              disabled={saving}
               onClick={addRow}
               className="bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-black uppercase tracking-widest px-4 h-9 rounded-xl"
             >
               <Plus size={14} className="mr-1" /> {t.addDevice || 'Add Device'}
             </Button>
-            {editing && (
-              <Button
-                onClick={() => saveDevices(devices)}
-                className="bg-celestial-saturn text-black font-bold text-xs px-6 h-9 rounded-xl hover:scale-105 transition-transform"
-              >
-                <Save size={14} className="mr-1" /> {t.saveChanges || 'Save Changes'}
-              </Button>
-            )}
           </div>
         </div>
+      )}
+
+      {editing && (
+        <Button disabled={saving} onClick={() => saveDevices(devices)} className="bg-celestial-saturn text-black font-bold text-xs px-6 h-9 rounded-xl">
+          <Save size={14} className="mr-1" /> {t.saveChanges || 'Save Changes'}
+        </Button>
       )}
 
       <div className="p-6 glass-dark rounded-[2rem] border border-white/5 space-y-4">

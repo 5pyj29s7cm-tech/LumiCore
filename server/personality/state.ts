@@ -351,7 +351,7 @@ export function applyIntimacyToVector(
   return {
     cognitiveStyle: {
       ...v.cognitiveStyle,
-      // Intimacy slightly boosts intuitive over analytical (familiarity = less need to verify)
+      // Familiarity changes conversational style, never evidence or authority.
       intuitive: +Math.min(1, v.cognitiveStyle.intuitive + scale * 0.15).toFixed(2),
       creative: +Math.min(1, v.cognitiveStyle.creative + scale * 0.1).toFixed(2),
     },

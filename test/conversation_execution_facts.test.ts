@@ -16,6 +16,13 @@ describe('conversation execution facts', () => {
     await initDatabase();
   });
 
+  it('leaves detailed action-proof queries to task status while retaining delivered-file-result recaps', () => {
+    expect(isConversationExecutionFactQuestion('你刚才做了什么，什么证据证明成功了？')).toBe(false);
+    expect(isConversationExecutionFactQuestion('What did you just do, and what evidence proved it succeeded?')).toBe(false);
+    expect(isConversationExecutionFactQuestion('你刚才实际完成了什么？原文件改过吗？只根据这次已经保存的操作记录告诉我，不要再执行操作。')).toBe(true);
+    expect(isConversationExecutionFactQuestion('What did you actually complete? Was the original file modified?')).toBe(true);
+  });
+
   it('answers the exact previous-turn tool-receipt question with only tool name and outcome', () => {
     const text = '你上一轮是否真的调用过工具？不要再次调用工具，只根据已保存的回执告诉我：工具名、成功还是失败。';
     expect(isConversationExecutionFactQuestion(text)).toBe(true);

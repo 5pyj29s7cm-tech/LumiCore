@@ -1,8 +1,9 @@
 import './helpers';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { initDatabase } from '../db_layer';
+import { initDatabase, readDB, writeDB, flushDBOrThrow, querySQL } from '../db_layer';
+import { personalityRegistry } from '../server/personality/registry';
 import { addMemory } from '../server/memory/store';
-import { synthesizeOwnerProfile } from '../server/personality/evolution';
+import { synthesizeOwnerProfile, lightweightEvolve, DEFAULT_EVOLUTION_CONFIG } from '../server/personality/evolution';
 import {
   beginEvolutionSynthesis,
   buildEvolutionEvidenceCursor,
@@ -75,26 +76,28 @@ describe('personality evolution synthesis cost guard', () => {
 
     let release!: (value: any) => void;
     const create = vi.fn(() => new Promise(resolve => { release = resolve; }));
-    const getDeepSeek = () => ({ chat: { completions: { create } } });
+    const getRelay = () => ({ chat: { completions: { create } } });
     const unavailable = () => null;
-
-    const leader = synthesizeOwnerProfile(
+    const synthesize = () => synthesizeOwnerProfile(
       userId,
-      getDeepSeek,
       unavailable,
       unavailable,
       unavailable,
       unavailable,
+      unavailable,
+      undefined,
+      undefined,
+      unavailable,
+      unavailable,
+      unavailable,
+      unavailable,
+      unavailable,
+      unavailable,
+      getRelay,
     );
+    const leader = synthesize();
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    const follower = synthesizeOwnerProfile(
-      userId,
-      getDeepSeek,
-      unavailable,
-      unavailable,
-      unavailable,
-      unavailable,
-    );
+    const follower = synthesize();
     await Promise.resolve();
     expect(create).toHaveBeenCalledTimes(1);
 
@@ -118,6 +121,38 @@ describe('personality evolution synthesis cost guard', () => {
     expect(leaderResult?.memoryCount).toBe(10);
     expect(followerResult).toBeNull();
     expect(create).toHaveBeenCalledTimes(1);
-    expect(getEvolutionSynthesisGuardState({ userId, domain: 'personal', orgId: '' })).toBeNull();
+    expect(getEvolutionSynthesisGuardState({ userId, domain: 'personal', orgId: '' })?.completedFingerprint).toBeTruthy();
+    expect(await synthesize()).toBeNull();
+    expect(create).toHaveBeenCalledTimes(1);
   });
+  it('applies growth from a full 50-item pool even when the old profile recorded 57 memories', async () => {
+    const userId = `bounded-pool-${Date.now()}`;
+    for (let i = 0; i < 60; i++) addMemory({ userId, type: 'preference', content: `Owner enduring preference number ${i}`,
+      keywords: ['preference', String(i)], confidence: 0.9, sourceInteractionId: `bounded-pool-${i}` },
+      { source: 'manual', perspective: 'owner_trait', deduplicate: false, generateEmbedding: false });
+    const base = personalityRegistry.getDefault();
+    const key = `personality_user_state:lumi:personal:${userId}`;
+    const db = readDB(); db.settings.push({ key, value: JSON.stringify({ schemaVersion: 1, personalityVersion: base.version,
+      lastEvolvedAt: null, growthState: { version: 1, ownerProfile: { memoryCount: 57 }, ownerInterests: [],
+        ownerExpressions: [], communicationPatterns: [], adaptationNotes: [] } }) }); writeDB(db);
+    const config = personalityRegistry.getForUser('lumi', userId)!;
+    expect(config.growthState?.ownerProfile?.memoryCount).toBe(57);
+    const create = vi.fn(async () => ({ choices: [{ message: { content: JSON.stringify({ dominantTone: 'warm',
+      frequentExpressions: ['concise outcomes'], interestClusters: ['nature photography'], formalityLevel: 0.2,
+      emotionalExpressiveness: 0.7, communicationPatterns: ['prefers a clear answer first'] }) } }],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }));
+    const no = () => null;
+    const step = await lightweightEvolve(config, userId, { ...DEFAULT_EVOLUTION_CONFIG, cooldownMs: 0 },
+      no, no, no, no, no, undefined, no, no, no, no, no, no, () => ({ chat: { completions: { create } } }));
+    expect(step?.ownerProfile.memoryCount).toBe(50);
+    expect(step?.mutations.map(m => m.field)).toEqual(['growthState']);
+    const updated = personalityRegistry.applyEvolution('lumi', step!, { userId });
+    expect(updated?.coreMotivation).toBe(config.coreMotivation);
+    await flushDBOrThrow();
+    const saved = JSON.parse((await querySQL<{value: string}>('SELECT value FROM settings WHERE key=?', [key]))[0].value);
+    expect(saved.growthState.ownerProfile.memoryCount).toBe(50);
+    expect(saved.growthState.ownerInterests).toContain('nature photography');
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
 });

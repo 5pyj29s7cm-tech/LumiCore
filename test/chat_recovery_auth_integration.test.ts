@@ -65,6 +65,7 @@ async function authenticatedPageUser(role: string) {
     setNotifications: (update: any) => update([]),
     apiFetch: async () => ({ ok: true, json: async () => ({}) }),
     setToolOverrides: noop, setOrgConnection: noop, console,
+    authGenerationRef: { current: 0 }, toolRequestRef: { current: 0 }, toolOverridesRef: { current: {} },
   });
   await refresh();
   expect(user).toMatchObject({ uid: `round6-${role}`, role, provider: 'custom' });

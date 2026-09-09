@@ -64,7 +64,7 @@ function publicIdentity(identity: PersistedLAPIdentity): LAPAgentIdentity {
     agentId: identity.agentId,
     userId: identity.userId,
     name: 'Lumi',
-    capabilities: ['chat', 'code', 'search', 'memory', 'file_ops', 'web_search', 'desktop', 'lap_collaboration', 'task_delegation'],
+    capabilities: ['memory', 'lap_collaboration'],
     publicKey: identity.publicKey,
     publicProfile: {
       displayName: 'Lumi',

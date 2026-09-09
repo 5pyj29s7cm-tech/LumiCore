@@ -16,7 +16,8 @@ import { makeLLMCall } from "../llm/providers";
 import { getMemoryFirewallPolicy } from "../memory/firewall";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { requireAuth, resolveDomain } from "../middleware/auth";
-import { refreshMemoryEmbedding } from '../memory/store';
+import { refreshMemoryEmbedding, backfillEmbeddings } from '../memory/store';
+import { requireAdmin, requireLocalRequest } from '../middleware/auth';
 import { memoryEmbeddingInputHash } from '../memory/embedding_identity';
 
 type MemoryScope = { domain: 'personal' | 'work'; orgId: string };
@@ -48,6 +49,21 @@ export function mountMemoryRoutes(
   });
 
   // Memory CRUD
+  router.post('/memory/reindex', requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', onClose);
+    try {
+      const limit = Math.max(1, Math.min(100, Math.floor(Number(req.body?.limit) || 40)));
+      const scope = getMemoryScope(req);
+      const progress = { attempted: 0, indexed: 0, failed: 0, stale: 0, remaining: 0, errors: {} };
+      const count = await backfillEmbeddings(req.user!.uid, { limit, ...scope, signal: controller.signal, progress });
+      if (!controller.signal.aborted) await sendDurableMutation(req, res, { ...progress, indexed: count, limit, complete: progress.remaining === 0 });
+    } catch {
+      if (!controller.signal.aborted) res.status(500).json({ error: 'Memory indexing could not complete.' });
+    } finally { res.off('close', onClose); }
+  });
+
   router.get("/memories", requireAuth, (req, res) => {
     try {
       const decoded = req.user!;
@@ -190,7 +206,7 @@ export function mountMemoryRoutes(
     }
   });
 
-  router.post("/reminders", requireAuth, (req, res) => {
+  router.post("/reminders", requireAuth, async (req, res) => {
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
@@ -206,13 +222,13 @@ export function mountMemoryRoutes(
         domain: scope.domain,
         orgId: scope.orgId,
       });
-      res.json(reminder);
+      return await sendDurableMutation(req, res, reminder, undefined, { retryable: false });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  router.put("/reminders/:id", requireAuth, (req, res) => {
+  router.put("/reminders/:id", requireAuth, async (req, res) => {
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
@@ -231,7 +247,7 @@ export function mountMemoryRoutes(
       if (dueAt !== undefined) reminder.dueAt = dueAt || null;
       if (status === "fired" && reminder.status !== "fired") {
         fireReminder(reminder.id);
-        return res.json({ ...reminder, status: "fired", firedAt: new Date().toISOString() });
+        return await sendDurableMutation(req, res, { ...reminder, status: "fired", firedAt: new Date().toISOString() });
       }
       if (status === "pending") {
         reminder.status = "pending";
@@ -239,13 +255,13 @@ export function mountMemoryRoutes(
       }
       db.reminders = reminders;
       writeDB(db);
-      res.json(reminder);
+      return await sendDurableMutation(req, res, reminder);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  router.delete("/reminders/:id", requireAuth, (req, res) => {
+  router.delete("/reminders/:id", requireAuth, async (req, res) => {
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
@@ -261,7 +277,7 @@ export function mountMemoryRoutes(
       reminders.splice(idx, 1);
       db.reminders = reminders;
       writeDB(db);
-      res.json({ success: true });
+      return await sendDurableMutation(req, res, { success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

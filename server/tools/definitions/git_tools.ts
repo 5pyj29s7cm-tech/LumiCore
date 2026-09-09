@@ -1,13 +1,24 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import path from 'path';
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
-const REPO_ROOT = process.cwd();
+const repositoryPathParameter = {
+  type: 'string',
+  description: 'Absolute path of the repository requested by the user. Required unless this task already has an explicit working directory.',
+};
 
-function git(args: string, timeout = 15000): Promise<string> {
+function git(args: string[], repositoryPath: unknown, context?: ToolContext, timeout = 15000): Promise<string> {
+  const cwd = repositoryPath === undefined ? context?.cwd : repositoryPath;
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
+    throw new Error('Git requires the absolute working directory of the requested repository.');
+  }
   return new Promise((resolve, reject) => {
-    exec(`git ${args}`, { timeout, maxBuffer: 300 * 1024, cwd: REPO_ROOT }, (error, stdout, stderr) => {
+    execFile('git', ['--literal-pathspecs', ...args], {
+      timeout, maxBuffer: 300 * 1024, cwd,
+      signal: context?.executionSignal, windowsHide: true, encoding: 'utf8',
+    }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr || stdout || error.message));
       } else {
@@ -17,16 +28,15 @@ function git(args: string, timeout = 15000): Promise<string> {
   });
 }
 
-async function gitStatusHandler(): Promise<string> {
-  const output = await git('status --short --branch');
+async function gitStatusHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const output = await git(['status', '--short', '--branch'], args.repositoryPath, context);
   if (!output.trim()) return 'Working tree clean. No changes.';
   return output.trim();
 }
 
-async function gitDiffHandler(args: Record<string, any>): Promise<string> {
-  const staged = args.staged ? '--cached' : '';
-  const file = args.file ? `-- ${args.file}` : '';
-  const output = await git(`diff ${staged} ${file}`.trim(), 15000);
+async function gitDiffHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
+  const command = ['diff', ...(args.staged ? ['--cached'] : []), '--', ...(args.file ? [String(args.file)] : [])];
+  const output = await git(command, args.repositoryPath, context);
   const lines = output.split('\n');
   if (lines.length > 500) {
     return lines.slice(0, 500).join('\n') + `\n\n[... truncated: ${lines.length - 500} more lines]`;
@@ -34,7 +44,7 @@ async function gitDiffHandler(args: Record<string, any>): Promise<string> {
   return output || 'No changes.';
 }
 
-async function gitStageHandler(args: Record<string, any>): Promise<string> {
+async function gitStageHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const files: string[] = args.files || [];
   if (!files.length) throw new Error('At least one file path is required.');
 
@@ -46,12 +56,11 @@ async function gitStageHandler(args: Record<string, any>): Promise<string> {
     }
   }
 
-  const fileList = files.map(f => `"${f}"`).join(' ');
-  await git(`add ${fileList}`);
+  await git(['add', '--', ...files], args.repositoryPath, context);
   return JSON.stringify({ ok: true, status: 'staged', fileCount: files.length, files }, null, 2);
 }
 
-async function gitCommitHandler(args: Record<string, any>): Promise<string> {
+async function gitCommitHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const message = String(args.message || '').trim();
   if (!message) throw new Error('Commit message is required.');
   if (message.length > 200) throw new Error(`Commit message too long (${message.length} chars). Max 200.`);
@@ -61,9 +70,8 @@ async function gitCommitHandler(args: Record<string, any>): Promise<string> {
     throw new Error('Dangerous commit flag rejected.');
   }
 
-  const body = args.body ? `-m "${String(args.body).replace(/"/g, '\\"')}"` : '';
-  await git(`commit -m "${message.replace(/"/g, '\\"')}" ${body}`.trim());
-  const revision = (await git('rev-parse HEAD')).trim();
+  await git(['commit', '-m', message, ...(args.body ? ['-m', String(args.body)] : [])], args.repositoryPath, context);
+  const revision = (await git(['rev-parse', 'HEAD'], args.repositoryPath, context)).trim();
   return JSON.stringify({ ok: true, status: 'committed', message, revision }, null, 2);
 }
 
@@ -71,7 +79,7 @@ export function registerGitTools(registry: ToolRegistry): void {
   registry.register({
     name: 'git_status',
     description: 'Show working tree status. Returns branch info and changed files. Equivalent to "git status --short --branch".',
-    parameters: { type: 'object', properties: {}, required: [] },
+    parameters: { type: 'object', properties: { repositoryPath: repositoryPathParameter }, required: [] },
     handler: gitStatusHandler,
     permission: 'user',
     securityLevel: 'safe',
@@ -83,6 +91,7 @@ export function registerGitTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        repositoryPath: repositoryPathParameter,
         staged: { type: 'boolean', description: 'Show staged (cached) changes instead of working tree' },
         file: { type: 'string', description: 'Limit diff to a specific file path' },
       },
@@ -99,6 +108,7 @@ export function registerGitTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        repositoryPath: repositoryPathParameter,
         files: { type: 'array', items: { type: 'string' }, description: 'Array of file paths to stage' },
       },
       required: ['files'],
@@ -136,6 +146,7 @@ export function registerGitTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        repositoryPath: repositoryPathParameter,
         message: { type: 'string', description: 'Commit message (max 200 chars)' },
         body: { type: 'string', description: 'Optional extended commit body' },
       },

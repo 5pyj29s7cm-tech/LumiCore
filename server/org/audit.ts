@@ -24,7 +24,7 @@ export function queryAuditLog(
   limit: number = 50,
   offset: number = 0
 ): EDB.AuditEntry[] {
-  let entries = EDB.listAuditLog(orgId, 0, 0); // get all, filter in-memory
+  let entries = EDB.listAuditLog(orgId, null, 0); // explicit unbounded query, then filter
 
   if (filters.userId) {
     entries = entries.filter(e => e.userId === filters.userId);
@@ -61,7 +61,7 @@ export interface AuditStats {
 export function getAuditStats(orgId: string, daysBack: number = 7): AuditStats {
   const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
 
-  const entries = EDB.listAuditLog(orgId, 0, 0).filter(e => e.timestamp >= since);
+  const entries = EDB.listAuditLog(orgId, null, 0).filter(e => e.timestamp >= since);
 
   // Top actions
   const actionCounts = new Map<string, number>();

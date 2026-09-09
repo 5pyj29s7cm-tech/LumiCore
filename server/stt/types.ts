@@ -38,9 +38,15 @@ export interface STTResult {
 export interface StreamingSTTSession {
   sendAudio(chunk: Buffer): void;
   end(): void;
+  /** Cancel capture/recovery immediately; discard queued audio and late results. */
+  abort?(): void;
   /** Flush the current utterance without closing a provider session, when supported. */
   flush?(): void;
   updateEndpointing?(silenceDurationMs: number): void;
   onResult(callback: (result: STTResult) => void): void;
   onError(callback: (err: Error) => void): void;
+  /** Provider acknowledged its streaming task; socket-open alone is insufficient. */
+  onReady?(callback: () => void): void;
+  /** Provider task/socket finished (including a normal remote session limit). */
+  onClose?(callback: () => void): void;
 }

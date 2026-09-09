@@ -1,20 +1,54 @@
 import { ToolRegistry } from '../registry';
+import type { ToolContext } from '../types';
 
-async function tryBingSearch(query: string, maxResults: number): Promise<string | null> {
+async function fetchText(url: string, timeoutMs: number, parent?: AbortSignal, headers?: Record<string, string>) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent?.reason);
+  parent?.addEventListener('abort', abort, { once: true });
+  if (parent?.aborted) abort();
+  const timeout = setTimeout(() => controller.abort(new DOMException('Web response timed out.', 'AbortError')), timeoutMs);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const cancelBody = () => { void reader?.cancel(controller.signal.reason).catch(() => {}); };
+  controller.signal.addEventListener('abort', cancelBody, { once: true });
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const response = await fetch(
-      `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`,
-      {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      },
-    );
+    const response = await fetch(url, { signal: controller.signal, headers });
+    const maxBytes = 2 * 1024 * 1024;
+    if (Number(response.headers.get('content-length')) > maxBytes) {
+      void response.body?.cancel().catch(() => {});
+      throw new Error('Web response exceeds the 2 MiB text limit.');
+    }
+    reader = response.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (reader) {
+      controller.signal.throwIfAborted();
+      const part = await reader.read();
+      controller.signal.throwIfAborted();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > maxBytes) throw new Error('Web response exceeds the 2 MiB text limit.');
+      chunks.push(part.value);
+    }
+    return { response, text: Buffer.concat(chunks, size).toString('utf8') };
+  } finally {
     clearTimeout(timeout);
+    parent?.removeEventListener('abort', abort);
+    controller.signal.removeEventListener('abort', cancelBody);
+    if (reader) {
+      void reader.cancel().catch(() => {});
+      try { reader.releaseLock(); } catch {}
+    }
+  }
+}
+
+async function tryBingSearch(query: string, maxResults: number, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const { response, text: html } = await fetchText(
+      `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`,
+      8000, signal, { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    );
     if (!response.ok) return null;
 
-    const html = await response.text();
     const results: string[] = [];
 
     // Bing 2024+ HTML: <li class="b_algo"> blocks
@@ -43,31 +77,28 @@ async function tryBingSearch(query: string, maxResults: number): Promise<string 
     }
     return results.length > 0 ? results.join('\n\n') : null;
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 }
 
-async function webSearchHandler(args: Record<string, any>): Promise<string> {
+async function webSearchHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const query = String(args.query || '');
   if (!query.trim()) throw new Error('Search query is required.');
 
   const maxResults = Math.min(Math.max(Number(args.maxResults) || 5, 1), 10);
 
   // Bing first — works in China, returns real search results
-  const bingResults = await tryBingSearch(query, maxResults);
+  const bingResults = await tryBingSearch(query, maxResults, context?.executionSignal);
   if (bingResults) return bingResults;
 
   // Fallback: DuckDuckGo Instant Answers (useful for definitions/facts)
   try {
     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
+    const { response, text } = await fetchText(url, 5000, context?.executionSignal);
 
     if (response.ok) {
-      const data = await response.json() as any;
+      const data = JSON.parse(text);
       const results: string[] = [];
 
       if (data.AbstractText) {
@@ -93,13 +124,14 @@ async function webSearchHandler(args: Record<string, any>): Promise<string> {
       if (results.length > 0) return results.join('\n\n');
     }
   } catch {
+    context?.executionSignal?.throwIfAborted();
     // DDG unavailable
   }
 
   return `No search results found for "${query}". Try different search terms or use url_fetch on a known news site.`;
 }
 
-async function urlFetchHandler(args: Record<string, any>): Promise<string> {
+async function urlFetchHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const url = String(args.url || '');
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     throw new Error('URL must start with http:// or https://');
@@ -108,14 +140,7 @@ async function urlFetchHandler(args: Record<string, any>): Promise<string> {
   const maxChars = Math.min(Math.max(Number(args.maxChars) || 10000, 100), 50000);
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'LumiAI/2.0 (Agent Tool)' },
-    });
-    clearTimeout(timeout);
+    const { response, text: body } = await fetchText(url, 15000, context?.executionSignal, { 'User-Agent': 'LumiAI/2.0 (Agent Tool)' });
 
     if (response.status === 401 || response.status === 403) {
       return `URL fetch requires authentication (${response.status}). Ask the user to authorize a web login profile, then use web_login_run and url_fetch_logged_in for this site.`;
@@ -130,7 +155,7 @@ async function urlFetchHandler(args: Record<string, any>): Promise<string> {
       throw new Error(`Unsupported content type: ${contentType}. Only text, JSON, and XML are supported.`);
     }
 
-    let text = await response.text();
+    let text = body;
     // Strip HTML tags
     text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
@@ -148,6 +173,7 @@ async function urlFetchHandler(args: Record<string, any>): Promise<string> {
 
     return text || '(No text content extracted)';
   } catch (err: any) {
+    context?.executionSignal?.throwIfAborted();
     if (err.name === 'AbortError') {
       return `URL fetch timed out for "${url}".`;
     }

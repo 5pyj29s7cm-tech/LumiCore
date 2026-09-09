@@ -158,7 +158,7 @@ export async function extractMemories(
 
     ctx.signal?.throwIfAborted();
     const text = response.text || '';
-    const jsonMatch = text.match(/\\{[\\s\\S]*\\}|\\[[\\s\\S]*\\]/);
+    const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
     if (!jsonMatch) return { memories: [], reminders: [] };
 
     const parsed = JSON.parse(jsonMatch[0]);

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
+import { sendDurableMutation } from './durable_mutation';
 import {
   createPlan, updatePlan, updatePlanStep, listPlans, getPlan, deletePlan, getTodayPlanSummary,
 } from "../autonomy/planner";
@@ -158,7 +159,7 @@ export function mountPlanRoutes(router: Router) {
     const { title, description, priority, steps, tags, source } = req.body;
     if (!title) return res.status(400).json({ error: "title required" });
     const plan = createPlan(title, description || "", scope, source || "user", priority || "medium", steps || [], tags || []);
-    res.json({ plan });
+    await sendDurableMutation(req, res, { plan }, undefined, { retryable: false });
   }));
 
   router.put("/plans/:id", requireAuth, guard(async (req, res) => {
@@ -166,7 +167,7 @@ export function mountPlanRoutes(router: Router) {
     if (!scope) return;
     const plan = updatePlan(req.params.id, req.body, scope);
     if (!plan) return res.status(404).json({ error: "Plan not found" });
-    res.json({ plan });
+    await sendDurableMutation(req, res, { plan });
   }));
 
   router.put("/plans/:planId/steps/:stepId", requireAuth, guard(async (req, res) => {
@@ -174,14 +175,14 @@ export function mountPlanRoutes(router: Router) {
     if (!scope) return;
     const plan = updatePlanStep(req.params.planId, req.params.stepId, req.body, scope);
     if (!plan) return res.status(404).json({ error: "Plan or step not found" });
-    res.json({ plan });
+    await sendDurableMutation(req, res, { plan });
   }));
 
-  router.delete("/plans/:id", requireAuth, (req, res) => {
+  router.delete("/plans/:id", requireAuth, async (req, res) => {
     const scope = resolvePlanScope(req, res);
     if (!scope) return;
     const ok = deletePlan(req.params.id, scope);
     if (!ok) return res.status(404).json({ error: "Plan not found" });
-    res.json({ deleted: true });
+    await sendDurableMutation(req, res, { deleted: true }, undefined, { retryable: false });
   });
 }

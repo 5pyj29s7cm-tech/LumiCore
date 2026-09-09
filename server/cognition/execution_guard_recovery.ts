@@ -493,11 +493,13 @@ function publicBlockedReason(decision: ExecutionGuardRecoveryDecision): string {
   return PUBLIC_RECOVERY_FAILURE_REASON;
 }
 
-function publicDeliveryReason(reason: unknown, blocked: boolean): string {
+function publicDeliveryReason(reason: unknown, blocked: boolean, exactPendingProposal: boolean): string {
   const normalized = String(reason || '').trim();
   if (!normalized) return blocked ? PUBLIC_RECOVERY_FAILURE_REASON : '';
   if (CONFIRMATION_BLOCK.test(normalized) || normalized === 'waiting_confirmation') {
-    return 'waiting_confirmation';
+    // A verifier saying an outcome is "not confirmed" is not a user approval
+    // request. Only the transport's exact durable proposal may expose this state.
+    return exactPendingProposal ? 'waiting_confirmation' : PUBLIC_RECOVERY_FAILURE_REASON;
   }
   if (/^(?:cancelled|canceled|request_cancelled)$/i.test(normalized)) return 'request_cancelled';
   if (/uncertain_external_(?:outcome|commit)/i.test(normalized)) return 'uncertain_external_outcome';
@@ -531,6 +533,8 @@ export function sanitizeExecutionResponseForDelivery<
     : publicDeliveryReason(
         textLeaks ? PUBLIC_RECOVERY_FAILURE_REASON : delivery.reason,
         blocked,
+        Boolean(options.trustedConfirmationRequestText
+          && String(delivery.text || '').trim() === options.trustedConfirmationRequestText.trim()),
       );
   const fallbackText = textLeaks
       ? intent === 'conversation'
@@ -602,6 +606,7 @@ function sanitizeLeakingFinalization<
       ? publicBlockedReason(decision)
       : finalization.reason,
     informationalGuard ? false : finalization.blocked,
+    decision.reason === 'waiting_for_user_confirmation',
   );
   const reasonChanged = publicReason !== String(finalization.reason || '').trim();
   if (!forceFailureText && !leakingText && !leakingReason && !leakingNotification && !reasonChanged && finalization.notification === undefined) {

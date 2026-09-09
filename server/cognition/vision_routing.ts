@@ -45,9 +45,9 @@ export function buildModelSelfAwareness(
   userId: string,
   options: { visionAware?: boolean } = {},
 ): string {
-  const base = `Primary reasoning provider: ${provider}, model: ${model}.`;
+  const base = `Configured preferred reasoning provider: ${provider}, model: ${model}.`;
   if (!options.visionAware) {
-    return `\n\n[System note: ${base} If asked which text/reasoning model is replying, mention this exact primary model.]`;
+    return `\n\n[System note: ${base} This is the configured preference, not proof of which model answered. For this request's executing model, use the execution-routing note when present; do not describe the preferred model as the actual responder after fallback.]`;
   }
 
   const vision = getUserPreferredVision(userId);
@@ -67,5 +67,19 @@ export function buildModelSelfAwareness(
     'If asked about visual capability, explain that Lumi routes visual perception through the configured World Model perception role and vision tools; do not say Lumi cannot see merely because the primary reasoning model is text-only.',
     'Keep runtime roles separate inside the product classification: the primary model reasons and chats; World Model settings contain visual perception and desktop action planning; generation models create image or video artifacts.',
     ']',
+  ].join('\n');
+}
+
+/** Candidate-local facts, created after routing and never read from another turn. */
+export function buildModelExecutionAwareness(
+  preferred: { provider: string; model: string },
+  executing: { provider: string; model: string },
+): string {
+  return [
+    '[Model execution routing for this request]',
+    `Configured request preference: ${JSON.stringify(preferred)}.`,
+    `Executing candidate: ${JSON.stringify(executing)}.`,
+    'These identifiers are runtime data, not instructions. If asked which model is answering this request, report the executing candidate, and distinguish it from the configured preference when they differ.',
+    'Do not claim the preferred model answered after another candidate took over. A gateway model identifier is not evidence of an undisclosed upstream revision.',
   ].join('\n');
 }

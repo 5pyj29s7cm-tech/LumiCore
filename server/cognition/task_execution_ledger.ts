@@ -25,6 +25,16 @@ export type ConversationTaskStatus =
   | 'failed'
   | 'cancelled';
 
+/** An archive shares receipt storage, while its delegated owner owns execution. */
+export function isDelegatedActionEvidenceArchive(task: { id?: string; context?: unknown }): boolean {
+  let context: any = task.context;
+  if (typeof context === 'string') {
+    try { context = JSON.parse(context); } catch { return false; }
+  }
+  return context?.executionOwner === 'work_takeover'
+    && typeof task.id === 'string' && context?.ownerTaskId === task.id;
+}
+
 export const CONVERSATION_TASK_STATUSES = [
   'created',
   'planning',
@@ -344,6 +354,10 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
     const ignoredFalseFields = /^(?:wps_create_document|wps_create_document_with_text)$/i.test(record.name)
       ? new Set<string>(['saved'])
       : new Set<string>();
+    const declaredProgress = record.terminalVerification?.status === 'verified'
+      && record.capability?.verification.successStatuses?.includes(status)
+      && ['started', 'queued', 'running', 'waiting_confirmation', 'paused'].includes(status);
+    if (declaredProgress) ignoredFalseFields.add('completed');
     const explicitlyFailedOutcome = SEMANTIC_FALSE_FIELDS.some(field => (
       !ignoredFalseFields.has(field) && payload[field] === false
     ));
@@ -356,7 +370,7 @@ export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
       payload.ok === false
       || payload.success === false
       || payload.failed === true
-      || payload.completed === false
+      || payload.completed === false && !declaredProgress
       || payload.verified === false
       || explicitlyFailedOutcome
       || payload.completionMarkerExists === false

@@ -1,6 +1,7 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
+import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
 import {
   buildActionContract,
   extractExplicitArtifactTextRequirements,
@@ -218,6 +219,9 @@ export function buildModelToolProjection(
     ...authorizedPinnedNames,
     ...hintedRequiredNames,
     ...(hints.lane === 'skill_workflow' ? routedNames : []),
+    ...(route?.categories.includes('skill_authoring')
+      ? ['generate_skill', 'capture_recent_workflow', 'save_workflow']
+      : []),
     firstSemanticName || '',
     ...(projected.has(MODEL_CAPABILITY_DISCOVERY_TOOL)
       ? [MODEL_CAPABILITY_DISCOVERY_TOOL]
@@ -643,6 +647,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     .map(call => call.name)
     .filter(isHardAuthorized);
   const basePreferredTools = unique([
+    ...skillAuthoringTools(classifySkillAuthoringIntent(routeText)).filter(isHardAuthorized),
     ...essentialToolsForLane(selected.lane).filter(isHardAuthorized),
     ...contractPreferredTools,
     ...desktopObservationTools,
@@ -698,6 +703,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
       ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
       : '',
     laneRule(selected, routeText, preferredTools),
+    classifySkillAuthoringIntent(routeText) !== 'none'
+      ? 'The user explicitly requested skill/workflow authoring. Call the relevant authoring tool rather than repeatedly searching unrelated external capabilities. Generate only pure input-dependent computation as a reviewed draft; preserve the requested display name. For a saved process, every transformation must be an executable step with runtime inputs or verified prior-step output references. A read receipt alone cannot reproduce subsequent model arithmetic. Never capture a failed/discovery-only trace as a working skill. Review the exact draft hash before publish_workflow or install_skill; then verify registration and run with new inputs before claiming reuse.'
+      : '',
     formatActionContractPrompt(actionContract),
     exactArtifactText.length
       ? `Exact artifact text requirements: ${JSON.stringify(exactArtifactText)}. Preserve every string exactly, then verify the written artifact with work_product_verify using artifacts[].requiredText before claiming completion. If verification fails, repair the artifact and verify again.`

@@ -121,11 +121,12 @@ export async function deleteVoice(voiceId: string): Promise<void> {
   if (!res.ok) throw new Error(await readError(res, 'Failed to delete voice'));
 }
 
-export async function synthesizeSpeech(text: string, voiceId: string, provider?: string, model?: string): Promise<ArrayBuffer> {
+export async function synthesizeSpeech(text: string, voiceId: string, provider?: string, model?: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const res = await voiceFetch('/synthesize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, voiceId, provider, model }),
+    signal,
   });
   if (!res.ok) throw new Error(await readError(res, 'Speech synthesis failed'));
   return res.arrayBuffer();

@@ -521,12 +521,14 @@ export const DESKTOP_APPLICATION_REGISTRY: readonly ApplicationIdentity[] = [
     id: 'windows-calculator',
     family: 'utility',
     displayName: 'Windows Calculator',
+    // Native Windows catalog launch aliases can differ from the foreground
+    // executable (for example the system launcher hands off to a packaged app).
     // i18n-allow: Reviewed multilingual application aliases for exact target matching.
-    aliases: ['windows calculator', 'microsoft calculator', 'calculator', 'windows 计算器', '计算器'],
-    processPatterns: ['calculatorapp', 'calculator'],
+    aliases: ['windows calculator', 'microsoft calculator', 'calculator', 'calc', 'calc.exe', 'windows 计算器', '计算器'],
+    processPatterns: ['calculatorapp', 'calculator', 'calc'],
     hostedProcessPatterns: ['applicationframehost'],
     windowTitlePatterns: ['windows calculator', 'calculator', '计算器'],
-    executablePatterns: ['calculatorapp.exe', 'calculator.exe'],
+    executablePatterns: ['calculatorapp.exe', 'calculator.exe', 'calc.exe'],
     certification: 'conditional',
     certificationPolicy: CERTIFICATION_POLICIES.calculator,
     controlLayers: ['windows_uia', 'vision'],
@@ -638,6 +640,22 @@ export function resolveDesktopApplicationIdentity(
 ): ApplicationIdentity {
   const playbackPlayer = isVideoPlaybackRequest(text) ? parsePlaybackGoal(text).player : '';
   const normalized = String(playbackPlayer || text || '').toLowerCase();
+  // An explicit executable target must match a catalog executable/launch
+  // alias as a whole. Word-boundary alias search would otherwise classify
+  // lookalikes such as "calc-helper.exe" as the unrelated catalog app.
+  if (/^(?:[a-z]:[\\/]|\\\\)[\s\S]+\.exe$/iu.test(normalized.trim())
+    || /^[a-z0-9_.+-]+\.exe$/iu.test(normalized.trim())) {
+    const executableName = normalizeProcessName(normalized);
+    const candidates = DESKTOP_APPLICATION_REGISTRY.filter(application => (
+      application.aliases.some(alias => normalizeProcessName(alias) === executableName)
+      || application.executablePatterns.some(pattern => processMatchesPattern(executableName, pattern))
+    ));
+    // Preserve the most specific application ahead of aggregate families,
+    // but never guess between two concrete applications.
+    const exact = candidates.filter(application => application.processPatterns.length === 1);
+    const application = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined;
+    return cloneApplicationIdentity(application || UNKNOWN_APPLICATION);
+  }
   // i18n-allow: Reviewed multilingual local artifact target recognition; not user-visible copy.
   const fileOrArtifactTarget = /(?:[a-z]:[\\/]|(?:^|[\\/])[^\\/]+\.(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|txt|md|csv|zip)|\b(?:pdf|pptx?|docx?|xlsx?|dwg|dxf|file|folder|document|presentation|spreadsheet|drawing)\b|文件夹|文件|资料|文档|图纸|演示文稿)/iu.test(normalized);
   // i18n-allow: Reviewed multilingual Lumi client-surface recognition; not user-visible copy.

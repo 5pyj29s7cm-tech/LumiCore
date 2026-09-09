@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { uploadSamples, cloneVoice as apiCloneVoice, getVoiceCloneStatus, listVoices, VOICE_PROVIDER_CHANGED_EVENT, type CloneVoiceOptions } from '../services/voiceService';
-import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { releaseSensorStream, requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 interface VoiceCloneState {
@@ -83,6 +83,7 @@ export function useVoiceCloning() {
   const chunks = useRef<Blob[]>([]);
   const activeStream = useRef<MediaStream | null>(null);
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingAbort = useRef<AbortController | null>(null);
 
   const startDurationTimer = useCallback(() => {
     recordingStartTime.current = Date.now();
@@ -110,9 +111,16 @@ export function useVoiceCloning() {
   }, []);
 
   const startRecording = useCallback(async () => {
+    if (recordingAbort.current) return;
+    const controller = new AbortController();
+    recordingAbort.current = controller;
     try {
       chunks.current = [];
-      const stream = await requestMicrophoneStream(true);
+      const stream = await requestMicrophoneStream(true, controller.signal);
+      if (controller.signal.aborted || recordingAbort.current !== controller) {
+        releaseSensorStream('microphone', stream);
+        return;
+      }
       activeStream.current = stream;
 
       audioContext.current = new AudioContext();
@@ -132,6 +140,7 @@ export function useVoiceCloning() {
       };
 
       mediaRecorder.current.onstop = () => {
+        recordingAbort.current = null;
         stopDurationTimer();
         const blob = new Blob(chunks.current, { type: mimeType });
         const hasData = chunks.current.some(c => c.size > 0);
@@ -156,6 +165,8 @@ export function useVoiceCloning() {
       startDurationTimer();
       updateAudioLevel();
     } catch (err: any) {
+      if (controller.signal.aborted || recordingAbort.current !== controller) return;
+      recordingAbort.current = null;
       stopDurationTimer();
       cancelAnimationFrame(animationFrame.current);
       activeStream.current?.getTracks().forEach(track => track.stop());
@@ -169,6 +180,9 @@ export function useVoiceCloning() {
   const stopRecording = useCallback(() => {
     if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
       mediaRecorder.current.stop();
+    } else {
+      recordingAbort.current?.abort();
+      recordingAbort.current = null;
     }
   }, []);
 
@@ -297,6 +311,8 @@ export function useVoiceCloning() {
   }, []);
 
   useEffect(() => () => {
+    recordingAbort.current?.abort();
+    recordingAbort.current = null;
     stopDurationTimer();
     if (successTimer.current) clearTimeout(successTimer.current);
     cancelAnimationFrame(animationFrame.current);

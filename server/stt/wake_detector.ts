@@ -1,14 +1,17 @@
 /**
  * Server-side wake word detection — multi-provider.
- * Auto-selects: Ark > Qwen. Both streaming; falls back to Qwen if no Ark key.
+ * Uses the selected official STT adapter; legacy auto mode remains Ark > Qwen.
  */
 import { logger } from '../../logger';
 import { requireNotStrict } from '../config/privacy';
 import { getKey } from '../config/keys';
-import { getVoicePreference } from '../config/voice_preference';
+import { getConfiguredVoiceModel, getVoicePreference } from '../config/voice_preference';
 import { classifyCloudError } from '../cloud/core';
 import { isCircuitClosed, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import * as doubaoAsr from './providers/ark';
+import { createResilientStreamingSession, createStreamingSession, isRecoverableStreamingSTTError } from './adapter';
+import type { StreamingSTTSession } from './types';
+import { relayConfigured } from '../relay/config';
 
 const WAKE_WORDS = [
   'Jarvis', 'jarvis', '贾维斯',
@@ -39,6 +42,7 @@ export interface WakeDetectorSession {
   stop(): void;
   onWake: (callback: (keyword: string) => void) => void;
   onError: (callback: (err: Error) => void) => void;
+  onReady?: (callback: () => void) => void;
 }
 
 // ── Provider: Qwen (DashScope) streaming WebSocket ──
@@ -89,6 +93,7 @@ function createQwenWakeDetector(
 
   const wakeCallbacks: Array<(keyword: string) => void> = [];
   const errorCallbacks: Array<(err: Error) => void> = [];
+  const readyCallbacks: Array<() => void> = [];
   const connections = new Set<ManagedQwenWakeConnection>();
   const handoffAudio: Buffer[] = [];
   const maxHandoffBytes = Math.ceil(
@@ -225,6 +230,7 @@ function createQwenWakeDetector(
     clearTimer(rolloverRetryTimer);
     rolloverRetryTimer = null;
     scheduleRollover();
+    readyCallbacks.forEach(callback => callback());
 
     if (previous && previous !== connection) {
       handoffDuplicateProtectionUntil = Date.now() + QWEN_WAKE_DUPLICATE_WINDOW_MS;
@@ -457,9 +463,162 @@ function createQwenWakeDetector(
       handoffBytes = 0;
       wakeCallbacks.length = 0;
       errorCallbacks.length = 0;
+      readyCallbacks.length = 0;
     },
     onWake(cb) { wakeCallbacks.push(cb); },
     onError(cb) { errorCallbacks.push(cb); },
+    onReady(cb) { readyCallbacks.push(cb); if (!stopped && activeConnection?.ready) cb(); },
+  };
+}
+
+// Official wake recognition uses the exact same transport and recovery as
+// voice STT. This manager owns only continuous-listening rollover, never a
+// second WebSocket protocol or a different provider fallback.
+export const OFFICIAL_WAKE_ROLLOVER_MS = 9 * 60 * 1000;
+export const OFFICIAL_WAKE_READY_TIMEOUT_MS = 10_000;
+const OFFICIAL_WAKE_HANDOFF_BYTES = 16_000 * 2 * 2;
+const OFFICIAL_WAKE_DUPLICATE_WINDOW_MS = 3_000;
+
+function createOfficialWakeDetector(model: string, echoFilter?: (text: string) => boolean): WakeDetectorSession {
+  type Connection = { session: StreamingSTTSession; ready: boolean; readyTimer: ReturnType<typeof setTimeout> | null };
+  const wakeCallbacks: Array<(keyword: string) => void> = [];
+  const errorCallbacks: Array<(error: Error) => void> = [];
+  const readyCallbacks: Array<() => void> = [];
+  const connections = new Set<Connection>();
+  let active: Connection | null = null;
+  let warming: Connection | null = null;
+  let rolloverTimer: ReturnType<typeof setTimeout> | null = null;
+  let rolloverRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let warmingFailures = 0;
+  let stopped = false;
+  let terminalError: Error | null = null;
+  let audioTail = Buffer.alloc(0);
+  let lastWakeAt: number | null = null;
+  let duplicateProtectionUntil = 0;
+
+  const retire = (connection: Connection) => {
+    connections.delete(connection);
+    if (connection.readyTimer) clearTimeout(connection.readyTimer);
+    connection.readyTimer = null;
+    try { connection.session.abort ? connection.session.abort() : connection.session.end(); } catch {}
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (rolloverTimer) clearTimeout(rolloverTimer);
+    if (rolloverRetryTimer) clearTimeout(rolloverRetryTimer);
+    rolloverTimer = null;
+    rolloverRetryTimer = null;
+    active = null;
+    warming = null;
+    for (const connection of [...connections]) retire(connection);
+    audioTail = Buffer.alloc(0);
+    wakeCallbacks.length = 0;
+    readyCallbacks.length = 0;
+    errorCallbacks.length = 0;
+  };
+  const fail = (error: Error) => {
+    if (stopped) return;
+    terminalError = error;
+    const callbacks = [...errorCallbacks];
+    stop();
+    callbacks.forEach(callback => callback(error));
+  };
+  const scheduleRollover = () => {
+    if (rolloverTimer) clearTimeout(rolloverTimer);
+    rolloverTimer = setTimeout(() => {
+      rolloverTimer = null;
+      startConnection();
+    }, OFFICIAL_WAKE_ROLLOVER_MS);
+  };
+  const connectionFailed = (connection: Connection, error: Error) => {
+    if (stopped || !connections.has(connection)) return;
+    const retryableStandbyFailure = isRecoverableStreamingSTTError(error)
+      || /circuit(?:\s+is)?\s+open/i.test(error.message);
+    if (warming === connection && active?.ready && active !== connection && retryableStandbyFailure) {
+      warming = null;
+      retire(connection);
+      warmingFailures += 1;
+      // Keep the live stream while trying at most three replacement loads.
+      // If they fail, its normal close/recovery still renews the listener.
+      if (warmingFailures <= 3) {
+        rolloverRetryTimer = setTimeout(() => {
+          rolloverRetryTimer = null;
+          startConnection();
+        }, 5_000 * (2 ** (warmingFailures - 1)));
+      }
+      logger.warn(`[Wake:Official] Replacement unavailable; retaining the active stream (attempt ${warmingFailures})`);
+      return;
+    }
+    fail(error);
+  };
+  const readinessTimeout = (connection: Connection) => {
+    const error = new Error('Official wake-word STT readiness timed out.');
+    if (active === connection || !active?.ready) recordFailure('relay-stt', model, error);
+    connectionFailed(connection, error);
+  };
+  function startConnection(): void {
+    if (stopped || warming) return;
+    let connection: Connection | undefined;
+    const session = createResilientStreamingSession({ provider: 'relay', model, language: 'zh', interimResults: false }, {
+      restartOnClose: true,
+      maxPendingChunks: 8,
+      createSession: config => {
+        if (!relayConfigured()) throw new Error('Official wake-word STT is not configured.');
+        if (!isCircuitClosed('relay-stt') || !isCircuitClosed('relay-stt', model)) throw new Error('Official wake-word STT provider health circuit is open.');
+        return createStreamingSession(config);
+      },
+      onRecovering: () => {
+        if (stopped || !connection || !connections.has(connection)) return;
+        connection.ready = false;
+        if (!connection.readyTimer) connection.readyTimer = setTimeout(() => { if (connection) readinessTimeout(connection); }, OFFICIAL_WAKE_READY_TIMEOUT_MS);
+      },
+    });
+    connection = { session, ready: false, readyTimer: null };
+    const owned = connection;
+    warming = owned;
+    connections.add(owned);
+    owned.readyTimer = setTimeout(() => readinessTimeout(owned), OFFICIAL_WAKE_READY_TIMEOUT_MS);
+    session.onError(error => connectionFailed(owned, error));
+    session.onResult(result => {
+      if (stopped || active !== owned || !result.isFinal || !result.text || echoFilter?.(result.text)) return;
+      const matched = isWakeWord(result.text);
+      if (!matched) return;
+      const now = Date.now();
+      if (now <= duplicateProtectionUntil && lastWakeAt !== null && now - lastWakeAt < OFFICIAL_WAKE_DUPLICATE_WINDOW_MS) return;
+      lastWakeAt = now;
+      wakeCallbacks.forEach(callback => callback(matched));
+    });
+    session.onReady?.(() => {
+      if (stopped || !connections.has(owned)) return;
+      owned.ready = true;
+      if (owned.readyTimer) clearTimeout(owned.readyTimer);
+      owned.readyTimer = null;
+      const previous = active;
+      const changed = previous !== owned;
+      active = owned;
+      if (warming === owned) warming = null;
+      if (changed && previous) duplicateProtectionUntil = Date.now() + OFFICIAL_WAKE_DUPLICATE_WINDOW_MS;
+      if (changed && audioTail.length) session.sendAudio(audioTail);
+      if (previous && changed) retire(previous);
+      warmingFailures = 0;
+      if (rolloverRetryTimer) clearTimeout(rolloverRetryTimer);
+      rolloverRetryTimer = null;
+      scheduleRollover();
+      readyCallbacks.forEach(callback => callback());
+    });
+  }
+  startConnection();
+  return {
+    sendAudio(chunk) {
+      if (stopped || !chunk?.length) return;
+      audioTail = Buffer.concat([audioTail, chunk.subarray(-OFFICIAL_WAKE_HANDOFF_BYTES)]).subarray(-OFFICIAL_WAKE_HANDOFF_BYTES);
+      active?.session.sendAudio(chunk);
+    },
+    stop,
+    onWake(callback) { if (!stopped) wakeCallbacks.push(callback); },
+    onError(callback) { if (terminalError) callback(terminalError); else if (!stopped) errorCallbacks.push(callback); },
+    onReady(callback) { if (!stopped) { readyCallbacks.push(callback); if (active?.ready) callback(); } },
   };
 }
 
@@ -576,9 +735,18 @@ export function createWakeDetector(
   requireNotStrict('Cloud wake-word detection');
   // Read user STT preference — if explicitly set, honor it
   let userPref: string = 'auto';
+  let officialModel: string | undefined;
   try {
-    userPref = getVoicePreference().stt || 'auto';
+    const preference = getVoicePreference();
+    userPref = preference.stt || 'auto';
+    if (userPref === 'relay') officialModel = getConfiguredVoiceModel('stt', preference);
   } catch {}
+
+  if (userPref === 'relay') {
+    if (!relayConfigured() || !officialModel) throw new Error('Official wake-word STT is not configured.');
+    if (!isCircuitClosed('relay-stt') || !isCircuitClosed('relay-stt', officialModel)) throw new Error('Official wake-word STT provider health circuit is open.');
+    return createOfficialWakeDetector(officialModel, echoFilter);
+  }
 
   const hasDoubao = doubaoAsr.hasDoubaoSpeech();
   const qwenKey = accessKey

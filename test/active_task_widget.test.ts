@@ -71,6 +71,27 @@ describe('active task widget', () => {
     expect(view.activeCount).toBe(1);
   });
 
+  it('never fills a task with another task confirmation or transient progress', () => {
+    const view = select({
+      status: { tasks: [task('executing')] },
+      focusThreads: [{ taskId: 'mail-task', goal: 'Send mail', status: 'waiting_confirmation', waitingFor: 'Confirm recipient' }],
+      tasks: [{ id: 'third-task', title: 'Export', status: 'running', error: 'Other failure' }],
+      progressText: 'Unowned transient progress',
+    });
+    expect(view.title).toBe('Prepare the client report');
+    expect(view.detail).toBe('');
+    expect(view.status).toBe('executing');
+    expect(view.activeCount).toBe(3);
+  });
+
+  it('accepts detail from a matching task identity', () => {
+    const view = select({
+      status: { tasks: [task('executing')] },
+      focusThreads: [{ taskId: 'task-1', goal: 'Prepare report', status: 'executing', nextAction: 'Review the report' }],
+    });
+    expect(view.detail).toBe('Review the report');
+  });
+
   it('does not expose runtime codes or receipt details in the foreground widget', () => {
     const runtimeTask = task('executing');
     runtimeTask.blocker = 'desktop_open failed: target_mismatch receipt=receipt-private';

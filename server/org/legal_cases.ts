@@ -3,6 +3,8 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import * as EDB from './db';
+import { inspectLegalReasoningStructure } from '../regions/packs/cn/legal_reasoning_structure';
+import { CN_LEGAL_REASONING_DRAFT_MESSAGES } from '../regions/packs/cn/skill_messages';
 import {
   assertOrganizationResourceAccess,
   authorizeOrganizationResource,
@@ -161,7 +163,7 @@ export function evaluateCaseWorkflow(
     || caseWorkflowHas(text, [/事实摘要|案件事实|时间线|履行|付款|交付|解除|侵权|损失|庭审|会谈|会议纪要/i]);
   const hasEvidence = materials.some(material => material.type === 'evidence')
     || caseWorkflowHas(text, [/证据目录|证明目的|三性|真实性|合法性|关联性|质证|原件|页码|证据材料/i]);
-  const hasReasoning = caseWorkflowHas(text, [/三段论|大前提|小前提|涵摄|法律分析三段论|legal_case_reasoning_matrix/i]);
+  const hasReasoning = inspectLegalReasoningStructure(text).passed;
   const lawBlocked = options.currentLawGate === 'blocked'
     || caseWorkflowHas(text, [/现行有效法律预检：未通过|现行有效法律硬门槛未通过|正式交付包未生成|current-law gate blocked|不得标记为正式成果|已废止|失效风险：[1-9]/i]);
   const lawPassed = !lawBlocked && (
@@ -210,8 +212,8 @@ export function evaluateCaseWorkflow(
     makeWorkflowStep(
       'reasoning',
       '三段论分析',
-      hasReasoning ? 'done' : hasFacts || hasEvidence ? 'ready' : 'missing',
-      hasReasoning ? '已形成三段论底稿' : '底层必经，尚未形成法律分析矩阵',
+      hasReasoning ? 'ready' : hasFacts || hasEvidence ? 'ready' : 'missing',
+      hasReasoning ? CN_LEGAL_REASONING_DRAFT_MESSAGES.ready : CN_LEGAL_REASONING_DRAFT_MESSAGES.missing,
       '先形成法律依据、事实证据、适用结论的三段论底稿。',
       'legal_case_reasoning_matrix',
     ),

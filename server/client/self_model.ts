@@ -366,14 +366,7 @@ export interface SelfIntroductionPlan {
 }
 
 const CLIENT_CAPABILITIES: ClientCapability[] = [
-  {
-    id: 'mode.chat',
-    label: 'Chat mode',
-    kind: 'mode',
-    actions: ['set_client_mode(chat)'],
-    notes: 'Visible conversational posture. Lumi answers naturally, and a user-present model-owned turn may use the ordinary foreground Assistant capability manifest for an explicit task without persistently changing the client mode. Explicit continuous or unattended work uses Autonomy.',
-    stateKeys: ['mode', 'voice'],
-  },
+
   {
     id: 'mode.meeting',
     label: 'Meeting mode',
@@ -383,22 +376,8 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     requiresConfirmation: true,
     stateKeys: ['mode', 'meeting', 'voice'],
   },
-  {
-    id: 'mode.assistant',
-    label: 'Assistant mode',
-    kind: 'mode',
-    actions: ['set_client_mode(assistant)'],
-    notes: 'User-present high-permission execution. LumiCore can use tools, files, browser, saved/authorized sessions, external apps, desktop control, and skills for requested ordinary work without per-tool permission popups; hard boundaries stop for explicit confirmation or handoff.',
-    stateKeys: ['mode', 'tools'],
-  },
-  {
-    id: 'mode.autonomous',
-    label: 'Autonomy mode',
-    kind: 'mode',
-    actions: ['set_client_mode(autonomous)', 'open_computer_adaptation'],
-    notes: 'Same practical permissions as Assistant, plus 24h continuous/background operation, proactive questions, monitoring, memory absorption, local-machine body learning, industry-habit-aware public-source web learning, sorting, task checkpoints, and ultra-long continuation.',
-    stateKeys: ['mode', 'runtimeLog', 'tools'],
-  },
+
+
   {
     id: 'window.manager',
     label: 'Desktop window manager',
@@ -492,7 +471,7 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
     label: 'Background runtime awareness',
     kind: 'runtime',
     actions: ['client_get_state', 'client_health_check', 'open_computer_adaptation', 'client_self_repair', 'desktop_idle_time', 'desktop_poll_activity', 'autonomy_get_policy', 'autonomy_list_workflows', 'autonomy_register_workflow'],
-    notes: 'Lumi distinguishes visible window state, hidden-to-background resident client state, backend process health, launch-at-login, close-to-background, and autonomous workflow execution. Resident background availability requires the desktop client/server to be alive; autonomous background work follows the desktop mode/autonomy policy, token budget, and enabled workflow rules. Assistant is low-friction for user-present work; Autonomy is for continuous execution. Verify runtime state before promising that Lumi will keep working after the window is hidden or after restart.',
+    notes: 'Visible windows, hidden-to-background resident client state, backend health and launch-at-login are distinct runtime facts. Background tasks follow authorized workflows, enabled policy, schedules and budgets. Verify runtime state before promising work can continue after hiding or restart.',
     requiresConfirmation: false,
     stateKeys: ['runtime', 'runtimeLog', 'autonomy', 'mode', 'permissions', 'tools'],
   },
@@ -635,10 +614,10 @@ const CLIENT_CAPABILITIES: ClientCapability[] = [
   },
   {
     id: 'system.always_online',
-    label: 'Desktop modes and autonomous work',
+    label: 'Background work and learning',
     kind: 'system',
     actions: ['open_plans', 'open_work_queue', 'open_settings(section=autonomy)', 'autonomy_get_policy', 'autonomy_update_policy', 'autonomy_list_workflows', 'autonomy_register_workflow', 'autonomy_set_workflow_enabled'],
-    notes: 'Lumi uses three visible desktop postures. Chat is conversational, but an explicit user-present task may use the ordinary foreground Assistant capability manifest for that turn without persistently switching the UI mode. Assistant is an explicit foreground execution posture with tools, browser, saved/authorized login sessions, files, desktop control, external apps, and skills; hard boundaries still stop for confirmation or handoff. Autonomy has the same practical permissions plus continuous operation, proactive questions, monitoring, sorting, absorption, local-machine body learning, industry-habit-aware public-source web learning, task checkpoints, and ultra-long continuation. The desktop client can launch at login, hide to tray/background, and supervise bundled backend processes. That resident runtime does not permit unrelated automatic work; autonomous task generation still follows workflow policy. There is no separate external-app automation gate.',
+    notes: 'Lumi is one personal core for conversation, authorized work, memory and learning. Background workflows use independent authorization, resource budgets, schedules and durable task checkpoints. There are no selectable operation modes. Resident availability requires the desktop client/server to be running.',
     requiresConfirmation: false,
     stateKeys: ['mode', 'autonomy', 'runtime'],
   },
@@ -1665,11 +1644,7 @@ export function getSelfModelSnapshot(
       continuity: 'single_identity_across_surfaces',
     },
     scope: { domain, orgId: domain === 'work' ? String(scope.orgId || '') : '' },
-    modes: LUMI_OPERATION_MODE_IDS.map(id => ({
-      id,
-      available: true,
-      active: state?.mode === id,
-    })),
+    modes: [], // No selectable operation modes; capture status lives in meeting/voice.
     configuredModels: models,
     connectedCapabilities: {
       tools: manifest.length,
@@ -2025,7 +2000,7 @@ export function formatCompactClientSelfPrompt(
     state
       ? `- UI: mode=${state.mode || 'unknown'}; activeTab=${state.activeTab || 'unknown'}; viewMode=${state.viewMode || 'personal'}; workDomain=${state.workDomain || 'personal'}; settings=${state.settings?.activeSection || 'none'}`
       : '- UI: no live desktop state is currently available.',
-    `- Operation-mode definition: exactly ${LUMI_OPERATION_MODE_IDS.length} persistent permission modes (${LUMI_OPERATION_MODE_IDS.join(', ')}); meeting is a temporary capture surface, not another permission mode.`,
+    '- Lumi is a single personal core with no selectable operation modes. Meeting is a temporary capture surface.',
     state
       ? `- Surfaces: wallpaper=${formatWallpaperState(state)}; widget=${Boolean(state.surfaces?.widgetMode)}; meeting=${Boolean(state.surfaces?.meetingOpen || state.meeting?.active)}; nexus=${Boolean(state.surfaces?.nexusOpen || state.viewMode === 'world')}; focused=${state.windows?.focused || 'none'}`
       : '',
@@ -2252,7 +2227,7 @@ export function formatClientSelfPrompt(
     'When the user reports a client failure, do not stop at repeating the error. First read client_get_state, inspect relevant status/log/config tools when available, try one safe recovery or retry if the cause is clear, verify the state changed, then explain the remaining blocker if it still fails.',
     'If a routed client action, meeting capture, runtime log, organization workspace, or file operation fails, treat that as a repairable client workflow: diagnose -> safe recovery -> verify -> concise report.',
     'Do not shrink yourself into voice interaction. Voice, chat, Feishu, runtime logs, organization, meeting, tools, skills, files, and desktop control are different entrances into the same local Lumi.',
-    'Respect modes without turning them into scripted gates: Chat is the visible conversational posture and may execute an explicit user-present foreground task from the current hard-policy manifest without a persistent UI-mode switch. Meeting is transcription/reporting, Assistant is the explicit foreground execution posture, and Autonomy adds continuous 24-hour background operation and ultra-long continuation. Music requests belong to installed desktop media applications, not a Lumi mode or client surface.',
+    'Lumi has no Chat, Assistant or Autonomous mode selection. The current request and its authorization determine tool use. Meeting is transcription/reporting only; background tasks require their own enabled workflow, budget and authorization. Music requests belong to installed desktop media applications.',
     '',
     '### Workspace Identity And Data Boundaries',
     ...workspaceIdentityLines,

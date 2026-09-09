@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isDelegatedActionEvidenceArchive } from './task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import { getJwtSecret } from '../config/local_identity';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
@@ -413,10 +414,16 @@ export function buildForegroundTaskCompletionFeedback(input: {
   toolRecords?: ToolExecutionRecord[];
   blocked?: boolean;
   reason?: string;
-  status?: 'waiting_confirmation' | 'cancelled' | 'persistence_unknown';
+  status?: 'waiting_confirmation' | 'executing' | 'cancelled' | 'persistence_unknown';
 }): TaskCompletionFeedback | undefined {
   const records = input.toolRecords || [];
   const label = compact(input.taskLabel, 200) || 'Task';
+  if (input.status === 'executing') return {
+    status: 'working', completed: [],
+    evidence: boundedUnique(records.map(record => `Observed tool receipt: ${compact(record.name, 120)}`), 20),
+    incomplete: [`${label} is still running in the background.`], blockers: [],
+    nextSteps: ['Wait for the workflow result or inspect its current progress.'],
+  };
   // Transport-owned lifecycle state outranks any late or duplicated tool
   // payload when confirmation, cancellation, or persistence is unresolved.
   if (input.status === 'waiting_confirmation') {
@@ -837,7 +844,7 @@ export function buildTaskAcceptanceProjections(db: any, input: {
 } = {}): TaskAcceptanceProjection[] {
   const actionReceipts = Array.isArray(db?.conversationActionReceipts) ? db.conversationActionReceipts : [];
   const conversation = (Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks : [])
-    .filter((task: any) => scopeMatches(task, input))
+    .filter((task: any) => !isDelegatedActionEvidenceArchive(task) && scopeMatches(task, input))
     .map((task: any) => {
       const context = parseObject(task?.context);
       return context.source === 'scheduler' && context.compactAudit === true

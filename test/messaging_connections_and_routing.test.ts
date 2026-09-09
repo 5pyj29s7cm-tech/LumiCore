@@ -540,8 +540,8 @@ describe('messaging long connections and organization routing', () => {
       text: '操作桌面打开微信',
       operationMode: 'chat',
     });
-    expect(chatAction.dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(chatAction.dispatch.flow.autoPromoteToAssistant).toBe(false);
+    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(chatAction.execution.allowToolUse).toBe(true);
     expect(chatAction.execution.maxIterations).toBeGreaterThan(3);
     expect(chatAction.execution.toolRoute?.categories).toContain('messaging');
@@ -572,7 +572,7 @@ describe('messaging long connections and organization routing', () => {
       text: '切换到自主模式',
       operationMode: 'assistant',
     });
-    expect(modeSwitch.dispatch.flow.requestedMode).toBe('autonomous');
+    expect(modeSwitch.dispatch.flow.requestedMode).toBeNull();
     expect(modeSwitch.dispatch.flow.effectiveOperationMode).toBe('assistant');
     const modeSwitchModelPolicy = buildModelCapabilityPolicy(modeSwitch.execution);
     expect(modeSwitchModelPolicy.allowedTools).toEqual(expect.arrayContaining([
@@ -642,19 +642,11 @@ describe('messaging long connections and organization routing', () => {
       },
     });
 
-    expect(reply).toBe('已切到自主模式。');
-    expect(scopes).toEqual([{ userId, source: 'wechat_bot', domain: 'personal', orgId: '' }]);
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toEqual({
-      name: 'client_action',
-      args: expect.objectContaining({ action: 'set_client_mode', mode: 'autonomous', confirmed: false }),
-    });
-    expect(calls[1]).toEqual({
-      name: 'client_action',
-      args: { action: 'refresh_client_state' },
-    });
+    expect(reply).toContain('统一的个人人格核心');
+    expect(reply).not.toContain('已切到自主模式');
+    expect(calls.some(call => call.args.action === 'set_client_mode')).toBe(false);
     const { getStoredOperationMode } = await import('../server/cognition/operation_mode_store');
-    expect(getStoredOperationMode(userId)).toBe('autonomous');
+    expect(getStoredOperationMode(userId)).toBe('assistant');
   });
 
   it('persists remote execution plans and answers later status turns from the durable receipt ledger', async () => {
@@ -668,16 +660,16 @@ describe('messaging long connections and organization routing', () => {
       chatId: `wx-${userId}`,
       boundUserId: userId,
       messageId: `mode-ledger-${Date.now()}`,
-      text: '\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f',
+      text: '\u5207\u6362\u5230\u4f1a\u8bae\u6a21\u5f0f',
     });
     const createScopedDesktopRelay = () => async (_name: string, args: Record<string, any>) => {
-      if (args.action === 'set_client_mode') {
-        updateClientState(userId, { platform: 'desktop', mode: args.mode });
+      if (args.action === 'start_meeting_mode') {
+        updateClientState(userId, { platform: 'desktop', mode: args.mode, surfaces: { meetingOpen: true } });
       }
       return JSON.stringify({ ok: true, action: args.action, mode: args.mode });
     };
 
-    expect(await routes.processWithPersonality(first, { createScopedDesktopRelay })).toBe('\u5df2\u5207\u5230\u81ea\u4e3b\u6a21\u5f0f\u3002');
+    expect(await routes.processWithPersonality(first, { createScopedDesktopRelay })).toMatch(/已完成|已切到会议/);
     const afterExecution: any = readDB();
     const tasks = (afterExecution.conversationActionTasks || []).filter((item: any) => item.userId === userId);
     expect(tasks).toHaveLength(1);

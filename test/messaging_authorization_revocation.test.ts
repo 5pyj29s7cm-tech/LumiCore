@@ -150,7 +150,7 @@ describe('remote message authorization remains bound to its accepted identity', 
     await waitFor(() => Boolean(captured));
     let drained = false;
     const draining = routes.stopMessagingIngressAndDrain().then(() => { drained = true; });
-    expect(routes.dispatchIncomingMessage({ ...message, messageId: 'after-close' }, { enrich: async value => value, reply }, { onMessage })).toBe(false);
+    expect(() => routes.dispatchIncomingMessage({ ...message, messageId: 'after-close' }, { enrich: async value => value, reply }, { onMessage })).toThrow(/ingress is stopping/);
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(drained).toBe(false);
     gate.resolve(captured!);

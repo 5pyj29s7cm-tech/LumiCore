@@ -39,6 +39,32 @@ describe('saved workflow execution receipts', () => {
     await initDatabase();
   });
 
+  it('publishes one reviewed data flow and recomputes from new run inputs and verified prior output', async () => {
+    const registry = new ToolRegistry(); registerWorkflowTools(registry);
+    registry.register({ name: 'flow_input_rows', description: 'Read supplied rows', permission: 'public', securityLevel: 'safe', parameters: { rows: { type: 'array' } }, handler: async args => JSON.stringify({ status: 'completed', rows: args.rows }) });
+    const transform = vi.fn(async args => JSON.stringify({ status: 'completed', total: args.rows.reduce((sum: number, row: { quantity: number; price: number }) => sum + row.quantity * row.price, 0) }));
+    registry.register({ name: 'flow_calculate_rows', description: 'Calculate from fresh rows', permission: 'public', securityLevel: 'safe', parameters: { rows: { type: 'array' } }, handler: transform });
+    const userId = 'workflow-data-flow'; const name = 'reusable-data-flow';
+    const saved = JSON.parse(await registry.execute('save_workflow', { name, steps: [
+      { tool: 'flow_input_rows', args: { rows: { $inputRef: 'inputs.rows' } } },
+      { tool: 'flow_calculate_rows', args: { rows: { $stepOutputRef: 'step_1.rows' } } },
+    ] }, { userId, conversationId: 'authoring' }));
+    await expect(registry.execute('publish_workflow', { name, expectedHash: 'wrong' }, { userId, requestConfirmation: async () => true })).rejects.toThrow();
+    await registry.execute('publish_workflow', { name, expectedHash: saved.hash }, { userId, requestConfirmation: async () => true });
+    for (const [conversationId, rows, expected] of [
+      ['fresh-one', [{ quantity: 2, price: 12.5 }, { quantity: 3, price: 8 }, { quantity: 1, price: 6 }], 55],
+      ['fresh-two', [{ quantity: 4, price: 12.5 }, { quantity: 3, price: 8 }, { quantity: 1, price: 6 }], 80],
+    ] as const) {
+      const inputs = { rows };
+      const started = JSON.parse(await registry.execute('run_workflow', { name, inputs }, { userId, conversationId, requestConfirmation: async () => true }));
+      // A plain confirmation must retain the original run inputs across pauses.
+      const terminal = await driveWorkflowToTerminal(registry, userId, started.runId);
+      expect(terminal.status, JSON.stringify(terminal)).toBe('completed');
+      expect(terminal.outputs.find((output: any) => output.stepId === 'step_2').result).toMatchObject({ total: expected });
+    }
+    expect(transform.mock.calls.map(call => call[0].rows[0].quantity)).toEqual([2, 4]);
+  });
+
   it('stops at the real failed step and never appends false completion', async () => {
     const registry = new ToolRegistry();
     registerWorkflowTools(registry);

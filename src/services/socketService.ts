@@ -12,7 +12,8 @@ function getDeviceFingerprint(): string {
   let fp: string | null = null;
   try { fp = localStorage.getItem(key); } catch {}
   if (!fp) {
-    fp = `${navigator.platform || 'unknown'}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const platform = typeof navigator === 'undefined' ? 'unknown' : navigator.platform || 'unknown';
+    fp = `${platform}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     try { localStorage.setItem(key, fp); } catch {}
   }
   return fp;

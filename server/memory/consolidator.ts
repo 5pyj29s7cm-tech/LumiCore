@@ -96,6 +96,20 @@ export interface ConsolidationContext {
   source?: string;
 }
 
+function sourceIdentity(memory: Memory): string {
+  return JSON.stringify([memory.id, memory.userId, memory.domain || 'personal', memory.orgId || '',
+    memory.agentId || '', memory.content, memory.updatedAt, memory.retention, memory.privacyClass]);
+}
+
+/** Capture before the model call; source objects may be edited in place. */
+function sourceStillCurrent(memories: Memory[]): () => boolean {
+  const identities = memories.map(sourceIdentity);
+  return () => {
+    const current = new Set((readDB().memories || []).map(sourceIdentity));
+    return identities.every(identity => current.has(identity));
+  };
+}
+
 /**
  * Consolidate unconsolidated episodic memories into a growth narrative.
  * Requires at least minCount episodic memories to trigger.
@@ -132,6 +146,7 @@ export async function consolidateEpisodic(
     .join('\n');
 
   const prompt = CONSOLIDATE_PROMPT.replace('{experiences}', experienceList);
+  const sourcesCurrent = sourceStillCurrent(batch);
 
   const messages: NormalizedMessage[] = [
     { role: 'user', content: prompt },
@@ -164,6 +179,7 @@ export async function consolidateEpisodic(
 
     if (!parsed.content || typeof parsed.content !== 'string') return null;
 
+    if (!sourcesCurrent()) return null;
     const consolidated = addMemory(
       {
         userId: ctx.userId,
@@ -235,6 +251,7 @@ export async function selfReflect(
     .join('\n');
 
   const prompt = SELF_REFLECT_PROMPT.replace('{growthMemories}', growthList);
+  const sourcesCurrent = sourceStillCurrent(growthMemories);
 
   const messages: NormalizedMessage[] = [
     { role: 'user', content: prompt },
@@ -267,6 +284,7 @@ export async function selfReflect(
 
     if (!parsed.content || typeof parsed.content !== 'string') return null;
 
+    if (!sourcesCurrent()) return null;
     const reflection = addMemory(
       {
         userId: ctx.userId,
@@ -346,6 +364,7 @@ export async function consolidateNarrative(
     .join('\n');
 
   const prompt = NARRATIVE_CONSOLIDATION_PROMPT.replace('{memories}', memoryList);
+  const sourcesCurrent = sourceStillCurrent(sample);
 
   const messages: NormalizedMessage[] = [
     { role: 'user', content: prompt },
@@ -381,6 +400,7 @@ export async function consolidateNarrative(
     const title = parsed.title || `叙事记忆 ${new Date().toISOString().slice(0, 10)}`;
     const content = `[${title}] ${parsed.narrative.trim().slice(0, 500)}`;
 
+    if (!sourcesCurrent()) return null;
     const narrative = addMemory(
       {
         userId: ctx.userId,

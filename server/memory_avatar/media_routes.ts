@@ -7,6 +7,7 @@ import { getMemoryAvatar, MemoryAvatarError } from './store';
 import { avatarMediaDirectory, AVATAR_MEDIA_MAX_BYTES } from './media_files';
 import { cancelMemoryAvatarMedia, deleteMemoryAvatarMedia, getMemoryAvatarMediaFile, listMemoryAvatarMedia, processMemoryAvatarMedia, uploadMemoryAvatarMedia, type AvatarMediaLlmGetters } from './media';
 import type { MemoryAvatarMediaVariant } from '../../shared/memory_avatar';
+import { createRequestAbortController } from '../http/request_abort';
 
 const handle = (fn: (req: Request, res: Response) => Promise<any>) => (req: Request, res: Response, next: NextFunction) => {
   return Promise.resolve(fn(req, res)).catch(error => {
@@ -31,17 +32,14 @@ export function mountMemoryAvatarMediaRoutes(router: Router, getters: AvatarMedi
     }, filename(_req, _file, done) { done(null, `.upload-${randomUUID()}`); },
   }), limits: { fileSize: AVATAR_MEDIA_MAX_BYTES.video, files: 1, fields: 5, fieldSize: 8000 } }).single('file');
   router.post(base, handle(async (req, res) => {
-    const controller = new AbortController();
-    const abort = () => controller.abort(new DOMException('Upload cancelled.', 'AbortError'));
-    const close = () => { if (!res.writableEnded) abort(); };
-    req.once('aborted', abort); res.once('close', close);
+    const controller = createRequestAbortController(req, res);
     try {
       await new Promise<void>((resolve, reject) => upload(req, res, error => error ? reject(error instanceof MemoryAvatarError ? error : new MemoryAvatarError(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, 'media_upload_invalid', 'Upload one supported media file within the size limit.')) : resolve()));
       if (!req.file) throw new MemoryAvatarError(400, 'media_upload_missing', 'Choose one media file.');
       const result = await uploadMemoryAvatarMedia(req.user!.uid, String(req.params.id), { path: req.file.path, title: req.body?.title || req.file.originalname, caption: req.body?.caption, clientRequestId: req.body?.clientRequestId, revision: Number(req.body?.revision), signal: controller.signal });
       if (!controller.signal.aborted) res.status(201).json({ media: result.media, avatar: publicAvatar(result.avatar) });
     } finally {
-      req.off('aborted', abort); res.off('close', close);
+      controller.dispose();
       if (req.file?.path) await fs.promises.rm(req.file.path, { force: true });
     }
   }));

@@ -11,7 +11,7 @@ import { ToolRegistry } from '../registry';
 function kindsFromArgs(value: unknown): RuntimeWorkKind[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((kind): kind is RuntimeWorkKind => (
-    kind === 'autonomy' || kind === 'takeover'
+    kind === 'autonomy' || kind === 'takeover' || kind === 'workflow'
   ));
 }
 
@@ -34,7 +34,7 @@ function scopeFromContext(context: { domain?: string; orgId?: string } | undefin
 export function registerRuntimeWorkTools(registry: ToolRegistry): void {
   registry.register({
     name: 'runtime_work_status',
-    description: 'Read the real active LumiCore work ledger across autonomous tasks and work-takeover tasks. Use this for task progress, what Lumi is doing, or whether autonomous work is still active. Do not substitute process lists or client health checks.',
+    description: 'Read the real active LumiCore work ledger across autonomous tasks, work-takeover tasks, and workflow runs. Use this for task progress, what Lumi is doing, or whether work is still active. Do not substitute process lists or client health checks.',
     // i18n-allow: Chinese input-recognition vocabulary; not user-visible copy.
     routingHints: ['后台任务', '任务进度', '正在做什么', '还在执行吗', 'active work', 'task progress', 'background task status'],
     parameters: {
@@ -42,7 +42,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       properties: {
         kinds: {
           type: 'array',
-          items: { type: 'string', enum: ['autonomy', 'takeover'] },
+          items: { type: 'string', enum: ['autonomy', 'takeover', 'workflow'] },
           description: 'Optional work-ledger categories. Omit to inspect all Lumi work.',
         },
       },
@@ -83,7 +83,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
         },
         kinds: {
           type: 'array',
-          items: { type: 'string', enum: ['autonomy', 'takeover'] },
+          items: { type: 'string', enum: ['autonomy', 'takeover', 'workflow'] },
           description: 'Optional work-ledger categories. Omit to cancel all Lumi work categories.',
         },
       },
@@ -132,7 +132,7 @@ export function registerRuntimeWorkTools(registry: ToolRegistry): void {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'Optional exact runtime task id. Omit to pause all matching checkpoint-capable work.' },
-        kinds: { type: 'array', items: { type: 'string', enum: ['autonomy'] } },
+        kinds: { type: 'array', items: { type: 'string', enum: ['autonomy', 'workflow'] } },
       },
       required: [],
     },

@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Users, Plus, Phone, Mail, MapPin, MessageSquare, Edit3, Trash2, Search } from 'lucide-react';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
+import { apiJson } from '../services/apiClient';
+import { toast } from 'sonner';
 
 interface Contact {
   id: string; name: string; phone?: string; email?: string; company?: string;
@@ -19,71 +21,63 @@ export function ContactsPanel() {
   const [showNew, setShowNew] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', phone: '', email: '', company: '', relationship: 'friend', notes: '' });
   const [interactNote, setInteractNote] = useState('');
+  const listGeneration = useRef(0);
 
-  useEffect(() => { loadContacts(); }, []);
+  useEffect(() => { void loadContacts(); return () => { listGeneration.current += 1; }; }, []);
 
   const loadContacts = async (query?: string) => {
+    const generation = ++listGeneration.current;
     try {
       const url = query ? `/api/contacts?search=${encodeURIComponent(query)}` : '/api/contacts';
-      const res = await fetch(url, { credentials: 'include' });
-      if (res.ok) {
-        const d = await res.json();
-        setContacts(d.contacts || []);
-      }
-    } catch {} finally { setLoading(false); }
+      const data = await apiJson(url);
+      if (generation === listGeneration.current) setContacts(data.contacts || []);
+    } catch (error: any) {
+      if (generation === listGeneration.current) toast.error(error.message);
+    } finally { if (generation === listGeneration.current) setLoading(false); }
   };
 
   const saveContact = async () => {
     if (!newContact.name.trim()) return;
     try {
-      const res = await fetch('/api/contacts', {
+      const c = await apiJson<Contact>('/api/contacts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newContact), credentials: 'include',
       });
-      if (res.ok) {
-        const c = await res.json();
-        setContacts(prev => [...prev, c]);
-        setNewContact({ name: '', phone: '', email: '', company: '', relationship: 'friend', notes: '' });
-        setShowNew(false);
-      }
-    } catch {}
+      setContacts(prev => [...prev, c]);
+      setNewContact({ name: '', phone: '', email: '', company: '', relationship: 'friend', notes: '' });
+      setShowNew(false);
+    } catch (error: any) { toast.error(error.message); }
   };
 
   const updateContact = async () => {
     if (!editing) return;
     try {
-      const res = await fetch(`/api/contacts/${editing.id}`, {
+      const updated = await apiJson<Contact>(`/api/contacts/${editing.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing), credentials: 'include',
       });
-      if (res.ok) {
-        const updated = await res.json();
-        setContacts(prev => prev.map(c => c.id === updated.id ? updated : c));
-        setEditing(null);
-      }
-    } catch {}
+      setContacts(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setEditing(null);
+    } catch (error: any) { toast.error(error.message); }
   };
 
   const deleteContact = async (id: string) => {
     try {
-      await fetch(`/api/contacts/${id}`, { method: 'DELETE', credentials: 'include' });
+      await apiJson(`/api/contacts/${id}`, { method: 'DELETE', credentials: 'include' });
       setContacts(prev => prev.filter(c => c.id !== id));
-    } catch {}
+    } catch (error: any) { toast.error(error.message); }
   };
 
   const recordInteraction = async (id: string, note: string) => {
     if (!note.trim()) return;
     try {
-      const res = await fetch(`/api/contacts/${id}/interact`, {
+      const updated = await apiJson<Contact>(`/api/contacts/${id}/interact`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note }), credentials: 'include',
       });
-      if (res.ok) {
-        const updated = await res.json();
-        setContacts(prev => prev.map(c => c.id === updated.id ? updated : c));
-        setInteractNote('');
-      }
-    } catch {}
+      setContacts(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setInteractNote('');
+    } catch (error: any) { toast.error(error.message); }
   };
 
   if (loading) return <div className="p-6 text-white/40">Loading...</div>;

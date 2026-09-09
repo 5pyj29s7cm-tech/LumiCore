@@ -2,6 +2,12 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
+import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
+import { artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
+import type { ToolExecutionRecord } from '../tools/types';
+
+// A bounded target-evidence window, independent of the model prompt window.
+export const TASK_TARGET_HISTORY_LIMIT = 80;
 
 export type TaskTargetAnchorStatus = 'unresolved' | 'candidate' | 'confirmed' | 'rejected';
 export type TaskTargetAnchorSource =
@@ -24,7 +30,16 @@ export interface TaskTargetAnchorV1 {
   source: TaskTargetAnchorSource;
 }
 
+/** A target resolved from server-owned conversation state, never client history. */
+export interface AcceptedTaskTarget {
+  target: TaskTargetAnchorV1;
+  source: 'current_turn' | 'prior_user_message' | 'prior_tool_receipt' | 'task';
+  sourceId: string;
+}
+
 export interface TaskTargetEvidenceRecord {
+  capability?: ToolExecutionRecord['capability'];
+  requestId?: string;
   name?: string;
   arguments?: Record<string, unknown>;
   result?: unknown;
@@ -225,7 +240,7 @@ function canonicalPathValue(value: unknown): CanonicalPathValue | null {
   };
 }
 
-function canonicalPathIdentity(value: unknown): string {
+export function canonicalPathIdentity(value: unknown): string {
   return canonicalPathValue(value)?.identity || '';
 }
 
@@ -296,11 +311,43 @@ function directorySearchReference(text: string): { directory: string; filename: 
   return { directory: match[1].trim(), filename: match[2].trim() };
 }
 
-function explicitFile(text: string): string {
-  const clean = primaryTaskText(text);
+// i18n-allow: negated file-read input recognition, not user-visible copy.
+const EXCLUDED_FILE_CLAUSE_RE = /(?:不要|别|无需|不用|禁止|请勿|勿|不再)\s*(?:再|继续)?\s*(?:读取|读|打开|用|使用|处理|分析|查看|检查)|\b(?:do\s+not|don't|never)\s+(?:read|open|use|process|inspect|analy[sz]e)\b/iu;
+// i18n-allow: output destinations are separate from input-file references.
+const OUTPUT_DESTINATION_RE = /(?:并|然后|再)?(?:另存(?:为)?|保存(?:为|到)|导出(?:为|到))|\b(?:and\s+)?(?:save\s+as|save\s+to|export\s+to)\b/iu;
+
+function fileReferenceClauses(text: string): string[] {
+  // Preserve punctuation boundaries so adjacent paths cannot merge.
+  return primaryTaskText(text).split(/[\r\n，,；;。！？!?]/u);
+}
+
+function excludedFileReferences(text: string): string[] {
+  return fileReferenceClauses(text)
+    .filter(clause => EXCLUDED_FILE_CLAUSE_RE.test(clause))
+    .map(clause => explicitFile(clause, true))
+    .filter(Boolean);
+}
+
+function explicitFile(text: string, keepExcluded = false): string {
+  const positive = keepExcluded ? primaryTaskText(text) : fileReferenceClauses(text)
+    .filter(clause => !EXCLUDED_FILE_CLAUSE_RE.test(clause))
+    .join('，');
+  // In "edit that workbook, save as X", X is only the output. The input
+  // remains referential and must be recovered from a trusted prior receipt.
+  const clean = positive.split(OUTPUT_DESTINATION_RE, 1)[0];
   // i18n-allow: multilingual user target-correction recognition; not user-visible copy.
-  const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|instead(?:\s+use)?|replace(?:\s+it)?\s+with)\s*([^\r\n]{1,240})/iu)?.[1];
-  const targetClause = compact(replacement || clean, 500);
+  const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|instead(?:\s+use)?|replace(?:\s+it)?\s+with)\s*([^\r\n，,；;。！？!?]{1,240})/iu)?.[1];
+  // A value correction (quantity, price, date...) is not a target correction.
+  // Only prefer the replacement clause when it actually names a file.
+  // An output destination is not the value of the preceding quantity/price
+  // correction, even when the user omitted punctuation between the clauses.
+  // i18n-allow: output-destination input recognition.
+  const replacementValue = replacement?.split(OUTPUT_DESTINATION_RE, 1)[0];
+  const replacementNamesFile = replacementValue && (
+    ABSOLUTE_FILE_RE.test(replacementValue) || POSIX_ABSOLUTE_FILE_RE.test(replacementValue)
+    || FILE_NAME_RE.test(replacementValue)
+  );
+  const targetClause = compact(replacementNamesFile ? replacementValue : clean, 1500);
   const directorySearch = directorySearchReference(targetClause);
   if (directorySearch) return directorySearch.filename;
   // i18n-allow: multilingual explicit filename recognition; not user-visible copy.
@@ -315,6 +362,129 @@ function explicitFile(text: string): string {
       || targetClause.match(FILE_NAME_RE)?.[1],
     500,
   );
+}
+
+/** Resolve a referential file target once for routing, execution and finalization.
+ * History must be loaded by the caller from this exact authorized conversation.
+ * Recovering a target does not authorize an operation or resume an old task.
+ */
+export function resolveAcceptedTaskTarget(input: {
+  text: string;
+  persistedHistory?: ReadonlyArray<{ id?: string; role?: string; message?: string; content?: string; requestId?: string; toolCalls?: unknown }>;
+  previousTask?: { taskId?: string; target?: Partial<TaskTargetAnchorV1> } | null;
+}): AcceptedTaskTarget | undefined {
+  const current = primaryTaskText(input.text);
+  const named = explicitFile(current);
+  const unresolved = (): AcceptedTaskTarget => ({
+    target: { label: '', application: '', window: '', object: '', path: '', location: '', status: 'unresolved', source: 'unknown' },
+    source: 'current_turn', sourceId: '',
+  });
+  const make = (value: string, source: AcceptedTaskTarget['source'], sourceId = ''): AcceptedTaskTarget | undefined => {
+    if (!concreteTargetPath(value) || !displayableFileName(value)) return undefined;
+    const target = buildTaskTargetAnchorProjection({ taskText: value }).target;
+    if (!target.path || target.status === 'rejected') return undefined;
+    return { target, source, sourceId };
+  };
+  if (concreteTargetPath(named)) return make(named, 'current_turn');
+  const authoringIntent = classifySkillAuthoringIntent(current);
+  if (authoringIntent !== 'none' && authoringIntent !== 'use') return undefined;
+  // A produced/new version is not the old input file. Recover it only from
+  // request-bound persisted tool receipts, never assistant prose.
+  // i18n-allow: produced-file and plural-target input recognition.
+  const producedReference = /(?:刚才|刚刚|之前|上次)?(?:生成|创建|另存|导出|保存)(?:的|好|完).{0,12}(?:文件|文档|表格|副本)|(?:新版|新生成|输出|结果)(?:的)?(?:文件|文档|表格)|\b(?:generated|created|exported|saved|output|new\s+version)\b.{0,25}\b(?:file|document|spreadsheet|copy)\b/iu.test(current);
+  // i18n-allow: plural file-reference input recognition.
+  const pluralReference = /(?:两|二|多|几|这些|上述|所有)(?:个|份|张)?(?:文件|文档|表格)|\b(?:both|these|all|multiple)\b.{0,15}\b(?:files|documents|spreadsheets)\b/iu.test(current);
+  if (pluralReference) return unresolved();
+  // i18n-allow: referential task recognition, not user-facing copy.
+  const refersToPrior = /(?:刚才|刚刚|之前|上面|前面|继续|接着|原文件|这(?:个|份|张)|该(?:文件|文档|表格)|其余|其他不变)|\b(?:previous|earlier|same|that|this|continue|resume|original)\b/iu.test(current);
+  // i18n-allow: value-correction and file-operation input recognition.
+  const valueCorrection = /(?:数量|单价|价格|金额|日期).{0,12}(?:改成|改为|调整为|换成)|\b(?:quantity|price|amount|date)\b.{0,20}\b(?:change|to|replace)\b/iu.test(current);
+  // Generic "continue/this" in a different topic does not select an old file.
+  // i18n-allow: semantic file-operation input recognition.
+  if (!named && !valueCorrection && !/(?:读取|读一下|查看|检查|分析|计算|核算|汇总|算出|重新算|原文件|文件|文档|表格)|按.{0,15}计划.{0,8}执行|\b(?:read|inspect|analy[sz]e|calculate|compute|file|document|spreadsheet)\b|\b(?:execute|run|follow)\b.{0,25}\bplan\b/iu.test(current)) return undefined;
+  if (!named && !refersToPrior && !valueCorrection && !producedReference) return undefined;
+  // "Keep the original unchanged" protects the selected input; it does not
+  // select an older pre-generation source instead of the current workbook.
+  // i18n-allow: original-file preservation clauses are not positive target selection.
+  const originalSelectionText = current.replace(/(?:不|不要|别|请勿|勿)\s*(?:修改|改动|改写|覆盖)\s*(?:原|源)(?:文件|文档|表格)|(?:保持|保留)\s*(?:原|源)(?:文件|文档|表格)(?:原样|不变)|(?:原|源)(?:文件|文档|表格)\s*(?:不动|不变|保持原样)|\b(?:do\s+not|don't|without)\s+(?:modify|modifying|edit|editing|change|changing|overwrite|overwriting)\s+(?:the\s+)?(?:original|source)\s+(?:file|document|spreadsheet)\b/giu, ' ');
+  // i18n-allow: affirmative original-file input recognition.
+  const explicitlyOriginal = /(?:原|源)(?:文件|文档|表格)|\b(?:original|source)\s+(?:file|document|spreadsheet)\b/iu.test(originalSelectionText);
+  // A reference to a previously read file format selects that input, even
+  // after another format was produced. Do not treat the output as the input.
+  // i18n-allow: explicit prior-read format recognition, not display text.
+  const priorReadFormat = current.match(/(?:刚才|刚刚|之前|上次)(?:读取|读过|查看)(?:的)?(?:那|这)?(?:一)?(?:份|个)?\s*(CSV|PDF|Excel|Word)\b|\b(?:previously|earlier)\s+read\s+(CSV|PDF|Excel|Word)\b/iu);
+  const selectedFormat = (priorReadFormat?.[1] || priorReadFormat?.[2] || '').toLowerCase();
+  const selectedExtensions: Record<string, RegExp> = { csv: /\.csv$/iu, pdf: /\.pdf$/iu, excel: /\.xlsx?$/iu, word: /\.docx?$/iu };
+  const matchesSelectedFormat = (value: string) => !selectedFormat || selectedExtensions[selectedFormat].test(value);
+  const rejected = excludedFileReferences(current);
+  for (const record of [...(input.persistedHistory || [])].reverse()) {
+    if (record.role === 'assistant' && !explicitlyOriginal) {
+      const calls = parseNestedJson(record.toolCalls);
+      if (selectedFormat && record.requestId && Array.isArray(calls)) {
+        const observed = unique(calls.filter((call): call is TaskTargetEvidenceRecord => Boolean(
+          call && typeof call === 'object' && call.requestId === record.requestId
+          && /^(?:read_file|read_xlsx|read_docx|read_pdf)$/u.test(String(call.name || ''))
+          && !call.error && call.outcome !== 'failure' && call.terminalVerification?.status === 'verified',
+        )).map(call => {
+          const args = call.arguments || {};
+          return String(args.filePath || args.path || '');
+        }).filter(value => concreteTargetPath(value) && displayableFileName(value)
+          && matchesSelectedFormat(value) && !rejected.some(reference => targetReferenceMatches(value, reference))));
+        if (observed.length > 1) return unresolved();
+        if (observed.length === 1) {
+          const accepted = make(observed[0], 'prior_tool_receipt', record.id || record.requestId);
+          if (accepted) accepted.target.source = 'tool_receipt';
+          return accepted || unresolved();
+        }
+      }
+      const producers = (Array.isArray(calls) ? calls : [])
+        .filter((call): call is TaskTargetEvidenceRecord => Boolean(call && typeof call === 'object' && isArtifactProducerRecord({ name: String(call.name || ''), capability: call.capability })));
+      if (producers.length) {
+        if (!record.requestId || producers.some(call => call.requestId !== record.requestId)) return unresolved();
+        const paths = producers.map(verifiedProducedDocumentPath);
+        if (paths.some(value => !value)) return unresolved();
+        const distinct = unique(paths).filter(value => matchesSelectedFormat(value) && !rejected.some(reference => targetReferenceMatches(value, reference)));
+        if (selectedFormat && distinct.length === 0) continue;
+        if (distinct.length !== 1 || (named && !targetReferenceMatches(distinct[0], named))) return unresolved();
+        const accepted = make(distinct[0], 'prior_tool_receipt', record.id || record.requestId);
+        if (accepted) accepted.target.source = 'tool_receipt';
+        return accepted || unresolved();
+      }
+      continue;
+    }
+    if (record.role !== 'user') continue;
+    const priorText = primaryTaskText(String(record.message || record.content || ''));
+    // An intervening output-producing request changes the possible referent.
+    // This resolver has no producer receipt, so it must not silently skip that
+    // request and reselect an older input when the user then edits "it".
+    // i18n-allow: prior artifact creation and explicit original-file recognition.
+    const priorProducedArtifact = /(?:生成|创建|新建|另存|导出).{0,45}(?:文件|文档|表格|副本|xlsx|csv)|\b(?:create|generate|export|save\s+as)\b.{0,50}\b(?:file|document|spreadsheet|copy|xlsx|csv)\b/iu.test(priorText);
+    if (!named && priorProducedArtifact && !explicitlyOriginal && !selectedFormat) return unresolved();
+    rejected.push(...excludedFileReferences(priorText));
+    const references = fileReferenceClauses(priorText)
+      .filter(clause => !EXCLUDED_FILE_CLAUSE_RE.test(clause))
+      .map(clause => explicitFile(clause)).filter(Boolean);
+    const distinct = new Set(references.map(reference => canonicalPathIdentity(reference) || normalizedIdentity(reference)));
+    if (!named && distinct.size > 1) return unresolved();
+    const prior = explicitFile(priorText);
+    if (!prior) continue;
+    if (!matchesSelectedFormat(prior)) continue;
+    if (producedReference && !explicitlyOriginal) return unresolved();
+    if (rejected.some(reference => targetReferenceMatches(prior, reference))) continue;
+    if (named && !targetReferenceMatches(prior, named)) continue;
+    const resolved = make(prior, 'prior_user_message', record.id || '');
+    if (resolved) return resolved;
+    // The most recent user reference did not resolve. Do not silently fall
+    // through to a different older document with an unrelated identity.
+    if (!named) return undefined;
+  }
+  if (producedReference) return unresolved();
+  const previous = input.previousTask?.target;
+  if (previous?.status === 'rejected' || !previous?.path) return undefined;
+  if (!matchesSelectedFormat(previous.path)) return unresolved();
+  if (rejected.some(reference => targetReferenceMatches(previous.path, reference))) return unresolved();
+  if (named && !targetReferenceMatches(previous.path, named)) return undefined;
+  return make(previous.path, 'task', input.previousTask?.taskId || '');
 }
 
 function explicitAbsolutePaths(text: string): string[] {
@@ -1045,6 +1215,26 @@ function targetMatchesAnchor(candidate: string, anchor: TaskTargetAnchorV1): boo
     .some(value => targetReferenceMatches(candidate, value));
 }
 
+function verifiedProducedDocumentPath(record: TaskTargetEvidenceRecord): string {
+  if (record.error || record.outcome === 'failure' || record.terminalVerification?.status !== 'verified') return '';
+  const toolRecord = { name: record.name || '', arguments: record.arguments, capability: record.capability,
+    result: typeof record.result === 'string' ? record.result : JSON.stringify(record.result),
+    receipt: typeof record.receipt === 'string' ? record.receipt : JSON.stringify(record.receipt) };
+  if (!isArtifactProducerRecord(toolRecord)) return '';
+  const receipt = objectValue(record.receipt);
+  const result = objectValue(record.result);
+  if ([receipt, result].some(value => value.ok === false || /^(?:failed|error|cancelled|waiting_confirmation|unknown_outcome)$/iu.test(String(value.status || '')))) return '';
+  const produced = artifactPathFromRecord(toolRecord);
+  return concreteTargetPath(produced) && displayableFileName(produced) ? produced : '';
+}
+
+/** A verification read may inspect an output already produced by this task. */
+export function isVerifiedProducedDocumentTarget(target: string, records: TaskTargetEvidenceRecord[]): boolean {
+  const identity = canonicalPathIdentity(target);
+  if (!identity || !concreteTargetPath(target)) return false;
+  return records.some(record => canonicalPathIdentity(verifiedProducedDocumentPath(record)) === identity);
+}
+
 function targetKeepsAnchoredObjectIdentity(candidate: string, anchor: TaskTargetAnchorV1): boolean {
   if (!candidate) return true;
   const anchoredReference = anchor.path || anchor.object || anchor.label;
@@ -1080,17 +1270,27 @@ export function guardTaskTargetToolCall(input: {
   toolName: string;
   arguments?: Record<string, unknown>;
   toolRecords?: TaskTargetEvidenceRecord[];
+  acceptedTaskTarget?: AcceptedTaskTarget;
   /** Registry-owned capability metadata says this call can read a local file. */
   enforceStructuredFileRead?: boolean;
   /** Registry-owned capability metadata says this call can execute a process. */
   forbidUnstructuredExecution?: boolean;
 }): TaskTargetToolCallGuardResult {
-  if (!isFileTargetTask(input.taskText)) return { allowed: true, reason: '' };
+  if (!isFileTargetTask(input.taskText) && !input.acceptedTaskTarget) return { allowed: true, reason: '' };
   const toolName = compact(input.toolName, 160);
+  // Authoring a reviewed, isolated draft is not execution against the example
+  // business file. Only this fixed handler is exempt; reads and general script
+  // tools below still require the normal target, and registry privacy/approval
+  // and installation checks remain authoritative.
+  const authoringIntent = classifySkillAuthoringIntent(primaryTaskText(input.taskText));
+  if (toolName === 'generate_skill' && (authoringIntent === 'generate' || authoringIntent === 'save')) {
+    return { allowed: true, reason: '' };
+  }
   const args = input.arguments || {};
   const projection = buildTaskTargetAnchorProjection({
     taskText: input.taskText,
     evidence: input.toolRecords || [],
+    previousTarget: input.acceptedTaskTarget?.target,
   });
   const target = callTarget(args);
   const currentWps = prefersCurrentWpsDocument(input.taskText, projection.target.application);
@@ -1197,6 +1397,12 @@ export function guardTaskTargetToolCall(input: {
   }
 
   if (input.enforceStructuredFileRead || DOCUMENT_INTERFACE_RE.test(toolName)) {
+    if (target && isVerifiedProducedDocumentTarget(target, input.toolRecords || [])) {
+      return { allowed: true, reason: '', normalizedArguments: args, anchor: projection };
+    }
+    if (input.acceptedTaskTarget?.target.status === 'unresolved' && !input.acceptedTaskTarget.target.path) {
+      return blocked('target_unresolved', 'The current file reference is ambiguous or names an unbound produced file. Ask for its exact path; do not substitute the previous source.', projection, CN_TASK_TARGET_ANCHOR_MESSAGES.unresolvedTarget);
+    }
     const directVerifiedWpsDocumentRead = Boolean(
       currentWps
       && projection.target.source === 'active_window'

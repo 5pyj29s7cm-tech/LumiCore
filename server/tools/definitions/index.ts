@@ -49,13 +49,7 @@ import { registerExtensionRegistryTools } from './extension_registry_tools';
 
 export function registerAllTools(
   registry: ToolRegistry,
-  llmGetters?: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI?: () => any;
-    getAnthropic?: () => any;
-    getQwen?: () => any;
-  },
+  llmGetters?: NonNullable<Parameters<typeof setSkillLLMGetters>[0]>,
 ): void {
   registerFileOpsTools(registry);
   registerSystemOpsTools(registry);

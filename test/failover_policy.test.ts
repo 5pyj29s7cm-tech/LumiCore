@@ -22,6 +22,51 @@ function preferences(overrides: Partial<UserLLMPrefs> = {}): UserLLMPrefs {
 }
 
 describe('reasoning failover policy', () => {
+  it('does not resurrect remembered BYOK models behind the official service', () => {
+    const candidates = compileReasoningFailoverCandidates({
+      primaryProvider: 'relay',
+      primaryModel: 'aliyun/deepseek-v4-flash',
+      preferences: preferences({
+        provider: 'relay',
+        model: 'aliyun/deepseek-v4-flash',
+        models: { relay: 'aliyun/deepseek-v4-flash', qwen: 'qwen-plus', openai: 'remembered-openai' },
+        autoFallbackProvider: 'relay',
+        autoFallbackModel: 'aliyun/deepseek-v4-flash',
+        fallbackCandidates: [{ provider: 'ollama', model: 'local-backup' }],
+      }),
+    });
+    expect(candidates).toEqual([{ provider: 'ollama', model: 'local-backup' }]);
+  });
+
+  it('uses only declared cloud routes when automatic mode targets the official service', () => {
+    const candidates = compileReasoningFailoverCandidates({
+      primaryProvider: 'ollama',
+      primaryModel: 'local-backup',
+      preferences: preferences({
+        provider: 'auto',
+        autoFallbackProvider: 'relay',
+        autoFallbackModel: 'aliyun/deepseek-v4-flash',
+        models: { qwen: 'qwen-plus' },
+      }),
+    });
+    expect(candidates).toEqual([{ provider: 'relay', model: 'aliyun/deepseek-v4-flash' }]);
+  });
+
+  it('retains an explicitly selected BYOK fallback behind the official service', () => {
+    const candidates = compileReasoningFailoverCandidates({
+      primaryProvider: 'relay',
+      primaryModel: 'aliyun/deepseek-v4-flash',
+      explicitCandidates: [{ provider: 'qwen', model: 'user-selected-model' }],
+      preferences: preferences({
+        provider: 'relay',
+        autoFallbackProvider: 'relay',
+        autoFallbackModel: 'aliyun/deepseek-v4-flash',
+        models: { qwen: 'qwen-plus' },
+      }),
+    });
+    expect(candidates).toEqual([{ provider: 'qwen', model: 'user-selected-model' }]);
+  });
+
   it('keeps the official relay out of the implicit compatibility priority', () => {
     expect(REASONING_FAILOVER_PRIORITY).not.toContain('relay');
 

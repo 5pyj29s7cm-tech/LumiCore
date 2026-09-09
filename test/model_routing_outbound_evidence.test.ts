@@ -440,10 +440,13 @@ describe('provider outbound message evidence', () => {
       const payload = captured[attempt.provider];
       expect(attempt.outboundMessagesEvidence?.messagesSha256)
         .toBe(sha256Stable({ system: null, messages: payload.messages }));
-      expect(attempt.outboundMessagesEvidence?.messages[0].contentSha256)
-        .toBe(sha256Stable(payload.messages[0].content));
-      expect(attempt.outboundMessagesEvidence?.messages[0].sourceMessageId)
-        .toBe('message-failover-evidence');
+      const userMessages = attempt.outboundMessagesEvidence?.messages.filter(message => message.role === 'user') || [];
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0].contentSha256)
+        .toBe(sha256Stable(payload.messages[userMessages[0].index].content));
+      expect(userMessages[0].sourceMessageId).toBe('message-failover-evidence');
+      expect(attempt.outboundMessagesEvidence?.messages.filter(message => message.role === 'system'))
+        .toEqual([expect.objectContaining({ sourceMessageId: null })]);
     }
   });
 
@@ -596,8 +599,13 @@ describe('provider outbound message evidence', () => {
     for (const attempt of receipt.attempts) {
       expect(attempt.outboundMessagesEvidence?.messagesSha256)
         .toBe(sha256Stable({ system: null, messages: captured[attempt.provider].messages }));
-      expect(attempt.outboundMessagesEvidence?.messages[0].sourceMessageId)
-        .toBe('message-all-failed-evidence');
+      const userMessages = attempt.outboundMessagesEvidence?.messages.filter(message => message.role === 'user') || [];
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0].sourceMessageId).toBe('message-all-failed-evidence');
+      expect(userMessages[0].contentSha256)
+        .toBe(sha256Stable(captured[attempt.provider].messages[userMessages[0].index].content));
+      expect(attempt.outboundMessagesEvidence?.messages.filter(message => message.role === 'system'))
+        .toEqual([expect.objectContaining({ sourceMessageId: null })]);
     }
   });
 

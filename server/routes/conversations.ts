@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
+import { sendDurableMutation } from './durable_mutation';
 import { readDB, flushDBOrThrow } from "../../db_layer";
 import { forgetConversationChatExecutionsDurably } from '../socket/chat_execution_registry';
 import { mutationScopeKey, runSerializedMutation, readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
@@ -107,7 +108,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     res.json({ activeConversation });
   });
 
-  router.post("/conversations/new", requireAuth, (req, res) => {
+  router.post("/conversations/new", requireAuth, async (req, res) => {
     const scope = getConversationScope(req);
     if (scope.domain === 'work' && !scope.orgId) {
       return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
@@ -117,7 +118,8 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const conversation = isolated
       ? startIsolatedConversation(req.user!.uid, agentId, scope.domain, scope.orgId)
       : startNewConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
-    res.status(201).json({ conversation });
+    res.status(201);
+    await sendDurableMutation(req, res, { conversation }, undefined, { retryable: false });
   });
 
   router.get("/conversations/search", requireAuth, (req, res) => {
@@ -187,7 +189,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     res.json({ messages });
   });
 
-  router.post("/conversations/:id/activate", requireAuth, (req, res) => {
+  router.post("/conversations/:id/activate", requireAuth, async (req, res) => {
     const scope = getConversationScope(req);
     if (scope.domain === 'work' && !scope.orgId) {
       return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
@@ -201,10 +203,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       scope.orgId,
     );
     if (!conversation) return res.status(404).json({ error: 'Conversation not found for this agent or workspace' });
-    res.json({ conversation });
+    await sendDurableMutation(req, res, { conversation });
   });
 
-  router.post("/conversations/:id/close", requireAuth, (req, res) => {
+  router.post("/conversations/:id/close", requireAuth, async (req, res) => {
     const db = readDB();
     const conv = (db.conversations || []).find((c: any) => c.id === req.params.id);
     if (!conv) return res.status(404).json({ error: "Conversation not found" });
@@ -214,7 +216,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const { summary } = req.body || {};
     const closed = closeConversation(req.params.id, summary);
     if (!closed) return res.status(404).json({ error: "Conversation not found" });
-    res.json({ success: true, conversation: closed });
+    await sendDurableMutation(req, res, { success: true, conversation: closed });
   });
 
   router.delete("/conversations/:id", requireAuth, async (req, res) => {

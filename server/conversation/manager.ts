@@ -1098,15 +1098,18 @@ function finalizeManagerActionTurnFromAssistant(input: {
   userId: string;
   requestId: string;
   assistantMessageId: string;
+  desiredStatus?: 'terminal' | 'cancelled';
   reason?: string;
   now?: string;
 }): void {
+  const desiredStatus = input.desiredStatus
+    || (getConversationActionTurn(input)?.status === 'cancelled' ? 'cancelled' : 'terminal');
   if (stageConversationTerminalTurn({
     ...input,
-    desiredStatus: 'terminal',
+    desiredStatus,
     reason: input.reason || 'assistant transcript staged behind strict durability fence',
   })) return;
-  finalizeManagerActionTurnFromAssistantImmediately(input);
+  finalizeManagerActionTurnFromAssistantImmediately({ ...input, desiredStatus });
 }
 
 function finalizeManagerActionTurnFromAssistantImmediately(input: {
@@ -1114,6 +1117,7 @@ function finalizeManagerActionTurnFromAssistantImmediately(input: {
   userId: string;
   requestId: string;
   assistantMessageId: string;
+  desiredStatus?: 'terminal' | 'cancelled';
   reason?: string;
   now?: string;
 }): void {
@@ -1122,7 +1126,8 @@ function finalizeManagerActionTurnFromAssistantImmediately(input: {
     conversationId: input.conversationId,
     userId: input.userId,
     requestId: input.requestId,
-    status: 'terminal',
+    status: input.desiredStatus
+      || (getConversationActionTurn(input)?.status === 'cancelled' ? 'cancelled' : 'terminal'),
     terminalMessageId: input.assistantMessageId,
     reason: input.reason || 'assistant transcript persisted',
     force: true,
@@ -1151,6 +1156,7 @@ export function commitConversationTerminalDurabilityStage(
         userId: entry.userId,
         requestId: entry.requestId,
         status: 'cancelled',
+        terminalMessageId: entry.assistantMessageId || undefined,
         reason: entry.reason || 'cancelled terminal persisted',
         force: true,
         now: entry.now,
@@ -1339,11 +1345,19 @@ function finalizePersistedAssistantActionTurnInDb(
     .includes(String(boundTask?.status || ''))
     ? String(boundTask.status)
     : '';
+  const taskFinalization = parsePersistedObject(parsePersistedObject(boundTask?.context).taskFinalization);
+  // A cancelled task's later history replay cannot retroactively cancel an
+  // unrelated earlier turn. Only this request's persisted adjudication may
+  // choose cancellation instead of the normal assistant terminal status.
+  const cancelledThisRequest = taskOutcome === 'cancelled'
+    && taskFinalization.outcome === 'cancelled'
+    && taskFinalization.requestId === input.requestId;
   finalizeManagerActionTurnFromAssistant({
     conversationId: input.conversationId,
     userId: input.userId,
     requestId: input.requestId,
     assistantMessageId: input.assistantMessageId,
+    ...(cancelledThisRequest ? { desiredStatus: 'cancelled' as const } : {}),
     reason: taskOutcome ? `task_outcome:${taskOutcome}` : undefined,
     now: input.now,
   });
@@ -1892,13 +1906,13 @@ function finalizeConversationActionRequestInDb(
       { requestId: normalizedRequestId, taskId: previous.taskId },
     );
     const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
-    const authoritativeBlocked = Boolean(
-      options.terminalDisposition?.outcome === 'blocked'
+    const authoritativeDisposition = Boolean(
+      (options.terminalDisposition?.outcome === 'blocked' || options.terminalDisposition?.outcome === 'cancelled')
       && options.terminalDisposition.requestId === normalizedRequestId
       && options.terminalDisposition.taskId === previous.taskId,
     );
-    const status = authoritativeBlocked
-      ? 'blocked'
+    const status = authoritativeDisposition
+      ? options.terminalDisposition!.outcome
       : completion.complete
       ? 'completed'
       : requestWasRunning
@@ -1907,10 +1921,10 @@ function finalizeConversationActionRequestInDb(
     const finalized = finalizeConversationActionTask(db, {
       conversation,
       state: previous,
-      outcome: status === 'completed' ? 'completed' : 'blocked',
+      outcome: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'blocked',
       requestId: normalizedRequestId,
-      blocker: status === 'blocked'
-        ? (authoritativeBlocked ? options.terminalDisposition?.reason : '')
+      blocker: status === 'blocked' || status === 'cancelled'
+        ? (authoritativeDisposition ? options.terminalDisposition?.reason : '')
           || previous.latestBlocker
           || completion.blocker
           || options.fallbackBlocker
@@ -1919,7 +1933,7 @@ function finalizeConversationActionRequestInDb(
       assistantState: options.assistantState !== undefined
         ? compactRolloverText(options.assistantState, 700)
         : previous.assistantState,
-      completionSource: authoritativeBlocked
+      completionSource: authoritativeDisposition
         ? undefined
         : completion.complete
           ? 'tool_receipt'
@@ -3360,14 +3374,14 @@ function normalizeConversationActionTerminalDisposition(
 ): ConversationActionTerminalDisposition | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  if (candidate.outcome !== 'blocked') return null;
+  if (candidate.outcome !== 'blocked' && candidate.outcome !== 'cancelled') return null;
   const taskId = String(candidate.taskId || '').trim().slice(0, 180);
   const requestId = String(candidate.requestId || '').trim().slice(0, 180);
   const reason = String(
     candidate.reason || 'The foreground request ended without a verified complete result.',
   ).replace(/\s+/g, ' ').trim().slice(0, 380);
   if (!taskId || !requestId || !reason) return null;
-  return { outcome: 'blocked', taskId, requestId, reason };
+  return { outcome: candidate.outcome, taskId, requestId, reason };
 }
 
 /**
@@ -3911,7 +3925,7 @@ export function addMessage(msg: {
             finalizeConversationActionTask(db, {
               conversation: conv,
               state: prepared.state,
-              outcome: 'blocked',
+              outcome: terminalTaskDisposition?.outcome || 'blocked',
               requestId: pending.requestId || msg.requestId || id,
               blocker: terminalTaskDisposition?.reason
                 || 'No terminal tool receipt was recorded for the requested step.',
@@ -3928,7 +3942,7 @@ export function addMessage(msg: {
           finalizeConversationActionTask(db, {
             conversation: conv,
             state: conv.actionContinuationState,
-            outcome: 'blocked',
+            outcome: terminalTaskDisposition?.outcome || 'blocked',
             requestId: msg.requestId || pending.requestId,
             blocker: terminalTaskDisposition?.reason
               || 'No terminal tool receipt was recorded for the requested step.',

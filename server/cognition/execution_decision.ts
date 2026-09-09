@@ -2,6 +2,7 @@ import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import { buildOperationModeToolPolicy } from './operation_modes';
 import { buildUnifiedLegalEntryPrompt } from './legal_entry';
+import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
 import {
   formatToolRouteForPrompt,
   mergeToolPolicyWithRoute,
@@ -161,17 +162,7 @@ function fallbackPolicy(
   registry?: ToolRegistry,
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolPolicy {
-  // The visible Chat posture is not a second permission prompt. For an open
-  // model-owned chat turn, expose the ordinary foreground Assistant manifest
-  // without persisting a UI-mode change. Semantic routing still only ranks
-  // candidates, while explicit no-tool/read-only/meeting and sanctuary
-  // boundaries keep modelToolAccess hard-off before this point.
-  const manifestMode = flow.channel === 'chat'
-    && flow.modelToolAccess === 'manifest'
-    && flow.operationMode === 'chat'
-      ? 'assistant'
-      : flow.operationMode;
-  const opModePolicy = buildOperationModeToolPolicy(manifestMode, registry, visibilityContext);
+  const opModePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry, visibilityContext);
   if (flow.channel === 'chat' && flow.modelToolAccess === 'manifest') {
     if (!personalityToolPolicy) return opModePolicy;
     const hardAllowed = new Set(opModePolicy.allowedTools || []);
@@ -351,6 +342,10 @@ function enhanceToolRouteForFlow(
   // requested follow-up operations. Generic artifact expansion must not
   // replace that route with document/file writers or capability installation.
   if (route.categories.some(category => ['image_generation', 'image_editing', 'video_generation'].includes(category))) return route;
+  // Explicit authoring already has the lifecycle tools it needs. Expanding
+  // the example business domain or automatic gap-repair discovery here adds
+  // unrelated file/marketplace routes and hides the actual draft next step.
+  if (route.categories.includes('skill_authoring')) return route;
 
   const available = new Set(declarations.map(declaration => declaration.function.name));
   const additions = new Set<string>();
@@ -360,6 +355,9 @@ function enhanceToolRouteForFlow(
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
   const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
   const actionContract = buildActionContract(semanticText);
+  const authoringTools = skillAuthoringTools(classifySkillAuthoringIntent(semanticText));
+  addAvailable(additions, available, authoringTools);
+  addAvailable(semanticPriority, available, authoringTools);
   // Keep one compact discovery schema in every non-hard model route. Its
   // receipt can re-project an already-authorized hidden capability on the
   // next iteration without restoring the complete registry to the prompt.
@@ -494,6 +492,7 @@ function enhanceToolRouteForFlow(
         ].filter(name => available.has(name))
       : [];
   const merged = unique([
+    ...authoringTools.filter(name => available.has(name)),
     ...priority,
     ...routeNames,
     ...Array.from(additions),

@@ -167,6 +167,13 @@ describe('RAG markdown source metadata', () => {
     });
     expect(renamed.ok).toBe(true);
     const afterRename = readDB().memories.filter((memory: any) => memory.userId === userId);
+    const { isKnowledgeMemorySourceCurrent, formatKnowledgeCitation } = await import('../server/agents/rag');
+    expect(afterRename.length).toBeGreaterThan(0);
+    for (const memory of afterRename) {
+      expect(isKnowledgeMemorySourceCurrent(memory)).toBe(true);
+      expect(memory.knowledgeProvenance.sourcePath).toBe(memory.sourceInteractionId);
+      expect(formatKnowledgeCitation(memory)).toContain(renamedName);
+    }
     expect(afterRename.some((memory: any) => String(memory.sourceInteractionId || '').endsWith(originalName))).toBe(false);
     expect(afterRename.some((memory: any) => (
       String(memory.sourceInteractionId || '').endsWith(renamedName)

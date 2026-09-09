@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeApp } from './helpers';
 import type { IncomingMessage } from '../server/messaging/types';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../shared/model_provider_capabilities';
 
 let cleanup = () => {};
 let routes: typeof import('../server/messaging/routes');
@@ -253,7 +254,7 @@ describe('remote messaging turn integrity', () => {
     };
     const options = {
       llmGetters: {
-        getDeepSeek: () => ({ chat: { completions: { create } } }),
+        getRelay: () => ({ chat: { completions: { create } } }),
       },
     };
 
@@ -264,6 +265,7 @@ describe('remote messaging turn integrity', () => {
     await waitFor(() => firstAborted);
     await waitFor(() => sent.length === 1, 5_000);
     expect(sent).toEqual(['只回复最新消息']);
+    expect(create.mock.calls.every(([params]) => params.model === LUMI_OFFICIAL_DEFAULT_MODELS.reasoning)).toBe(true);
   });
 
   it('keeps exact filenames and paths from persisted file receipts', () => {
@@ -463,7 +465,7 @@ describe('remote messaging turn integrity', () => {
       },
     }, {
       llmGetters: {
-        getDeepSeek: () => ({ chat: { completions: { create } } }),
+        getRelay: () => ({ chat: { completions: { create } } }),
       },
     });
 
@@ -474,6 +476,7 @@ describe('remote messaging turn integrity', () => {
       return String(lastUser?.content || '').includes('派遣函_最终版.pdf');
     });
     expect(modelTurn).toBeTruthy();
+    expect(modelTurn.model).toBe(LUMI_OFFICIAL_DEFAULT_MODELS.reasoning);
     const lastUser = [...modelTurn.messages].reverse().find((item: any) => item.role === 'user');
     expect(lastUser.content).toContain('某人民法院材料，仅要求分析，不得自动创建案件。');
     expect(routes.buildRemoteTurnIntentText({ ...message, text: lastUser.content })).toBe('分析一下这份附件');

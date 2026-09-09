@@ -4,7 +4,7 @@ import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpManager } from '../server/mcp/client';
 import type { MCPToolDef } from '../server/mcp/client';
-import { activateInstalledSkill, registerConnectedSkillTools } from '../server/mcp';
+import { activateInstalledSkill, registerConnectedSkillTools, SKILLS_DIR } from '../server/mcp';
 import { registerSkillTools, setSkillLLMGetters } from '../server/tools/definitions/skill_tools';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { ToolRegistry } from '../server/tools/registry';
@@ -54,6 +54,10 @@ function receiptSkillTool(skillName = 'receipt-skill'): MCPToolDef {
 }
 
 describe('skill lifecycle terminal receipts', () => {
+  it('isolates worker skill installation and migration from the real user home', () => {
+    expect(path.resolve(SKILLS_DIR)).not.toBe(path.resolve(os.homedir(), 'lumi_skills'));
+    expect(path.resolve(SKILLS_DIR).startsWith(path.resolve(process.env.LUMI_TEST_TMPDIR || os.tmpdir()) + path.sep)).toBe(true);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     setSkillLLMGetters(null);
@@ -197,6 +201,47 @@ describe('skill lifecycle terminal receipts', () => {
     expect(record.error).toContain('Arbitrary local skill execution is disabled');
     expect(record.terminalVerification?.status).toBe('failed');
     expect(install).not.toHaveBeenCalled();
+  });
+
+  it('corroborates only an unchanged host-approved pure computation, preserving failure and identity fences', async () => {
+    const directory = temporarySkillDirectory('lumi-pure-receipt-');
+    const entry = path.join(directory, 'index.ts');
+    fs.writeFileSync(entry, `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+const inputSchema = z.object({ value: z.number() });
+async function main() {
+  const server = new McpServer({ name: 'receipt-skill', version: '1.0.0' }, { capabilities: { tools: {} } });
+  server.registerTool('probe', { description: 'Pure transform', inputSchema }, async (args: Record<string, any>) => {
+    let result = '';
+    result = JSON.stringify({ status: 'completed', data: { doubled: args.value * 2 } });
+    return { content: [{ type: 'text', text: result }] };
+  });
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+await main();`);
+    const identity = { origin: 'generated' as const, skillId: 'receipt-skill', packageName: 'receipt-skill', packageVersion: '1', contentDigest: 'a'.repeat(64), reviewHash: 'b'.repeat(64),
+      runtime: { transport: 'stdio' as const, command: 'node', args: [entry], cwd: directory, files: [] } };
+    const tool = receiptSkillTool();
+    tool.capability!.verification.requiredFields = ['status', 'data'];
+    tool.capability!.verification.requiredValues = { status: 'completed' };
+    vi.spyOn(mcpManager, 'getConfig').mockReturnValue({ 'receipt-skill': { enabled: true, source: 'local', managedSkill: identity } });
+    vi.spyOn(mcpManager, 'restartServer').mockResolvedValue([tool]);
+    const assertion = vi.spyOn(mcpManager, 'assertLocalSkillRuntimeIdentity').mockReturnValue(identity);
+    const call = vi.spyOn(mcpManager, 'callToolForServer').mockResolvedValue(JSON.stringify({ status: 'completed', data: { doubled: 14 } }));
+    const registry = new ToolRegistry();
+    await activateInstalledSkill('receipt-skill', { registry });
+    const invoke = () => executeToolCall({ registry, name: tool.name, arguments: { value: 7 }, context: { ...adminLocalToolContext, requestConfirmation: async () => true } });
+    expect((await invoke()).terminalVerification).toMatchObject({ status: 'verified', reason: expect.stringContaining('pure-computation') });
+    assertion.mockImplementationOnce(() => { throw new Error('changed runtime'); });
+    expect((await invoke()).terminalVerification?.status).toBe('unverified');
+    call.mockResolvedValueOnce(JSON.stringify({ status: 'completed', data: {}, ok: false }));
+    expect((await invoke()).terminalVerification?.status).toBe('failed');
+    call.mockResolvedValueOnce(JSON.stringify({ status: 'completed' }));
+    expect((await invoke()).terminalVerification?.status).toBe('unverified');
+    fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace('args.value * 2', 'process.pid'));
+    expect((await invoke()).terminalVerification?.status).toBe('unverified');
   });
 
   it('rolls back a newly installed package when its MCP runtime cannot activate', async () => {

@@ -52,11 +52,11 @@ function parseObject(value: unknown): Record<string, any> {
   }
 }
 
-function extractWindowFingerprint(record: ToolExecutionRecord): WindowFingerprint | null {
-  const parsed = parseObject(record.result);
+export function parseDesktopWindowFingerprint(value: unknown): WindowFingerprint | null {
+  const parsed = parseObject(value);
   const active = parseObject(parsed.activeWindow || parsed.window || parsed.foregroundWindow || parsed);
-  const title = String(active.title || active.windowTitle || '').trim();
-  const processName = String(active.process_name || active.processName || active.executable || '').trim();
+  const title = String(active.title || active.windowTitle || active.window_title || '').trim();
+  const processName = String(active.process_name || active.processName || active.process || active.executable || '').trim();
   const processId = Number(active.pid || active.processId || 0) || undefined;
   const nativeWindowHandle = Number(active.nativeWindowHandle || active.hwnd || active.window_id || active.windowId || 0) || undefined;
   const bounds = parseObject(active.bounds || active.rect || active.windowBounds);
@@ -243,8 +243,18 @@ export class DesktopExecutionTracker {
     const verified = !record.error && record.terminalVerification?.status === 'verified';
     const evidence = [`tool:${record.name}`, `result_sha256:${digest(record.result || record.error || '')}`];
 
-    if (isObservationStep(step)) {
-      const fingerprint = extractWindowFingerprint(record);
+    const payload = parseObject(record.result);
+    const postOpenFingerprint = verified && step.operation === 'focus_or_open'
+      && payload.verificationBasis === 'post_open_foreground'
+      && payload.targetMatched === true && payload.status === 'verified'
+      ? parseDesktopWindowFingerprint(payload.actualTarget)
+      : null;
+    // desktop_open already made this fresh native observation after its
+    // launch. Consume that measurement in the existing plan, instead of
+    // asking the model to issue an identical second observation.
+    if (postOpenFingerprint) this.pendingAction = { step, recordVerified: true };
+    if (isObservationStep(step) || postOpenFingerprint) {
+      const fingerprint = postOpenFingerprint || parseDesktopWindowFingerprint(record.result);
       const fingerprintInvalidated = fingerprintInvalidatesVisualPlan(this.lastFingerprint, fingerprint);
       const identityAssessment = this.plan.application.family === 'lumi'
         ? null

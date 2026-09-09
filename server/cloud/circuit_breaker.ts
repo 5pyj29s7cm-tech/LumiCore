@@ -15,6 +15,7 @@ interface CircuitEntry {
   successCount: number;      // consecutive successes in half-open
   lastFailureTime: number;
   lastStateChange: number;
+  cooldownMs?: number;
 }
 
 const circuits = new Map<string, CircuitEntry>();
@@ -53,10 +54,11 @@ export function isCircuitClosed(provider: string, model?: string): boolean {
 
   if (entry.state === 'open') {
     const elapsed = Date.now() - entry.lastStateChange;
-    if (elapsed >= CONFIG.cooldownMs) {
+    if (elapsed >= (entry.cooldownMs ?? CONFIG.cooldownMs)) {
       // Transition to half-open — allow a probe
       entry.state = 'half-open';
       entry.lastStateChange = Date.now();
+      delete entry.cooldownMs;
       console.log(`[CircuitBreaker] ${key} → half-open (cooldown elapsed)`);
       return true; // Allow one probe request
     }
@@ -109,7 +111,7 @@ export function recordFailure(
   provider: string,
   model?: string,
   error?: Error,
-  options: { openImmediately?: boolean } = {},
+  options: { openImmediately?: boolean; cooldownMs?: number } = {},
 ): void {
   const key = circuitKey(provider, model);
   let entry = circuits.get(key);
@@ -133,6 +135,9 @@ export function recordFailure(
     entry.state = 'open';
     entry.lastStateChange = now;
     entry.successCount = 0;
+    entry.cooldownMs = Number.isFinite(options.cooldownMs)
+      ? Math.max(0, Number(options.cooldownMs))
+      : undefined;
     console.log(`[CircuitBreaker] ${key} → OPEN (${entry.failureCount} failures)${error ? ` — ${error.message}` : ''}`);
   }
 }

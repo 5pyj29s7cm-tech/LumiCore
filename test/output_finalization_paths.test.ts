@@ -214,15 +214,23 @@ describe('finalized output paths', () => {
     const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
     const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
-    const singleModelStart = voice.indexOf('const streamResult = await makeLLMCallStreaming(');
-    const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', singleModelStart);
+    // Include the stream callback as well as both shared entry points. Starting
+    // at only the runWithTools call would miss speech queued from onChunk.
+    const modelCandidateStart = voice.indexOf('const modelConfig: LLMConfig = {');
+    const sharedTurnStart = voice.indexOf('const result = toolSessionActive', modelCandidateStart);
+    const sharedToolStart = voice.indexOf('await runWithTools(', sharedTurnStart);
+    const sharedConversationStart = voice.indexOf('await runConversationTurn({', sharedTurnStart);
+    const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', sharedTurnStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
-    const modelCandidatePath = voice.slice(singleModelStart, finalizerStart);
+    const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
     const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);
 
     expect(terminalBoundaryStart).toBeGreaterThan(0);
-    expect(singleModelStart).toBeGreaterThan(0);
-    expect(finalizerStart).toBeGreaterThan(singleModelStart);
+    expect(modelCandidateStart).toBeGreaterThan(0);
+    expect(sharedTurnStart).toBeGreaterThan(modelCandidateStart);
+    expect(sharedToolStart).toBeGreaterThan(sharedTurnStart);
+    expect(sharedConversationStart).toBeGreaterThan(sharedToolStart);
+    expect(finalizerStart).toBeGreaterThan(sharedConversationStart);
     expect(finalCommitStart).toBeGreaterThan(finalizerStart);
     expect(terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably(')).toBeGreaterThan(0);
     expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(
@@ -233,6 +241,9 @@ describe('finalized output paths', () => {
     );
     expect(modelCandidatePath).not.toContain('flushSentence(');
     expect(modelCandidatePath).not.toContain('queueFinalizedSpeech(');
+    expect(modelCandidatePath).toContain('const onChunk = (chunk: string) => {');
+    expect(modelCandidatePath).toContain("responseText = result.text || '';");
+    expect(modelCandidatePath).toContain('completionGuard = result.completionGuard;');
     expect(finalCommitPath).toContain('speechText: responseText');
     expect(voice.slice(finalizerStart, finalCommitStart + 1_000)).not.toContain('modelGateSnapshot');
   });

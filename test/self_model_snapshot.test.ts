@@ -34,7 +34,7 @@ describe('live Lumi self model snapshot', () => {
     const snapshot = getSelfModelSnapshot('self-snapshot-user');
 
     expect(snapshot.identity.name).toBe('Lumi');
-    expect(snapshot.modes.find(mode => mode.id === 'assistant')?.active).toBe(true);
+    expect(snapshot.modes).toEqual([]);
     expect(snapshot.configuredModels.length).toBeGreaterThanOrEqual(9);
     expect(snapshot.connectedCapabilities.tools).toBeGreaterThan(0);
     expect(snapshot.knowledgeCoverage.verification).toBe('partial');

@@ -43,6 +43,8 @@ export interface OfficialApiModelDescriptor {
   capabilities?: string[];
   endpoint: string;
   ownedBy: string;
+  /** Informational upstream label; requests must still use the gateway id. */
+  upstreamModel?: string;
 }
 
 export interface OfficialApiModelCatalog {
@@ -148,7 +150,7 @@ function externalMediaHeaders(extra: Record<string, string> = {}): Record<string
   );
 }
 
-function errorMessage(body: any, response: Response): string {
+function errorMessage(body: any, response: Response, credential = relayApiKey()): string {
   const value = body?.error?.message
     || body?.error?.detail
     || body?.message
@@ -156,7 +158,25 @@ function errorMessage(body: any, response: Response): string {
     || body?.reason
     || response.statusText
     || `HTTP ${response.status}`;
-  return String(value).replace(/(?:Bearer\s+|sk-[A-Za-z0-9_-]{6,})[^\s]*/gi, '[redacted]').slice(0, 500);
+  const message = credential ? String(value).split(credential).join('[redacted]') : String(value);
+  return message.replace(/(?:Bearer\s+|sk-[A-Za-z0-9_-]{6,})[^\s]*/gi, '[redacted]').slice(0, 500);
+}
+
+/** Preserve the gateway's FastAPI error detail through OpenAI SDK parsing. */
+export async function normalizeOfficialOpenAIErrorResponse(response: Response, credential: string): Promise<Response> {
+  if (response.ok || !/json/i.test(response.headers.get('content-type') || '')) return response;
+  const body = await response.clone().json().catch(() => null);
+  // Standard OpenAI envelopes already survive the SDK unchanged. Successful
+  // responses (including SSE) must never be buffered by this compatibility fix.
+  if (!body || body.error?.message || !(body.detail || body.message || body.reason)) return response;
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'application/json');
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  headers.delete('transfer-encoding');
+  return new Response(JSON.stringify({ error: { message: errorMessage(body, response, credential) } }), {
+    status: response.status, statusText: response.statusText, headers,
+  });
 }
 
 async function readBody(response: Response): Promise<any> {
@@ -222,14 +242,24 @@ export async function listOfficialApiModels(
     signal: options.signal,
     timeoutMs: options.timeoutMs || 15_000,
   });
+  return parseOfficialApiModelCatalog(body);
+}
+
+/** Accept both authenticated OpenAI lists and the documented console catalog. */
+export function parseOfficialApiModelCatalog(body: unknown): OfficialApiModelCatalog {
   const responseRecord = catalogRecord(body);
+  const responseData = catalogRecord(responseRecord.data);
   const rawModels: unknown[] = Array.isArray(body)
     ? body
-    : Array.isArray(responseRecord.data) ? responseRecord.data : [];
+    : Array.isArray(responseRecord.data) ? responseRecord.data
+      : Array.isArray(responseData.items) ? responseData.items : [];
   const modelsById = new Map<string, OfficialApiModelDescriptor>();
   for (const candidate of rawModels.slice(0, 2_000)) {
     const raw = catalogRecord(candidate);
-    const id = catalogString(raw.id, 200);
+    if (raw.enabled === false || raw.enabled === 0) continue;
+    // Console rows have numeric database ids. Only route_id is callable.
+    const id = catalogString(raw.route_id, 200) || catalogString(raw.id, 200);
+    const upstreamModel = catalogString(raw.provider_model_name, 200);
     const rawCapabilities: unknown[] = [];
     for (const value of [raw.capability, raw.capabilities]) {
       if (Array.isArray(value)) rawCapabilities.push(...value);
@@ -246,7 +276,8 @@ export async function listOfficialApiModels(
       existing.capabilities = merged;
       if (!existing.endpoint) existing.endpoint = catalogString(raw.endpoint, 240);
       if (!existing.ownedBy) existing.ownedBy = catalogString(raw.owned_by, 120)
-        || catalogString(raw.ownedBy, 120);
+        || catalogString(raw.ownedBy, 120) || catalogString(raw.provider, 120);
+      if (!existing.upstreamModel && upstreamModel) existing.upstreamModel = upstreamModel;
       continue;
     }
     modelsById.set(id, {
@@ -254,7 +285,8 @@ export async function listOfficialApiModels(
       capability: capabilities[0],
       capabilities,
       endpoint: catalogString(raw.endpoint, 240),
-      ownedBy: catalogString(raw.owned_by, 120) || catalogString(raw.ownedBy, 120),
+      ownedBy: catalogString(raw.owned_by, 120) || catalogString(raw.ownedBy, 120) || catalogString(raw.provider, 120),
+      ...(upstreamModel ? { upstreamModel } : {}),
     });
   }
   const models = [...modelsById.values()];

@@ -23,6 +23,7 @@ export interface EvolutionSynthesisGuardState {
   latestObservedEvidence: EvolutionEvidenceCursor;
   lastFailureCategory?: string;
   lastFailureMessage?: string;
+  completedFingerprint?: string;
 }
 
 export interface EvolutionScope {
@@ -33,7 +34,7 @@ export interface EvolutionScope {
 
 export interface EvolutionSynthesisAdmission {
   allowed: boolean;
-  reason: 'ready' | 'backoff' | 'attempt_in_progress';
+  reason: 'ready' | 'backoff' | 'attempt_in_progress' | 'already_analyzed';
   retryAfter?: string;
 }
 
@@ -79,6 +80,7 @@ function parseState(value: unknown): EvolutionSynthesisGuardState | null {
     retryAfter: String(raw.retryAfter || ''),
     attemptedEvidence,
     latestObservedEvidence,
+    ...(raw.completedFingerprint ? { completedFingerprint: String(raw.completedFingerprint) } : {}),
     ...(raw.lastFailureCategory ? { lastFailureCategory: String(raw.lastFailureCategory) } : {}),
     ...(raw.lastFailureMessage ? { lastFailureMessage: String(raw.lastFailureMessage) } : {}),
   };
@@ -162,6 +164,9 @@ export function beginEvolutionSynthesis(
 ): EvolutionSynthesisAdmission {
   const now = options.now ?? Date.now();
   const state = getEvolutionSynthesisGuardState(scope);
+  if (!options.force && state?.completedFingerprint === evidence.fingerprint) {
+    return { allowed: false, reason: 'already_analyzed' };
+  }
   const retryAt = state?.retryAfter ? new Date(state.retryAfter).getTime() : 0;
   if (state && !options.force && Number.isFinite(retryAt) && retryAt > now) {
     if (state.latestObservedEvidence.fingerprint !== evidence.fingerprint) {
@@ -234,5 +239,8 @@ export function recordEvolutionSynthesisSuccess(
     });
     return;
   }
-  persistState(scope, null);
+  persistState(scope, { schemaVersion: 1, status: 'ready', consecutiveFailures: 0,
+    lastAttemptAt: new Date(now).toISOString(), retryAfter: new Date(now).toISOString(),
+    attemptedEvidence: evidence, latestObservedEvidence: previous?.latestObservedEvidence || evidence,
+    completedFingerprint: evidence.fingerprint });
 }

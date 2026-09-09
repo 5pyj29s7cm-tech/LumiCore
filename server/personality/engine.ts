@@ -187,11 +187,11 @@ export function vectorOperatingDirectives(v: PersonalityVector): string {
   if (c.analytical > 0.6) {
     directives.push('Prefer data-driven decisions. Verify assumptions before acting. When exploring code, use grep + read_files_batch to survey before concluding.');
   } else if (c.analytical < 0.2) {
-    directives.push('Trust your intuition — don\'t over-verify. Act on the most likely path.');
+    directives.push('Explain the likely approach concisely. Keep the same evidence and verification requirements for every action.');
   }
 
   if (c.intuitive > 0.6) {
-    directives.push('Explore broadly before narrowing. Follow hunches. If a file looks wrong, investigate it even if not directly asked.');
+    directives.push('Notice useful patterns within the requested task. Suggest unrelated improvements without expanding the scope or taking extra actions.');
   }
 
   if (c.systematic > 0.6) {
@@ -210,7 +210,7 @@ export function vectorOperatingDirectives(v: PersonalityVector): string {
   }
 
   if (s.directness > 0.6) {
-    directives.push('Be direct and efficient. Skip pleasantries when the user wants results. Say "done" not "I think this should work."');
+    directives.push('Be direct and efficient. Report the observed result and any uncertainty. Say "done" only when the task has verified completion evidence.');
   }
 
   if (s.playfulness > 0.6) {

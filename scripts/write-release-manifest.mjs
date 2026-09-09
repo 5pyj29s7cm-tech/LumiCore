@@ -5,6 +5,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeSourceIdentity } from './lib/source-identity.mjs';
+import { verifyBuildReceipt } from './lib/release-receipt.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
@@ -66,6 +67,9 @@ async function main() {
   const runtimeMetaPath = path.join(root, 'desktop-resources', 'dist-server', 'runtime-meta.json');
   if (!existsSync(runtimeMetaPath)) throw new Error('Packaged runtime metadata is missing. Build desktop resources first.');
   const runtimeMeta = await readJson(runtimeMetaPath);
+  const buildReceiptPath = path.join(bundleDir, 'build-receipt.json');
+  if (!existsSync(buildReceiptPath)) throw new Error('Desktop build receipt missing. Rebuild with npm run tauri:build.');
+  const buildReceipt = await readJson(buildReceiptPath);
   if (
     runtimeMeta.version !== tauri.version
     || runtimeMeta.buildId !== head
@@ -106,11 +110,13 @@ async function main() {
     });
   }
 
+  verifyBuildReceipt(buildReceipt, runtimeMeta, entries);
   const manifest = {
     productName: tauri.productName || pkg.name,
     packageName: pkg.name,
     version: tauri.version || pkg.version,
     runtime: runtimeMeta,
+    buildReceipt,
     generatedAt: new Date().toISOString(),
     git: {
       branch: git(['branch', '--show-current'], 'unknown'),

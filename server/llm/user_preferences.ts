@@ -6,7 +6,14 @@ import {
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
 } from '../extensions/registry';
-import { normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
+import {
+  LUMI_OFFICIAL_BASE_URL,
+  LUMI_OFFICIAL_DEFAULT_MODELS,
+  LUMI_OFFICIAL_REASONING_DEFAULTS_VERSION,
+  migrateLumiOfficialReasoningDefault,
+  normalizeLumiOfficialModel,
+} from '../../shared/model_provider_capabilities';
+import { relayBaseUrl } from '../relay/config';
 
 export type BuiltinUserLLMProvider =
   | 'deepseek'
@@ -41,6 +48,7 @@ export interface UserLLMLegacyMigration {
 
 export interface UserLLMPrefs {
   schemaVersion: 2;
+  officialDefaultsVersion?: number;
   provider: UserLLMProvider;
   model: string;
   models: Record<string, string>;
@@ -64,7 +72,7 @@ export const DEFAULT_MODELS: Record<BuiltinUserLLMProvider, string> = {
   kimi: 'moonshot-v1-8k',
   glm: 'glm-5.1',
   // ModelDepot/Lumi Official model IDs include the upstream namespace.
-  relay: 'aliyun/qwen-plus',
+  relay: LUMI_OFFICIAL_DEFAULT_MODELS.reasoning,
   ollama: 'qwen2.5:7b',
   lmstudio: 'local-model',
   auto: 'qwen2.5:7b',
@@ -90,9 +98,11 @@ const CLOUD_PROVIDERS = new Set<CloudUserLLMProvider>([
 ]);
 
 function normalizeProvider(value: unknown): UserLLMProvider {
+  // Chat and background helpers resolve through the same per-user default.
+  // Missing preferences are not authorization to resurrect configured BYOKs.
   return typeof value === 'string' && (VALID_PROVIDERS.has(value as BuiltinUserLLMProvider) || isExtensionProviderId(value))
     ? value as UserLLMProvider
-    : 'deepseek';
+    : 'relay';
 }
 
 export function isUserLLMProvider(value: unknown, userId?: string): value is UserLLMProvider {
@@ -143,7 +153,7 @@ function normalizeFallbackCandidates(value: unknown): UserLLMFallbackCandidate[]
 function normalizeCloudFallback(value: unknown): CloudUserLLMProvider {
   return typeof value === 'string' && (CLOUD_PROVIDERS.has(value as CloudUserLLMProvider) || isExtensionProviderId(value))
     ? value as CloudUserLLMProvider
-    : 'deepseek';
+    : 'relay';
 }
 
 function parsePrefsRow(key: string): any {
@@ -163,17 +173,39 @@ function migrateLegacyModel(provider: UserLLMProvider, model: string): string {
   return model;
 }
 
+/** A custom OpenAI-compatible deployment keeps its own model identifiers. */
+function usesOfficialGatewayDefaults(): boolean {
+  const base = relayBaseUrl();
+  if (!base) return true;
+  try { return new URL(base).origin === new URL(LUMI_OFFICIAL_BASE_URL).origin; }
+  catch { return false; }
+}
+
 function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
   const provider = normalizeProvider(raw?.provider);
   const rawModels = normalizeModels(raw?.models);
+  const legacySelectedModel = typeof raw?.model === 'string' ? raw.model.trim().slice(0, 200) : '';
+  if (!rawModels[provider] && legacySelectedModel) rawModels[provider] = legacySelectedModel;
   const isLegacySchema = Number(raw?.schemaVersion || 0) < 2;
+  const rawDefaultsVersion = Number(raw?.officialDefaultsVersion || 0);
+  const officialDefaultsVersion = Number.isSafeInteger(rawDefaultsVersion) && rawDefaultsVersion >= 0 ? rawDefaultsVersion : 0;
+  const migrateOfficialDefaults = usesOfficialGatewayDefaults()
+    && officialDefaultsVersion < LUMI_OFFICIAL_REASONING_DEFAULTS_VERSION;
+  const officialPrimary = provider === 'relay'
+    || (['auto', 'ollama', 'lmstudio'].includes(provider) && raw?.autoFallbackProvider === 'relay');
+  // This was an automatically provisioned failed direct route in old official
+  // configurations. Independent BYOK selections and local backups stay intact.
+  if (migrateOfficialDefaults && officialPrimary && rawModels.qwen === 'qwen-plus') delete rawModels.qwen;
   const migrationEntries: UserLLMLegacyMigration['entries'] = [];
+  const migrateOfficial = (model: string) => migrateOfficialDefaults
+    ? migrateLumiOfficialReasoningDefault(model)
+    : migrateLegacyModel('relay', model);
   const migratedModels = Object.fromEntries(Object.entries(rawModels).map(([candidateProvider, candidateModel]) => {
     const normalizedProvider = normalizeProvider(candidateProvider);
     // Official model placeholders are invalid even in schema-v2 records: an
     // older UI could persist them after the schema migration had run.
     const migrated = normalizedProvider === 'relay'
-      ? migrateLegacyModel(normalizedProvider, candidateModel)
+      ? migrateOfficial(candidateModel)
       : (isLegacySchema ? migrateLegacyModel(normalizedProvider, candidateModel) : candidateModel);
     if (migrated !== candidateModel) {
       migrationEntries.push({ provider: normalizedProvider, from: candidateModel, to: migrated });
@@ -185,26 +217,43 @@ function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
   const autoFallbackProvider = isCloudLLMProvider(provider, userId)
     ? provider as CloudUserLLMProvider
     : normalizeCloudFallback(raw?.autoFallbackProvider);
-  const rawAutoFallbackModel = String(raw?.autoFallbackModel || models[autoFallbackProvider] || getDefaultModelForProvider(autoFallbackProvider, userId));
+  // A cloud primary is also its auto-mode cloud selection. Do not overwrite
+  // its saved model map with a stale duplicate autoFallbackModel field.
+  const rawAutoFallbackModel = String(autoFallbackProvider === provider
+    ? model
+    : raw?.autoFallbackModel || models[autoFallbackProvider] || getDefaultModelForProvider(autoFallbackProvider, userId));
   const autoFallbackModel = autoFallbackProvider === 'relay'
-    ? migrateLegacyModel(autoFallbackProvider, rawAutoFallbackModel)
+    ? migrateOfficial(rawAutoFallbackModel)
     : (isLegacySchema ? migrateLegacyModel(autoFallbackProvider, rawAutoFallbackModel) : rawAutoFallbackModel);
   if (autoFallbackModel !== rawAutoFallbackModel) {
     migrationEntries.push({ provider: autoFallbackProvider, from: rawAutoFallbackModel, to: autoFallbackModel });
   }
   models[autoFallbackProvider] = autoFallbackModel;
-  const legacyMigration = raw?.legacyMigration && typeof raw.legacyMigration === 'object'
-    ? raw.legacyMigration as UserLLMLegacyMigration
-    : migrationEntries.length > 0
-      ? { migratedAt: new Date().toISOString(), entries: migrationEntries }
-      : undefined;
+  const fallbackCandidates = normalizeFallbackCandidates(normalizeFallbackCandidates(raw?.fallbackCandidates)
+    .filter(candidate => !(migrateOfficialDefaults && officialPrimary
+      && candidate.provider === 'qwen' && candidate.model === 'qwen-plus'))
+    .map(candidate => {
+      const migrated = candidate.provider === 'relay' ? migrateOfficial(candidate.model) : candidate.model;
+      if (migrated !== candidate.model) migrationEntries.push({ provider: candidate.provider, from: candidate.model, to: migrated });
+      return { ...candidate, model: migrated };
+    }))
+    .filter(candidate => candidate.provider !== provider || candidate.model !== model);
+  const previousMigration = raw?.legacyMigration && typeof raw.legacyMigration === 'object'
+    ? raw.legacyMigration as UserLLMLegacyMigration : undefined;
+  const legacyMigration = migrationEntries.length > 0
+    ? { migratedAt: new Date().toISOString(), entries: [
+      ...(Array.isArray(previousMigration?.entries) ? previousMigration.entries : []), ...migrationEntries,
+    ] }
+    : previousMigration;
   return {
     schemaVersion: 2,
+    officialDefaultsVersion: migrateOfficialDefaults
+      ? LUMI_OFFICIAL_REASONING_DEFAULTS_VERSION : officialDefaultsVersion,
     provider,
     model,
     models,
     selectionMode: normalizeSelectionMode(raw?.selectionMode, provider),
-    fallbackCandidates: normalizeFallbackCandidates(raw?.fallbackCandidates),
+    fallbackCandidates,
     allowCloudFallback: raw?.allowCloudFallback !== false,
     autoFallbackProvider,
     autoFallbackModel,
@@ -217,6 +266,7 @@ function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: s
   const key = `llm_prefs_${userId || 'anonymous'}`;
   const payload = {
     schemaVersion: 2,
+    officialDefaultsVersion: prefs.officialDefaultsVersion,
     provider: prefs.provider,
     models: prefs.models,
     selectionMode: prefs.selectionMode,
@@ -237,7 +287,10 @@ export function getUserPreferredLLM(userId: string, options: { persistMigration?
   // Legacy aliases are migrated exactly once. New schema writes preserve the
   // user's literal model id, including ids that happen to match old aliases.
   if (options.persistMigration !== false && raw && (Number(raw.schemaVersion || 0) < 2
-    || JSON.stringify(normalizeModels(raw.models)) !== JSON.stringify(resolved.models))) {
+    || Number(raw.officialDefaultsVersion || 0) !== resolved.officialDefaultsVersion
+    || JSON.stringify(normalizeModels(raw.models)) !== JSON.stringify(resolved.models)
+    || raw.autoFallbackModel !== resolved.autoFallbackModel
+    || JSON.stringify(normalizeFallbackCandidates(raw.fallbackCandidates)) !== JSON.stringify(resolved.fallbackCandidates))) {
     persistResolvedPrefs(uid, resolved, raw.updatedAt);
   }
   return resolved;
@@ -302,6 +355,7 @@ export function upsertUserPreferredLLM(
     : input.allowCloudFallback === true;
   const payload = {
     schemaVersion: 2,
+    officialDefaultsVersion: LUMI_OFFICIAL_REASONING_DEFAULTS_VERSION,
     provider,
     models,
     selectionMode,

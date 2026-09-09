@@ -83,4 +83,21 @@ describe('legal retrieval identity', () => {
     EDB.saveKbEmbedding(article.id, 0, [1, 0], article.content, 'qwen/other-space');
     expect(await searchStatutes(orgId, query, 5, userId)).not.toContainEqual(expect.objectContaining({ articleId: article.id }));
   });
+
+  it('does not restore legal vectors after article deletion or a cancelled index attempt', async () => {
+    for (const cancelled of [false, true]) {
+      const { userId, orgId, article, fetchMock } = fixture(cancelled ? 'index-abort' : 'index-delete');
+      let finish!: (response: Response) => void;
+      fetchMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const controller = new AbortController();
+      const pending = indexLegalArticle(orgId, article.id, userId, { signal: controller.signal });
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      if (cancelled) controller.abort(new DOMException('cancelled', 'AbortError'));
+      else EDB.deleteKbArticle(orgId, article.id);
+      finish(new Response(JSON.stringify({ data: [{ embedding: [1, 0] }] }), { status: 200 }));
+      if (cancelled) await expect(pending).rejects.toThrow(/cancelled/);
+      else expect(await pending).toBe(0);
+      expect(EDB.getAllKbEmbeddings(orgId).filter(row => row.articleId === article.id)).toEqual([]);
+    }
+  });
 });

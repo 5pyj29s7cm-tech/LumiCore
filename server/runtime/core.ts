@@ -87,8 +87,9 @@ export function createApp(): AppContext {
   app.use("/api", apiRouter);
 
   // Global error handler for async route rejections
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('[Express] Unhandled error:', err?.message || err);
+    if (res.headersSent) return next(err);
     res.status(500).json({ error: err?.message || 'Internal server error' });
   });
 

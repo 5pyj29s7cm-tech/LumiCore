@@ -118,6 +118,14 @@ interface VoiceAudioResponse {
   requestId?: string;
   lane?: string;
   sessionId?: string;
+  /** Client-local timing and preparation, never trusted from socket metadata. */
+  receivedAt?: number;
+  preparedAudio?: {
+    context: AudioContext;
+    startedAt: number;
+    finishedAt?: number;
+    promise: Promise<{ decoded?: AudioBuffer; error?: unknown }>;
+  };
 }
 
 /**
@@ -737,12 +745,39 @@ export function useVoiceCall({
      * Cross-fade: overlaps the last 50ms of previous audio with the first 50ms of next.
      * VolumeGain: applies server-computed volume adaptation.
      */
+    const prepareAudio = (packet: VoiceAudioResponse, ctx: AudioContext) => {
+      if (packet.preparedAudio?.context === ctx) return packet.preparedAudio;
+      const prepared: NonNullable<VoiceAudioResponse['preparedAudio']> = {
+        context: ctx, startedAt: performance.now(), promise: Promise.resolve({}),
+      };
+      // Decode at most the playing packet and one queued packet. A rejected
+      // preparation is observed here even if interruption later drops the queue.
+      prepared.promise = Promise.resolve().then(() => ctx.decodeAudioData(packet.buffer.slice(0))).then(decoded => {
+        prepared.finishedAt = performance.now();
+        return { decoded };
+      }, error => {
+        prepared.finishedAt = performance.now();
+        return { error };
+      });
+      packet.preparedAudio = prepared;
+      return prepared;
+    };
+
+    const prepareQueueHead = (ctx: AudioContext) => {
+      const next = audioQueue.current[0];
+      if (!next) return;
+      const packet: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next, receivedAt: performance.now() } : next;
+      audioQueue.current[0] = packet;
+      prepareAudio(packet, ctx);
+    };
+
     const playAudioChunk = (
       buffer: ArrayBuffer,
       volumeGain?: number,
       lane?: string,
       requestId?: string,
       format?: string,
+      queuedPacket?: VoiceAudioResponse,
     ) => {
       if (!isCallActive.current) return;
       let ctx: AudioContext;
@@ -761,6 +796,9 @@ export function useVoiceCall({
       }
       if (!isConversationTtsPlaying.current) playbackGenerationRef.current++;
       const playbackGeneration = playbackGenerationRef.current;
+      const packet = queuedPacket || { buffer, receivedAt: performance.now() };
+      const preparedAudio = prepareAudio(packet, ctx);
+      prepareQueueHead(ctx);
       playbackRequestIdRef.current = requestId || null;
       isConversationTtsPlaying.current = true;
       setHasConversationPlayback(true);
@@ -777,7 +815,7 @@ export function useVoiceCall({
         if (audioQueue.current.length > 0) {
           const next = audioQueue.current.shift()!;
           const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
-          playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId, queued.format);
+          playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId, queued.format, queued);
           return;
         }
         isConversationTtsPlaying.current = false;
@@ -852,6 +890,8 @@ export function useVoiceCall({
                 requestId,
                 lane,
                 durationMs: Math.max(1, Math.round(decoded.duration * 1_000)),
+                clientDecodeMs: Math.max(0, Math.round((preparedAudio.finishedAt ?? performance.now()) - preparedAudio.startedAt)),
+                clientReceiptToPlaybackMs: Math.max(0, Math.round(performance.now() - (packet.receivedAt ?? preparedAudio.startedAt))),
               });
             }, delayMs);
           }
@@ -862,7 +902,10 @@ export function useVoiceCall({
 
       const decode = () => {
         try {
-          void ctx.decodeAudioData(buffer.slice(0)).then(startDecodedAudio).catch(failPlayback);
+          void preparedAudio.promise.then(result => {
+            if (result.decoded) startDecodedAudio(result.decoded);
+            else failPlayback(result.error || new Error('Audio decoding returned no samples'));
+          }).catch(failPlayback);
         } catch (error) {
           failPlayback(error);
         }
@@ -924,6 +967,10 @@ export function useVoiceCall({
       const actualGain = envelope?.volumeGain;
       const actualLane = envelope?.lane;
       const actualFormat = envelope?.format;
+      const packet: VoiceAudioResponse = {
+        buffer: actualBuffer, format: actualFormat, volumeGain: actualGain,
+        lane: actualLane, requestId: actualRequestId, receivedAt: performance.now(),
+      };
 
       // A foreground reply owns the speaker. Do not let an earlier proactive
       // greeting keep the conversation packet parked in an undrained queue.
@@ -944,16 +991,13 @@ export function useVoiceCall({
 
       if (isConversationTtsPlaying.current) {
         // Currently playing — queue this chunk
-        audioQueue.current.push({
-          buffer: actualBuffer,
-          format: actualFormat,
-          volumeGain: actualGain,
-          lane: actualLane,
-          requestId: actualRequestId,
-        });
+        audioQueue.current.push(packet);
+        if (audioQueue.current.length === 1 && ttsContext.current && ttsContext.current.state !== 'closed') {
+          prepareQueueHead(ttsContext.current);
+        }
         return;
       }
-      playAudioChunk(actualBuffer, actualGain, actualLane, actualRequestId, actualFormat);
+      playAudioChunk(actualBuffer, actualGain, actualLane, actualRequestId, actualFormat, packet);
     };
 
     const onAudioTranscript = (data: { text: string; isFinal: boolean } & VoiceTranscriptMeta) => {
@@ -1124,6 +1168,15 @@ export function useVoiceCall({
       setResponseText(sanitizeAgentResponseTextForDisplay(data.text));
     };
 
+    const onAudioProactiveError = (data: { contextId?: string; userId?: string; domain?: string; orgId?: string }) => {
+      const context = proactiveContextRef.current;
+      if (!context?.enabled || data.contextId !== context.contextId || data.userId !== context.userId
+        || data.domain !== context.domain || String(data.orgId || '') !== context.orgId
+        || !socket.connected || isMutedRef.current || hasVoiceCapture() || isCallActive.current
+        || localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
+      setError('Proactive voice output is temporarily unavailable. Please check voice settings.');
+    };
+
     const onAudioProactiveSpeak = (data: { audioBuffer: ArrayBuffer; text: string; timestamp: string; contextId?: string; userId?: string; domain?: string; orgId?: string; volumeGain?: number }) => {
       // A proactive greeting is optional. Never let it share ownership of the
       // conversation playback queue or reset the foreground speaking state.
@@ -1210,6 +1263,7 @@ export function useVoiceCall({
           gain.connect(ctx.destination);
           source.onended = () => finish(false);
           source.start(0);
+          setError(previous => previous?.startsWith('Proactive voice output') ? null : previous);
           // Keep a bounded fallback in case a WebView never dispatches `ended`.
           setCallState('speaking');
           proactiveStateTimerRef.current = setTimeout(
@@ -1218,6 +1272,7 @@ export function useVoiceCall({
           );
         } catch (err) {
           console.error('[ProactiveVoice] Playback failed:', err);
+          if (canPlay()) setError('Proactive voice output could not be played. Please check the audio output device.');
           finish(true);
         }
       })();
@@ -1237,6 +1292,7 @@ export function useVoiceCall({
     socket.on('audio:sidecar_response', onAudioSidecarResponse);
     socket.on('audio:work_progress', onAudioWorkProgress);
     socket.on('audio:proactive_speak', onAudioProactiveSpeak);
+    socket.on('audio:proactive_error', onAudioProactiveError);
 
     return () => {
       socket.off('audio:status', onAudioStatus);
@@ -1253,6 +1309,7 @@ export function useVoiceCall({
       socket.off('audio:sidecar_response', onAudioSidecarResponse);
       socket.off('audio:work_progress', onAudioWorkProgress);
       socket.off('audio:proactive_speak', onAudioProactiveSpeak);
+      socket.off('audio:proactive_error', onAudioProactiveError);
       clearThinkingWatchdog();
     };
   }, [disabled, socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog]);

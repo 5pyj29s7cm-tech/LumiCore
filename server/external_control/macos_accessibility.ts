@@ -96,8 +96,8 @@ function rootWindows(systemEvents, input) {
     for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
       const windowElement = windows[windowIndex];
       const title = text(safe(function () { return windowElement.name(); }, ''));
-      if (input.name && title.toLowerCase() !== text(input.name).toLowerCase()) continue;
-      if (input.nameContains && title.toLowerCase().indexOf(text(input.nameContains).toLowerCase()) < 0) continue;
+      if (input.kind === 'snapshot' && input.name && title.toLowerCase() !== text(input.name).toLowerCase()) continue;
+      if (input.kind === 'snapshot' && input.nameContains && title.toLowerCase().indexOf(text(input.nameContains).toLowerCase()) < 0) continue;
       roots.push({ element: windowElement, process: process, processInfo: info });
       if (input.root !== 'desktop' && !input.allMatches) return roots;
       if (!input.allMatches && roots.length >= 1) return roots;
@@ -131,7 +131,7 @@ function walk(root, input, collectTree) {
     visited += 1;
     const children = safe(function () { return element.uiElements(); }, []);
     const node = elementInfo(element, info, depth, children.length);
-    if (matchesSelector(node, input)) matches.push({ element: element, process: process, info: node });
+    if (matchesSelector(node, input)) matches.push({ element: element, process: process, processInfo: info, info: node });
     if (collectTree) node.children = [];
     for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
       const childNode = visit(children[childIndex], process, info, depth + 1);

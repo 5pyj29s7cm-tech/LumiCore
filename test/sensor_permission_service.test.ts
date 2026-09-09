@@ -4,6 +4,7 @@ import {
   BACKGROUND_FACE_PRESENCE_ENABLED_KEY,
   isSensorEnabled,
   requestMicrophoneStream,
+  requestCameraStream,
   setBackgroundFacePresenceEnabled,
   setSensorEnabled,
 } from '@/services/sensorPermissionService';
@@ -63,6 +64,35 @@ describe('sensor permission access toggles', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(['microphone', 'camera'] as const)('rejects a late %s grant after disable and re-enable', async kind => {
+    const fake = createFakeStream();
+    let grant!: (value: any) => void;
+    installBrowserGlobals(vi.fn(() => new Promise(resolve => { grant = resolve; })));
+    setSensorEnabled(kind, true);
+    const pending = kind === 'microphone' ? requestMicrophoneStream() : requestCameraStream();
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    setSensorEnabled(kind, false);
+    setSensorEnabled(kind, true);
+    grant(fake.stream);
+    await rejected;
+    expect(fake.track.stop).toHaveBeenCalledTimes(1);
+    setSensorEnabled(kind, false);
+    expect(fake.track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a late microphone grant after its owning component cancels', async () => {
+    const fake = createFakeStream();
+    let grant!: (value: any) => void;
+    installBrowserGlobals(vi.fn(() => new Promise(resolve => { grant = resolve; })));
+    const controller = new AbortController();
+    const pending = requestMicrophoneStream(true, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    grant(fake.stream);
+    await rejected;
+    expect(fake.track.stop).toHaveBeenCalledTimes(1);
   });
 
   it('blocks microphone capture when the Lumi mic switch is disabled', async () => {

@@ -11,7 +11,7 @@ import { getVoicePreference, setVoicePreference } from '../server/config/voice_p
 import { listOfficialApiModels } from '../server/llm/official_api';
 
 const catalog = [
-  { id: 'aliyun/qwen-plus', capability: 'chat' },
+  { id: 'aliyun/deepseek-v4-flash', capability: 'chat' },
   { id: 'aliyun/qwen2.5-vl-72b', capability: 'multimodal_chat' },
   { id: 'aliyun/qwen3-vl-flash', capability: 'multimodal_chat' },
   { id: 'aliyun/qwen-image', capability: 'image_generation' },
@@ -107,7 +107,7 @@ describe('official model configuration concurrent ownership', () => {
     expect(getUserPreferredLLM(uid)).toMatchObject({ provider: 'openai', model: 'audit-latest-model' });
   });
 
-  it('real SQLite read-only failure preserves the later acknowledged choice', async () => {
+  it('real SQLite read-only failure reports both saves pending and preserves the latest choice for recovery', async () => {
     const uid = 'audit9-apply-real-sqlite';
     upsertUserPreferredLLM(uid, { provider: 'deepseek', model: 'audit-original-model' });
     await database.flushDBOrThrow();
@@ -124,10 +124,14 @@ describe('official model configuration concurrent ownership', () => {
     try {
       const oldApply = request('/preferences/official/apply', uid, 'POST');
       await vi.waitFor(() => expect(getUserPreferredLLM(uid).provider).toBe('relay'));
-      expect((await request('/preferences/llm', uid, 'PUT', { provider: 'openai', model: 'audit-newer-choice' })).status).toBe(200);
+      const newerSave = request('/preferences/llm', uid, 'PUT', { provider: 'openai', model: 'audit-newer-choice' });
+      await vi.waitFor(() => expect(getUserPreferredLLM(uid).model).toBe('audit-newer-choice'));
       expect(getUserPreferredLLM(uid).model).toBe('audit-newer-choice');
       unlock();
       await hold;
+      const newerResponse = await newerSave;
+      expect(newerResponse.status).toBe(503);
+      expect(await newerResponse.json()).toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', persistence: 'pending' });
       expect((await oldApply).status).toBe(500);
       expect(getUserPreferredLLM(uid)).toMatchObject({ provider: 'openai', model: 'audit-newer-choice' });
     } finally {
@@ -169,6 +173,8 @@ describe('official model configuration concurrent ownership', () => {
 
   it('serializes official batches across users and continues after the first batch fails', async () => {
     const nextUid = 'official-queue-second-user';
+    const nextPreference = () => database.readDB().settings.find(row => row.key === `llm_prefs_${nextUid}`);
+    expect(nextPreference()).toBeUndefined();
     const verifiedCatalog = await listOfficialApiModels();
     let next!: ReturnType<typeof applyLumiOfficialModelConfiguration>;
     let settled = false;
@@ -178,10 +184,14 @@ describe('official model configuration concurrent ownership', () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(settled).toBe(false);
-      expect(getUserPreferredLLM(nextUid).provider).toBe('deepseek');
+      expect(getUserPreferredLLM(nextUid).provider).toBe('relay');
+      // A fresh user's default is already official. The absent preference row
+      // proves the queued batch has not started writing that user's settings.
+      expect(nextPreference()).toBeUndefined();
     });
     expect((await next).ok).toBe(true);
     expect(getUserPreferredLLM(nextUid).provider).toBe('relay');
+    expect(nextPreference()).toBeDefined();
     expect(getVoicePreference()).toMatchObject({ stt: 'relay', tts: 'relay' });
   });
 });

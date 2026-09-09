@@ -1,3 +1,4 @@
+import { withoutNegatedLookupClauses } from './normalized_action_intent';
 /**
  * Legacy intent classifier — read-only routing telemetry.
  *
@@ -258,7 +259,7 @@ function isForegroundMessagingReadIntent(text: string): boolean {
 }
 
 export function classifyIntent(input: string): IntentResult {
-  const text = input.trim();
+  const text = withoutNegatedLookupClauses(input).trim();
   if (!text) {
     return { category: 'unknown', confidence: 0, entities: {}, needsLLM: true };
   }

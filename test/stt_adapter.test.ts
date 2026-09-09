@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../shared/model_provider_capabilities';
 
 const clearedEnvKeys = ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'DOUBAO_SPEECH_KEY', 'RELAY_API_KEY', 'RELAY_BASE_URL'] as const;
 let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefined>> = {};
@@ -6,16 +7,19 @@ let previousEnv: Partial<Record<(typeof clearedEnvKeys)[number], string | undefi
 async function loadAdapter(
   stt: 'auto' | 'local-whisper' | 'qwen' | 'ark' | 'whisper' | 'relay' = 'auto',
   sttModel?: string,
+  health: (provider: string, model?: string) => boolean = () => true,
 ) {
   vi.resetModules();
   vi.doMock('../server/config/voice_preference', () => ({
     getVoicePreference: () => ({ stt, tts: 'auto', sttModel }),
+    getConfiguredVoiceModel: () => stt === 'relay' ? sttModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition : undefined,
   }));
   vi.doMock('../server/config/keys', () => ({
     getKey: () => undefined,
   }));
   vi.doMock('../server/cloud/circuit_breaker', () => ({
-    isCircuitClosed: () => true,
+    isCircuitClosed: vi.fn(health),
+    isCircuitHealthy: vi.fn(health),
     recordSuccess: vi.fn(),
     recordFailure: vi.fn(),
   }));
@@ -112,5 +116,35 @@ describe('STT adapter provider selection', () => {
       true,
       { model: 'aliyun/qwen-audio-3.0-asr-flash-streaming' },
     );
+  });
+
+  it('checks the selected official model without probing or falling back to an unrelated direct provider', async () => {
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    process.env.DASHSCOPE_API_KEY = 'unrelated-direct-key';
+    const selected = 'aliyun/selected-asr';
+    const adapter = await loadAdapter('relay', selected, (_provider, model) => model !== selected);
+    const circuits = await import('../server/cloud/circuit_breaker');
+    expect(adapter.getActiveStreamingSTTProvider({ requireHealthy: true })).toBeNull();
+    expect(circuits.isCircuitHealthy).toHaveBeenCalledWith('relay-stt');
+    expect(circuits.isCircuitHealthy).toHaveBeenCalledWith('relay-stt', selected);
+    expect(circuits.isCircuitClosed).not.toHaveBeenCalled();
+  });
+
+  it('does not inherit a different official model failure for the current selection', async () => {
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const adapter = await loadAdapter('relay', 'aliyun/current-asr', (_provider, model) => model !== 'aliyun/old-failed-asr');
+    expect(adapter.getActiveStreamingSTTProvider({ requireHealthy: true })).toBe('relay');
+    const circuits = await import('../server/cloud/circuit_breaker');
+    expect(circuits.isCircuitHealthy).toHaveBeenCalledWith('relay-stt', 'aliyun/current-asr');
+    expect(circuits.isCircuitHealthy).not.toHaveBeenCalledWith('relay-stt', 'aliyun/old-failed-asr');
+  });
+
+  it('still honors an instance-wide official provider failure even when its selected model is healthy', async () => {
+    process.env.RELAY_API_KEY = 'relay-test-key';
+    process.env.RELAY_BASE_URL = 'https://relay.example.test/v1';
+    const adapter = await loadAdapter('relay', 'aliyun/current-asr', (provider, model) => provider !== 'relay-stt' || model !== undefined);
+    expect(adapter.getActiveStreamingSTTProvider({ requireHealthy: true })).toBeNull();
   });
 });

@@ -3,7 +3,10 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import os from 'os';
+import { randomUUID } from 'node:crypto';
+import { promisify } from 'util';
 import { createRequire } from 'module';
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
@@ -16,9 +19,73 @@ import type { STTProvider } from '../../stt/types';
 import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, prepareSpreadsheetRows, workbookToText, worksheetToCsv, worksheetToCsvPage, writeXlsxWorkbook } from '../../utils/spreadsheet';
 import { extractPdfText } from '../../utils/pdf_text';
 import { getGeneratedOutputDir } from '../../config/data_path';
+import { canonicalPathIdentity } from '../../conversation/task_target_anchor';
+import { requestedSingleArtifact } from '../../cognition/artifact_write_scope';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
+
+export async function transformWordDocument(inputPath: string, outputPath: string, format: 'docx' | 'pdf', editScript: string, context?: ToolContext): Promise<number> {
+  const checkCancelled = () => {
+    context?.executionSignal?.throwIfAborted();
+    if (context?.isCancelled?.()) throw new DOMException('Word operation cancelled.', 'AbortError');
+  };
+  checkCancelled();
+  const destination = path.resolve(outputPath);
+  if (destination === path.resolve(inputPath)) throw new Error('Word output must differ from the input document.');
+  const temporaryOutput = path.join(path.dirname(destination), `.lumi-word-${randomUUID()}.${format}`);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-word-'));
+  const scriptPath = path.join(directory, 'transform.ps1');
+  const pidPath = path.join(directory, 'owned-word.pid');
+  const script = `
+$ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
+$existingWordIds = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class LumiWordWindow { [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid); }'
+try {
+  $word = New-Object -ComObject Word.Application
+  $word.Visible = $false
+  $word.DisplayAlerts = 0
+  [uint32]$ownedWordId = 0
+  [LumiWordWindow]::GetWindowThreadProcessId([IntPtr]$word.Hwnd, [ref]$ownedWordId) | Out-Null
+  if ($ownedWordId -gt 0 -and $existingWordIds -notcontains $ownedWordId) { [IO.File]::WriteAllText('${esc(pidPath)}', [string]$ownedWordId) }
+  $doc = $word.Documents.Open('${esc(path.resolve(inputPath))}', $false, $true)
+  ${editScript}
+  $doc.SaveAs2([ref]'${esc(temporaryOutput)}', [ref]${format === 'pdf' ? 17 : 16})
+} finally {
+  if ($null -ne $doc) { try { $doc.Close(0) } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } }
+  if ($null -ne $word) { try { $word.Quit(0) } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } }
+}
+`;
+  fs.writeFileSync(scriptPath, '\uFEFF' + script, 'utf8');
+  let succeeded = false;
+  try {
+    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+      timeout: 30_000, encoding: 'utf8', windowsHide: true, signal: context?.executionSignal,
+    });
+    checkCancelled();
+    const bytes = fs.readFileSync(temporaryOutput);
+    if (bytes.length === 0 || (format === 'pdf' ? bytes.subarray(0, 5).toString() !== '%PDF-' : bytes[0] !== 0x50 || bytes[1] !== 0x4b)) {
+      throw new Error(`Word did not create a valid new ${format.toUpperCase()} artifact.`);
+    }
+    fs.renameSync(temporaryOutput, destination);
+    succeeded = true;
+    return bytes.length;
+  } finally {
+    // The aborted PowerShell process may not have reached COM finally. Only
+    // terminate the new Word PID it recorded; never a pre-existing Word app.
+    if (!succeeded && fs.existsSync(pidPath)) {
+      const ownedPid = fs.readFileSync(pidPath, 'utf8').trim();
+      if (/^[1-9]\d*$/.test(ownedPid)) {
+        await execFileAsync('taskkill.exe', ['/PID', ownedPid, '/T', '/F'], { timeout: 5000, windowsHide: true }).catch(() => undefined);
+      }
+    }
+    for (const target of [temporaryOutput, scriptPath, pidPath]) { try { fs.unlinkSync(target); } catch {} }
+    try { fs.rmdirSync(directory); } catch {}
+  }
+}
 
 function documentArtifactCapability(
   id: string,
@@ -371,7 +438,9 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
 
   const outDir = ensureOutputDir();
   const safeName = (filename || 'spreadsheet').replace(/[\\/:*?"<>|]/g, '_');
-  const outPath = path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
+  const outPath = resolveExplicitSpreadsheetOutput(args.outputPath)
+    || path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await writeXlsxWorkbook(wb, outPath);
   return JSON.stringify({ ok: true, status: 'created', path: outPath, sheetCount: wb.worksheets.length, size: fs.statSync(outPath).size }, null, 2);
 }
@@ -386,12 +455,22 @@ async function modifyXlsx(args: Record<string, any>): Promise<string> {
   const wb = await loadXlsxWorkbook(filePath);
   applySpreadsheetOperations(wb, operations);
 
-  const outPath = filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`);
+  const outPath = resolveExplicitSpreadsheetOutput(args.outputPath)
+    || filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`);
+  if (canonicalPathIdentity(outPath) === canonicalPathIdentity(filePath)) throw new Error('Spreadsheet output must differ from the source file.');
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await writeXlsxWorkbook(wb, outPath);
   return JSON.stringify({ ok: true, status: 'modified', path: outPath, size: fs.statSync(outPath).size }, null, 2);
 }
 
 // ── DOCX Creation & Modification ──
+function resolveExplicitSpreadsheetOutput(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !path.isAbsolute(value) || !/\.xlsx$/i.test(value)) {
+    throw new Error('Spreadsheet outputPath must be an absolute .xlsx file path.');
+  }
+  return path.resolve(value);
+}
 
 async function createDocx(args: Record<string, any>): Promise<string> {
   const { title, content, paragraphs, headings, tables, filename } = args;
@@ -479,7 +558,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
   return JSON.stringify({ ok: true, status: 'created', path: outPath, size: buffer.length }, null, 2);
 }
 
-async function modifyDocx(args: Record<string, any>): Promise<string> {
+async function modifyDocx(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const { filePath, replacements } = args;
   if (!filePath || !fs.existsSync(filePath)) throw new Error(`DOCX not found: ${filePath}`);
   if (!replacements) throw new Error('replacements (object or array) is required');
@@ -496,34 +575,8 @@ async function modifyDocx(args: Record<string, any>): Promise<string> {
   ).join('\n');
 
   const outPath = filePath.replace(/\.docx$/i, `_filled_${Date.now()}.docx`);
-  const outPathEsc = esc(outPath);
-  const psScript = `
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$doc = $word.Documents.Open('${esc(filePath)}')
-$find = $word.Selection.Find
-${replaceScript}
-$doc.SaveAs([ref]'${outPathEsc}')
-$doc.Close()
-$word.Quit()
-Write-Output '${outPathEsc}'
-`;
-
-  const tmpFile = path.join(require('os').tmpdir(), `lumi_docx_mod_${Date.now()}.ps1`);
-  fs.writeFileSync(tmpFile, '﻿' + psScript, 'utf-8');
-  try {
-    const result = execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
-      { timeout: 30000, encoding: 'utf-8' },
-    );
-    const reportedPath = result.trim().split(/\r?\n/).pop()?.trim() || outPath;
-    if (!fs.existsSync(outPath)) throw new Error(`Word did not create the expected output: ${reportedPath}`);
-    return JSON.stringify({ ok: true, status: 'modified', path: outPath, size: fs.statSync(outPath).size }, null, 2);
-  } catch (err: any) {
-    throw new Error(`DOCX modification failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`);
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
-  }
+  const size = await transformWordDocument(filePath, outPath, 'docx', '$find = $doc.Content.Find\n' + replaceScript, context);
+  return JSON.stringify({ ok: true, status: 'modified', path: outPath, size }, null, 2);
 }
 
 // ── Format Conversion ──
@@ -560,36 +613,12 @@ async function docxToMarkdown(args: Record<string, any>): Promise<string> {
   return JSON.stringify({ ok: true, status: 'converted', path: outPath, characters: markdown.length, size: fs.statSync(outPath).size }, null, 2);
 }
 
-async function docxToPdf(args: Record<string, any>): Promise<string> {
+async function docxToPdf(args: Record<string, any>, context?: ToolContext): Promise<string> {
   const { filePath, outputPath } = args;
-  if (!filePath || !fs.existsSync(filePath)) throw new Error(`DOCX not found: ${filePath}`);
-
+  if (!filePath || !fs.existsSync(filePath)) throw new Error('DOCX not found: ' + filePath);
   const outPath = outputPath || filePath.replace(/\.docx$/i, '.pdf');
-  const psScript = `
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$doc = $word.Documents.Open('${esc(filePath)}')
-$doc.SaveAs([ref]'${esc(outPath)}', [ref]17)
-$doc.Close()
-$word.Quit()
-Write-Output '${esc(outPath)}'
-`;
-
-  const tmpFile = path.join(require('os').tmpdir(), `lumi_docx2pdf_${Date.now()}.ps1`);
-  fs.writeFileSync(tmpFile, '﻿' + psScript, 'utf-8');
-  try {
-    const result = execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
-      { timeout: 30000, encoding: 'utf-8' },
-    );
-    const reportedPath = result.trim().split(/\r?\n/).pop()?.trim() || outPath;
-    if (!fs.existsSync(outPath)) throw new Error(`Word did not create the expected output: ${reportedPath}`);
-    return JSON.stringify({ ok: true, status: 'converted', path: outPath, size: fs.statSync(outPath).size }, null, 2);
-  } catch (err: any) {
-    throw new Error(`DOCX to PDF conversion failed: ${err.stderr || err.message}. Ensure Microsoft Word is installed.`);
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
-  }
+  const size = await transformWordDocument(filePath, outPath, 'pdf', '', context);
+  return JSON.stringify({ ok: true, status: 'converted', path: outPath, size }, null, 2);
 }
 
 // ── Document Comparison ──
@@ -793,7 +822,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'create_xlsx',
-    description: 'Create a new Excel .xlsx spreadsheet. Supports multiple sheets with headers and data rows, or JSON arrays. Saves to the lumi_output directory.',
+    description: 'Create a new Excel .xlsx spreadsheet. Supports multiple sheets with headers and data rows, or JSON arrays. Use outputPath for an exact requested absolute .xlsx path; otherwise saves a generated filename to lumi_output.',
     parameters: {
       type: 'object',
       properties: {
@@ -803,10 +832,20 @@ export function registerDocumentTools(registry: ToolRegistry): void {
           items: { type: 'object' },
         },
         filename: { type: 'string', description: 'Output filename (without extension)' },
+        outputPath: { type: 'string', description: 'Optional exact absolute .xlsx output path. Use this when the user specifies where to save the file.' },
       },
       required: ['sheets'],
     },
     handler: createXlsx,
+    serverOwnedArgumentBinder: (args, context) => {
+      const artifact = requestedSingleArtifact(String(context?.actionIntent || ''));
+      return {
+        ...args,
+        outputPath: resolveExplicitSpreadsheetOutput(args.outputPath)
+          || (artifact?.producer === 'create_xlsx' ? resolveExplicitSpreadsheetOutput(artifact.path) : undefined)
+          || path.join(OUTPUT_DIR, `${String(args.filename || 'spreadsheet').replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.xlsx`),
+      };
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: documentArtifactCapability('office.xlsx.create', 'spreadsheet', 'new XLSX workbook'),
@@ -815,11 +854,12 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'modify_xlsx',
-    description: 'Modify an existing .xlsx file — update cell values or add new sheets.',
+    description: 'Modify an existing .xlsx file — update cell values or add new sheets, preserving the original and saving a separate copy. Use outputPath for an exact requested destination.',
     parameters: {
       type: 'object',
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the .xlsx file' },
+        outputPath: { type: 'string', description: 'Optional absolute .xlsx destination, which must differ from filePath. Otherwise saves a new timestamped copy next to the source.' },
         operations: {
           type: 'array',
           description: 'Operations: [{ sheet: "Sheet1", cell: "A1", value: "new" }] or [{ addSheet: true, sheet: "New", headers: [...], data: [[...]] }]',
@@ -829,6 +869,11 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       required: ['filePath', 'operations'],
     },
     handler: modifyXlsx,
+    serverOwnedArgumentBinder: args => ({
+      ...args,
+      outputPath: resolveExplicitSpreadsheetOutput(args.outputPath)
+        || (typeof args.filePath === 'string' ? path.resolve(args.filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`)) : undefined),
+    }),
     permission: 'user',
     securityLevel: 'safe',
     capability: documentArtifactCapability('office.xlsx.modify-copy', 'spreadsheet', 'modified XLSX workbook copy'),

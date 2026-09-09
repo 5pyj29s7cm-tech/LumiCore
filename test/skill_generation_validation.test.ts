@@ -20,6 +20,7 @@ import {
   computeGeneratedSkillArtifactHash,
   isGeneratedSkillDraftLocation,
   validateGeneratedSkillDraftForInstall,
+  buildHandlerFunction,
 } from '../server/skills/generator';
 
 const DEPENDENCIES = {
@@ -204,6 +205,45 @@ afterEach(() => {
 });
 
 describe('generated skill draft installation validation', () => {
+  it('accepts checked immutable local pure helpers without executing them during review', async () => {
+    const fixture = createDraft({ trialPassed: true, source: generatedSource('const clean = (text: string) => text.trim(); const number = (text: string) => Number(clean(text)); result = JSON.stringify({ total: number("3") });') });
+    const checked = await validateGeneratedSkillDraftForInstall(fixture.directory);
+    expect(checked.errors).toEqual([]);
+    expect(checked.valid).toBe(true);
+    if (checked.validatedDirectory) temporaryDirectories.add(checked.validatedDirectory);
+  });
+  it('accepts fixed data keys, literal array indexes and literal regex validation', async () => {
+    const fixture = createDraft({ trialPassed: true, source: generatedSource('const rows = [{ amount: 3 }]; const item = rows[0]; const valid = /^-?\\d+(?:\\.\\d+)?$/.test("3"); result = JSON.stringify({ total: valid ? item["amount"] : 0 });') });
+    const checked = await validateGeneratedSkillDraftForInstall(fixture.directory);
+    expect(checked.errors).toEqual([]);
+    expect(checked.valid).toBe(true);
+    if (checked.validatedDirectory) temporaryDirectories.add(checked.validatedDirectory);
+  });
+  it.each([
+    'const loop = () => loop(); result = String(loop());',
+    'let helper = () => 1; result = String(helper());',
+    'const helper = () => 1; const call = (helper: any) => helper(); result = String(call(args.text));',
+    'const helper = () => 1; { const helper = () => helper(); result = String(helper()); }',
+    'const helper = () => 1; { const other = () => helper(); const helper = () => other(); result = String(helper()); }',
+    'const read = () => process.env; result = String(read());',
+    'const key = args.text; result = String(args[key]);',
+    'result = String(args["constructor"]);',
+    'const checker = args.text; result = String(checker.test("3"));',
+  ])('rejects recursive, mutable, shadowed or host-capable local calls: %s', async body => {
+    const fixture = createDraft({ trialPassed: true, source: generatedSource(body) });
+    const checked = await validateGeneratedSkillDraftForInstall(fixture.directory);
+    expect(checked.valid).toBe(false);
+    expect(childProcessMocks.exec).not.toHaveBeenCalled();
+  });
+  it('accepts the generator-owned completed data envelope without weakening code review', async () => {
+    const callback = buildHandlerFunction('result = JSON.stringify({ total: 7 });', { type: 'object', properties: {} });
+    const source = generatedSource().replace(/async \(args: Record<string, any>\) => \{[\s\S]*?\n    \}/, callback);
+    const fixture = createDraft({ source, trialPassed: true });
+    const result = await validateGeneratedSkillDraftForInstall(fixture.directory);
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
+    if (result.validatedDirectory) temporaryDirectories.add(result.validatedDirectory);
+  });
   it('validates through a non-executing clean lock snapshot and returns only the four reviewed files', async () => {
     const fixture = createDraft({ trialPassed: true });
 
@@ -488,7 +528,7 @@ describe('generated skill draft installation validation', () => {
     [
       'computed fs access',
       `const reader = fs['readFile']; result = String(reader);`,
-      'Computed property access',
+      'host entry fs',
     ],
     [
       'constructor escape',

@@ -78,11 +78,12 @@ function readWindowsProcesses() {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
-function killWindowsProcessTree(pid) {
-  execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+export function assertNoRunningDebugClients(processes, debugExe = DEBUG_EXES) {
+  const clients = processes.filter(proc => isProjectDebugClient(proc, debugExe));
+  if (clients.length) {
+    const pids = clients.map(proc => proc.ProcessId ?? proc.processId).join(', ');
+    throw new Error(`Lumi development client is still running (PID ${pids}). Close it through the client so pending work is saved, then retry. Dev startup does not force-terminate active clients.`);
+  }
 }
 
 export function main() {
@@ -93,22 +94,7 @@ export function main() {
   }
 
   const processes = readWindowsProcesses();
-  const targets = collectStaleClientPids(processes);
-  if (targets.length === 0) return;
-
-  const rootTargets = processes
-    .filter(proc => isProjectDebugClient(proc, DEBUG_EXES))
-    .map(proc => Number(proc.ProcessId))
-    .filter(pid => targets.includes(pid));
-
-  for (const pid of rootTargets) {
-    console.warn(`[tauri-dev] Terminating stale Lumi desktop client PID ${pid} before dev start.`);
-    try {
-      killWindowsProcessTree(pid);
-    } catch (err) {
-      console.warn(`[tauri-dev] Failed to terminate PID ${pid}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  assertNoRunningDebugClients(processes);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

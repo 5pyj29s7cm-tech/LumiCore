@@ -2,6 +2,7 @@ import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { assertValidCommandForHost } from '../command_platform';
 import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
+import { parseDesktopWindowFingerprint } from '../../desktop/execution_runtime';
 import crypto from 'node:crypto';
 
 function parseRelayPayload(value: unknown): Record<string, any> | null {
@@ -18,14 +19,14 @@ function parseRelayPayload(value: unknown): Record<string, any> | null {
     : null;
 }
 
-function activeWindowFingerprint(value: unknown): { title: string; processName: string } | null {
-  const payload = parseRelayPayload(value);
-  if (!payload) return null;
-  const title = String(payload.title || payload.windowTitle || payload.window_title || '').trim();
-  const processName = String(
-    payload.processName || payload.process_name || payload.process || payload.executable || '',
-  ).trim();
-  return title || processName ? { title, processName } : null;
+function focusedNativeProcessId(value: unknown): number | undefined {
+  // Exact native relay receipt grammar, not model prose or a title alias.
+  // The PID binds this launch/focus operation to its subsequent observation.
+  const match = typeof value === 'string'
+    ? value.match(/^Focused running app .+ \(pid ([1-9]\d*), window "[\s\S]*"\)$/u)
+    : null;
+  const pid = Number(match?.[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
 
 function wait(ms: number): Promise<void> {
@@ -83,7 +84,8 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
   const target = String(args.target || '').trim();
   const application = String(args.application || args.browser || '').trim();
   const openResult = await context.desktopRelay('desktop_open', { target, application });
-  let lastFingerprint: { title: string; processName: string } | null = null;
+  const focusedProcessId = focusedNativeProcessId(openResult);
+  let lastFingerprint: ReturnType<typeof parseDesktopWindowFingerprint> = null;
   let observationError = '';
   const retryDelays = [0, 250, 750, 1_500];
 
@@ -100,16 +102,18 @@ async function desktopOpen(args: Record<string, any>, context?: any): Promise<st
     if (delay > 0) await wait(delay);
     try {
       const observed = await context.desktopRelay('desktop_active_window', {});
-      const fingerprint = activeWindowFingerprint(observed);
+      const fingerprint = parseDesktopWindowFingerprint(observed);
       if (!fingerprint) continue;
       lastFingerprint = fingerprint;
-      if (desktopFingerprintMatchesRequestedTarget(fingerprint, target, application)) {
+      if ((focusedProcessId === undefined || fingerprint.processId === focusedProcessId)
+        && desktopFingerprintMatchesRequestedTarget(fingerprint, target, application)) {
         return JSON.stringify({
           ok: true,
           status: 'verified',
           target,
           application,
           targetMatched: true,
+          verificationBasis: 'post_open_foreground',
           actualTarget: fingerprint,
           openResult,
         });

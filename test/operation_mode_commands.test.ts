@@ -7,7 +7,7 @@ beforeAll(async () => {
 });
 
 describe('shared Lumi operation mode commands', () => {
-  it('recognizes natural mode requests without treating ordinary conversation as a switch', async () => {
+  it('recognizes meeting capture and ignores retired mode requests without treating ordinary conversation as a switch', async () => {
     const {
       detectRequestedOperationMode,
       isPureOperationModeSwitchRequest,
@@ -18,25 +18,25 @@ describe('shared Lumi operation mode commands', () => {
     const assistant = '\u8bf7\u8fdb\u5165\u52a9\u624b\u6a21\u5f0f\u5427';
     const assistantAlias = '\u5207\u6362\u5230\u52a9\u7406\u6a21\u5f0f';
 
-    expect(detectRequestedOperationMode(pureChat)).toBe('chat');
-    expect(detectRequestedOperationMode(autonomy)).toBe('autonomous');
-    expect(detectRequestedOperationMode(assistant)).toBe('assistant');
-    expect(detectRequestedOperationMode(assistantAlias)).toBe('assistant');
-    expect(detectRequestedOperationMode('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBe('autonomous');
+    expect(detectRequestedOperationMode(pureChat)).toBeNull();
+    expect(detectRequestedOperationMode(autonomy)).toBeNull();
+    expect(detectRequestedOperationMode(assistant)).toBeNull();
+    expect(detectRequestedOperationMode(assistantAlias)).toBeNull();
+    expect(detectRequestedOperationMode('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBeNull();
     expect(detectRequestedOperationMode('switch to meeting mode')).toBe('meeting');
     expect(detectRequestedOperationMode('\u6211\u60f3\u804a\u804a\u6700\u8fd1\u7684\u5de5\u4f5c')).toBeNull();
-    expect(isPureOperationModeSwitchRequest(autonomy)).toBe(true);
-    expect(isPureOperationModeSwitchRequest(assistant)).toBe(true);
-    expect(isPureOperationModeSwitchRequest(assistantAlias)).toBe(true);
-    expect(isPureOperationModeSwitchRequest('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBe(true);
+    expect(isPureOperationModeSwitchRequest(autonomy)).toBe(false);
+    expect(isPureOperationModeSwitchRequest(assistant)).toBe(false);
+    expect(isPureOperationModeSwitchRequest(assistantAlias)).toBe(false);
+    expect(isPureOperationModeSwitchRequest('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c')).toBe(false);
   });
 
-  it('routes mode requests as deterministic Lumi client actions', async () => {
+  it('does not route retired mode selectors into client mutations', async () => {
     const { hasClientActionIntent, hasClientActionOnlyIntent } = await import('../server/cognition/tool_intent');
     const request = '\u5207\u6362\u5230\u81ea\u4e3b\u6a21\u5f0f';
 
-    expect(hasClientActionIntent(request)).toBe(true);
-    expect(hasClientActionOnlyIntent(request)).toBe(true);
+    expect(hasClientActionIntent(request)).toBe(false);
+    expect(hasClientActionOnlyIntent(request)).toBe(false);
   });
 
   it('allows only safe client-state tools for an explicit page inspection request', async () => {
@@ -49,7 +49,7 @@ describe('shared Lumi operation mode commands', () => {
     expect(trace.matchedRules.some(rule => rule.layer === 'client_action_only')).toBe(true);
   });
 
-  it('keeps ordinary Chat pure and treats explicit work as an advisory Assistant transition', async () => {
+  it('uses the same core for ordinary conversation and requested work', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const ordinary = buildLumiTurnFlow({
       userId: 'operation_mode_chat_user',
@@ -73,17 +73,17 @@ describe('shared Lumi operation mode commands', () => {
       operationMode: 'chat',
     });
 
-    expect(ordinary.effectiveOperationMode).toBe('chat');
+    expect(ordinary.effectiveOperationMode).toBe('assistant');
     expect(ordinary.allowToolUseForTurn).toBe(false);
     for (const action of [messagingAction, desktopAction]) {
-      expect(action.autoPromoteToAssistant).toBe(true);
-      expect(action.effectiveOperationMode).toBe('chat');
+      expect(action.autoPromoteToAssistant).toBe(false);
+      expect(action.effectiveOperationMode).toBe('assistant');
       expect(action.allowToolUseForTurn).toBe(true);
       expect(action.clientActionOnlyTurn).toBe(false);
     }
   });
 
-  it('keeps a natural-language Autonomy switch on the verified client transition boundary', async () => {
+  it('treats a retired Autonomy switch as a conceptual conversation', async () => {
     const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
     const flow = buildLumiTurnFlow({
       userId: 'operation_mode_switch_user',
@@ -93,10 +93,10 @@ describe('shared Lumi operation mode commands', () => {
       operationMode: 'chat',
     });
 
-    expect(flow.requestedMode).toBe('autonomous');
-    expect(flow.effectiveOperationMode).toBe('chat');
-    expect(flow.clientActionOnlyTurn).toBe(true);
-    expect(flow.allowToolUseForTurn).toBe(true);
+    expect(flow.requestedMode).toBeNull();
+    expect(flow.effectiveOperationMode).toBe('assistant');
+    expect(flow.clientActionOnlyTurn).toBe(false);
+    expect(flow.allowToolUseForTurn).toBe(false);
   });
 
   it('keeps a compound mode switch and external task in one executable turn', async () => {
@@ -118,6 +118,6 @@ describe('shared Lumi operation mode commands', () => {
     expect(hasClientActionOnlyIntent(text)).toBe(false);
     expect(flow.clientActionOnlyTurn).toBe(false);
     expect(flow.allowToolUseForTurn).toBe(true);
-    expect(route.toolNames).toEqual(expect.arrayContaining(['client_action', 'desktop_open']));
+    expect(route.toolNames).toEqual(expect.arrayContaining(['desktop_open']));
   });
 });

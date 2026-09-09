@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { readDB, writeDB } from "../../db_layer";
 import { requireAuth } from "../middleware/auth";
+import { sendDurableMutation } from './durable_mutation';
 
 export interface NotificationRecord {
   id: string;
@@ -56,7 +57,7 @@ export function mountNotificationRoutes(router: Router) {
     }
   });
 
-  router.post("/notifications/read-all", requireAuth, (req: Request, res: Response) => {
+  router.post("/notifications/read-all", requireAuth, async (req: Request, res: Response) => {
     try {
       const db = readDB();
       ensureNotifications(db);
@@ -65,13 +66,13 @@ export function mountNotificationRoutes(router: Router) {
         if (n.userId === req.user!.uid && !n.read) { n.read = true; count++; }
       }
       writeDB(db);
-      res.json({ success: true, marked: count });
+      return await sendDurableMutation(req, res, { success: true, marked: count });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.delete("/notifications", requireAuth, (req: Request, res: Response) => {
+  router.delete("/notifications", requireAuth, async (req: Request, res: Response) => {
     try {
       const db = readDB();
       ensureNotifications(db);
@@ -79,7 +80,7 @@ export function mountNotificationRoutes(router: Router) {
         n => n.userId !== req.user!.uid,
       );
       writeDB(db);
-      res.json({ success: true });
+      return await sendDurableMutation(req, res, { success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

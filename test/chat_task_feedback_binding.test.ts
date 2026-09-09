@@ -47,22 +47,12 @@ describe('chat task feedback binding integration', () => {
     expect(task).not.toContain("reason: 'missing_control_target'");
   });
 
-  it('propagates foreground cancellation through classification and the tool/model loop', () => {
-    const classifier = chat.indexOf('const llmClassifier = async');
-    const classifierCall = chat.indexOf('const result = await callAuthorizedModel(', classifier);
-    const toolLoop = chat.indexOf('const result = await runAuthorizedTools(', classifierCall);
-    const cancellationCatch = chat.lastIndexOf("if (isChatCancelled() || error?.name === 'AbortError')");
-
-    expect(chat).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
-    expect(classifier).toBeGreaterThan(-1);
-    expect(classifierCall).toBeGreaterThan(classifier);
-    expect(chat.slice(classifierCall, classifierCall + 1_200)).toContain('signal: abortController.signal');
-    expect(toolLoop).toBeGreaterThan(classifierCall);
-    expect(chat.slice(toolLoop, toolLoop + 1_200)).toContain('signal: abortController.signal');
-    expect(cancellationCatch).toBeGreaterThan(toolLoop);
-    expect(chat.slice(cancellationCatch, cancellationCatch + 1_800)).toContain('cancelConversationActionExecution(');
-    expect(chat.slice(cancellationCatch, cancellationCatch + 1_800)).toContain("cognitiveIntent: 'task_cancelled'");
-  });
+  // Cancellation is exercised through real Socket handlers in
+  // chat_authorization_terminal.test.ts: parent cancellation during optional
+  // classification, and revoked cancellation while a foreground model is held.
+  // intent_classifier_budget.test.ts covers the child deadline and late SDK
+  // completion. Keep that behavioral coverage instead of coupling this file
+  // to a helper's spelling, its source position, or a fixed character window.
 
   it('settles a repeated confirmation as a no-op before binding a new task', () => {
     const duplicateConfirmation = chat.indexOf('const adjacentConfirmedAction = !pendingConfirmation');

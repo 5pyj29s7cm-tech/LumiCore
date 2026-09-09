@@ -3,7 +3,8 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { execFileSync } from 'child_process';
+import { runMediaProcess } from '../server/media/process';
+import { createRequestAbortController } from '../server/http/request_abort';
 import { synthesizeSpeech, cloneVoice, getVoiceCloneStatus, designVoice, listVoices, getActiveProvider, isTTSProviderConfigured } from '../server/tts/adapter';
 import { TTSProvider } from '../server/tts/types';
 import { logger } from '../logger';
@@ -151,12 +152,12 @@ function resolveUserSamplePath(req: Request, sampleUrl: string): string {
   return filePath;
 }
 
-function runFfmpeg(args: string[], errorPrefix: string) {
+async function runFfmpeg(args: string[], errorPrefix: string, signal?: AbortSignal) {
   try {
-    execFileSync('ffmpeg', args, { stdio: 'pipe', timeout: 30000 });
+    await runMediaProcess('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', ...args], signal, 30000);
   } catch (err: any) {
-    const detail = err.stderr?.toString()?.slice(0, 240) || err.message || 'ffmpeg failed';
-    throw Object.assign(new Error(`${errorPrefix}: ${detail}`), { statusCode: 400 });
+    if (signal?.aborted || err?.name === 'AbortError') throw err;
+    throw Object.assign(new Error(`${errorPrefix}: ${err.message || 'ffmpeg failed'}`), { statusCode: err.statusCode || 400 });
   }
 }
 
@@ -189,7 +190,8 @@ function isPcm16MonoWav(filePath: string, expectedSampleRate: number): boolean {
   return false;
 }
 
-function prepareCloneSampleFile(inputPaths: string[], userId: string, sampleRate = 16000): string {
+async function prepareCloneSampleFile(inputPaths: string[], userId: string, cleanupPaths: Set<string>, sampleRate = 16000, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   if (inputPaths.length === 0) {
     throw Object.assign(new Error('At least one sample URL is required'), { statusCode: 400 });
   }
@@ -202,10 +204,14 @@ function prepareCloneSampleFile(inputPaths: string[], userId: string, sampleRate
   const userPreparedDir = path.join(preparedSamplesDir, userId);
   fs.mkdirSync(userPreparedDir, { recursive: true });
 
-  const wavPaths = inputPaths.map((inputPath, index) => {
+  const wavPaths: string[] = [];
+  for (const [index, inputPath] of inputPaths.entries()) {
     const wavPath = path.join(userPreparedDir, `${jobId}_${index}.wav`);
-    runFfmpeg([
+    // Register before spawning: failed conversions may already have written output.
+    cleanupPaths.add(wavPath);
+    await runFfmpeg([
       '-y',
+      '-protocol_whitelist', 'file,pipe',
       '-i',
       inputPath,
       '-acodec',
@@ -215,17 +221,18 @@ function prepareCloneSampleFile(inputPaths: string[], userId: string, sampleRate
       '-ac',
       '1',
       wavPath,
-    ], 'Audio conversion failed');
-    return wavPath;
-  });
+    ], 'Audio conversion failed', signal);
+    wavPaths.push(wavPath);
+  }
 
   if (wavPaths.length === 1) return wavPaths[0];
 
   const combinedPath = path.join(userPreparedDir, `${jobId}_combined.wav`);
+  cleanupPaths.add(combinedPath);
   const filter = `${wavPaths.map((_, index) => `[${index}:a]`).join('')}concat=n=${wavPaths.length}:v=0:a=1[a]`;
-  runFfmpeg([
+  await runFfmpeg([
     '-y',
-    ...wavPaths.flatMap(wavPath => ['-i', wavPath]),
+    ...wavPaths.flatMap(wavPath => ['-protocol_whitelist', 'file,pipe', '-i', wavPath]),
     '-filter_complex',
     filter,
     '-map',
@@ -237,7 +244,7 @@ function prepareCloneSampleFile(inputPaths: string[], userId: string, sampleRate
     '-ac',
     '1',
     combinedPath,
-  ], 'Audio sample merge failed');
+  ], 'Audio sample merge failed', signal);
 
   for (const wavPath of wavPaths) {
     try { fs.unlinkSync(wavPath); } catch {}
@@ -371,6 +378,7 @@ function publicVoiceErrorStatus(error: unknown): number {
 
 router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => {
   const cleanupPaths = new Set<string>();
+  const request = createRequestAbortController(req, res);
   try {
     assertCanMutateVoiceAssets(req);
     const {
@@ -427,7 +435,8 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
     let cloneResult;
 
     if (activeProvider === 'ark') {
-      const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req), 24000);
+      const cloneAudioPath = await prepareCloneSampleFile(localSamplePaths, getUserId(req), cleanupPaths, 24000, request.signal);
+      request.signal.throwIfAborted();
       cleanupPaths.add(cloneAudioPath);
       voiceModel = 'seed-icl-2.0';
       cloneResult = await cloneVoice({
@@ -454,7 +463,8 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
           requiresPublicBaseUrl: true,
         });
       }
-      const cloneAudioPath = prepareCloneSampleFile(localSamplePaths, getUserId(req));
+      const cloneAudioPath = await prepareCloneSampleFile(localSamplePaths, getUserId(req), cleanupPaths, 16000, request.signal);
+      request.signal.throwIfAborted();
       cleanupPaths.add(cloneAudioPath);
       const cloneSampleUrls = cloneAudioMode === 'data-url'
         ? [cloneAudioPath]
@@ -479,6 +489,7 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       statusMessage: cloneResult.message,
       createdAt: new Date().toISOString(),
     });
+    if (request.signal.aborted) return;
     res.json({
       voiceId,
       name: cleanName,
@@ -493,9 +504,11 @@ router.post('/voice/clone', requireAuth, async (req: Request, res: Response) => 
       message: cloneResult.message,
     });
   } catch (err: any) {
+    if (request.signal.aborted) return;
     logger.error('[Voice Clone Error]', err);
     res.status(err.statusCode || 500).json({ error: err.message || 'Voice cloning service unavailable' });
   } finally {
+    request.dispose();
     for (const filePath of cleanupPaths) {
       try { fs.rmSync(filePath, { force: true }); } catch {}
       for (const [token, entry] of publicSampleTokens) {
@@ -630,6 +643,7 @@ router.delete('/voice/:voiceId', requireAuth, async (req: Request, res: Response
 // POST /api/voice/synthesize — Synthesize speech (for TTS without full voice call)
 router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response) => {
   let activeProvider: TTSProvider | null = null;
+  const request = createRequestAbortController(req, res);
   try {
     const { text, voiceId, provider, model } = req.body;
 
@@ -658,7 +672,9 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
       voiceId: voiceId || 'default',
       model,
       allowFallback: !requestedProvider,
+      signal: request.signal,
     });
+    request.signal.throwIfAborted();
     recordLatency('tts', Date.now() - start);
 
     const { contentType, extension } = getAudioContentType(result.format);
@@ -666,6 +682,7 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
     res.set('X-Audio-Format', extension);
     res.send(result.audioBuffer);
   } catch (err: any) {
+    if (request.signal.aborted) return;
     logger.error('[Voice Synthesize Error]', err);
     const detail = publicVoiceError(err);
     const status = publicVoiceErrorStatus(err);
@@ -675,6 +692,8 @@ router.post('/voice/synthesize', requireAuth, async (req: Request, res: Response
       provider: activeProvider,
       retryable: status >= 500,
     });
+  } finally {
+    request.dispose();
   }
 });
 

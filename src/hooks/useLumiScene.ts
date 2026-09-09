@@ -16,9 +16,11 @@ interface SceneSyncResponse {
   error?: string;
 }
 
-export function useLumiScene(input: { enabled?: boolean; scopeKey?: string } = {}) {
+export function useLumiScene(input: { enabled?: boolean; scopeKey?: string; userId?: string } = {}) {
   const { enabled = true, scopeKey = 'personal' } = input;
   const [scene, setScene] = useState<LumiSceneSnapshot | null>(null);
+  const ownerKey = JSON.stringify([input.userId || '', scopeKey]);
+  const [sceneOwner, setSceneOwner] = useState(ownerKey);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
   const sceneRef = useRef<LumiSceneSnapshot | null>(null);
@@ -27,6 +29,11 @@ export function useLumiScene(input: { enabled?: boolean; scopeKey?: string } = {
   const refresh = useCallback((force = false) => requestRef.current(force), []);
 
   useEffect(() => {
+    sceneRef.current = null;
+    setScene(null);
+    setSceneOwner(ownerKey);
+    setError('');
+    setLoading(enabled);
     if (!enabled) {
       sceneRef.current = null;
       setScene(null);
@@ -109,7 +116,7 @@ export function useLumiScene(input: { enabled?: boolean; scopeKey?: string } = {
       socket.off('focus:updated', schedule);
       socket.off('audio:work_progress', schedule);
     };
-  }, [enabled, scopeKey]);
+  }, [enabled, scopeKey, ownerKey]);
 
-  return { scene, loading, error, refresh };
+  return { scene: sceneOwner === ownerKey ? scene : null, loading, error, refresh };
 }

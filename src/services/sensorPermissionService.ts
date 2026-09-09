@@ -35,6 +35,7 @@ const activeStreams: Record<SensorKind, Set<MediaStream>> = {
   camera: new Set(),
 };
 const activeStreamReleases = new WeakMap<MediaStream, () => void>();
+const accessRevision: Record<SensorKind, number> = { microphone: 0, camera: 0 };
 
 function hasNavigator() {
   return typeof navigator !== 'undefined';
@@ -148,7 +149,12 @@ export function setSensorEnabled(kind: SensorKind, enabled: boolean) {
     } catch {}
   }
 
-  if (!enabled) stopActiveStreams(kind);
+  if (!enabled) {
+    // A pending browser permission dialog is not an active stream yet. Its
+    // eventual result must stay revoked even if the switch is enabled again.
+    accessRevision[kind] += 1;
+    stopActiveStreams(kind);
+  }
   broadcastSensorAccessChange({ [kind]: enabled });
 }
 
@@ -247,46 +253,38 @@ export async function requestSensorPermission(kind: SensorKind): Promise<{
   }
 }
 
-export async function requestMicrophoneStream(audio: MediaStreamConstraints['audio'] = true): Promise<MediaStream> {
-  if (!isSensorEnabled('microphone')) {
-    throw new Error('Microphone is disabled in Lumi settings.');
-  }
-
+async function requestSensorStream(kind: SensorKind, constraints: MediaStreamConstraints, signal?: AbortSignal): Promise<MediaStream> {
+  const label = kind === 'microphone' ? 'Microphone' : 'Camera';
+  signal?.throwIfAborted();
+  if (!isSensorEnabled(kind)) throw new Error(`${label} is disabled in Lumi settings.`);
   if (!hasNavigator() || !navigator.mediaDevices?.getUserMedia) {
-    broadcastSensorPermissionChange({ microphone: 'unavailable' });
-    throw new Error('Microphone is unavailable in this runtime.');
+    broadcastSensorPermissionChange({ [kind]: 'unavailable' });
+    throw new Error(`${label} is unavailable in this runtime.`);
   }
-
+  const revision = accessRevision[kind];
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio, video: false });
-    trackActiveStream('microphone', stream);
-    broadcastSensorPermissionChange({ microphone: 'granted' });
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (signal?.aborted || revision !== accessRevision[kind] || !isSensorEnabled(kind)) {
+      releaseSensorStream(kind, stream);
+      throw new DOMException(`${label} request was cancelled.`, 'AbortError');
+    }
+    trackActiveStream(kind, stream);
+    broadcastSensorPermissionChange({ [kind]: 'granted' });
     return stream;
   } catch (err) {
-    const state = await queryPermission('microphone');
-    broadcastSensorPermissionChange({ microphone: state === 'unknown' ? 'denied' : state });
+    // Cancellation is an application choice, not an OS permission denial.
+    if ((err as Error)?.name !== 'AbortError') {
+      const state = await queryPermission(kind);
+      broadcastSensorPermissionChange({ [kind]: state === 'unknown' ? 'denied' : state });
+    }
     throw err;
   }
 }
 
-export async function requestCameraStream(video: MediaStreamConstraints['video'] = true): Promise<MediaStream> {
-  if (!isSensorEnabled('camera')) {
-    throw new Error('Camera is disabled in Lumi settings.');
-  }
+export function requestMicrophoneStream(audio: MediaStreamConstraints['audio'] = true, signal?: AbortSignal): Promise<MediaStream> {
+  return requestSensorStream('microphone', { audio, video: false }, signal);
+}
 
-  if (!hasNavigator() || !navigator.mediaDevices?.getUserMedia) {
-    broadcastSensorPermissionChange({ camera: 'unavailable' });
-    throw new Error('Camera is unavailable in this runtime.');
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
-    trackActiveStream('camera', stream);
-    broadcastSensorPermissionChange({ camera: 'granted' });
-    return stream;
-  } catch (err) {
-    const state = await queryPermission('camera');
-    broadcastSensorPermissionChange({ camera: state === 'unknown' ? 'denied' : state });
-    throw err;
-  }
+export function requestCameraStream(video: MediaStreamConstraints['video'] = true, signal?: AbortSignal): Promise<MediaStream> {
+  return requestSensorStream('camera', { video, audio: false }, signal);
 }

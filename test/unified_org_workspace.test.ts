@@ -34,7 +34,7 @@ describe('unified organization workspace boundary', () => {
     expect(desktop).toContain("case 'org'");
     expect(desktop).toContain('<OrgPortal />');
     expect(portal).toContain("await switchDomain('work')");
-    expect(portal).toContain('<OrgHub />');
+    expect(portal).toMatch(/<OrgHub\s+key=/);
     expect(hub).toContain("switchDomain('personal')");
   });
 

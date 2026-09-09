@@ -75,6 +75,9 @@ export function readProviderRuntimeObservation(provider: string, model: string):
       for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex -= 1) {
         const attempt = attempts[attemptIndex];
         if (String(attempt?.provider || '') !== provider || String(attempt?.model || '') !== model) continue;
+        // Policy/circuit skips and user cancellation did not test the model.
+        // They must not hide the actual failure (or recovery) behind them.
+        if (!['succeeded', 'failed'].includes(attempt.status) || attempt.reason === 'cancelled') continue;
         return {
           provider,
           model,

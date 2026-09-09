@@ -11,6 +11,7 @@ import {
 type ProactivePayload = {
   type?: string;
   taskId?: string;
+  interactionId?: string;
   message: string;
   timestamp?: string;
   action?: string;
@@ -96,6 +97,8 @@ export function ProactiveNotifications() {
 
     const handleProactive = (data: ProactivePayload) => {
       const taskId = data.type || data.taskId || 'unknown';
+      const isReminder = taskId === 'reminder_check'
+        && /^proactive_[a-f0-9]{24}$/.test(data.interactionId || '');
       const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
       if (taskId === 'greeting' && !proactiveGreetingEnabled) return;
       const publicMessage = sanitizeAgentResponseTextForDisplay(
@@ -103,7 +106,7 @@ export function ProactiveNotifications() {
         language,
       );
       const delivery = { ...data, text: publicMessage };
-      if (!shouldDisplayAgentResponse(delivery)) return;
+      if (!shouldDisplayAgentResponse(delivery) && !isReminder) return;
       const notify = (item: { type: string; title: string; message: string }) => {
         addNotification({
           ...item,
@@ -115,11 +118,13 @@ export function ProactiveNotifications() {
       // Voice-appropriate proactive events: also trigger spoken output
       const voiceTasks = new Set(['proactive_lumi_scan', 'greeting', 'daily_summary', 'evening_wrapup']);
       if (
-        voiceTasks.has(taskId)
+        (voiceTasks.has(taskId) || isReminder)
         && proactiveGreetingEnabled
-        && shouldSpeakAgentResponse(delivery)
+        && (isReminder || shouldSpeakAgentResponse(delivery))
       ) {
-        socket.emit('proactive:request_speak', { message: publicMessage });
+        socket.emit('proactive:request_speak', { message: publicMessage,
+          ...(isReminder ? { interactionId: data.interactionId } : {}),
+        });
       }
 
       switch (taskId) {

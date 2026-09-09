@@ -74,17 +74,70 @@ function shouldCopyServerRuntime(src) {
 }
 
 async function copyIfExists(src, dest) {
+  if (!shouldCopyServerRuntime(src)) return;
   if (!existsSync(src)) return;
   await fs.mkdir(path.dirname(dest), { recursive: true });
   await fs.copyFile(src, dest);
 }
 
-async function copyDir(src, dest, filter = shouldCopy) {
+export async function copyDir(src, dest, filter = shouldCopy) {
   if (!existsSync(src)) return;
+  const sourceRoot = path.resolve(src);
+  const destinationRoot = path.resolve(dest);
+  // A previous interrupted preparation must not let a destination junction
+  // redirect dependency writes back into the development installation.
+  let commonParent = path.dirname(destinationRoot);
+  while (sourceRoot !== commonParent && !sourceRoot.startsWith(`${commonParent}${path.sep}`)) {
+    const parent = path.dirname(commonParent);
+    if (parent === commonParent) break;
+    commonParent = parent;
+  }
+  for (let current = destinationRoot; current !== commonParent; current = path.dirname(current)) {
+    try {
+      if ((await fs.lstat(current)).isSymbolicLink()) {
+        throw new Error(`Refusing to copy desktop resources through a destination link: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (path.dirname(current) === current) break;
+  }
+  const copiedDirectories = new Map();
+  // Windows fs.cp passes namespace-prefixed paths (\\?\...) to its filter.
+  // Compare the root and callback paths in the same lexical representation
+  // so an ancestor cycle cannot evade the traversal boundary.
+  const copyPathKey = value => {
+    const normalized = path.toNamespacedPath(path.resolve(value));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const copySourceKey = copyPathKey(sourceRoot);
   await fs.cp(src, dest, {
     recursive: true,
     force: true,
-    filter,
+    // Dependencies can be junctions in an isolated worktree. The package must
+    // contain independent files, never links into the developer's installation.
+    dereference: true,
+    filter: async (entry, target) => {
+      if (!await filter(entry, target)) return false;
+      try {
+        if ((await fs.lstat(target)).isSymbolicLink()) {
+          throw new Error(`Refusing to copy desktop resources through a destination link: ${target}`);
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+      if ((await fs.stat(entry)).isDirectory()) {
+        const realEntry = copyPathKey(await fs.realpath(entry));
+        for (let parent = path.dirname(copyPathKey(entry)); parent === copySourceKey || parent.startsWith(`${copySourceKey}${path.sep}`); parent = path.dirname(parent)) {
+          if (copiedDirectories.get(parent) === realEntry) {
+            throw new Error(`Cyclic directory link in desktop runtime resources: ${entry}`);
+          }
+          if (parent === copySourceKey) break;
+        }
+        copiedDirectories.set(copyPathKey(entry), realEntry);
+      }
+      return true;
+    },
   });
 }
 
@@ -187,7 +240,6 @@ async function prepareServer() {
   await copyIfExists(path.join(src, 'runtime-meta.json'), path.join(dest, 'runtime-meta.json'));
   await copyIfExists(path.join(src, 'server.cjs'), path.join(dest, 'server.cjs'));
   await copyIfExists(path.join(src, 'package.json'), path.join(dest, 'package.json'));
-  await copyIfExists(path.join(src, '.env'), path.join(dest, '.env'));
   if (process.platform === 'win32') {
     await copyIfExists(path.join(src, 'hide-console.cjs'), path.join(dest, 'hide-console.cjs'));
   }
@@ -280,6 +332,7 @@ async function prepareWebView2Dll() {
   }
 }
 
+async function prepareDesktopResources() {
 const resolvedOutDir = path.resolve(outDir);
 if (resolvedOutDir !== path.join(path.resolve(root), 'desktop-resources')) {
   throw new Error(`Refusing to refresh unexpected desktop resource directory: ${resolvedOutDir}`);
@@ -299,4 +352,9 @@ await prepareWebView2Dll();
 console.log(`Prepared desktop resources at ${path.relative(root, outDir)}`);
 if (!includeLocalVoice) {
   console.log('Local GPT-SoVITS resources skipped. Set LUMI_DESKTOP_WITH_LOCAL_VOICE=1 for the large offline voice bundle.');
+}
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  await prepareDesktopResources();
 }

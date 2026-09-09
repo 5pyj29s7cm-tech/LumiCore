@@ -23,6 +23,11 @@ vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ addNotification:
 vi.mock('../src/lib/useT', () => ({ useT: () => ({ langCode: 'en' }) }));
 
 import { initDatabase } from '../db_layer';
+import * as database from '../db_layer';
+import { randomUUID } from 'node:crypto';
+import { buildScheduledProactiveInteractionId } from '../server/scheduler';
+import { setVoicePreference } from '../server/config/voice_preference';
+import * as memoryStore from '../server/memory/store';
 import { registerVoiceHandlers } from '../server/socket/voice';
 import { loadEmotionalState, saveEmotionalState } from '../server/personality/state';
 import { saveGateConfig } from '../server/autonomy/safety_gate';
@@ -77,6 +82,28 @@ function returnDetection(socket: ClientSocket) {
     IDLE_AWAY_SECONDS: 120, RETURN_IDLE_SECONDS: 10, callState: 'idle', isMuted: false, volume: 60, workDomain: 'personal',
   });
 }
+async function persistedReminder(options: { userId?: string; domain?: string; orgId?: string; content?: string } = {}) {
+  const timestamp = new Date().toISOString();
+  const scope = { userId: options.userId || preference.userId, domain: (options.domain || 'personal') as 'personal' | 'work', orgId: options.orgId || '' };
+  const reminderId = `rem_${randomUUID()}`;
+  const executionId = `scheduler_test_${randomUUID()}`;
+  const interactionId = buildScheduledProactiveInteractionId(executionId, 0, scope);
+  const content = options.content || 'Take a short break';
+  const db = database.readDB();
+  db.reminders ||= [];
+  db.reminders.push({ id: reminderId, ...scope, content, dueAt: timestamp, status: 'fired', firedAt: timestamp,
+    sourceInteractionId: 'synthetic-request', createdAt: timestamp });
+  db.interactions.push({ id: interactionId, ...scope, agentId: 'lumi', conversationId: '', module: 'lumi',
+    message: `[reminder_check] Reminder: ${content}`, response: '', role: 'assistant', mode: 'proactive', personality: 'lumi',
+    timestamp, toolCalls: JSON.stringify({ executionId, scheduledTaskId: 'reminder_check', reminderIds: [reminderId] }),
+  });
+  database.writeDB(db); await database.flushDBOrThrow();
+  return { interactionId, reminderId, payload: { taskId: 'reminder_check', interactionId, message: `Reminder: ${content}` } };
+}
+async function setLowInitiative() {
+  saveEmotionalState(preference.userId, { ...loadEmotionalState(preference.userId), initiative: 0.15 });
+  await vi.waitFor(() => expect(loadEmotionalState(preference.userId).initiative).toBe(0.15));
+}
 beforeAll(async () => { await initDatabase(); });
 beforeEach(() => {
   fixture.sources = []; fixture.provider = 'relay'; fixture.notify.mockReset();
@@ -87,6 +114,7 @@ beforeEach(() => {
   vi.stubGlobal('AudioContext', AudioContextFixture);
   vi.spyOn(Date.prototype, 'getHours').mockReturnValue(13);
   localStorage.setItem('lumi_allow_proactive_voice', 'true');
+  setVoicePreference({ tts: 'relay', ttsModel: 'aliyun/cosyvoice-v3-flash' });
   saveEmotionalState(preference.userId, { ...loadEmotionalState(preference.userId), initiative: 1 });
   saveGateConfig({ quietHoursEnabled: false }, preference.userId);
 });
@@ -195,12 +223,154 @@ describe('proactive speech through production desktop, server and playback', () 
   });
 
   it('TTS failures release the optional speech lane so the next notification can play', async () => {
-    fixture.synthesize.mockRejectedValueOnce(new Error('Synthetic TTS unavailable')).mockRejectedValueOnce(new Error('Synthetic fallback unavailable'));
-    const { client } = setup();
+    fixture.synthesize.mockRejectedValueOnce(new Error('Synthetic TTS unavailable'));
+    const { client, hook } = setup();
     await act(async () => { client.emit('greeting:generate', {}); await client.drain(); });
     expect(fixture.sources).toEqual([]);
+    expect(fixture.synthesize).toHaveBeenCalledOnce();
+    expect(hook.result.current.error).toContain('Proactive voice output is temporarily unavailable');
     await act(async () => { client.emit('proactive:request_speak', { message: '欢迎回来。' }); await client.drain(); });
     expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+    expect(hook.result.current.error).toBeNull();
     for (const [, config] of fixture.synthesize.mock.calls) expect(config.allowFallback).toBe(false);
+  });
+
+  it('honors opted-in return greetings at default initiative and keeps return-event deduplication', async () => {
+    await setLowInitiative();
+    const { client } = setup(); const onIdleReport = returnDetection(client);
+    await act(async () => { onIdleReport({ idle_seconds: 180 }); onIdleReport({ idle_seconds: 0 }); onIdleReport({ idle_seconds: 0 }); await client.drain(); });
+    expect(fixture.model).toHaveBeenCalledOnce();
+    expect(fixture.synthesize).toHaveBeenCalledOnce();
+    expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+    expect(loadEmotionalState(preference.userId).initiative).toBe(0.15);
+  });
+
+  it('uses one fixed greeting when text generation fails, without another model request', async () => {
+    fixture.model.mockRejectedValueOnce(new Error('Synthetic text provider unavailable'));
+    const { client } = setup();
+    await act(async () => { client.emit('greeting:generate', {}); await client.drain(); });
+    expect(fixture.model).toHaveBeenCalledOnce();
+    expect(fixture.synthesize).toHaveBeenCalledExactlyOnceWith('下午好，继续吧。', expect.objectContaining({ provider: 'relay', allowFallback: false }));
+    expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+  });
+
+  it('speaks a durable reminder before any microphone call at low initiative, using stored content and current relay TTS', async () => {
+    await setLowInitiative();
+    const reminder = await persistedReminder();
+    const { client, server } = setup(); render(<ProactiveNotifications />);
+    await act(async () => { client.deliver('agent:proactive', { ...reminder.payload, message: 'Client replacement text' }); await client.drain(); });
+    expect(fixture.synthesize).toHaveBeenCalledExactlyOnceWith(reminder.payload.message, expect.objectContaining({ provider: 'relay', model: 'aliyun/cosyvoice-v3-flash', allowFallback: false }));
+    expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+    expect(fixture.model).not.toHaveBeenCalled();
+    expect(server.data.audioSession.userId).toBe('');
+    expect(server.outputs.find(([event]) => event === 'audio:proactive_speak')?.[1]).toMatchObject({ interactionId: reminder.interactionId });
+    const row = database.readDB().interactions.find((row: any) => row.id === reminder.interactionId);
+    expect(JSON.parse(row.toolCalls).proactiveVoiceDispatch).toMatchObject({ reservedAt: expect.any(String) });
+  });
+
+  it('deduplicates simultaneous and repeated reminder deliveries across sockets', async () => {
+    const reminder = await persistedReminder(); const held = deferred<any>();
+    fixture.synthesize.mockReturnValueOnce(held.promise);
+    const first = setup(); const second = setup();
+    const request = { message: reminder.payload.message, interactionId: reminder.interactionId };
+    await act(async () => { first.client.emit('proactive:request_speak', request); });
+    await vi.waitFor(() => expect(fixture.synthesize).toHaveBeenCalledOnce());
+    await act(async () => { second.client.emit('proactive:request_speak', request); await second.client.drain(); });
+    await act(async () => { held.resolve({ audioBuffer: new Uint8Array([5]).buffer }); await first.client.drain(); });
+    await act(async () => { second.client.emit('proactive:request_speak', request); await second.client.drain(); });
+    expect(fixture.synthesize).toHaveBeenCalledOnce();
+    expect([...first.server.outputs, ...second.server.outputs].filter(([event]) => event === 'audio:proactive_speak')).toHaveLength(1);
+  });
+
+  it.each(['unknown-id', 'foreign-user', 'foreign-domain', 'wrong-source', 'cancelled'] as const)('rejects an unverified reminder (%s)', async reason => {
+    await setLowInitiative();
+    const reminder = await persistedReminder(reason === 'foreign-user' ? { userId: 'other-owner' } : reason === 'foreign-domain' ? { domain: 'work', orgId: 'other-org' } : {});
+    const db = database.readDB();
+    if (reason === 'wrong-source') db.interactions.find((row: any) => row.id === reminder.interactionId).mode = 'chat';
+    if (reason === 'cancelled') db.reminders = db.reminders.filter((row: any) => row.id !== reminder.reminderId);
+    database.writeDB(db);
+    const { client } = setup();
+    await act(async () => { client.emit('proactive:request_speak', { taskId: 'reminder_check', message: reminder.payload.message,
+      interactionId: reason === 'unknown-id' ? 'proactive_' + '0'.repeat(24) : reminder.interactionId }); await client.drain(); });
+    expect(fixture.synthesize).not.toHaveBeenCalled();
+    expect(fixture.sources).toEqual([]);
+  });
+
+  it.each(['disabled', 'muted', 'quiet', 'private-call'] as const)('retains reminder voice permission gates (%s)', async reason => {
+    const reminder = await persistedReminder();
+    if (reason === 'disabled') localStorage.setItem('lumi_allow_proactive_voice', 'false');
+    if (reason === 'quiet') saveGateConfig({ quietHoursEnabled: true, quietHoursStart: 12, quietHoursEnd: 14 }, preference.userId);
+    const { client } = setup({ outputMuted: reason === 'muted' });
+    const token = Symbol('private-reminder-test');
+    try {
+      if (reason === 'private-call') await act(async () => { claimVoiceCapture(token, () => {}); });
+      await act(async () => { client.emit('proactive:request_speak', { message: reminder.payload.message, interactionId: reminder.interactionId }); await client.drain(); });
+      expect(fixture.synthesize).not.toHaveBeenCalled();
+      expect(fixture.sources).toEqual([]);
+    } finally { if (reason === 'private-call') await act(async () => { releaseVoiceCapture(token); }); }
+  });
+
+  it.each(['cancelled', 'muted'] as const)('drops a late synthesized reminder after %s', async reason => {
+    const reminder = await persistedReminder(); const held = deferred<any>(); fixture.synthesize.mockReturnValueOnce(held.promise);
+    const { client, hook, server } = setup();
+    await act(async () => { client.emit('proactive:request_speak', { message: reminder.payload.message, interactionId: reminder.interactionId }); });
+    await vi.waitFor(() => expect(fixture.synthesize).toHaveBeenCalledOnce());
+    if (reason === 'muted') await act(async () => { hook.result.current.toggleMute(); });
+    else { const db = database.readDB(); db.reminders = db.reminders.filter((row: any) => row.id !== reminder.reminderId); database.writeDB(db); }
+    await act(async () => { held.resolve({ audioBuffer: new Uint8Array([9]).buffer }); await client.drain(); });
+    expect(server.outputs.some(([event]) => event === 'audio:proactive_speak')).toBe(false);
+    expect(fixture.sources).toEqual([]);
+  });
+
+  it('does not dispatch a reminder on reservation persistence failure and permits a later retry', async () => {
+    const reminder = await persistedReminder(); const { client, hook } = setup();
+    const flush = vi.spyOn(database, 'flushDBOrThrow').mockRejectedValueOnce(new Error('Synthetic save failure'));
+    const request = { message: reminder.payload.message, interactionId: reminder.interactionId };
+    await act(async () => { client.emit('proactive:request_speak', request); await client.drain(); });
+    expect(fixture.sources).toEqual([]);
+    expect(hook.result.current.error).toContain('Proactive voice output');
+    flush.mockRestore();
+    await act(async () => { client.emit('proactive:request_speak', request); await client.drain(); });
+    expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+  });
+
+  it('does not repeat a dispatched greeting if saving its memory fails', async () => {
+    const { client, server } = setup();
+    vi.spyOn(memoryStore, 'addMemory').mockImplementationOnce(() => { throw new Error('Synthetic memory save failure'); });
+    await act(async () => { client.emit('greeting:generate', {}); await client.drain(); });
+    expect(fixture.model).toHaveBeenCalledOnce();
+    expect(fixture.synthesize).toHaveBeenCalledOnce();
+    expect(server.outputs.filter(([event]) => event === 'audio:proactive_speak')).toHaveLength(1);
+    expect(fixture.sources[0].start).toHaveBeenCalledOnce();
+  });
+
+  it('reports client playback failure without pretending audio started', async () => {
+    fixture.decode.mockRejectedValueOnce(new Error('Synthetic output failure'));
+    const { client, hook } = setup();
+    await act(async () => { client.emit('greeting:generate', {}); await client.drain(); });
+    expect(fixture.sources).toEqual([]);
+    expect(hook.result.current.callState).toBe('idle');
+    expect(hook.result.current.error).toContain('Proactive voice output could not be played');
+  });
+
+  it('does not treat a client task label without a persisted reminder as scheduled authority', async () => {
+    await setLowInitiative();
+    const { client } = setup(); render(<ProactiveNotifications />);
+    await act(async () => {
+      client.deliver('agent:proactive', { taskId: 'reminder_check', message: 'A client supplied reminder' });
+      client.emit('proactive:request_speak', { taskId: 'reminder_check', message: 'A client supplied reminder' });
+      await client.drain();
+    });
+    expect(fixture.synthesize).not.toHaveBeenCalled();
+  });
+
+  it('rejects an in-memory reminder candidate that has not crossed the durable delivery boundary', async () => {
+    const reminder = await persistedReminder();
+    await database.withDatabaseSqlWriteLock(({ run }) => run('DELETE FROM interactions WHERE id = ?', [reminder.interactionId]));
+    expect(database.readDB().interactions.some((row: any) => row.id === reminder.interactionId)).toBe(true);
+    const { client } = setup();
+    await act(async () => { client.emit('proactive:request_speak', { message: reminder.payload.message, interactionId: reminder.interactionId }); await client.drain(); });
+    expect(fixture.synthesize).not.toHaveBeenCalled();
+    expect(fixture.sources).toEqual([]);
   });
 });

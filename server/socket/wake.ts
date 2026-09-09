@@ -17,11 +17,13 @@ const wakeOwnerByUser = new Map<string, ActiveWakeOwner>();
 export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => string) {
   let wakeDetector: WakeDetector | null = null;
   let wakeStarting = false;
+  let wakeReady = false;
 
   const releaseOwnedDetector = (stop = true) => {
     const uid = getUserId(socket);
     const detector = wakeDetector;
     wakeDetector = null;
+    wakeReady = false;
     const owner = wakeOwnerByUser.get(uid);
     if (owner?.socketId === socket.id && (!detector || owner.detector === detector)) {
       wakeOwnerByUser.delete(uid);
@@ -40,7 +42,7 @@ export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => s
         wakeDetector = null;
       }
       if (wakeDetector || wakeStarting) {
-        socket.emit("wake:started", { reused: true });
+        if (wakeReady) socket.emit("wake:started", { reused: true });
         return;
       }
       const existingOwner = wakeOwnerByUser.get(uid);
@@ -51,6 +53,7 @@ export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => s
       }
       wakeStarting = true;
       const detector = createWakeDetector(undefined, isEchoText);
+      wakeReady = false;
       wakeDetector = detector;
       wakeOwnerByUser.set(uid, { socketId: socket.id, detector });
 
@@ -67,8 +70,14 @@ export function registerWakeHandlers(socket: Socket, getUserId: (s: Socket) => s
         releaseOwnedDetector(true);
       });
 
-      socket.emit("wake:started");
-      logger.info(`[Wake] Started for user ${uid}`);
+      const onReady = () => {
+        if (wakeDetector !== detector || wakeOwnerByUser.get(uid)?.detector !== detector) return;
+        wakeReady = true;
+        socket.emit("wake:started");
+        logger.info(`[Wake] Ready for user ${uid}`);
+      };
+      if (detector.onReady) detector.onReady(onReady);
+      else onReady();
     } catch (err: any) {
       releaseOwnedDetector(true);
       socket.emit("wake:error", { message: err.message || 'Failed to start wake detector' });

@@ -38,6 +38,7 @@ vi.mock('../server/extensions/registry', () => ({
 
 vi.mock('../server/self_extension/capability_memory', () => ({
   isCapabilityLearningRecordVerified: () => false,
+  isCapabilityLearningRecordUsable: () => false,
   listCapabilityLearningRecords: () => [],
 }));
 
@@ -81,6 +82,15 @@ describe('skill runtime availability truth', () => {
     runtimeFixture.keys = {};
     runtimeFixture.marketplace = [];
     runtimeFixture.signedExtensions = [];
+  });
+
+  it('excludes failed adapters but preserves lazy-start adapters that are idle', () => {
+    runtimeFixture.localSkills = [localSkill('callable_skill')];
+    runtimeFixture.config = { callable_skill: { enabled: true, source: 'local' } };
+    runtimeFixture.health = { callable_skill: { status: 'failed' } };
+    expect(getExtensionRuntimeStates([manifestEntry()])[0]).toMatchObject({ usable: false, status: 'broken' });
+    runtimeFixture.health.callable_skill.status = 'idle';
+    expect(getExtensionRuntimeStates([manifestEntry()])[0]).toMatchObject({ usable: true, status: 'callable' });
   });
 
   it('does not treat a directory, disabled config, missing key, or absent registration as usable', () => {

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ToolExecutionRecord } from '../tools/types';
+import { ToolExecutionRecord, type ToolContext } from '../tools/types';
 import {
   buildActionContract,
   claimsCurrentAppSaveCompletion,
@@ -11,7 +11,7 @@ import {
 } from '../cognition/action_contract';
 import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_COMPLETION_GUARD_MESSAGES } from '../regions/packs/cn/completion_guard_messages';
-import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import { normalizeActionIntent, isStoredMemoryRecallQuestion } from '../cognition/normalized_action_intent';
 import { formatGroundedKnowledgeObservation, isKnowledgeInventoryRequest } from '../cognition/knowledge_result';
 
 export interface CompletionGuardResult {
@@ -67,6 +67,9 @@ interface CompletionGuardInput {
   response: string;
   toolCalls?: ToolExecutionRecord[];
   source?: string;
+  requestId?: string;
+  taskId?: string;
+  acceptedTaskTarget?: ToolContext['acceptedTaskTarget'];
 }
 
 const EXTERNAL_WORK_TASK_RE =
@@ -455,6 +458,7 @@ function buildExecutionStatusGuardedResponse(
 }
 
 export function needsCompletionEvidence(task: string): boolean {
+  if (isStoredMemoryRecallQuestion(task)) return false;
   return EXTERNAL_WORK_TASK_RE.test(task || '');
 }
 
@@ -558,7 +562,8 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
 
   const actionContract = buildActionContract(task);
   const hasDomainCompletionEvidence = actionContract.applies
-    && hasCoreActionEvidence(actionContract, toolCalls, task);
+    && hasCoreActionEvidence(actionContract, toolCalls, task, undefined,
+      { requestId: input.requestId, taskId: input.taskId }, input.acceptedTaskTarget);
   // Persistent-task creation has its own receipt contract. Once that exact
   // contract is satisfied, do not run the response through generic
   // file/desktop heuristics: wording such as "created and persisted" is about
@@ -584,7 +589,12 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
   const hasAnySuccess = successful.length > 0;
   const hasActionTool = successful.some(call => !INSPECTION_ONLY_TOOL_RE.test(call.name));
   const hasFileProducer = successful.some(call =>
-    FILE_PRODUCER_TOOL_RE.test(call.name) ||
+    (
+      call.terminalVerification?.status === 'verified'
+      && call.terminalVerification.strategy === 'artifact'
+      && ['create', 'mutate'].includes(call.capability?.operation || '')
+      && call.capability?.sideEffects.some(effect => effect.type === 'local_write')
+    ) || FILE_PRODUCER_TOOL_RE.test(call.name) ||
     (
       !INSPECTION_ONLY_TOOL_RE.test(call.name) &&
       /File written:|Text file:|Output file:|Saved to:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md|\.txt/i.test(call.result || '')
@@ -615,7 +625,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     && !hasPassingVerification
   ) {
     reason = '回复声称已经生成或保存产物，但没有成功的写入/生成/验收记录';
-  } else if (!hasActionTool && !hasPassingVerification && !pathsExist) {
+  } else if (!hasActionTool && !hasPassingVerification && !pathsExist && !hasDomainCompletionEvidence) {
     reason = '\u6210\u529f\u6267\u884c\u4e86\u67e5\u8be2\u6216\u68c0\u67e5\u5de5\u5177\uff0c\u4f46\u8fd9\u4e9b\u7ed3\u679c\u4e0d\u662f\u5b8c\u6210\u5f53\u524d\u8bf7\u6c42\u6240\u9700\u7684\u6267\u884c\u8bc1\u636e'; // i18n-allow: reviewed Chinese evidence-accuracy reason.
     reasonCode = 'successful_irrelevant_evidence';
   }

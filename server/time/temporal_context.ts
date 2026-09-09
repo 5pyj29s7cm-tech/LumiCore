@@ -3,6 +3,7 @@
 import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, getMonthDay, isWeekend, hoursSince, daysSince, minutesSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
 import { readDB } from '../../db_layer';
+import { getUserDayRange } from './utils';
 
 export interface TemporalContext {
   dateString: string;
@@ -38,10 +39,10 @@ export function buildTemporalContext(userId: string): TemporalContext {
   let sessionDurationMinutes = 0;
   try {
     const db = readDB();
-    const todayStart = getDateString(userId) + 'T00:00:00.000Z';
+    const today = getUserDayRange(userId);
     const todayInteractions = (db.interactions || []).filter(
-      (i: any) => i.userId === userId && i.timestamp >= todayStart,
-    );
+      (i: any) => i.userId === userId && i.timestamp >= today.after && i.timestamp < today.before,
+    ).sort((a: any, b: any) => a.timestamp.localeCompare(b.timestamp));
     if (todayInteractions.length >= 2) {
       const first = new Date(todayInteractions[0].timestamp).getTime();
       const last = new Date(todayInteractions[todayInteractions.length - 1].timestamp).getTime();
@@ -52,7 +53,7 @@ export function buildTemporalContext(userId: string): TemporalContext {
   // Recent memory count (last 7 days)
   let recentMemoryCount = 0;
   try {
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     recentMemoryCount = queryMemories({ userId, after: sevenDaysAgo, limit: 1000 }).length;
   } catch {}
 

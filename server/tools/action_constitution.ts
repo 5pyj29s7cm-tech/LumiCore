@@ -35,11 +35,39 @@ const TRUSTED_EXPLICIT_LOCAL_WRITE_TOOL_RE =
 // i18n-allow: Reviewed multilingual confirmation-boundary input recognition; not user-visible copy.
 const EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN =
   /(?:不要|不得|禁止|别).{0,20}(?:代替|替代|自行|自动|自己).{0,12}(?:用户|我)?.{0,8}(?:确认|批准|同意)|(?:等待|等我|等用户|需要|要求|必须|先).{0,20}(?:用户|我|人工).{0,8}(?:确认|批准|同意)|(?:到|在).{0,12}(?:确认|批准).{0,12}(?:边界|之前|前).{0,12}(?:立即|先)?.{0,8}(?:停止|停下|等待)|(?:未经|没有).{0,8}(?:用户|我).{0,8}(?:确认|批准|同意).{0,20}(?:不得|不要|禁止|别|不应|不能).{0,12}(?:执行|写入|创建|生成|继续)|\b(?:stop|wait|pause)\b.{0,24}\b(?:at|before|until|pending)\b.{0,24}\b(?:confirmation|approval)\b|\b(?:do\s+not|don't|never)\b.{0,48}\b(?:self[-\s]?confirm|auto[-\s]?confirm|confirm(?:ation)?\s+(?:for|on\s+behalf\s+of)\s+(?:the\s+)?user)\b/iu;
+const LOCAL_READ_TOOLS = new Set(['read_file', 'read_files_batch', 'extract_document_text', 'list_directory', 'search_files', 'desktop_path_info']);
+// i18n-allow: Reviewed input recognition scopes a user's confirmation to reading versus writing; no display copy.
+const READ_CONFIRMATION_BOUNDARY_PATTERN = /(?:读取|回读|查看|读文件).{0,24}(?:前|之前|也要|也需).{0,24}(?:确认|批准|同意)(?=[，,。；;！!\s]|$)|(?:我|用户|人工).{0,8}(?:确认|批准|同意).{0,20}(?:才|再|之后|后|不得|不能).{0,8}(?:读取|回读|查看)|\b(?:read(?:ing)?|inspect(?:ing)?)\b.{0,32}\b(?:confirmation|approval)\b|\b(?:confirmation|approval|permission)\b.{0,32}\b(?:read(?:ing)?|inspect(?:ing)?)\b/iu;
+// i18n-allow: Reviewed operation-specific confirmation clause recognition.
+const WRITE_CONFIRMATION_SCOPE_PATTERN = /(?:确认|批准|同意).{0,20}(?:写入|写文件|修改|创建|生成|保存|覆盖|删除)|(?:写入|写文件|修改|创建|生成|保存|覆盖|删除).{0,12}(?:前|之前).{0,24}(?:确认|批准|同意)|\b(?:confirmation|approval)\b.{0,32}\b(?:writ(?:e|ing)|creat(?:e|ing)|sav(?:e|ing)|overwrit(?:e|ing)|delet(?:e|ing))\b|\b(?:writ(?:e|ing)|creat(?:e|ing)|sav(?:e|ing)|overwrit(?:e|ing)|delet(?:e|ing))\b.{0,32}\b(?:confirmation|approval)\b/iu;
+// i18n-allow: Reviewed standalone anti-self-confirmation constraint; it never authorizes a write.
+const NO_SELF_CONFIRMATION_CLAUSE_PATTERN = /^(?:不要|不得|禁止|别).{0,8}(?:代替|替代|自行|自动|自己).{0,12}(?:用户|我)?.{0,8}(?:确认|批准|同意)[\s。.!！]*$|^\s*(?:do\s+not|don't|never)\s+(?:self[-\s]?confirm|auto[-\s]?confirm)[\s.!]*$/iu;
 
 const LOW_RISK_DESKTOP_COMMAND_PATTERN =
   /^(?:cmd(?:\.exe)?\s+\/c\s+start\b|start\s+|explorer(?:\.exe)?\b|rundll32\b|powershell(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|pwsh(?:\.exe)?\s+.*\b(?:start-process|invoke-item)\b|acad(?:\.exe)?\b|".+?\\(?:acad|wps|weixin|wechat|winword|excel|powerpnt|notepad)\.exe")/i;
 const DESKTOP_COMMAND_HIGH_RISK_PATTERN =
   /\b(?:setup|installer|install|uninstall|msiexec|reg\s+add|reg\s+delete|schtasks|sc\s+create|net\s+user|takeown|icacls|bcdedit|powershell\s+-enc|encodedcommand)\b/i;
+
+/** Inspect executable inputs, not filenames or data written by structured tools. */
+function executableArgumentText(toolName: string, args: Record<string, any>, capability?: CapabilityManifestEntry): string {
+  const name = toolName.toLowerCase();
+  const hasDeclaredExecution = capability?.metadataSources.sideEffects === 'tool_definition'
+    && capability.sideEffects.some(effect => effect.type === 'process_execution' || effect.type === 'installation');
+  const hasExecutionName = /(?:^|_)(?:run_command|execute_command|command|shell|terminal|code_execution|execute_code|execute_script|script_exec|python_exec|node_exec|database_query|sql|execute_query)(?:_|$)/i.test(name);
+  // Legacy/dynamic executors may not yet have a semantic manifest. Explicit
+  // executable fields still retain their conservative command boundary.
+  const hasExecutableField = ['command', 'cmd', 'commands', 'code', 'script', 'sql', 'executable', 'program']
+    .some(key => typeof args?.[key] === 'string' || Array.isArray(args?.[key]));
+  const desktopTyping = /^(?:desktop_ui_type|keyboard_type|type_text)$/i.test(name);
+  const desktopTask = name === 'computer_use';
+  if (!hasDeclaredExecution && !hasExecutionName && !hasExecutableField && !desktopTyping && !desktopTask) return '';
+  const keys = desktopTask ? ['task'] : desktopTyping ? ['text', 'content']
+    : ['command', 'cmd', 'commands', 'code', 'script', 'sql', 'query', 'expression', 'executable', 'program', 'argv', 'args'];
+  return keys.map(key => args?.[key])
+    .filter(value => typeof value === 'string' || Array.isArray(value))
+    .map(value => Array.isArray(value) ? value.filter(item => typeof item === 'string').join(' ') : value)
+    .join('\n');
+}
 
 export function getActionConstitutionPolicy(): ActionConstitutionPolicy {
   return {
@@ -66,7 +94,7 @@ export function evaluateActionConstitution(
   capability?: CapabilityManifestEntry,
 ): ActionConstitutionDecision {
   const domain = classifyAction(toolName, args, capability);
-  const argText = JSON.stringify(args || {});
+  const commandText = executableArgumentText(toolName, args, capability);
   const actionText = buildActionText(toolName, args, context);
   const risk = classifyActionRisk(toolName, args, context, capability);
 
@@ -78,7 +106,7 @@ export function evaluateActionConstitution(
     return confirm('desktop_control', `Sensitive client action "${sensitiveClientAction}" requires user confirmation`);
   }
 
-  if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) {
+  if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(commandText)) {
     return {
       level: 'forbidden',
       domain: 'destructive',
@@ -135,6 +163,10 @@ export function evaluateActionConstitution(
     return confirm(domain, `High-risk ${domain} action requires explicit user confirmation`);
   }
 
+  if (LOCAL_READ_TOOLS.has(toolName) && hasReadConfirmationBoundary(String(context?.actionIntent || ''))) {
+    return confirm(domain, 'The current instruction explicitly requires user confirmation before reading');
+  }
+
   if (
     domain === 'local_write'
     && hasExplicitConfirmationBoundary(context)
@@ -188,7 +220,7 @@ export function classifyActionRisk(
 ): ActionRisk {
   const domain = classifyAction(toolName, args, capability);
   const name = toolName.toLowerCase();
-  const argText = JSON.stringify(args || {}).toLowerCase();
+  const commandText = executableArgumentText(toolName, args, capability);
   const actionText = buildActionText(toolName, args, context);
   const externalStateChanging = isExternalStateChangingDomain(domain);
   // Conservative manifest-policy inference is useful for discovery and for
@@ -205,9 +237,9 @@ export function classifyActionRisk(
   // never be auto-approved as a generic low-risk "observe" action.
   if (name === 'client_repair_skill') return 'high';
   if (name === 'desktop_write_text_file') return 'high';
-  if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'high';
+  if (domain === 'destructive' || DESTRUCTIVE_ARG_PATTERN.test(commandText)) return 'high';
   if (name.includes('install') || name.includes('uninstall') || name.includes('delete') || name.includes('remove')) return 'high';
-  if (GIT_MUTATION_PATTERN.test(argText) || PACKAGE_INSTALL_PATTERN.test(argText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(argText)) return 'high';
+  if (GIT_MUTATION_PATTERN.test(commandText) || PACKAGE_INSTALL_PATTERN.test(commandText) || SHELL_DOWNLOAD_EXEC_PATTERN.test(commandText)) return 'high';
   if (isLowFrictionAuthorizedWebLoginAction(toolName, args)) return 'medium';
   if (isTrustedDesktopRunCommand(toolName, args) || isAutocadPlaybackAction(toolName, args)) return 'medium';
   if (externalStateChanging && isHighConsequenceExternalCommit(actionText, toolName)) return 'high';
@@ -230,8 +262,10 @@ export function canAutoApproveAction(toolName: string, args: Record<string, any>
     || toolName === 'self_improvement_queue'
     || toolName === 'self_improvement_activate'
   ) return false;
-  if (hasExplicitConfirmationBoundary(context)) return false;
   const domain = classifyAction(toolName, args);
+  const instruction = String(context?.actionIntent || '').trim();
+  if (hasReadConfirmationBoundary(instruction)) return false;
+  if (hasExplicitConfirmationBoundary(context) && !hasWriteOnlyConfirmationBoundary(toolName, instruction)) return false;
   const risk = classifyActionRisk(toolName, args, context);
   if (risk === 'high') return false;
   const actionText = buildActionText(toolName, args, context);
@@ -246,24 +280,41 @@ function hasExplicitConfirmationBoundary(context?: Pick<ToolContext, 'actionInte
   return EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN.test(String(context?.actionIntent || '').trim());
 }
 
+function hasWriteOnlyConfirmationBoundary(toolName: string, instruction: string): boolean {
+  if (!LOCAL_READ_TOOLS.has(toolName)) return false;
+  // Scope the current instruction, not an old receipt or a consumed write
+  // approval. Generic/ambiguous confirmation boundaries remain unchanged.
+  const boundaries = confirmationClauses(instruction).filter(clause => EXPLICIT_CONFIRMATION_BOUNDARY_PATTERN.test(clause));
+  return boundaries.some(clause => WRITE_CONFIRMATION_SCOPE_PATTERN.test(clause))
+    && boundaries.every(clause => WRITE_CONFIRMATION_SCOPE_PATTERN.test(clause) || NO_SELF_CONFIRMATION_CLAUSE_PATTERN.test(clause));
+}
+
+function confirmationClauses(instruction: string): string[] {
+  return instruction.split(/[，,。；;！!？?\r\n]+|\.\s+/u).map(clause => clause.trim()).filter(Boolean);
+}
+
+function hasReadConfirmationBoundary(instruction: string): boolean {
+  return confirmationClauses(instruction).some(clause => READ_CONFIRMATION_BOUNDARY_PATTERN.test(clause));
+}
+
 export function classifyAction(
   toolName: string,
   args: Record<string, any> = {},
   capability?: CapabilityManifestEntry,
 ): ActionDomain {
   const name = toolName.toLowerCase();
-  const argText = JSON.stringify(args || {}).toLowerCase();
+  const commandText = executableArgumentText(toolName, args, capability);
 
   const manifestDomain = capabilityDomain(capability);
   if (manifestDomain) {
-    if (DESTRUCTIVE_ARG_PATTERN.test(argText)) return 'destructive';
+    if (DESTRUCTIVE_ARG_PATTERN.test(commandText)) return 'destructive';
     return manifestDomain;
   }
 
   if (name === 'legal_message_intake_to_case') return 'observe';
   if (name === 'client_action') return getSensitiveClientAction(args) ? 'desktop_control' : 'observe';
   if (name === 'client_repair_skill') return 'local_write';
-  if (DESTRUCTIVE_ARG_PATTERN.test(argText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
+  if (DESTRUCTIVE_ARG_PATTERN.test(commandText) || /\b(delete|remove|wipe|format|kill|shutdown|reboot)\b/.test(name)) return 'destructive';
   if (name === 'desktop_ai_list_targets' || name === 'desktop_ai_discovery_plan') return 'observe';
   if (name === 'desktop_ai_register_target') return 'local_write';
   if (name === 'desktop_write_text_file') return 'local_write';

@@ -21,6 +21,7 @@ import {
 } from '../extensions/registry';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
 import { recentProviderProbeFailure } from './provider_health';
+import { buildModelExecutionAwareness } from '../cognition/vision_routing';
 import {
   normalizeProviderOutboundMessagesEvidence,
   type ProviderOutboundMessagesEvidence,
@@ -56,6 +57,25 @@ export interface LLMGetters {
 export interface DispatchedLLMResponse extends NormalizedLLMResponse {
   tier: 'local' | 'cloud';
   routing: ModelRoutingTrace;
+}
+
+function messagesForCandidate(
+  messages: NormalizedMessage[],
+  config: DispatchConfig,
+  candidate: { provider: string; model: string },
+): NormalizedMessage[] {
+  const firstConversationMessage = messages.findIndex(message => message.role !== 'system');
+  const insertAt = firstConversationMessage < 0 ? messages.length : firstConversationMessage;
+  // Each attempt receives a fresh note; neither the shared transcript nor the
+  // configured preference is mutated when a later candidate takes over.
+  return [
+    ...messages.slice(0, insertAt),
+    { role: 'system', content: buildModelExecutionAwareness({
+      provider: config.requestedProvider || config.provider,
+      model: config.requestedModel || config.model,
+    }, candidate) },
+    ...messages.slice(insertAt),
+  ];
 }
 
 function callArguments(config: DispatchConfig, provider: string, model: string) {
@@ -245,7 +265,7 @@ async function tryLocal(
     const startedAt = Date.now();
     try {
       const result = await makeLLMCallDirect(
-        messages,
+        messagesForCandidate(messages, config, candidate),
         toolDeclarations,
         callArguments(config, candidate.provider, candidate.model),
         ...getterArguments(getters),
@@ -408,7 +428,7 @@ async function dispatchOrderedCall(
     const startedAt = Date.now();
     try {
       const result = await makeLLMCallDirect(
-        messages,
+        messagesForCandidate(messages, config, candidate),
         toolDeclarations,
         callArguments(config, candidate.provider, candidate.model),
         ...getterArguments(getters),
@@ -519,7 +539,7 @@ export async function dispatchLLMCall(
     const startedAt = Date.now();
     try {
       const cloudResult = await makeLLMCallDirect(
-        messages,
+        messagesForCandidate(messages, config, fallback),
         toolDeclarations,
         callArguments(config, fallback.provider, fallback.model),
         ...getterArguments(getters),
@@ -797,7 +817,7 @@ async function attemptStreamingCandidate(
   visibility: CandidateVisibility,
 ): Promise<NormalizedLLMResponse> {
   const result = await makeLLMCallStreamingDirect(
-    messages,
+    messagesForCandidate(messages, config, candidate),
     toolDeclarations,
     callArguments(config, candidate.provider, candidate.model),
     visibility.accept,

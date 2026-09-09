@@ -33,17 +33,16 @@ describe('desktop operation mode autonomy sync', () => {
     return res.json();
   }
 
-  it('maps desktop Chat, Assistant, and Autonomy modes to the three autonomy levels', async () => {
-    const { getGateConfig } = await import('../server/autonomy/safety_gate');
-
-    await expect(putMode('chat')).resolves.toMatchObject({ autonomyLevel: 'reactive' });
-    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('reactive');
-
-    await expect(putMode('assistant')).resolves.toMatchObject({ autonomyLevel: 'semi' });
-    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('semi');
-
-    await expect(putMode('autonomous')).resolves.toMatchObject({ autonomyLevel: 'full' });
-    expect(getGateConfig('mode-sync-user').autonomyLevel).toBe('full');
+  it('accepts legacy mode values without changing background authorization or resource limits', async () => {
+    const { getGateConfig, saveGateConfig } = await import('../server/autonomy/safety_gate');
+    saveGateConfig({ autoProcessEnabled: false, maxTokensPerHour: 1234, requireIdle: true }, 'mode-sync-user');
+    const before = getGateConfig('mode-sync-user');
+    for (const mode of ['chat', 'assistant', 'autonomous']) {
+      await expect(putMode(mode)).resolves.toMatchObject({ ok: true, mode: 'assistant' });
+      expect(getGateConfig('mode-sync-user')).toEqual(before);
+    }
+    const response = await fetch(`${app.url}/api/preferences/operation_mode`, { headers });
+    expect(await response.json()).toEqual({ mode: 'assistant' });
   });
 
   it('does not treat Meeting as a fourth autonomy permission level', async () => {

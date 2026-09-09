@@ -80,7 +80,7 @@ function hasExplicitFailure(payload: unknown, acceptedStatuses = new Set<string>
   const status = statusFromPayload(value);
   return value.ok === false
     || value.success === false
-    || value.completed === false
+    || (value.completed === false && !(acceptedStatuses.has(status) && ['started', 'queued', 'running', 'waiting_confirmation', 'paused'].includes(status)))
     || value.verified === false
     || value.sent === false
     || value.submitted === false
@@ -182,6 +182,7 @@ function hasMeasurement(payload: unknown, rawResult: string): boolean {
 export function verifyCapabilityReceipt(
   capability: CapabilityManifestEntry | undefined,
   record: Pick<ToolExecutionRecord, 'result' | 'receipt' | 'error'>,
+  hostCorroboration?: ToolExecutionRecord['terminalVerification'],
 ): NonNullable<ToolExecutionRecord['terminalVerification']> {
   const strategy = capability?.verification.strategy || 'terminal_receipt';
   if (record.error) {
@@ -283,6 +284,7 @@ export function verifyCapabilityReceipt(
       && !['core', 'official'].includes(String(capability?.provenance.trust || ''))
     );
   if (providerOwnedDeclaration) {
+    if (hostCorroboration?.status === 'verified') return hostCorroboration;
     return {
       status: 'unverified',
       strategy,

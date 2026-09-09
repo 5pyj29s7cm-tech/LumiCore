@@ -22,7 +22,7 @@ describe('autonomy levels', () => {
     expect(isAutonomousWorkAllowed('level_full_user').allowed).toBe(true);
   });
 
-  it('keeps reactive mode as the only non-autonomous preset', async () => {
+  it('preserves the disabled setting from the legacy reactive preset', async () => {
     const { isAutonomousWorkAllowed, saveGateConfig } = await import('../server/autonomy/safety_gate');
 
     const config = saveGateConfig({ autonomyLevel: 'reactive' });
@@ -31,7 +31,7 @@ describe('autonomy levels', () => {
     expect(config.autonomyLevel).toBe('reactive');
     expect(config.autoProcessEnabled).toBe(false);
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toContain('reactive');
+    expect(decision.reason).toContain('disabled');
   });
 
   it('keeps semi mode low-friction without adding extra external-app gates', async () => {

@@ -225,6 +225,7 @@ describe('systematic naturalness regressions', () => {
         name: 'create_docx',
         arguments: { title: '客户报告' },
         result: 'DOCX created: D:\\lumi_output\\客户报告.docx (1200 bytes)',
+        terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'Created file verified by the tool engine.' },
       }, {
         name: 'desktop_path_info',
         arguments: { target: 'D:\\lumi_output\\客户报告.docx' },

@@ -83,6 +83,39 @@ describe('REST chat remote execution boundary', () => {
     });
   });
 
+  it('cancels the model and tool context when the HTTP client leaves', async () => {
+    let executionSignal: AbortSignal | undefined;
+    mocks.runWithTools.mockImplementationOnce((_messages, _registry, config, ...rest) => new Promise((_resolve, reject) => {
+      executionSignal = config.signal;
+      const context = rest[8];
+      expect(context.executionSignal).toBe(executionSignal);
+      executionSignal!.addEventListener('abort', () => reject(executionSignal!.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = fetch(`${baseUrl}/api/chat`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({ message: 'Describe this synthetic topic' }),
+    });
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(executionSignal).toBeDefined());
+    controller.abort();
+    await rejected;
+    await vi.waitFor(() => expect(executionSignal!.aborted).toBe(true));
+    expect(mocks.runWithTools).toHaveBeenCalledOnce();
+  });
+
+  it('terminates an already-started SSE response with an error frame', async () => {
+    mocks.runWithTools.mockRejectedValueOnce(new Error('Synthetic upstream failure'));
+    const response = await fetch(`${baseUrl}/api/chat?stream=true`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({ message: 'hello' }),
+    });
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const frames = (await response.text()).trim().split('\n\n').map(frame => JSON.parse(frame.replace(/^data: /, '')));
+    expect(frames.at(-1)).toMatchObject({ done: true, failed: true, code: expect.any(String), error: expect.any(String) });
+  });
+
   it('does not expose the shared model to an anonymous caller', async () => {
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',

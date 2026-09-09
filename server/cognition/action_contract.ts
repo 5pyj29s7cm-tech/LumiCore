@@ -1,6 +1,12 @@
+import { withoutNegatedLookupClauses } from './normalized_action_intent';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
+import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
+import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
+import { artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
-import { isInformationOnlyQuestion } from './tool_intent';
+import { hasExplicitNoToolInstruction, hasRequestedArtifactMutation, isInformationOnlyQuestion } from './tool_intent';
+import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';
+import { preservedSourceOutputScope } from './artifact_write_scope';
 import { isVideoPlaybackRequest } from './media_intent';
 import { parsePlaybackGoal, validatePlaybackVerification } from './playback_verification';
 import {
@@ -20,6 +26,7 @@ import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
   normalizeActionIntent,
+  withoutChatReplyDestination,
 } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
@@ -30,6 +37,7 @@ import {
 } from '../tools/receipt_payload';
 
 export type LumiActionContractKind =
+  | 'skill_authoring'
   | 'none'
   | 'messaging_read'
   | 'messaging_send'
@@ -351,7 +359,8 @@ export function extractExplicitArtifactTextRequirements(input: string): string[]
   const text = String(input || '');
   const requirements: string[] = [];
   const patterns = [
-    /(?:明确写出|原样写入|精确写入|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/gu,
+    // i18n-allow: Chinese exact user-supplied content recognition, not UI copy.
+    /(?:明确写出|原样写入|精确写入|(?:只|仅)写入|内容(?:为|是)|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/gu,
     /第(?:[一二三四五六七八九十百\d]+)行\s*[：:]?\s*[“"]([^”"\r\n]{1,1000})[”"]/gu,
     /\b(?:exactly\s+(?:include|write)|must\s+(?:include|contain))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/giu,
   ];
@@ -819,22 +828,9 @@ function isDesktopLaunchVerificationOnly(
 }
 
 export function requiresArtifactPostWriteReadback(input: string): boolean {
+  // i18n-allow: explicit post-write verification input recognition.
+  if (/(?:写完|保存完|创建完|生成完)(?:后|之后)?\s*(?:再|然后|并)?\s*(?:回读|重读|重新读取)/u.test(String(input || ''))) return true;
   return /(?:\u5199\u5165|\u4fdd\u5b58|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210).{0,48}(?:\u540e|\u4e4b\u540e|\u2192|->|\u7136\u540e|\u63a5\u7740|\u518d|\u5e76).{0,48}(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb)|(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb).{0,32}(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u62a5\u544a)|\bafter\s+(?:writing|saving|creating)\b[\s\S]{0,420}\b(?:read|verify|check)\b|\b(?:write|save|create)\b[\s\S]{0,220}\b(?:then|afterwards|next)\b[\s\S]{0,220}\b(?:read|verify|check)\b/iu.test(String(input || ''));
-}
-
-function artifactTargetFromRecord(record: ToolExecutionRecord): string {
-  const args = record.arguments || {};
-  const direct = String(
-    args.path || args.filePath || args.outputPath || args.targetPath || args.destination || '',
-  ).trim();
-  if (direct) return direct;
-  const text = String(record.result || '');
-  return text.match(/([A-Za-z]:[\\/][^\r\n"<>|*?]+\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))/i)?.[1]?.trim() || '';
-}
-
-function sameArtifactTarget(left: string, right: string): boolean {
-  const normalize = (value: string) => String(value || '').replace(/\//g, '\\').toLowerCase();
-  return Boolean(left && right && normalize(left) === normalize(right));
 }
 
 export function hasRequestedArtifactPostWriteReadback(
@@ -842,25 +838,7 @@ export function hasRequestedArtifactPostWriteReadback(
   taskText = '',
 ): boolean {
   if (!requiresArtifactPostWriteReadback(taskText)) return true;
-  let writeIndex = -1;
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    if (
-      !record.error
-      && /^(?:write_file|desktop_write_text_file|create_docx|create_xlsx|create_ppt|create_pdf)$/i.test(String(record.name || ''))
-    ) {
-      writeIndex = index;
-      break;
-    }
-  }
-  if (writeIndex < 0) return false;
-  const target = artifactTargetFromRecord(records[writeIndex]);
-  if (!target) return false;
-  return records.slice(writeIndex + 1).some(record => (
-    !record.error
-    && /^(?:read_file|read_docx|read_pdf|pdf_to_text|extract_document_text)$/i.test(String(record.name || ''))
-    && sameArtifactTarget(target, artifactTargetFromRecord(record))
-  ));
+  return Boolean(resolveArtifactDelivery(records)?.readback);
 }
 
 function buildCustomerOperationsContract(): LumiActionContract {
@@ -984,6 +962,7 @@ export function buildActionContract(input: string): LumiActionContract {
   const rawInput = String(input || '');
   const normalizedIntent = normalizeActionIntent(rawInput);
   const primaryTaskText = extractPrimaryTaskText(rawInput);
+  if (hasExplicitNoToolInstruction(primaryTaskText || rawInput)) return NONE_CONTRACT;
   if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
     const primaryContract = buildActionContract(primaryTaskText);
     if (
@@ -997,8 +976,21 @@ export function buildActionContract(input: string): LumiActionContract {
     ) return primaryContract;
   }
 
-  const text = compact(rawInput);
+  const text = compact(withoutNegatedLookupClauses(rawInput));
   if (!text) return NONE_CONTRACT;
+  const authoringIntent = classifySkillAuthoringIntent(rawInput);
+  if (['generate', 'save', 'install', 'publish'].includes(authoringIntent)
+    || authoringIntent === 'use' && /工作流|流程|\bworkflow\b/iu.test(rawInput)) { // i18n-allow: workflow execution intent recognition.
+    return withDefaults({
+      kind: 'skill_authoring', label: 'Skill/workflow authoring',
+      coreAction: `Complete the requested ${authoringIntent} lifecycle phase.`,
+      preparationIsNotCompletion: ['describing a skill', 'executing the example task instead of saving its capability'],
+      requiredEvidence: ['a verified current-turn receipt for the requested lifecycle phase'],
+      preferredTools: skillAuthoringTools(authoringIntent), verificationTools: [],
+      nextStep: 'Use the authoring receipt to report the exact draft, registration, or publication state; do not repeat successful creation.',
+      caution: 'A reviewed draft is not installed or executed. Registration does not prove a business task succeeded.',
+    });
+  }
   // A named persistent takeover-task query belongs to the takeover ledger,
   // not the active runtime-work ledger. Its deterministic quick command emits
   // a verified work_takeover_task_list receipt, so do not demand the unrelated
@@ -1233,10 +1225,11 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
+  const messageSourceText = withoutChatReplyDestination(text);
   if (
     !readOnlyArtifactInspection &&
-    matches(text, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
-    matches(text, /\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3|read|view|inspect|recent|history/i) &&
+    matches(messageSourceText, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
+    matches(messageSourceText, /\u770b\u770b|\u67e5\u770b|\u770b\u4e00\u4e0b|\u8bfb\u53d6|\u8bfb|\u6700\u8fd1|\u804a\u5929\u5185\u5bb9|\u804a\u5929\u8bb0\u5f55|\u603b\u7ed3|read|view|inspect|recent|history/i) &&
     !directedMessageSend &&
     !matches(text, /\u53d1\u9001|\u53d1\u7ed9|\u76f4\u63a5\u53d1|\u4f60\u6765\u53d1|\bsend\b/i)
   ) {
@@ -2898,11 +2891,12 @@ function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
   // Keep this branch deliberately narrower than generic artifact work. A
   // create/write/edit request may inspect the source first, but that read is
   // preparation rather than completion of the requested mutation.
-  const wantsSemanticRead = /(?:\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker)\b/iu.test(primary);
+  // i18n-allow: file analysis includes calculations over the accepted source.
+  const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker)\b/iu.test(primary);
   if (!wantsSemanticRead) return false;
   const hasFileSubject = /(?:\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:file|document|filepath|path)\b|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf|rtf)\b/iu.test(primary);
   if (!hasFileSubject) return false;
-  const wantsMutation = /(?:\u521b\u5efa|\u65b0\u5efa|\u5199\u5165|\u7f16\u8f91|\u4fee\u6539|\u66f4\u65b0|\u8ffd\u52a0|\u66ff\u6362|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u4fdd\u5b58|\u5bfc\u51fa|\u751f\u6210|\u8986\u76d6)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|overwrit(?:e|es|ing|ten))\b/iu.test(primary);
+  const wantsMutation = hasRequestedArtifactMutation(primary);
   return !wantsMutation;
 }
 
@@ -2933,6 +2927,7 @@ function taskTextAnchorsExactDocumentTarget(taskText: string, target: string): b
 export function documentReadMatchesRequestedTarget(
   record: ToolExecutionRecord,
   taskText: string,
+  acceptedTaskTarget?: AcceptedTaskTarget,
 ): boolean {
   // Target correlation is independent from content retention. Large structured
   // reads may be compacted before a later finalization pass, but their exact
@@ -2945,7 +2940,10 @@ export function documentReadMatchesRequestedTarget(
     || record.terminalVerification?.status === 'failed'
   ) return false;
   const target = exactDocumentReadTarget(record);
-  const primaryTask = compact(extractPrimaryTaskText(taskText));
+  const requestedTask = compact(extractPrimaryTaskText(taskText));
+  // The save-as destination belongs to output verification. It must not
+  // replace an explicitly preserved source or its server-owned continuation.
+  const primaryTask = preservedSourceOutputScope(requestedTask)?.sourceText || requestedTask;
   if (!target || !primaryTask) return false;
 
   // When the user supplied an absolute document path, basename equality is
@@ -2955,6 +2953,11 @@ export function documentReadMatchesRequestedTarget(
   ) || [];
   if (absoluteTargets.length > 0) {
     return absoluteTargets.some(candidate => sameExactDocumentTarget(candidate, target));
+  }
+
+  if (acceptedTaskTarget?.target.path) {
+    return acceptedTaskTarget.target.status !== 'rejected'
+      && sameExactDocumentTarget(acceptedTaskTarget.target.path, target);
   }
 
   const targetName = documentBasename(target);
@@ -2988,15 +2991,16 @@ export function documentReadMatchesRequestedTarget(
 function hasVerifiedExactReadOnlyArtifactEvidence(
   records: ToolExecutionRecord[],
   taskText: string,
+  acceptedTaskTarget?: AcceptedTaskTarget,
 ): boolean {
   if (!requestsExactReadOnlyArtifactInspection(taskText)) return false;
   return records.some(record => {
     if (
-      record.name !== 'read_file'
+      !CURRENT_DOCUMENT_READER_RE.test(record.name)
       || record.terminalVerification?.status !== 'verified'
       || !isSuccessfulExactDocumentRead(record)
     ) return false;
-    return documentReadMatchesRequestedTarget(record, taskText);
+    return documentReadMatchesRequestedTarget(record, taskText, acceptedTaskTarget);
   });
 }
 
@@ -3255,8 +3259,10 @@ export function hasCoreActionEvidence(
   taskText = '',
   taskCapsule?: TaskCapsuleV1 | null,
   currentTurn?: { requestId?: string; taskId?: string },
+  acceptedTaskTarget?: AcceptedTaskTarget,
 ): boolean {
   if (!contract.applies) return true;
+  if (contract.kind === 'skill_authoring') return Boolean(verifiedSkillAuthoringReceipt(taskText, records, currentTurn));
   const successful = expandSuccessfulRecords(records);
   const recoverableObservedOpen = contract.kind === 'desktop_operation'
     ? (() => {
@@ -3347,12 +3353,15 @@ export function hasCoreActionEvidence(
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'artifact_work') {
+    const resolvedTarget = acceptedTaskTarget || (taskCapsule?.target.path && taskCapsule.target.status !== 'rejected'
+      && (!currentTurn?.taskId || taskCapsule.taskId === currentTurn.taskId)
+      ? { target: taskCapsule.target, source: 'task' as const, sourceId: taskCapsule.taskId } : undefined);
     if (requestsExactReadOnlyArtifactInspection(taskText)) {
-      return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText);
+      return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText, resolvedTarget);
     }
-    if (!hasRequestedArtifactPostWriteReadback(records, taskText)) return false;
-    return successful.some(record => /write_file|create_|desktop_path_info|work_product_verify/i.test(record.name))
-      || hasVerifiedManifestCapabilityEvidence(contract, successful);
+    const current = successful.filter(record => artifactRecordMatchesTurn(record, currentTurn || {}));
+    if (!hasRequestedArtifactPostWriteReadback(current, taskText)) return false;
+    return current.some(isArtifactProducerRecord);
   }
   if (contract.kind === 'external_ai_request') {
     const hasSubmission = successful.some(record => {

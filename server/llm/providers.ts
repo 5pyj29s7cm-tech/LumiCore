@@ -39,7 +39,14 @@ export type MessageContent =
   | null
   | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }>;
 
-export type LLMResponseFormat = 'json_object';
+export type LLMResponseFormat = 'json_object' | {
+  type: 'json_schema';
+  json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean };
+};
+
+function responseFormatParameter(format?: LLMResponseFormat) {
+  return format === 'json_object' ? { type: 'json_object' as const } : format;
+}
 
 export type ReasoningProvider = string;
 
@@ -64,6 +71,8 @@ export interface LLMCallConfig {
   interactionId?: string;
   source?: string;
   responseFormat?: LLMResponseFormat;
+  /** Per-call opt-out for supported DeepSeek thinking APIs; never a saved preference. */
+  thinkingMode?: 'disabled';
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for one model attempt. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
@@ -631,7 +640,7 @@ type OpenAICompatibleRequest = {
   tool_choice?: string;
   max_tokens?: number;
   user?: string;
-  response_format?: { type: 'json_object' };
+  response_format?: ReturnType<typeof responseFormatParameter>;
 };
 
 function formatOpenAICompatibleRequest(
@@ -648,7 +657,7 @@ function formatOpenAICompatibleRequest(
     ...(hasTools ? { tools: params.toolDeclarations, tool_choice: 'auto' } : {}),
     ...(params.maxTokens ? { max_tokens: params.maxTokens } : {}),
     ...(params.userId ? { user: params.userId.replace(/[^a-zA-Z0-9_-]/g, '_') } : {}),
-    ...(params.responseFormat === 'json_object' ? { response_format: { type: 'json_object' as const } } : {}),
+    ...(params.responseFormat ? { response_format: responseFormatParameter(params.responseFormat) } : {}),
   };
 }
 
@@ -930,7 +939,7 @@ export function formatQwenRequest(params: {
   tools?: ToolDeclaration[];
   tool_choice?: string;
   max_tokens?: number;
-  response_format?: { type: 'json_object' };
+  response_format?: ReturnType<typeof responseFormatParameter>;
 } {
   const openaiMessages = buildOpenAICompatibleMessages(params.messages);
 
@@ -941,7 +950,7 @@ export function formatQwenRequest(params: {
     messages: openaiMessages,
     ...(hasTools ? { tools: params.toolDeclarations, tool_choice: 'auto' } : {}),
     ...(params.maxTokens ? { max_tokens: params.maxTokens } : {}),
-    ...(params.responseFormat === 'json_object' ? { response_format: { type: 'json_object' as const } } : {}),
+    ...(params.responseFormat ? { response_format: responseFormatParameter(params.responseFormat) } : {}),
     // DashScope does not support the OpenAI `user` parameter — omit it
   };
 }
@@ -1382,6 +1391,10 @@ export async function makeLLMCallDirect(
     if (config.provider === 'xiaomi') {
       if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
       delete params.max_tokens;
+    }
+    if (config.thinkingMode === 'disabled' && (config.provider === 'deepseek'
+      || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model)))) {
+      params.thinking = { type: 'disabled' };
     }
 
     const outboundSourceSlot = providerSourceUserSlot(params.messages);
@@ -1956,6 +1969,10 @@ export async function makeLLMCallStreamingDirect(
       if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
       delete params.max_tokens;
     }
+    if (config.thinkingMode === 'disabled' && (config.provider === 'deepseek'
+      || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model)))) {
+      params.thinking = { type: 'disabled' };
+    }
     // The official relay currently fails its SSE endpoint after an empty
     // handshake frame.  Use the reliable JSON response by default; callers
     // may explicitly opt in after verifying a relay deployment's streaming
@@ -2090,10 +2107,12 @@ export async function makeLLMCallStreamingDirect(
       const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
       const nonStreamingParams = { ...params, stream: false };
       try {
-        const response = await supervisor.request(() => client.chat.completions.create(
+        // A non-stream request resolves only after the complete answer. The
+        // connection/stream-handshake deadline must not truncate generation.
+        const response = await supervisor.completion(Promise.resolve().then(() => client.chat.completions.create(
           nonStreamingParams,
           { signal: supervisor.signal },
-        ));
+        )));
         const parsed = parseOpenAICompatibleResponse(response, toolDeclarations);
         if (!String(parsed.text || '').trim() && !(parsed.toolCalls?.length)) {
           supervisor.assertSemanticContent();

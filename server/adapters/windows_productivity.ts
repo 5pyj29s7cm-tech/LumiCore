@@ -52,6 +52,30 @@ $outlook = New-Object -ComObject Outlook.Application
 $ns = $outlook.GetNamespace('MAPI')
 `;
 
+const TARGET_OUTLOOK_EVENT = `
+if (-not [string]$payload.eventId -or -not [string]$payload.calendarId) {
+  [PSCustomObject]@{ ok = $false; status = 'target_required'; provider = 'outlook'; note = 'Observe the event first and supply its eventId and calendarId.' } | ConvertTo-Json -Compress
+  exit 0
+}
+$calendar = $ns.GetDefaultFolder(9)
+$found = $null
+if ([string]$calendar.EntryID -eq [string]$payload.calendarId) {
+  try { $found = $ns.GetItemFromID([string]$payload.eventId, [string]$calendar.StoreID) } catch { $found = $null }
+}
+if (-not $found -or [string]$found.Parent.EntryID -ne [string]$payload.calendarId) {
+  [PSCustomObject]@{ ok = $false; status = 'not_found'; provider = 'outlook' } | ConvertTo-Json -Compress
+  exit 0
+}
+if ([string]$found.Subject -ne [string]$payload.subject) {
+  [PSCustomObject]@{ ok = $false; status = 'stale_target'; provider = 'outlook'; note = 'The event changed after observation. Observe it again.' } | ConvertTo-Json -Compress
+  exit 0
+}
+if ($found.IsRecurring) {
+  [PSCustomObject]@{ ok = $false; status = 'unsupported'; provider = 'outlook'; note = 'Recurring event changes require explicit occurrence support.' } | ConvertTo-Json -Compress
+  exit 0
+}
+`;
+
 export const windowsProductivityAdapter: ProductivityAdapter = {
   id: 'windows.outlook_com',
   platform: 'windows',
@@ -69,6 +93,7 @@ foreach ($item in $items) {
   if ($item.Start -ge $start -and $item.Start -lt $finish) {
     $found += [PSCustomObject]@{
       id = [string]$item.EntryID
+      calendarId = [string]$calendar.EntryID
       subject = [string]$item.Subject
       start = $item.Start.ToString('o')
       end = $item.End.ToString('o')
@@ -92,6 +117,7 @@ foreach ($item in $items) {
   if ($item.Start -ge $start -and $item.Start -lt $finish) {
     $found += [PSCustomObject]@{
       id = [string]$item.EntryID
+      calendarId = [string]$calendar.EntryID
       subject = [string]$item.Subject
       start = $item.Start.ToString('o')
       end = $item.End.ToString('o')
@@ -146,44 +172,26 @@ $item.ReminderSet = $true
 $item.ReminderMinutesBeforeStart = [int]$payload.reminderMinutes
 $item.AllDayEvent = [bool]$payload.allDay
 $item.Save()
-[PSCustomObject]@{ ok = $true; status = 'created'; created = $true; provider = 'outlook'; eventId = [string]$item.EntryID; subject = [string]$item.Subject } | ConvertTo-Json -Compress
+[PSCustomObject]@{ ok = $true; status = 'created'; created = $true; provider = 'outlook'; eventId = [string]$item.EntryID; calendarId = [string]$item.Parent.EntryID; subject = [string]$item.Subject } | ConvertTo-Json -Compress
 `, input),
 
   modifyEvent: async input => runPowerShell(`
 ${OPEN_OUTLOOK}
-$calendar = $ns.GetDefaultFolder(9)
-$calendar.Items.IncludeRecurrences = $true
-$found = $null
-foreach ($item in $calendar.Items) {
-  if ($item.Subject -eq [string]$payload.subject -and $item.Start -ge [DateTime]::Now.AddDays(-1)) { $found = $item; break }
-}
-if (-not $found) {
-  [PSCustomObject]@{ ok = $false; status = 'not_found'; updated = $false; provider = 'outlook'; subject = [string]$payload.subject } | ConvertTo-Json -Compress
-  exit 0
-}
+${TARGET_OUTLOOK_EVENT}
 if ($null -ne $payload.newSubject -and [string]$payload.newSubject) { $found.Subject = [string]$payload.newSubject }
 if ($null -ne $payload.newStart -and [string]$payload.newStart) { $found.Start = [DateTime]::Parse([string]$payload.newStart) }
 if ($null -ne $payload.newEnd -and [string]$payload.newEnd) { $found.End = [DateTime]::Parse([string]$payload.newEnd) }
 if ($null -ne $payload.newLocation) { $found.Location = [string]$payload.newLocation }
 if ($null -ne $payload.newBody) { $found.Body = [string]$payload.newBody }
 $found.Save()
-[PSCustomObject]@{ ok = $true; status = 'updated'; updated = $true; provider = 'outlook'; eventId = [string]$found.EntryID; subject = [string]$found.Subject } | ConvertTo-Json -Compress
+[PSCustomObject]@{ ok = $true; status = 'updated'; updated = $true; provider = 'outlook'; eventId = [string]$found.EntryID; calendarId = [string]$payload.calendarId; subject = [string]$found.Subject } | ConvertTo-Json -Compress
 `, input),
 
   deleteEvent: async input => runPowerShell(`
 ${OPEN_OUTLOOK}
-$calendar = $ns.GetDefaultFolder(9)
-$calendar.Items.IncludeRecurrences = $true
-$found = $null
-foreach ($item in $calendar.Items) {
-  if ($item.Subject -eq [string]$payload.subject) { $found = $item; break }
-}
-if (-not $found) {
-  [PSCustomObject]@{ ok = $false; status = 'not_found'; deleted = $false; provider = 'outlook'; subject = [string]$payload.subject } | ConvertTo-Json -Compress
-  exit 0
-}
+${TARGET_OUTLOOK_EVENT}
 $eventId = [string]$found.EntryID
 $found.Delete()
-[PSCustomObject]@{ ok = $true; status = 'deleted'; deleted = $true; provider = 'outlook'; eventId = $eventId; subject = [string]$payload.subject } | ConvertTo-Json -Compress
+[PSCustomObject]@{ ok = $true; status = 'deleted'; deleted = $true; provider = 'outlook'; eventId = $eventId; calendarId = [string]$payload.calendarId; subject = [string]$payload.subject } | ConvertTo-Json -Compress
 `, input),
 };

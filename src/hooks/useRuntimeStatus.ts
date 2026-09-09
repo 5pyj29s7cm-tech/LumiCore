@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/services/apiClient';
 import { socketService } from '@/services/socketService';
 import type { ConversationFocusThread } from './useFocusThreads';
+import { isCurrentScopeRequest } from '@/components/scopeRequestGuard';
 
 export interface RuntimeEvidenceReceipt {
   receiptId: string;
@@ -82,9 +83,13 @@ export interface StructuredRuntimeStatus {
   };
 }
 
-export function useRuntimeStatus(input: { enabled?: boolean; scopeKey?: string } = {}) {
+export function useRuntimeStatus(input: { enabled?: boolean; scopeKey?: string; userId?: string } = {}) {
   const { enabled = true, scopeKey = 'personal' } = input;
   const [status, setStatus] = useState<StructuredRuntimeStatus | null>(null);
+  const ownerKey = JSON.stringify([input.userId || '', scopeKey]);
+  const [statusOwner, setStatusOwner] = useState(ownerKey);
+  const activeOwnerRef = useRef(ownerKey);
+  activeOwnerRef.current = ownerKey;
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState('');
   const generationRef = useRef(0);
@@ -96,24 +101,38 @@ export function useRuntimeStatus(input: { enabled?: boolean; scopeKey?: string }
       return;
     }
     const generation = ++generationRef.current;
+    const request = { scopeKey: ownerKey, generation };
     if (!hasStatusRef.current) setLoading(true);
     try {
       const response = await apiFetch('/api/runtime/status', { signal: AbortSignal.timeout(6_000) });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `runtime_status_http_${response.status}`);
-      if (generation !== generationRef.current) return;
+      if (!isCurrentScopeRequest(request, activeOwnerRef.current, generationRef.current)) return;
+      const domain = scopeKey.startsWith('work:') ? 'work' : 'personal';
+      const orgId = domain === 'work' ? scopeKey.slice(5) : '';
+      if (payload.scope?.domain !== domain || String(payload.scope?.orgId || '') !== orgId) {
+        throw new Error('runtime_status_scope_mismatch');
+      }
       setStatus(payload as StructuredRuntimeStatus);
+      setStatusOwner(ownerKey);
       hasStatusRef.current = true;
       setError('');
     } catch (refreshError: any) {
-      if (generation !== generationRef.current) return;
+      if (!isCurrentScopeRequest(request, activeOwnerRef.current, generationRef.current)) return;
+      setStatus(null);
+      hasStatusRef.current = false;
       setError(String(refreshError?.message || 'runtime_status_failed'));
     } finally {
-      if (generation === generationRef.current) setLoading(false);
+      if (isCurrentScopeRequest(request, activeOwnerRef.current, generationRef.current)) setLoading(false);
     }
-  }, [enabled]);
+  }, [enabled, ownerKey, scopeKey]);
 
   useEffect(() => {
+    generationRef.current += 1;
+    hasStatusRef.current = false;
+    setStatus(null);
+    setStatusOwner(ownerKey);
+    setError('');
     if (!enabled) {
       generationRef.current += 1;
       hasStatusRef.current = false;
@@ -152,7 +171,7 @@ export function useRuntimeStatus(input: { enabled?: boolean; scopeKey?: string }
       socket.off('audio:work_progress', scheduleRefresh);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, refresh, scopeKey]);
+  }, [enabled, refresh, scopeKey, ownerKey]);
 
-  return { status, loading, error, refresh };
+  return { status: statusOwner === ownerKey ? status : null, loading, error, refresh };
 }

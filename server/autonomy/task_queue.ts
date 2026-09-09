@@ -103,6 +103,19 @@ export interface AutonomousTaskLeaseInput {
   durationMs?: number;
 }
 
+/** Shared scope boundary for readers and controls of the same task. */
+export function autonomousTaskMatchesScope(
+  task: Pick<AutonomousTask, 'domain' | 'orgId'>,
+  scope: { domain: 'personal' | 'work'; orgId?: string },
+): boolean {
+  const domain = task.domain === 'work' ? 'work' : 'personal';
+  const orgId = domain === 'work' ? String(task.orgId || '').trim() : '';
+  const requestedOrg = String(scope.orgId || '').trim();
+  if (scope.domain === 'work' && !requestedOrg) return false;
+  if (domain === 'work' && !orgId) return false;
+  return domain === scope.domain && (domain === 'personal' || orgId === requestedOrg);
+}
+
 const MAX_QUEUE_SIZE = 20;
 const MAX_HISTORY = 200;
 const TASK_TTL_DAYS = 7;

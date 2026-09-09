@@ -68,7 +68,7 @@ export function CommandCenterPlanner({
   conversationId: string;
   onDiscuss: (prompt: string) => void;
 }) {
-  const { workDomain, orgConnection, operationMode, setOperationMode } = useApp();
+  const { workDomain, orgConnection } = useApp();
   const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const scopeKey = `${isWork ? 'work' : 'personal'}:${isWork ? orgConnection?.orgId || '' : ''}`;
   const [plans, setPlans] = useState<CommandCenterPlan[]>([]);
@@ -192,7 +192,6 @@ export function CommandCenterPlanner({
       setTitle('');
       setInstruction('');
       setShowCreate(false);
-      if (cadence !== 'none' && operationMode !== 'autonomous') setNotice(copy.savedWaitingForMode);
       await refresh(true);
     } catch (cause) {
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
@@ -307,11 +306,6 @@ export function CommandCenterPlanner({
       </button>
     </div>
 
-    {operationMode !== 'autonomous' && <div data-command-center-mode-notice className="mb-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-xs leading-5 text-amber-100/80">
-      <p>{copy.modeRequired}</p>
-      <button type="button" onClick={() => setOperationMode('autonomous')} className="mt-2 rounded-lg border border-amber-200/25 px-3 py-1.5 font-semibold hover:bg-amber-200/10">{copy.enableAutonomous}</button>
-    </div>}
-
     {showCreate && <div className="mb-4 space-y-3 rounded-2xl border border-cyan-300/14 bg-[#09121c]/88 p-3 shadow-xl shadow-black/20">
       <div className="grid grid-cols-3 gap-1.5">
         {(['daily_task', 'long_term_goal', 'periodic_report'] as PlanKind[]).map(value => {
@@ -346,7 +340,7 @@ export function CommandCenterPlanner({
     </div>}
 
     {error && <div className="mb-3 rounded-xl border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] text-rose-100/70">{error}</div>}
-    {notice && !(operationMode === 'autonomous' && notice === copy.savedWaitingForMode) && <div className="mb-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[0.05] px-3 py-2 text-[10px] text-cyan-100/70">{notice}</div>}
+    {notice && <div className="mb-3 rounded-xl border border-cyan-300/15 bg-cyan-300/[0.05] px-3 py-2 text-[10px] text-cyan-100/70">{notice}</div>}
     {loading ? <div className="flex flex-1 items-center justify-center text-cyan-100/35"><Loader2 size={18} className="animate-spin" /></div> : plans.length === 0 ? (
       <button type="button" onClick={() => setShowCreate(true)} className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.08] text-center text-white/30 hover:border-cyan-300/18 hover:text-white/45">
         <Target size={28} className="mb-3 text-cyan-200/25" />
@@ -386,7 +380,7 @@ export function CommandCenterPlanner({
               {plan.authorizationBlockedReason && plan.status !== 'completed' ? <div data-command-center-authorization-blocker className="mt-2 text-xs leading-5 text-amber-100/80">
                 <p>{copy.authorizationRequired}</p>
                 <button type="button" onClick={() => void updatePlan(plan, { reauthorize: true, status: 'active' }).catch(() => setError(feedbackCopy.controlError))} className="mt-1 rounded-lg border border-amber-200/25 px-2 py-1 font-semibold">{copy.reauthorize}</button>
-              </div> : plan.cadence !== 'none' && plan.status === 'active' && operationMode !== 'autonomous' && <p data-command-center-waiting-mode className="mt-2 text-xs text-amber-100/75">{copy.waitingForMode}</p>}
+              </div> : null}
             </div>
           </div>
           {task && (

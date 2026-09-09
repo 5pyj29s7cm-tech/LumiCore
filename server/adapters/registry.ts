@@ -159,18 +159,15 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       notes: 'Preferred route for Lumi UI control. Use this before mouse/keyboard control inside Lumi itself.',
     },
     {
-      id: 'client.modes',
-      label: 'Client Modes',
+      id: 'client.modes', // Stable adapter ID retained for compatibility.
+      label: 'Meeting capture',
       category: 'client',
       status: hasState ? 'ready' : 'available',
-      actions: [
-        ...LUMI_OPERATION_MODE_IDS.map(mode => `set_client_mode(${mode})`),
-        'start_meeting_mode',
-      ],
-      surfaces: ['mode switcher', 'voice', 'chat', 'meeting'],
+      actions: ['start_meeting_mode', 'end_meeting_mode'],
+      surfaces: ['voice', 'meeting'],
       requiresConfirmation: false,
-      diagnostics: state?.mode ? [`Current mode: ${state.mode}`] : [],
-      notes: 'This adapter describes exactly three persistent operation modes: Chat, Assistant, and Autonomous. It is a capability-registry entry, not a live client.modes state field. Chat is conversation-first; an explicit foreground action can borrow the Assistant manifest for that turn without persistently changing the visible mode. Assistant is user-present high-permission work. Autonomous adds continuous/background work. Meeting is an explicit temporary capture surface, not a fourth permission mode.',
+      diagnostics: state?.mode === 'meeting' ? ['Meeting capture active'] : [],
+      notes: 'Lumi has no selectable operation modes. Meeting is a temporary capture function. This adapter is not a live client.modes state field.',
     },
     {
       id: 'client.self_intro_demo',
@@ -284,7 +281,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `autoProcess=${gate.autoProcessEnabled}`,
       ].filter(Boolean),
       safety: 'Reading runtime status is safe. Assistant and Autonomous execution do not need per-tool permission popups. Changing startup/runtime settings, enabling recurring workflows, or crossing high-consequence boundaries still requires explicit confirmation or handoff. Hidden-to-background, live backend health, and autonomous execution are distinct states.',
-      notes: 'Use before promising 24-hour availability, background continuity, restart survival, or unattended task execution. Resident runtime depends on the desktop client/server actually running; autonomous work additionally depends on desktop mode, autonomy policy, token budget, and enabled workflow limits. Assistant is low-friction by default instead of waiting for idle time.',
+      notes: 'Use before promising 24-hour availability, background continuity, restart survival, or unattended task execution. Resident runtime depends on the desktop client/server actually running; background work additionally depends on authorization, workflow policy, token budget, and enabled workflow limits. Assistant is low-friction by default instead of waiting for idle time.',
     },
     {
       id: 'client.visible_execution_habits',
@@ -438,7 +435,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         `autoProcess=${gate.autoProcessEnabled}`,
         `maxConsecutiveTasks=${gate.maxConsecutiveTasks}`,
       ],
-      notes: 'The desktop has three permission modes: Chat is conversation-first and may borrow Assistant foreground capabilities for an explicit action in the current turn, Assistant is user-present high-permission execution without ordinary tool prompts, and Autonomy has the same practical permissions plus continuous 24h/background operation. Launch-at-login and close-to-background only make Lumi resident when the client/server are alive; workflows then run according to autonomy policy, token budgets, enabled workflow limits, and high-consequence hard boundaries.',
+      notes: 'Lumi uses one personal core. Tools follow current task authorization and high-consequence confirmations. Launch-at-login and close-to-background keep the client resident; enabled background workflows still follow token budgets and schedules.',
     },
     {
       id: 'automation.work_takeover_tasks',

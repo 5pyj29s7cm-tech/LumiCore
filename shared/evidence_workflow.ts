@@ -23,6 +23,8 @@ export interface EvidenceWorkflowStepBlueprint {
   order: number;
   executionMode: EvidenceWorkflowExecutionMode;
   tool?: string;
+  /** Exact expected artifact/resource identity fixed before execution. */
+  targetIdentity?: string;
   verificationRequired?: boolean;
   requiredEvidence?: string[];
   confirmationRequired?: string[];
@@ -101,6 +103,7 @@ function normalizeBlueprints(blueprints: EvidenceWorkflowStepBlueprint[]): Evide
       order: Number.isFinite(Number(blueprint.order)) ? Number(blueprint.order) : index,
       executionMode: blueprint.executionMode,
       tool,
+      targetIdentity: compact(blueprint.targetIdentity, 2000) || undefined,
       // Any tool-backed step is evidence-bearing by definition. Callers may
       // require verification for additional manual/assisted steps, but cannot
       // disable receipt verification for an actual tool execution.

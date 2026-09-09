@@ -148,7 +148,7 @@ describe('main voice decode, queue and request ownership', () => {
       client.deliver('audio:status', { ...packet('a'), status: 'listening' });
     });
     expect(hook.result.current.callState).toBe('speaking');
-    expect(fixture.decode).toHaveBeenCalledTimes(1);
+    expect(fixture.decode).toHaveBeenCalledTimes(2);
     await act(async () => { fixture.sources[0].onended(); });
     expect(hook.result.current.callState).toBe('speaking');
     expect(fixture.decode).toHaveBeenCalledTimes(2);
@@ -192,7 +192,7 @@ describe('main voice decode, queue and request ownership', () => {
       hook.result.current.interrupt();
     });
     await act(async () => { decode.resolve({ duration: 2 }); client.deliver('audio:response', packet('a')); });
-    expect(fixture.sources).toHaveLength(0); expect(fixture.decode).toHaveBeenCalledOnce();
+    expect(fixture.sources).toHaveLength(0); expect(fixture.decode).toHaveBeenCalledTimes(2);
     await act(async () => {
       client.deliver('audio:status', { ...packet('b'), status: 'thinking' });
       client.deliver('audio:response', packet('b'));
@@ -252,5 +252,42 @@ describe('main voice decode, queue and request ownership', () => {
     expect(hook.result.current.callState).toBe('listening');
     expect(hook.result.current.error).toContain('text reply is still available');
     expect(fixture.tracks[0].stop).not.toHaveBeenCalled();
+  });
+
+  it('predecodes only the next queued packet while playback remains ordered', async () => {
+    const second = deferred<{ duration: number }>();
+    fixture.decode.mockResolvedValueOnce({ duration: 2 }).mockReturnValueOnce(second.promise);
+    const { client, packet } = await mainCall();
+    await act(async () => {
+      client.deliver('audio:response', packet('ordered'));
+      client.deliver('audio:response', packet('ordered'));
+      client.deliver('audio:response', packet('ordered'));
+    });
+    expect(fixture.decode).toHaveBeenCalledTimes(2);
+    expect(fixture.sources).toHaveLength(1);
+    await act(async () => { second.resolve({ duration: 3 }); });
+    expect(fixture.sources).toHaveLength(1);
+    await act(async () => { fixture.sources[0].onended(); });
+    expect(fixture.decode).toHaveBeenCalledTimes(3);
+    expect(fixture.sources).toHaveLength(2);
+    expect(fixture.sources[1].buffer.duration).toBe(3);
+  });
+
+  it('acknowledges playback with client-local timing rather than incoming metadata', async () => {
+    const { client, packet } = await mainCall();
+    await act(async () => {
+      client.deliver('audio:response', {
+        ...packet('timed'), receivedAt: -9_000_000,
+        clientDecodeMs: -42, clientReceiptToPlaybackMs: -84,
+        preparedAudio: { context: {}, promise: Promise.resolve({}) },
+      });
+    });
+    await vi.waitFor(() => expect(client.outputs.some(([event]) => event === 'audio:playback_started')).toBe(true));
+    const ack = client.outputs.find(([event]) => event === 'audio:playback_started')![1];
+    expect(ack).toMatchObject({ requestId: 'timed', clientDecodeMs: expect.any(Number), clientReceiptToPlaybackMs: expect.any(Number) });
+    expect(ack.clientDecodeMs).toBeGreaterThanOrEqual(0);
+    expect(ack.clientReceiptToPlaybackMs).toBeGreaterThanOrEqual(ack.clientDecodeMs);
+    expect(ack.clientReceiptToPlaybackMs).toBeLessThan(5_000);
+    expect(fixture.decode).toHaveBeenCalledOnce();
   });
 });

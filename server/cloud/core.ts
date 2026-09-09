@@ -56,21 +56,26 @@ export function classifyCloudError(error: Error, provider?: string): ClassifiedE
     return { category: 'circuit_open', message: error.message, isRetryable: true, provider };
   }
 
-  if (
+  const billingFailure = hasStatus(402)
+    || msg.includes('overdue')
+    || msg.includes('payment required')
+    || msg.includes('insufficient balance')
+    || msg.includes('account is in good standing')
+    || msg.includes('free quota exhausted')
+    || msg.includes('use free tier only');
+
+  // Some official upstreams report an exhausted free tier as HTTP 403.
+  // Its explicit billing detail is more precise than the generic status.
+  if (!billingFailure && (
     msg.includes('not configured') ||
     msg.includes('invalid api key') ||
     msg.includes('unauthorized') ||
     msg.includes('authentication') ||
     hasStatus(401, 403)
-  ) {
+  )) {
     return { category: 'auth', message: error.message, isRetryable: false, provider };
   }
 
-  const billingFailure = hasStatus(402)
-    || msg.includes('overdue')
-    || msg.includes('payment required')
-    || msg.includes('insufficient balance')
-    || msg.includes('account is in good standing');
   if (
     billingFailure ||
     hasStatus(429) ||

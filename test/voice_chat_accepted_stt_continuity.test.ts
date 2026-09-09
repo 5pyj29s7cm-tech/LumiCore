@@ -62,6 +62,9 @@ vi.mock('../server/llm/providers', async importOriginal => {
 
 vi.mock('../server/llm/adapter', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/llm/adapter')>();
+  // Observe the transport handoff without replacing any loop decisions,
+  // tool execution, replay protection, cancellation, or completion policy.
+  mocks.runWithTools.mockImplementation(actual.runWithTools);
   return { ...actual, runWithTools: mocks.runWithTools };
 });
 
@@ -105,7 +108,7 @@ vi.mock('../server/conversation/summary_scheduler', async importOriginal => {
   return { ...actual, scheduleConversationSummary: vi.fn() };
 });
 
-import { initDatabase, readDB } from '../db_layer';
+import { initDatabase, readDB, querySQL } from '../db_layer';
 import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import { getMessages } from '../server/conversation/manager';
@@ -118,9 +121,9 @@ import { saveVoiceprint } from '../server/biometrics/store';
 import { registerChatHandler } from '../server/socket/chat';
 import { registerDeviceHandlers } from '../server/socket/device';
 import { registerVoiceHandlers } from '../server/socket/voice';
-import { executeToolCall } from '../server/tools/execution_engine';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
+import { getPendingConfirmation, clearAllPendingConfirmationsForTests } from '../server/tools/pending_confirmation';
 
 function waitForEvent<T>(
   socket: ClientSocket,
@@ -210,77 +213,54 @@ describe('accepted STT Voice -> Chat task continuity', () => {
       sampleCount: 1,
     });
 
-    mocks.makeLLMCall.mockImplementation(async (_messages: any[], _tools: any[], options: any) => ({
-      text: options?.source === 'chat_intent_classifier'
-        ? JSON.stringify({ category: 'command', confidence: 0.99, entities: {} })
-        : JSON.stringify({ correctsIdentity: false }),
-      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-    }));
+    mocks.makeLLMCall.mockImplementation(async (messages: any[], declarations: any[], options: any) => {
+      if (declarations.length && mocks.runWithTools.mock.calls.length) {
+        return mocks.makeLLMCallStreaming(messages, declarations, options, undefined);
+      }
+      return {
+        text: options?.source === 'chat_intent_classifier'
+          ? JSON.stringify({ category: 'command', confidence: 0.99, entities: {} })
+          : JSON.stringify({ correctsIdentity: false }),
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      };
+    });
 
-    let voiceModelIteration = 0;
+    const modelIterations = new Map<string, number>();
     mocks.makeLLMCallStreaming.mockImplementation(async (...args: any[]) => {
-      voiceModelIteration += 1;
       const [messages, declarations, options, onChunk] = args;
-      providerInputs.push({ channel: 'voice', messages, declarations, options });
-      if (voiceModelIteration === 1) {
+      const context = mocks.runWithTools.mock.calls.at(-1)?.[11] as Record<string, any>;
+      const channel = String(context?.source || '').startsWith('voice') ? 'voice' : 'chat';
+      const iterationKey = `${channel}:${context?.requestId}`;
+      const iteration = (modelIterations.get(iterationKey) || 0) + 1;
+      modelIterations.set(iterationKey, iteration);
+      providerInputs.push({ channel, messages, declarations, options, context });
+      if (iteration === 1) {
+        const targetPath = channel === 'voice' ? missingPath : fixturePath;
         return {
           text: '',
           toolCalls: [
             {
-              id: `voice-search-missing-${suffix}`,
+              id: `${channel}-search-${suffix}`,
               name: 'search_files',
-              arguments: { directory: isolatedDataDir, pattern: missingPath },
+              arguments: { directory: isolatedDataDir, pattern: path.basename(targetPath) },
             },
             {
-              id: `voice-read-missing-${suffix}`,
+              id: `${channel}-read-${suffix}`,
               name: 'read_file',
-              arguments: { path: missingPath },
+              arguments: { path: targetPath },
             },
           ],
           usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
         };
       }
-      const text = '我没有找到你指定的文件。请告诉我正确路径，我会接着这个任务继续读取。';
+      const text = channel === 'voice'
+        ? '我没有找到你指定的文件。请告诉我正确路径，我会接着这个任务继续读取。'
+        : `已经按你的纠正读取了正确文件，内容是：${fixtureText}`;
       onChunk?.(text);
       return {
         text,
         toolCalls: [],
         usage: { promptTokens: 12, completionTokens: 8, totalTokens: 20 },
-      };
-    });
-
-    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
-      const messages = args[0] as any[];
-      const onToolCall = args[3] as ((record: Record<string, any>) => void) | undefined;
-      const context = args[11] as Record<string, any>;
-      if (context?.source === 'voice_guard_recovery') {
-        return {
-          text: '我没有找到你指定的文件。请告诉我正确路径，我会接着这个任务继续读取。',
-          toolCalls: [],
-          usageRecords: [],
-        };
-      }
-      providerInputs.push({ channel: 'chat', messages, context });
-      const searchRecord = await executeToolCall({
-        registry: toolRegistry,
-        id: `chat-search-correct-${suffix}`,
-        name: 'search_files',
-        arguments: { directory: isolatedDataDir, pattern: path.basename(fixturePath) },
-        context,
-      });
-      onToolCall?.(searchRecord);
-      const readRecord = await executeToolCall({
-        registry: toolRegistry,
-        id: `chat-read-correct-${suffix}`,
-        name: 'read_file',
-        arguments: { path: fixturePath },
-        context,
-      });
-      onToolCall?.(readRecord);
-      return {
-        text: `已经按你的纠正读取了正确文件，内容是：${fixtureText}`,
-        toolCalls: [searchRecord, readRecord],
-        usageRecords: [],
       };
     });
 
@@ -528,11 +508,15 @@ describe('accepted STT Voice -> Chat task continuity', () => {
         requestId: voiceRequestId,
         status: 'terminal',
       });
-    expect(getConversationActionStateByTaskId(readDB(), {
+    const blockedVoiceState = getConversationActionStateByTaskId(readDB(), {
       conversationId,
       userId,
       taskId: voiceTaskId,
-    })).toMatchObject({ taskId: voiceTaskId, status: 'blocked', unfinished: true });
+    });
+    expect(blockedVoiceState).toMatchObject({ taskId: voiceTaskId, status: 'blocked', unfinished: true });
+    expect(blockedVoiceState?.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'read_file', arguments: { path: missingPath }, error: expect.any(String) }),
+    ]));
 
     const voiceProviderInput = providerInputs.find(input => input.channel === 'voice');
     expect(voiceProviderInput?.declarations?.map((item: any) => item.function?.name))
@@ -601,6 +585,12 @@ describe('accepted STT Voice -> Chat task continuity', () => {
       requestId: chatRequestId,
       conversationId,
     });
+    expect(chatProviderInput?.context?.priorToolRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'read_file', arguments: { path: missingPath }, error: expect.any(String) }),
+    ]));
+    expect(mocks.runWithTools.mock.calls.map(call => call[11]?.source)).toEqual(expect.arrayContaining(['voice', 'chat']));
+    expect(chatProviderInput?.declarations?.map((item: any) => item.function?.name))
+      .toEqual(expect.arrayContaining(['search_files', 'read_file']));
     const rawChatInput = (chatProviderInput?.messages || [])
       .map((message: any) => String(message?.content || ''))
       .join('\n');
@@ -659,4 +649,266 @@ describe('accepted STT Voice -> Chat task continuity', () => {
     expect((readDB().conversations || []).find((row: any) => row.id === conversationId)
       ?.pendingActionContinuation).toBeUndefined();
   });
+
+  it('keeps a second confirmation waiting after a voice-approved first write executes through the shared loop', async () => {
+    const firstPath = path.join(isolatedDataDir, `s6-confirm-first-${suffix}.txt`);
+    const secondPath = path.join(isolatedDataDir, `s6-confirm-second-${suffix}.txt`);
+    const firstArgs = { path: firstPath, content: `first confirmed ${suffix}` };
+    const secondArgs = { path: secondPath, content: `second pending ${suffix}` };
+    const proposalText = `请用 write_file 创建两个文件：${firstPath} 内容为 ${firstArgs.content}；${secondPath} 内容为 ${secondArgs.content}。必须先等待我确认才能写第一份，写第二份前也必须等待我确认，不得自行确认。`;
+    mocks.runWithTools.mockClear();
+    mocks.makeLLMCallStreaming.mockImplementation(async (...args: any[]) => {
+      const context = mocks.runWithTools.mock.calls.at(-1)?.[11];
+      const alreadyWroteFirst = context?.priorToolRecords?.some((record: any) => (
+        record.name === 'write_file' && record.arguments?.path === firstPath && record.adapterStarted === true && !record.error
+      ));
+      return {
+        text: '',
+        toolCalls: alreadyWroteFirst
+          ? [{ id: `second-pending-${suffix}`, name: 'write_file', arguments: secondArgs }]
+          : [
+              { id: `first-pending-${suffix}`, name: 'write_file', arguments: firstArgs },
+              { id: `second-must-not-start-${suffix}`, name: 'write_file', arguments: secondArgs },
+            ],
+        usage: { promptTokens: 10, completionTokens: 3, totalTokens: 13 },
+      };
+    });
+    let precedingVoiceRequest = voiceRequestId;
+    const speak = async (text: string) => {
+      const terminal = waitForEvent<Record<string, any>>(
+        client, 'agent:response',
+        payload => payload?.channel === 'voice' && payload.finalized === true && payload.requestId !== precedingVoiceRequest,
+        20_000,
+      );
+      client.emit('audio:chunk', Buffer.alloc(640, 7));
+      client.emit('voiceprint:result', {
+        isOwnerSpeaking: true, confidence: 0.99, quality: 0.95, frameCount: 16,
+        source: 'local-mfcc', speakerLabel: 'S6 owner', utteranceEpoch: latestVoiceprintEpoch,
+      });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      await sttHarness.sessions[0].emitResult({ text, isFinal: true, speechStarted: true, speechFinal: true });
+      const result = await terminal;
+      precedingVoiceRequest = result.requestId;
+      return result;
+    };
+    const firstTerminal = await speak(proposalText);
+    expect(firstTerminal).toMatchObject({ reason: 'waiting_confirmation', blocked: false });
+    const firstPending = getPendingConfirmation(userId);
+    expect(firstPending).toMatchObject({ toolName: 'write_file', exactArgs: firstArgs });
+    expect(fs.existsSync(firstPath)).toBe(false);
+    expect(fs.existsSync(secondPath)).toBe(false);
+
+    const secondTerminal = await speak('确认');
+    expect(secondTerminal).toMatchObject({
+      conversationId: firstTerminal.conversationId,
+      reason: 'waiting_confirmation', blocked: false, finalized: true,
+    });
+    const secondPending = getPendingConfirmation(userId);
+    expect(secondPending).toMatchObject({
+      toolName: 'write_file', exactArgs: secondArgs, taskId: firstPending?.taskId,
+    });
+    expect(secondPending?.id).not.toBe(firstPending?.id);
+    expect(fs.readFileSync(firstPath, 'utf8')).toBe(firstArgs.content);
+    expect(fs.existsSync(secondPath)).toBe(false);
+    expect(getConversationActionStateByTaskId(readDB(), {
+      conversationId: firstTerminal.conversationId, userId, taskId: firstPending!.taskId!,
+    })).toMatchObject({ status: 'waiting_confirmation', unfinished: true });
+    const assistant = getMessages(firstTerminal.conversationId).find((row: any) => (
+      row.role === 'assistant' && row.requestId === secondTerminal.requestId
+    ));
+    expect(assistant?.message).toBe(secondTerminal.text);
+    expect(mocks.runWithTools.mock.calls.length).toBe(2);
+    expect(mocks.runWithTools.mock.calls[1][11].priorToolRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'write_file', arguments: firstArgs, adapterStarted: true }),
+    ]));
+  }, 30_000);
+
+  it.each([false, true])('completes an exact voice-confirmed write with required readback=%s through the same bounded finalizer', async readbackRequired => {
+    clearAllPendingConfirmationsForTests();
+    const target = path.join(isolatedDataDir, `voice-bounded-${readbackRequired}-${suffix}.txt`);
+    const content = `LC voice bounded ${suffix}`;
+    const task = `在 ${target} 新建文本文件，只写入“${content}”。先等待我确认才能写入，不得自行确认。${readbackRequired ? '写完回读并告诉我全文。' : ''}`;
+    mocks.runWithTools.mockClear();
+    mocks.makeLLMCallStreaming.mockClear();
+    mocks.makeLLMCallStreaming.mockImplementation(async () => {
+      const context = mocks.runWithTools.mock.calls.at(-1)?.[11];
+      const written = context?.priorToolRecords?.some((record: any) => record.name === 'write_file'
+        && record.arguments?.path === target && record.terminalVerification?.status === 'verified');
+      return {
+        text: '', toolCalls: [{ id: `voice-bounded-call-${written ? 'read' : 'write'}-${suffix}`,
+          name: written ? 'read_file' : 'write_file', arguments: written ? { path: target } : { path: target, content } }],
+        usage: { promptTokens: 10, completionTokens: 3, totalTokens: 13 },
+      };
+    });
+    const speak = async (text: string) => {
+      const terminal = waitForEvent<Record<string, any>>(client, 'agent:response',
+        payload => payload?.channel === 'voice' && payload.finalized === true, 20_000);
+      client.emit('audio:chunk', Buffer.alloc(640, 7));
+      client.emit('voiceprint:result', { isOwnerSpeaking: true, confidence: 0.99, quality: 0.95,
+        frameCount: 16, source: 'local-mfcc', utteranceEpoch: latestVoiceprintEpoch });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      await sttHarness.sessions[0].emitResult({ text, isFinal: true, speechStarted: true, speechFinal: true });
+      return terminal;
+    };
+    const proposal = await speak(task);
+    expect(proposal).toMatchObject({ reason: 'waiting_confirmation', blocked: false });
+    const pending = getPendingConfirmation(userId);
+    expect(pending).toMatchObject({ toolName: 'write_file', exactArgs: { path: target, content } });
+    expect(fs.existsSync(target)).toBe(false);
+    const result = await speak('确认');
+    expect(result).toMatchObject({ blocked: false, finalized: true });
+    expect(result.text).toContain(target);
+    if (readbackRequired) expect(result.text).toContain(content);
+    expect(fs.readFileSync(target, 'utf8')).toBe(content);
+    expect(getPendingConfirmation(userId)).toBeNull();
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(readbackRequired ? 2 : 1);
+    expect(mocks.makeLLMCallStreaming).toHaveBeenCalledTimes(readbackRequired ? 2 : 1);
+    const receipts = await querySQL('SELECT toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [result.requestId]);
+    expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'write_file', outcome: 'verified_success' })]));
+    if (readbackRequired) expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'read_file', outcome: 'verified_success' })]));
+    expect(getConversationActionStateByTaskId(readDB(), { conversationId: proposal.conversationId, userId, taskId: pending!.taskId! }))
+      .toMatchObject({ status: 'completed', unfinished: false });
+  }, 30_000);
+
+  it.each(['success', 'failure', 'unsettled'])('persists a voice-confirmed tool that settles as %s after duplicate cancellation', async outcome => {
+    clearAllPendingConfirmationsForTests();
+    const target = path.join(isolatedDataDir, `voice-late-${outcome}-${suffix}.txt`);
+    const content = `LC late voice ${outcome}`;
+    const original = toolRegistry.get('write_file')!;
+    let started!: () => void;
+    const handlerStarted = new Promise<void>(resolve => { started = resolve; });
+    let release!: () => void;
+    const handlerReleased = new Promise<void>(resolve => { release = resolve; });
+    let activeRequestId = '';
+    let abortObserved = false;
+    toolRegistry.unregister('write_file');
+    toolRegistry.register({ ...original, handler: async (args, context) => {
+      if (args.path !== target) return original.handler(args, context);
+      activeRequestId = context?.requestId || '';
+      context?.executionSignal?.addEventListener('abort', () => { abortObserved = true; }, { once: true });
+      started();
+      await handlerReleased;
+      if (outcome === 'failure') throw new Error('isolated voice late failure');
+      return original.handler(args, context);
+    } });
+    mocks.runWithTools.mockClear();
+    mocks.makeLLMCallStreaming.mockClear();
+    mocks.makeLLMCallStreaming.mockResolvedValue({ text: '', toolCalls: [{ id: `late-${outcome}-${suffix}`,
+      name: 'write_file', arguments: { path: target, content } }], usage: { promptTokens: 10, completionTokens: 3, totalTokens: 13 } });
+    const speak = async (text: string) => {
+      const terminal = waitForEvent<Record<string, any>>(client, 'agent:response',
+        payload => payload?.channel === 'voice' && payload.finalized === true, 20_000);
+      client.emit('audio:chunk', Buffer.alloc(640, 7));
+      client.emit('voiceprint:result', { isOwnerSpeaking: true, confidence: 0.99, quality: 0.95,
+        frameCount: 16, source: 'local-mfcc', utteranceEpoch: latestVoiceprintEpoch });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      await sttHarness.sessions[0].emitResult({ text, isFinal: true, speechStarted: true, speechFinal: true });
+      return terminal;
+    };
+    try {
+      const proposal = await speak(`在 ${target} 新建文件，只写入“${content}”。先等待我确认才能写入，不得自行确认。`);
+      expect(proposal.reason).toBe('waiting_confirmation');
+      const pending = getPendingConfirmation(userId)!;
+      const cancelledTerminal = speak('确认');
+      await Promise.race([handlerStarted, cancelledTerminal.then(value => { throw new Error(`Ended before tool entry: ${JSON.stringify(value)}`); })]);
+      expect(activeRequestId).toBeTruthy();
+      client.emit('audio:cancel_turn', { requestId: activeRequestId, reason: 'user_cancelled' });
+      client.emit('audio:cancel_turn', { requestId: activeRequestId, reason: 'user_cancelled' });
+      await waitUntil(() => abortObserved);
+      // The already started handler owns its real result; cancellation waits
+      // for it and prevents the model/next tool from running afterwards.
+      expect((await querySQL('SELECT id FROM interactions WHERE requestId=? AND role=?', [activeRequestId, 'assistant']))).toHaveLength(0);
+      if (outcome !== 'unsettled') release();
+      const result = await cancelledTerminal;
+      expect(result.reason).toBe(outcome === 'unsettled' ? 'execution_settlement_unknown' : 'cancelled');
+      if (outcome === 'unsettled') {
+        expect(getConversationActionStateByTaskId(readDB(), { conversationId: proposal.conversationId, userId, taskId: pending.taskId! }))
+          .toMatchObject({ status: 'blocked' });
+        release();
+        await waitUntil(() => (readDB().conversationActionReceipts || []).some((row: any) => row.requestId === activeRequestId && row.outcome === 'verified_success'));
+      }
+      await waitUntil(() => getMessages(proposal.conversationId).some((row: any) => row.role === 'assistant' && row.requestId === activeRequestId));
+      const receipts = await querySQL('SELECT toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [activeRequestId]);
+      if (outcome === 'unsettled') {
+        expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'write_file', outcome: 'verified_success' })]));
+      } else {
+        expect(receipts).toEqual([expect.objectContaining({ toolName: 'write_file', outcome: outcome === 'success' ? 'verified_success' : 'failed' })]);
+      }
+      expect(await querySQL('SELECT id FROM interactions WHERE requestId=? AND role=?', [activeRequestId, 'assistant'])).toHaveLength(1);
+      expect(getConversationActionStateByTaskId(readDB(), { conversationId: proposal.conversationId, userId, taskId: pending.taskId! }))
+        .toMatchObject(outcome === 'unsettled' ? { status: 'blocked' } : { status: 'cancelled', unfinished: false });
+      if (outcome !== 'unsettled') expect(getConversationActionTurn({ conversationId: proposal.conversationId, userId, requestId: activeRequestId }))
+        .toMatchObject({ status: 'cancelled' });
+      expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+      if (outcome !== 'failure') expect(fs.readFileSync(target, 'utf8')).toBe(content);
+      else expect(fs.existsSync(target)).toBe(false);
+    } finally {
+      release();
+      toolRegistry.unregister('write_file');
+      toolRegistry.register(original);
+    }
+  }, 30_000);
+  it('routes an explicit forget request through durable memory storage before any tool loop', async () => {
+    const store = await import('../server/memory/store');
+    const actual = await vi.importActual<typeof store>('../server/memory/store');
+    const beforeQuery = vi.mocked(store.queryMemories).getMockImplementation();
+    const beforeCall = mocks.makeLLMCall.getMockImplementation();
+    const target = actual.addMemory({ userId, type: 'fact', content: 'The violet index fixture belongs on shelf 2.',
+      keywords: ['violet index fixture'], confidence: 1, sourceInteractionId: 'memory-routing-fixture' },
+      { source: 'manual', perspective: 'shared_memory', generateEmbedding: false, deduplicate: false });
+    const requestId = `chat-memory-forget-${suffix}`;
+    const text = 'Forget the violet index fixture and delete its stored memory.';
+    vi.mocked(store.queryMemories).mockImplementation(actual.queryMemories);
+    mocks.makeLLMCall.mockImplementation(async (...args: any[]) => {
+      if (args[2]?.source === 'memory_turn') return { text: JSON.stringify({ changes: [{ operation: 'forget',
+        targetId: target.id, evidence: 'Forget the violet index fixture' }] }) };
+      return beforeCall?.(...args);
+    });
+    const toolsBefore = mocks.runWithTools.mock.calls.length;
+    try {
+      const terminal = waitForEvent<Record<string, any>>(client, 'agent:response', p => p.requestId === requestId && p.finalized, 15000);
+      expect(await client.timeout(5000).emitWithAck('agent:chat', { text, history: [], agentId: 'lumi',
+        domain: 'personal', source: 'command-center-chat', requestId })).toMatchObject({ ok: true });
+      expect(await terminal).toMatchObject({ blocked: false, reason: 'memory_saved' });
+      expect(mocks.runWithTools).toHaveBeenCalledTimes(toolsBefore);
+      expect(await querySQL('SELECT id FROM memories WHERE id=?', [target.id])).toEqual([]);
+      expect(await querySQL('SELECT id FROM interactions WHERE requestId=? AND role=?', [requestId, 'assistant'])).toHaveLength(1);
+    } finally {
+      vi.mocked(store.queryMemories).mockImplementation(beforeQuery!);
+      mocks.makeLLMCall.mockImplementation(beforeCall!);
+    }
+  }, 20000);
+
+  it('routes accepted voice memory deletion to the same durable service without a tool loop', async () => {
+    clearAllPendingConfirmationsForTests();
+    const store = await import('../server/memory/store');
+    const actual = await vi.importActual<typeof store>('../server/memory/store');
+    const beforeQuery = vi.mocked(store.queryMemories).getMockImplementation();
+    const beforeCall = mocks.makeLLMCall.getMockImplementation();
+    const target = actual.addMemory({ userId, type: 'fact', content: 'The orange memory fixture belongs on shelf 3.',
+      keywords: ['orange memory fixture'], confidence: 1, sourceInteractionId: 'voice-memory-routing-fixture' },
+      { source: 'manual', perspective: 'shared_memory', generateEmbedding: false, deduplicate: false });
+    vi.mocked(store.queryMemories).mockImplementation(actual.queryMemories);
+    mocks.makeLLMCall.mockImplementation(async (...args: any[]) => args[2]?.source === 'memory_turn'
+      ? { text: JSON.stringify({ changes: [{ operation: 'forget', targetId: target.id, evidence: 'Forget the orange memory fixture' }] }) }
+      : beforeCall?.(...args));
+    const toolsBefore = mocks.runWithTools.mock.calls.length;
+    try {
+      client.emit('audio:chunk', Buffer.alloc(640, 7));
+      client.emit('voiceprint:result', { isOwnerSpeaking: true, confidence: 0.99, quality: 0.95,
+        frameCount: 16, source: 'local-mfcc', utteranceEpoch: latestVoiceprintEpoch });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      const terminal = waitForEvent<Record<string, any>>(client, 'agent:response', p => p.channel === 'voice' && p.finalized, 15000);
+      await sttHarness.sessions[0].emitResult({ text: 'Forget the orange memory fixture and delete its stored memory.', isFinal: true, speechStarted: true, speechFinal: true });
+      const response = await terminal;
+      expect(response).toMatchObject({ blocked: false, reason: 'memory_saved' });
+      expect(mocks.runWithTools).toHaveBeenCalledTimes(toolsBefore);
+      expect(await querySQL('SELECT id FROM memories WHERE id=?', [target.id])).toEqual([]);
+      expect(await querySQL('SELECT id FROM interactions WHERE requestId=? AND role=?', [response.requestId, 'assistant'])).toHaveLength(1);
+    } finally {
+      vi.mocked(store.queryMemories).mockImplementation(beforeQuery!);
+      mocks.makeLLMCall.mockImplementation(beforeCall!);
+    }
+  }, 20000);
+
 });

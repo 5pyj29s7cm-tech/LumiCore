@@ -6,6 +6,7 @@ import { requireAuth, requireLocalRequest } from '../middleware/auth';
 import { canInspectSession, canUseSession, claimSession, getSessionBinding, lapAccessScope, revokeSessionBinding } from './access';
 import { createPairingTicket, listPairingTickets, revokePairingTicket } from './pairing';
 import { addMemory } from '../memory/store';
+import { sendDurableMutation } from '../routes/durable_mutation';
 
 export const lapRoutes = Router();
 
@@ -172,7 +173,7 @@ lapRoutes.post('/lap/sessions/:sessionId/sandbox-probe', requireAuth, requireLoc
 
 // Selective absorption is an explicit local write. One context entry is copied
 // with immutable LAP provenance; remote peer approval flags are never trusted.
-lapRoutes.post('/lap/sessions/:sessionId/contexts/:contextId/absorb', requireAuth, requireLocalRequest, (req, res) => {
+lapRoutes.post('/lap/sessions/:sessionId/contexts/:contextId/absorb', requireAuth, requireLocalRequest, async (req, res) => {
   const scope = lapAccessScope(req.user!);
   const session = getSession(req.params.sessionId);
   if (!session || !canUseSession(session, scope)) return res.status(404).json({ error: 'LAP session not found in this workspace.' });
@@ -208,7 +209,8 @@ lapRoutes.post('/lap/sessions/:sessionId/contexts/:contextId/absorb', requireAut
       userApproved: true,
       deduplicate: true,
     });
-    res.status(201).json({
+    res.status(201);
+    return await sendDurableMutation(req, res, {
       success: true,
       memoryId: memory.id,
       source: {

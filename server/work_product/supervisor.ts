@@ -24,6 +24,7 @@ export interface WorkProductPlan {
   deliverableType: DeliverableType;
   finalOutput: string;
   acceptanceCriteria: string[];
+  deliveryCriteria?: string[];
   checkpoints: string[];
   verificationActions: string[];
   maxRepairCycles: number;
@@ -53,6 +54,9 @@ export interface ArtifactVerification {
 }
 
 export interface WorkProductVerification {
+  scope: 'work_product_evidence';
+  taskCompletionOwner: 'shared_execution';
+  deliveryCriteria: string[];
   status: VerificationStatus;
   planId?: string;
   task: string;
@@ -90,6 +94,11 @@ const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.json', '.csv', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.xml', '.svg', '.dxf', '.py', '.rs', '.toml', '.yaml', '.yml',
 ]);
 
+const DELIVERY_CRITERIA = [
+  'The final answer states what was produced and what was verified.',
+  'Known limitations, missing inputs, or assumptions are disclosed.',
+];
+
 export function createWorkProductPlan(input: PlanInput): WorkProductPlan {
   const task = String(input.task || '').trim();
   if (!task) throw new Error('task is required');
@@ -103,6 +112,7 @@ export function createWorkProductPlan(input: PlanInput): WorkProductPlan {
     deliverableType,
     finalOutput,
     acceptanceCriteria,
+    deliveryCriteria: [...DELIVERY_CRITERIA],
     checkpoints: buildCheckpoints(deliverableType),
     verificationActions: buildVerificationActions(deliverableType, input.expectedArtifacts),
     maxRepairCycles: Math.max(1, Math.min(Number(input.maxRepairCycles) || 3, 8)),
@@ -123,18 +133,20 @@ export function verifyWorkProduct(input: VerifyInput): WorkProductVerification {
   const plan = input.planId ? getWorkProductPlan(input.userId, input.planId) : null;
   const task = String(input.task || plan?.task || '').trim();
   if (!task) throw new Error('task or planId is required');
-  const acceptanceCriteria = normalizeList(input.acceptanceCriteria, plan?.acceptanceCriteria || buildAcceptanceCriteria(inferDeliverableType(task), task));
+  const suppliedCriteria = normalizeList(input.acceptanceCriteria, plan?.acceptanceCriteria || buildAcceptanceCriteria(inferDeliverableType(task), task, input.artifacts));
+  // Older plans mixed presentation requirements with executable checks. Keep
+  // those requirements for delivery, but never wait for a reply that this
+  // pre-delivery tool cannot receive. Explicit caller criteria remain strict.
+  const acceptanceCriteria = input.acceptanceCriteria ? suppliedCriteria
+    : suppliedCriteria.filter(criterion => !DELIVERY_CRITERIA.includes(criterion));
+  if (!acceptanceCriteria.length) acceptanceCriteria.push('All expected artifact paths exist and are readable.');
   const artifactChecks = (input.artifacts || []).map(verifyArtifact);
   const failedCriteria: string[] = [];
   const blockedCriteria: string[] = [];
   const passedCriteria: string[] = [];
-  const completedCriteria = normalizeList(input.completedCriteria, []);
-
   for (const criterion of acceptanceCriteria) {
-    if (isCriterionCompleted(criterion, completedCriteria)) {
-      passedCriteria.push(criterion);
-      continue;
-    }
+    // Caller-supplied completion claims are not execution evidence. Criteria
+    // without a machine verifier remain blocked instead of self-certifying.
     const result = evaluateCriterion(criterion, artifactChecks);
     if (result === 'pass') passedCriteria.push(criterion);
     else if (result === 'blocked') blockedCriteria.push(criterion);
@@ -161,6 +173,9 @@ export function verifyWorkProduct(input: VerifyInput): WorkProductVerification {
   const nextRepairActions = buildRepairActions(status, failedCriteria, blockedCriteria, artifactChecks, repairCycle, maxRepairCycles);
 
   return {
+    scope: 'work_product_evidence',
+    taskCompletionOwner: 'shared_execution',
+    deliveryCriteria: plan?.deliveryCriteria || [...DELIVERY_CRITERIA],
     status,
     planId: plan?.id || input.planId,
     task,
@@ -225,11 +240,8 @@ function inferFinalOutput(task: string, deliverableType: DeliverableType): strin
 }
 
 function buildAcceptanceCriteria(deliverableType: DeliverableType, task: string, artifacts: WorkProductArtifact[] = []): string[] {
-  const base = [
-    'The final answer states what was produced and what was verified.',
-    'Known limitations, missing inputs, or assumptions are disclosed.',
-  ];
-  if (artifacts.length > 0) base.unshift('All expected artifact paths exist and are readable.');
+  const base: string[] = [];
+  if (artifacts.length > 0 || ['document', 'drawing', 'design', 'data', 'general'].includes(deliverableType)) base.push('All expected artifact paths exist and are readable.');
   if (deliverableType === 'code') {
     return [
       'Relevant files were changed intentionally.',
@@ -312,18 +324,6 @@ function normalizeList(value: unknown, fallback: string[]): string[] {
   return items.length ? items : fallback;
 }
 
-function isCriterionCompleted(criterion: string, completedCriteria: string[]): boolean {
-  const normalized = normalizeText(criterion);
-  return completedCriteria.some(item => {
-    const candidate = normalizeText(item);
-    return candidate === normalized || candidate.includes(normalized) || normalized.includes(candidate);
-  });
-}
-
-function normalizeText(value: string): string {
-  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
 function verifyArtifact(artifact: WorkProductArtifact): ArtifactVerification {
   const rawPath = String(artifact.path || '').trim();
   const label = String(artifact.label || artifact.kind || rawPath || 'artifact');
@@ -390,7 +390,7 @@ function buildRepairActions(
   const actions: string[] = [];
   if (artifactChecks.some(check => !check.exists)) actions.push('Regenerate or locate the missing artifact path, then verify again.');
   if (artifactChecks.some(check => check.exists && check.issues.length > 0)) actions.push('Repair the artifact content/size/readability issue, then verify again.');
-  if (blockedCriteria.length) actions.push('Run the domain-specific verification tool for blocked criteria, then call work_product_verify again with the results/artifacts.');
+  if (blockedCriteria.length) actions.push('Use the domain-specific verifier for these criteria and return its evidence to the shared execution flow. Repeating this artifact check with unchanged inputs cannot resolve them.');
   if (failedCriteria.length && !actions.length) actions.push('Address failed acceptance criteria and rerun verification.');
   if (!actions.length) actions.push('Continue work, then rerun work_product_verify before finalizing.');
   return actions;

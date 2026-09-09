@@ -16,6 +16,7 @@
 import { PersonalityConfig, ExpressionStyle, PersonalityGrowthState } from './types';
 import { Memory } from '../memory/types';
 import { queryMemories } from '../memory/store';
+import { isOwnerEvolutionEvidence } from '../memory/provenance';
 import { NormalizedMessage, makeLLMCall } from '../llm/providers';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 import {
@@ -224,11 +225,12 @@ export async function synthesizeOwnerProfile(
   const memories = queryMemories({
     userId,
     perspective: 'owner_trait',
-    limit: 50,
+    limit: 500,
     minConfidence: 0.3,
     domain: normalizedScope.domain,
     orgId: normalizedScope.orgId,
-  });
+    recordRetrieval: false,
+  }).filter(isOwnerEvolutionEvidence).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 50);
   const minimumMemoryCount = Math.max(
     1,
     Math.floor(options.minimumMemoryCount || DEFAULT_EVOLUTION_CONFIG.minMemoriesForEvolution),
@@ -353,6 +355,8 @@ ${memoryTexts}`;
         fallbackCandidates: prefs.fallbackCandidates,
         allowCloudFallback: prefs.allowCloudFallback,
         source: 'personality_evolution',
+        maxTokens: 1800,
+        thinkingMode: 'disabled',
       },
       getDeepSeek,
       getGemini,
@@ -771,15 +775,12 @@ export async function lightweightEvolve(
   );
   if (!profile) return null; // Not enough owner_trait memories
 
-  const previousProfileCount = config.growthState?.ownerProfile?.memoryCount || 0;
-  const minimumNewSignals = Math.max(3, Math.ceil(effConfig.minMemoriesForEvolution / 3));
-  if (previousProfileCount > 0 && profile.memoryCount - previousProfileCount < minimumNewSignals) {
-    return null;
-  }
+  // The durable evidence cursor gates synthesis before the model call. A
+  // bounded candidate pool's length is not the number of new observations.
 
   // Compute mutations at halved plasticity — only vocabulary + interest
   const effectivePlasticity = Math.min(effConfig.plasticity * 0.5, 0.15);
-  const allMutations = computeMutations(config, profile, { ...effConfig, plasticity: effectivePlasticity });
+  const allMutations = computeMutations(config, profile, { ...effConfig, plasticity: effectivePlasticity, maxMutationsPerStep: Number.MAX_SAFE_INTEGER });
 
   // Filter: only owner-specific growth state mutations (no core/vector shifts)
   const mutations = allMutations.filter(m =>

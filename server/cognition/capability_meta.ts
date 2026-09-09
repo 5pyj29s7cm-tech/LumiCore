@@ -1,4 +1,4 @@
-import type { OperationMode } from './operation_modes';
+import { isRetiredOperationModeRequest, type OperationMode } from './operation_modes';
 import {
   formatCnCapabilityMetaResponse,
   formatCnCurrentOperationModeResponse,
@@ -110,6 +110,7 @@ export function isOperationModeMetaQuestion(text: string): boolean {
  */
 export function isCapabilityMetaQuestion(text: string): boolean {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (isRetiredOperationModeRequest(normalized)) return true;
   if (hasConcreteExecutionIntent(normalized)) return false;
   if (isSelfIntroductionMetaQuestion(normalized)) return true;
   if (isOperationModeMetaQuestion(normalized)) return true;
@@ -141,6 +142,9 @@ function isChinese(text: string): boolean {
 
 export function buildOperationModeMetaResponse(input: CapabilityMetaResponseInput): string | null {
   const normalizedText = String(input.text || '').replace(/\s+/g, ' ').trim();
+  if (isRetiredOperationModeRequest(normalizedText)) return isChinese(normalizedText)
+    ? formatCnOperationModeInventoryResponse()
+    : 'Lumi uses one core for conversation, tasks and learning. There are no modes to switch; tell me what you would like to do.';
   if (!normalizedText || hasConcreteExecutionIntent(normalizedText)) return null;
   const inventoryQuestion = isOperationModeInventoryQuestion(normalizedText);
   const currentQuestion = isCurrentOperationModeQuestion(normalizedText);
@@ -153,23 +157,10 @@ export function buildOperationModeMetaResponse(input: CapabilityMetaResponseInpu
       : formatCnCurrentOperationModeResponse(mode);
   }
 
-  if (inventoryQuestion) {
-    return [
-      `LumiCore has exactly ${LUMI_OPERATION_MODE_IDS.length} persistent user-selectable operation/permission modes:`,
-      '1. Chat (`chat`): conversation-first; an explicit foreground task may borrow Assistant capabilities for that turn without persisting a mode switch.',
-      '2. Assistant (`assistant`): user-present foreground execution with the relevant file, app, browser, desktop, and tool capabilities.',
-      '3. Autonomy (`autonomous`): Assistant permissions plus continuous, background, and long-running task execution.',
-      `Meeting transcription (\`${LUMI_MEETING_CAPTURE_SURFACE.id}\`) is a temporary voice-capture surface, not a fourth permission mode. Personality response presets and conversation styles are not operation modes and do not change tool permissions.`,
-    ].join('\n');
+  if (!inventoryQuestion && mode === LUMI_MEETING_CAPTURE_SURFACE.id) {
+    return 'Meeting transcription is active. It is a temporary capture surface; Lumi has no selectable conversation or execution modes.';
   }
-
-  if (mode === LUMI_MEETING_CAPTURE_SURFACE.id) {
-    return 'The client is currently in the temporary Meeting transcription surface. Meeting is not a fourth operation/permission mode.';
-  }
-  const normalizedMode = LUMI_OPERATION_MODE_IDS.includes(mode as LumiOperationMode)
-    ? mode as LumiOperationMode
-    : 'assistant';
-  return `The current operation/permission mode is \`${normalizedMode}\`. LumiCore has exactly ${LUMI_OPERATION_MODE_IDS.length} persistent modes: ${LUMI_OPERATION_MODE_IDS.join(', ')}.`;
+  return 'Lumi is one personal core for conversation, task execution, memory and learning. There are no Chat, Assistant or Autonomous modes to select. Background work follows your enabled workflows, schedules and permissions; meeting transcription is a separate capture function.';
 }
 
 export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput): string | null {
@@ -198,13 +189,7 @@ export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput):
   const mode = String(input.operationMode || 'assistant').toLowerCase();
   const commandCenter = input.source === 'command-center-chat';
   if (!isChinese(input.text)) {
-    const modeLine = mode === 'assistant'
-      ? 'You are already in Assistant mode, which has the full foreground tool, skill, browser, app, file, and desktop permissions.'
-      : mode === 'autonomous'
-        ? 'You are in Autonomous mode, which includes Assistant permissions plus continuous background execution.'
-        : mode === 'chat'
-          ? 'You are in Chat mode; a clear action request automatically promotes that turn to Assistant before execution.'
-          : 'Meeting is a voice-capture surface; real action follows the same Assistant/Autonomous execution policy.';
+    const modeLine = 'Lumi uses one conversation and execution core. State your task directly; relevant capabilities follow your authorization without switching modes.';
     const entryLine = commandCenter
       ? 'The text panel beside the command-center office is Lumi\'s text entry; there is no second text screen to switch to.'
       : 'Give the complete task directly in the current conversation.';

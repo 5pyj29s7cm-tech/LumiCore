@@ -19,6 +19,31 @@ describe('runtime work exact batch cancellation', () => {
     resetAutonomousTaskQueueForTest({ markHydrated: true });
   });
 
+  it('uses the task organization for both visibility and cancellation', () => {
+    resetAutonomousTaskQueueForTest({ markHydrated: true });
+    const userId = 'runtime-org-boundary';
+    const work = enqueue({
+      userId, title: 'organization task', description: 'isolated',
+      source: 'user_request', priority: 5, mode: 'analysis',
+      domain: 'work', orgId: 'org-a', conversationId: 'conversation-a',
+    })!;
+    const personal = enqueue({
+      userId, title: 'personal task', description: 'isolated',
+      source: 'user_request', priority: 5, mode: 'analysis',
+    })!;
+    expect(getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'personal' }).items.map(item => item.id))
+      .toEqual([personal.id]);
+    expect(getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'work', orgId: 'org-a' }).items)
+      .toEqual([expect.objectContaining({ id: work.id, scope: { domain: 'work', orgId: 'org-a' }, conversationId: 'conversation-a' })]);
+    for (const scope of [{ domain: 'personal' as const }, { domain: 'work' as const, orgId: 'org-b' }]) {
+      expect(cancelRuntimeWork({ userId, taskId: work.id, kinds: ['autonomy'], scope }).targetResults)
+        .toEqual([{ taskId: work.id, status: 'not_found' }]);
+    }
+    expect(cancelRuntimeWork({ userId, taskId: work.id, kinds: ['autonomy'], scope: { domain: 'work', orgId: 'org-a' } }))
+      .toMatchObject({ ok: true, cancelledTaskIds: [work.id] });
+    expect(getRuntimeWorkSnapshot(userId, ['autonomy'], { domain: 'personal' }).items[0].phase).toBe('queued');
+  });
+
   it('treats an explicit empty target set as cancel-zero, never cancel-all', () => {
     resetAutonomousTaskQueueForTest({ markHydrated: true });
     const userId = `runtime-empty-batch-${Date.now()}-${Math.random()}`;

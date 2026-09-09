@@ -62,7 +62,7 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
     id: 'neural',
     label: 'LumiCore and autonomy',
     aliases: ['neural', 'lumicore', 'autonomy', 'autonomous'],
-    useWhen: 'Inspect or configure LumiCore, operation modes, and autonomous execution policy.',
+    useWhen: 'Inspect or configure LumiCore background work, learning workflows, and runtime limits.',
   },
   {
     id: 'ai-providers',

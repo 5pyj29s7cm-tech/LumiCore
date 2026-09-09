@@ -19,38 +19,34 @@ describe('canonical LumiCore operation-mode taxonomy', () => {
     await initDatabase();
   });
 
-  it('keeps exactly three persistent permission modes and a separate meeting surface', () => {
-    expect(LUMI_OPERATION_MODE_IDS).toEqual(['chat', 'assistant', 'autonomous']);
-    expect(LUMI_CLIENT_MODE_IDS).toEqual(['chat', 'assistant', 'autonomous', 'meeting']);
+  it('normalizes old postures to one core and preserves meeting capture', () => {
+    expect(LUMI_OPERATION_MODE_IDS).toEqual(['assistant']);
+    expect(LUMI_CLIENT_MODE_IDS).toEqual(['assistant', 'meeting']);
     expect(LUMI_MEETING_CAPTURE_SURFACE).toMatchObject({
       id: 'meeting',
       kind: 'capture_surface',
       persistent: false,
       allowsTools: false,
     });
-    expect(Object.keys(OPERATION_MODE_CONFIGS)).toEqual(LUMI_CLIENT_MODE_IDS);
+    expect(OPERATION_MODE_CONFIGS.chat).toBe(OPERATION_MODE_CONFIGS.assistant);
+    expect(OPERATION_MODE_CONFIGS.autonomous).toBe(OPERATION_MODE_CONFIGS.assistant);
     expect(normalizeLumiClientMode('autonomy')).toBe('assistant');
   });
 
-  it('projects the same three modes into the self-model and client adapter', () => {
+  it('does not advertise selectable modes to the model', () => {
     const snapshot = getSelfModelSnapshot('operation-mode-taxonomy-user');
-    expect(snapshot.modes.map(mode => mode.id)).toEqual(LUMI_OPERATION_MODE_IDS);
+    expect(snapshot.modes).toEqual([]);
 
     const adapter = getAdapterRegistry().adapters.find(item => item.id === 'client.modes');
-    expect(adapter?.actions).toEqual([
-      'set_client_mode(chat)',
-      'set_client_mode(assistant)',
-      'set_client_mode(autonomous)',
-      'start_meeting_mode',
-    ]);
+    expect(adapter?.actions).toEqual(['start_meeting_mode', 'end_meeting_mode']);
     expect(adapter?.notes).toContain('not a live client.modes state field');
   });
 
   it('gives the model an explicit boundary between modes and response presets', () => {
     const prompt = buildOperationModeTaxonomyPrompt();
-    expect(prompt).toContain('exactly 3 persistent');
-    expect(prompt).toContain('meeting');
-    expect(prompt).toContain('not a fourth permission mode');
+    expect(prompt).toContain('no user-selectable');
+    expect(prompt).toContain('Meeting');
+    expect(prompt).toContain('not a permission mode');
     expect(prompt).toContain('personality response presets');
   });
 });

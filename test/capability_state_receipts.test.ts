@@ -21,7 +21,7 @@ describe('state-changing capability receipts', () => {
     const policyRecord = await executeToolCall({
       registry,
       name: 'autonomy_update_policy',
-      arguments: { autonomyLevel: 'reactive', reason: 'receipt test' },
+      arguments: { autoProcessEnabled: false, reason: 'receipt test' },
       context: { userId, userConfirmed: true },
     });
     expect(policyRecord.error).toBeUndefined();
@@ -30,7 +30,7 @@ describe('state-changing capability receipts', () => {
       ok: true,
       status: 'updated',
       persisted: true,
-      persistedPolicy: { autonomyLevel: 'reactive' },
+      persistedPolicy: { autoProcessEnabled: false },
     });
 
     const createRecord = await executeToolCall({

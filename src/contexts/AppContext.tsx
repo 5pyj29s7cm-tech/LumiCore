@@ -4,7 +4,7 @@ import * as authService from '../services/authService';
 import * as notificationService from '../services/notificationService';
 import { socketService } from '../services/socketService';
 import { saveServerKeys } from '../services/settingsKeys';
-import { apiFetch } from '../services/apiClient';
+import { apiFetch, apiJson } from '../services/apiClient';
 import { getDomainReconciliation } from '../lib/domainSession';
 import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
 import { translate } from '../i18n/runtime';
@@ -169,8 +169,8 @@ interface AppContextType {
   logout: () => Promise<void>;
   updateBalance: (amount: number) => Promise<void>;
   refreshUser: () => Promise<void>;
-  updateAIConfig: (config: Partial<AIConfig>) => void;
-  updateVisionConfig: (config: Partial<VisionConfig>) => void;
+  updateAIConfig: (config: Partial<AIConfig>, models?: Record<string, string>) => Promise<boolean>;
+  updateVisionConfig: (config: Partial<VisionConfig>, models?: Record<string, string>) => Promise<boolean>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -237,6 +237,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
   const modelPreferenceRequestRef = React.useRef(0);
+  const authGenerationRef = React.useRef(0);
   const aiConfigRef = React.useRef(aiConfig);
   useEffect(() => {
     aiConfigRef.current = aiConfig;
@@ -260,10 +261,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return fallback;
     }
   });
+  const visionConfigRef = React.useRef(visionConfig);
+  const visionPreferenceRequestRef = React.useRef(0);
+  const visionWriteTailRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const modelPreferenceReadRef = React.useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     const loadModelPreferences = async () => {
+      const readGeneration = ++modelPreferenceReadRef.current;
+      const owner = authGenerationRef.current;
+      const reasoningRevision = modelPreferenceRequestRef.current;
+      const visionRevision = visionPreferenceRequestRef.current;
       const [reasoningResponse, visionResponse] = await Promise.all([
         apiFetch('/api/preferences/llm').catch(() => null),
         apiFetch('/api/preferences/vision').catch(() => null),
@@ -272,9 +281,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         reasoningResponse?.ok ? reasoningResponse.json().catch(() => null) : null,
         visionResponse?.ok ? visionResponse.json().catch(() => null) : null,
       ]);
-      if (cancelled) return;
+      if (cancelled || readGeneration !== modelPreferenceReadRef.current || owner !== authGenerationRef.current) return;
 
-      if (reasoning?.provider) {
+      if (reasoning?.provider && reasoningRevision === modelPreferenceRequestRef.current) {
         setAiConfig(previous => {
           const next = {
             ...previous,
@@ -292,7 +301,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      if (vision?.provider) {
+      if (vision?.provider && visionRevision === visionPreferenceRequestRef.current) {
         setVisionConfig(previous => {
           const next = {
             ...previous,
@@ -301,6 +310,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             apiKey: '',
           };
           localStorage.setItem('lumi_vision_config', JSON.stringify(next));
+          visionConfigRef.current = next;
           if (vision.models) localStorage.setItem('lumi_vision_models', JSON.stringify(vision.models));
           return next;
         });
@@ -330,6 +340,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [toolOverrides, setToolOverrides] = useState<Record<string, ToolOverride>>(() => {
     try { return JSON.parse(localStorage.getItem('lumi_tool_overrides') || '{}'); } catch { return {}; }
   });
+  const toolOverridesRef = React.useRef(toolOverrides);
+  const toolWriteTailRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const toolRequestRef = React.useRef(0);
 
   // Org state
   const [orgConnection, setOrgConnection] = useState<OrgConnection | null>(() => {
@@ -517,7 +530,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.style.colorScheme = resolvedAppearanceMode;
   }, [resolvedAppearanceMode]);
 
-  const updateAIConfig = (newConfig: Partial<AIConfig>) => {
+  const updateAIConfig = (newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
     const requestRevision = ++modelPreferenceRequestRef.current;
     const previous = aiConfigRef.current;
     const resolved = { ...newConfig };
@@ -558,12 +571,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    if (!updated.provider && !updated.model) return;
+    if (!updated.provider && !updated.model) return Promise.resolve(false);
     const allModels = (() => {
       try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
     })();
+    Object.assign(allModels, models);
     if (updated.model && updated.provider) allModels[updated.provider] = updated.model;
-    void apiFetch('/api/preferences/llm', {
+    return apiFetch('/api/preferences/llm', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -578,7 +592,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }).then(async response => {
       const confirmed = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(confirmed.error || 'Model preference update failed');
-      if (modelPreferenceRequestRef.current !== requestRevision) return;
+      if (modelPreferenceRequestRef.current !== requestRevision) return false;
       const synchronized = {
         ...updated,
         provider: confirmed.provider || updated.provider,
@@ -597,76 +611,81 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (confirmed.models) localStorage.setItem('lumi_llm_models', JSON.stringify(confirmed.models));
       window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
       toast.success('Neural core configuration synchronized');
+      return true;
     }).catch(error => {
-      if (modelPreferenceRequestRef.current !== requestRevision) return;
+      if (modelPreferenceRequestRef.current !== requestRevision) return false;
       const safePrevious = { ...previous, apiKey: '' };
       aiConfigRef.current = safePrevious;
       setAiConfig(safePrevious);
       localStorage.setItem('lumi_ai_config', JSON.stringify(safePrevious));
       toast.error(error?.message || 'Model preference update failed');
+      return false;
     });
   };
 
-  const updateVisionConfig = (newConfig: Partial<VisionConfig>) => {
-    setVisionConfig(prev => {
-      let resolved = { ...newConfig };
-      if (newConfig.provider && !newConfig.model) {
-        const savedModels = (() => {
-          try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-        })();
-        const defaults: Record<string, string> = {
-          openai: 'gpt-4o',
-          gemini: 'gemini-2.0-flash',
-          ark: 'doubao-1-5-vision-pro-32k',
-          qwen: 'qwen-vl-max',
-          ollama: 'qwen2.5vl:7b',
-          lmstudio: 'local-vision-model',
-          relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
-        };
-        resolved.model = savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
-      }
-
-      const updated = { ...prev, ...resolved };
-      const persisted = { ...updated, apiKey: '' };
-      localStorage.setItem('lumi_vision_config', JSON.stringify(persisted));
-
-      if (updated.apiKey && updated.provider) {
-        const KEY_MAP: Record<string, string> = {
-          openai: 'OPENAI_API_KEY',
-          gemini: 'GEMINI_API_KEY',
-          ark: 'ARK_API_KEY',
-          qwen: 'DASHSCOPE_API_KEY',
-          relay: 'RELAY_API_KEY',
-        };
-        const serverKey = KEY_MAP[updated.provider];
-        if (serverKey) {
-          saveServerKeys({ [serverKey]: updated.apiKey })
-            .catch(err => toast.error(err.message || 'Vision API key save failed'));
-        }
-      }
-
+  const updateVisionConfig = (newConfig: Partial<VisionConfig>, models: Record<string, string> = {}): Promise<boolean> => {
+    ++visionPreferenceRequestRef.current;
+    const owner = authGenerationRef.current;
+    // Serialize writes to this preference. A slow earlier save cannot replace
+    // a newer selection at the server while the UI reports the newer value.
+    const operation = visionWriteTailRef.current.then(async () => {
+      if (owner !== authGenerationRef.current) return false;
+      const previous = visionConfigRef.current;
       const allModels = (() => {
         try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
       })();
-      if (updated.provider && updated.model) {
-        allModels[updated.provider] = updated.model;
-        localStorage.setItem('lumi_vision_models', JSON.stringify(allModels));
+      Object.assign(allModels, models);
+      const resolved = { ...newConfig };
+      if (newConfig.provider && !newConfig.model) {
+        const defaults: Record<string, string> = {
+          openai: 'gpt-4o', gemini: 'gemini-2.0-flash', ark: 'doubao-1-5-vision-pro-32k',
+          qwen: 'qwen-vl-max', ollama: 'qwen2.5vl:7b', lmstudio: 'local-vision-model',
+          relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
+        };
+        resolved.model = allModels[newConfig.provider] || defaults[newConfig.provider] || '';
       }
-      apiFetch('/api/preferences/vision', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+      const updated = { ...previous, ...resolved };
+      if (updated.apiKey && updated.provider) {
+        const keys: Record<string, string> = {
+          openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', ark: 'ARK_API_KEY',
+          qwen: 'DASHSCOPE_API_KEY', relay: 'RELAY_API_KEY',
+        };
+        if (keys[updated.provider]) await saveServerKeys({ [keys[updated.provider]]: updated.apiKey });
+      }
+      if (owner !== authGenerationRef.current) return false;
+      if (updated.provider && updated.model) allModels[updated.provider] = updated.model;
+      const confirmed = await apiJson('/api/preferences/vision', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: updated.provider, model: updated.model, models: allModels }),
-        credentials: 'include',
-      }).catch(() => {});
-
-      return persisted;
+      });
+      if (owner !== authGenerationRef.current) return false;
+      visionPreferenceRequestRef.current += 1;
+      const persisted = {
+        provider: confirmed.provider || updated.provider,
+        model: confirmed.model || updated.model,
+        apiKey: '',
+      };
+      visionConfigRef.current = persisted;
+      setVisionConfig(persisted);
+      localStorage.setItem('lumi_vision_config', JSON.stringify(persisted));
+      localStorage.setItem('lumi_vision_models', JSON.stringify(confirmed.models || allModels));
+      window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
+      toast.success('Vision model configuration synchronized');
+      return true;
+    }).catch(error => {
+      if (owner === authGenerationRef.current) toast.error(error?.message || 'Vision model preference update failed');
+      return false;
     });
-    toast.success('Vision model configuration synchronized');
+    visionWriteTailRef.current = operation;
+    return operation;
   };
 
   const refreshUser = async () => {
+    const owner = authGenerationRef.current;
+    const toolRevision = toolRequestRef.current;
     try {
       const customAuth = await authService.getMe();
+      if (owner !== authGenerationRef.current) return;
       if (customAuth) {
         setUser({ ...customAuth.user, provider: 'custom' } as any);
         // Sync org connection from user data
@@ -679,6 +698,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Load persisted notifications from server
         try {
           const notifData = await notificationService.fetchNotifications();
+          if (owner !== authGenerationRef.current) return;
           const clearKey = notificationClearStorageKey(String(customAuth.user.uid || ''));
           const clearedAt = Number(localStorage.getItem(clearKey) || 0);
           const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
@@ -693,7 +713,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const toRes = await apiFetch('/api/settings/tool_overrides');
           if (toRes.ok) {
             const serverOverrides = await toRes.json();
-            if (serverOverrides && Object.keys(serverOverrides).length > 0) {
+            if (owner !== authGenerationRef.current) return;
+            if (serverOverrides && toolRevision === toolRequestRef.current) {
+              toolOverridesRef.current = serverOverrides;
               setToolOverrides(serverOverrides);
               localStorage.setItem('lumi_tool_overrides', JSON.stringify(serverOverrides));
             }
@@ -777,13 +799,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    try {
-      await authService.logout();
-      setUser(null);
-      toast.info('Returned to the mortal realm');
-    } catch (error: any) {
-      toast.error('Logout failed: ' + error.message);
-    }
+    authGenerationRef.current += 1;
+    modelPreferenceRequestRef.current += 1;
+    visionPreferenceRequestRef.current += 1;
+    const revocation = authService.logout();
+    setUser(null);
+    setNotifications([]);
+    toolOverridesRef.current = {};
+    setToolOverrides({});
+    socketService.disconnect();
+    const result = await revocation;
+    if (result.remoteRevoked) toast.info('Signed out');
+    else toast.warning('Signed out locally. Server session revocation could not be confirmed.');
   };
 
   const updateBalance = async (amount: number) => {
@@ -812,7 +839,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const addNotification = (item: Omit<NotificationItem, 'id' | 'timestamp' | 'read'>) => {
+  const addNotification = useCallback((item: Omit<NotificationItem, 'id' | 'timestamp' | 'read'>) => {
     const notification: NotificationItem = {
       ...item,
       id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -820,7 +847,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       read: false,
     };
     setNotifications(prev => [notification, ...prev].slice(0, 50));
-  };
+  }, []);
 
   const markAllNotificationsRead = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
@@ -842,18 +869,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const setToolOverride = (name: string, override: ToolOverride) => {
-    setToolOverrides(prev => {
-      const next = { ...prev, [name]: override };
-      localStorage.setItem('lumi_tool_overrides', JSON.stringify(next));
-      // Sync to server for tool registry awareness
-      apiFetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+    ++toolRequestRef.current;
+    const owner = authGenerationRef.current;
+    const operation = toolWriteTailRef.current.then(async () => {
+      if (owner !== authGenerationRef.current) return;
+      const next = { ...toolOverridesRef.current, [name]: override };
+      await apiJson('/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: 'tool_overrides', value: next }),
-      }).catch(() => {});
-      return next;
+      });
+      if (owner !== authGenerationRef.current) return;
+      toolOverridesRef.current = next;
+      setToolOverrides(next);
+      localStorage.setItem('lumi_tool_overrides', JSON.stringify(next));
+    }).catch(error => {
+      if (owner === authGenerationRef.current) toast.error(error?.message || 'Tool preference update failed');
     });
+    toolWriteTailRef.current = operation;
   };
 
   return (

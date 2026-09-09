@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildStructuredRuntimeStatus } from '../server/monitor/runtime_status';
+import { listConversationFocusThreads } from '../server/conversation/focus_threads';
+import { buildTaskAcceptanceProjections } from '../server/cognition/acceptance_evidence';
 
 function task(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -135,5 +137,25 @@ describe('structured runtime status', () => {
     expect(chat).not.toContain('<ConversationTaskLedger');
     expect(explorer).toContain('<RuntimeEvidencePanel');
     expect(explorer).toContain('<LumiScenePanel');
+  });
+
+  it('does not create a second visible task for a takeover receipt archive', () => {
+    const db = {
+      conversationActionTasks: [
+        task('foreground', { status: 'executing' }),
+        task('takeover-owned', {
+          status: 'created', activeRequestId: '',
+          context: JSON.stringify({ executionOwner: 'work_takeover', ownerTaskId: 'takeover-owned' }),
+        }),
+      ],
+      conversationActionReceipts: [], autonomousTasks: [],
+    };
+    const scope = { userId: 'user-1', domain: 'personal' as const };
+    const status = buildStructuredRuntimeStatus(db, scope);
+    expect(status.tasks.map(item => item.taskId)).toEqual(['foreground']);
+    expect(status.counts.activeTasks).toBe(1);
+    expect(listConversationFocusThreads(db, scope).map(item => item.taskId)).toEqual(['foreground']);
+    expect(buildTaskAcceptanceProjections(db, scope).map(item => item.taskId)).toEqual(['foreground']);
+    expect(db.conversationActionTasks).toHaveLength(2);
   });
 });

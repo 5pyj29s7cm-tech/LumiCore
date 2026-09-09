@@ -25,22 +25,20 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it('explains the mode requirement, permits saving a plan, and changes mode only on an explicit click', async () => {
-  render(<CommandCenterPlanner isZh={false} conversationId="synthetic-conversation" onDiscuss={vi.fn()} />);
-  expect(await screen.findByText('Automatic execution is waiting for autonomous mode.')).toBeTruthy();
+it.each(['chat', 'assistant', 'autonomous'])('saves and shows scheduled plans without a %s mode prerequisite', async mode => {
+  mocks.mode = mode;
+  const view = render(<CommandCenterPlanner isZh={false} conversationId="synthetic-conversation" onDiscuss={vi.fn()} />);
+  await screen.findByText(plan.title);
+  expect(view.container.querySelector('[data-command-center-mode-notice]')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Enable autonomous mode' })).toBeNull();
   expect(screen.getByText('Plan status: Enabled')).toBeTruthy();
-  expect(screen.getByText('Not run yet')).toBeTruthy();
-  expect(screen.getByText(/current mode does not run scheduled tasks automatically/)).toBeTruthy();
-  expect(mocks.setMode).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: /^New$/ }));
   fireEvent.change(screen.getByPlaceholderText('Plan title'), { target: { value: 'New research plan' } });
   fireEvent.change(screen.getByPlaceholderText('What should Lumi execute, advance, or report?'), { target: { value: 'Research a public source.' } });
   fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-  await screen.findByText('Plan saved. Automatic execution is waiting for autonomous mode.');
+  await screen.findByText('New research plan');
   expect(mocks.api.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   expect(mocks.setMode).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Enable autonomous mode' }));
-  expect(mocks.setMode).toHaveBeenCalledExactlyOnceWith('autonomous');
 });
 
 it('removes mode waiting labels when autonomous and does not label manual-only plans as waiting', async () => {

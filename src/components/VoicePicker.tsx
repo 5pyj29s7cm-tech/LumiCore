@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Play, Star, ChevronDown, Volume2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { listVoices, synthesizeSpeech, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
+import { listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
+import { useVoicePreview } from '../hooks/useVoicePreview';
 import { useApp } from '@/contexts/AppContext';
 import { voiceSampleText } from '../i18n/locales/voiceSamples';
 
@@ -16,18 +17,22 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
   const [search, setSearch] = useState('');
   const [langFilter, setLangFilter] = useState<string>('all');
   const [catFilter, setCatFilter] = useState<string>('all');
-  const [playingId, setPlayingId] = useState<string | null>(null);
+  const { playingId, play, stop } = useVoicePreview(message => toast.error(message || t.voicePreviewFailed || '试听播放失败'));
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [providerRevision, setProviderRevision] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => { if (!open) stop(); }, [open, stop]);
+  useEffect(() => stop, [workDomain, orgConnection?.orgId, stop]);
+
   useEffect(() => {
+    let active = true;
     setVoices([]);
     setOpen(false);
     setLoadingVoices(true);
     listVoices()
       .then(data => {
+        if (!active) return;
         const available = [...data.cloned, ...data.premade];
         setVoices(available);
         const selectable = available.filter(voice => voice.status !== 'training' && voice.status !== 'failed');
@@ -39,8 +44,9 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
           setSelectedVoiceId(preferredVoice.voiceId, preferredVoice.provider || data.provider || undefined);
         }
       })
-      .catch(() => toast.error(t.failedToLoadVoices || 'Failed to load voices'))
-      .finally(() => setLoadingVoices(false));
+      .catch(() => { if (active) toast.error(t.failedToLoadVoices || 'Failed to load voices'); })
+      .finally(() => { if (active) setLoadingVoices(false); });
+    return () => { active = false; };
   }, [refreshTrigger, workDomain, orgConnection?.orgId, providerRevision]);
 
   useEffect(() => {
@@ -79,41 +85,7 @@ export function VoicePicker({ t, direction = 'up', refreshTrigger = 0 }: { t: an
 
   const currentVoice = voices.find(v => v.voiceId === selectedVoiceId);
 
-  const playPreview = async (voice: any) => {
-    if (playingId === voice.voiceId) {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-      setPlayingId(null);
-      return;
-    }
-    try {
-      setPlayingId(voice.voiceId);
-      if (voice.provider === 'ark' && voice.demoAudio) {
-        const audio = new Audio(voice.demoAudio);
-        audioRef.current = audio;
-        audio.onended = () => setPlayingId(null);
-        audio.onerror = () => setPlayingId(null);
-        await audio.play();
-        return;
-      }
-      const lang = voice.language || 'zh';
-      const sampleText = voiceSampleText(lang);
-      const buffer = await synthesizeSpeech(sampleText, voice.voiceId, voice.provider, voice.model);
-      const blob = new Blob([buffer], { type: 'audio/mp3' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => { setPlayingId(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => {
-        setPlayingId(null);
-        URL.revokeObjectURL(url);
-        toast.error(t.voicePreviewFailed || '试听播放失败');
-      };
-      await audio.play();
-    } catch (error: any) {
-      setPlayingId(null);
-      toast.error(error?.message || t.voicePreviewFailed || '试听播放失败');
-    }
-  };
+  const playPreview = (voice: any) => play(voice, voiceSampleText(voice.language || 'zh'));
 
   return (
     <div ref={pickerRef} className="relative">

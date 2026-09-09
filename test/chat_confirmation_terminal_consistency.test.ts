@@ -1,5 +1,6 @@
 import './helpers';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Server as SocketIOServer } from 'socket.io';
@@ -29,8 +30,9 @@ vi.mock('../server/agents/rag', async importOriginal => {
   return { ...actual, retrieveChunks: vi.fn(async () => []) };
 });
 
-import { initDatabase, readDB } from '../db_layer';
+import { initDatabase, readDB, querySQL } from '../db_layer';
 import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
+import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import { getOrCreateActiveConversation, startIsolatedConversation } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
@@ -41,6 +43,7 @@ import {
 } from '../server/tools/pending_confirmation';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
+import { executeToolCall } from '../server/tools/execution_engine';
 
 function waitForRequestEvent<T extends Record<string, any>>(
   socket: ClientSocket,
@@ -395,5 +398,172 @@ describe('chat pending-confirmation terminal consistency', () => {
     })).toMatchObject({ status: 'cancelled', unfinished: false });
     expect(mocks.runWithTools).toHaveBeenCalledTimes(3);
     for (const target of targets) expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('keeps cancellation terminal after the confirmed tool succeeds and its continuation returns a cancelled summary', async () => {
+    clearAllPendingConfirmationsForTests();
+    mocks.runWithTools.mockClear();
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const target = path.join(String(process.env.LUMI_DATA_DIR), `confirmed-before-cancel-${suffix}.txt`);
+    const proposedArgs = { path: target, content: `confirmed fixture ${suffix}` };
+    const proposalRequestId = `confirmation-cancel-proposal-${suffix}`;
+    const confirmationRequestId = `confirmation-cancel-resume-${suffix}`;
+    let signalStarted!: () => void;
+    const continuationStarted = new Promise<void>(resolve => { signalStarted = resolve; });
+    let releaseContinuation!: () => void;
+    const release = new Promise<void>(resolve => { releaseContinuation = resolve; });
+    let continuationReturned = false;
+    let continuationContext: any;
+    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+      const context = args[11];
+      if (context.source === 'chat_confirmation_resume') {
+        continuationContext = context;
+        signalStarted();
+        await release;
+        expect(args[2].signal.aborted).toBe(true);
+        continuationReturned = true;
+        return {
+          text: 'Task was cancelled before the model response could be applied.',
+          toolCalls: context.priorToolRecords,
+          usageRecords: [],
+        };
+      }
+      expect(context.requestId).toBe(proposalRequestId);
+      expect(await context.requestConfirmation('write_file', proposedArgs)).toBe(false);
+      return { text: 'waiting confirmation', toolCalls: [], usageRecords: [] };
+    });
+    const send = async (currentRequestId: string, text: string) => {
+      const terminal = waitForRequestEvent<Record<string, any>>(client, 'agent:response', currentRequestId);
+      const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+        text, history: [], agentId: 'lumi', domain: 'personal', source,
+        requestId: currentRequestId, conversationId: isolated.id,
+      });
+      expect(ack).toMatchObject({ ok: true, requestId: currentRequestId });
+      return terminal;
+    };
+    const proposal = await send(proposalRequestId, `Create ${target} with write_file and exact content ${proposedArgs.content}. Stop at the confirmation boundary and do not self-confirm, then verify the file contents.`);
+    expect(proposal.reason).toBe('waiting_confirmation');
+    const terminals: Record<string, any>[] = [];
+    const collect = (payload: Record<string, any>) => {
+      if (payload.requestId === confirmationRequestId) terminals.push(payload);
+    };
+    client.on('agent:response', collect);
+    try {
+      const cancelledTerminal = send(confirmationRequestId, '确认');
+      await Promise.race([continuationStarted, cancelledTerminal.then(terminal => { throw new Error(`Confirmation ended before continuation: ${JSON.stringify(terminal)}`); })]);
+      expect(continuationContext.priorToolRecords).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'write_file', arguments: proposedArgs, adapterStarted: true }),
+      ]));
+      expect(fs.readFileSync(target, 'utf8')).toBe(proposedArgs.content);
+      const aborted = await client.timeout(5_000).emitWithAck('agent:abort_chat', {
+        requestId: confirmationRequestId, conversationId: isolated.id,
+        agentId: 'lumi', domain: 'personal', source,
+      });
+      expect(aborted).toMatchObject({ ok: true });
+      releaseContinuation();
+      const terminal = await cancelledTerminal;
+      expect(terminal.reason).toMatch(/cancel/u);
+      const settleUntil = Date.now() + 3_000;
+      while (!continuationReturned && Date.now() < settleUntil) await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(continuationReturned).toBe(true);
+      expect(terminals.every(payload => /cancel/u.test(String(payload.reason)))).toBe(true);
+      const assistantRows = (readDB().interactions || []).filter((row: any) => (
+        row.userId === userId && row.role === 'assistant' && row.requestId === confirmationRequestId
+      ));
+      expect(assistantRows).toHaveLength(1);
+      expect(assistantRows[0].cognitiveIntent).toMatch(/cancel/u);
+      expect(String(assistantRows[0].message)).not.toContain('Task was cancelled before the model response');
+      const durableMessages = await querySQL('SELECT toolCalls FROM interactions WHERE requestId=? AND role=?', [confirmationRequestId, 'assistant']);
+      expect(durableMessages).toHaveLength(1);
+      expect(JSON.parse(durableMessages[0].toolCalls)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'write_file', arguments: proposedArgs }),
+      ]));
+      const durableReceipts = await querySQL('SELECT taskId,toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [confirmationRequestId]);
+      expect(durableReceipts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ toolName: 'write_file', outcome: 'verified_success' }),
+      ]));
+      const [durableTask] = await querySQL('SELECT status,activeRequestId FROM conversation_action_tasks WHERE id=?', [durableReceipts[0].taskId]);
+      expect(durableTask).toMatchObject({ status: 'cancelled', activeRequestId: '' });
+      expect(getConversationActionTurn({ conversationId: isolated.id, userId, requestId: confirmationRequestId }))
+        .toMatchObject({ status: 'cancelled' });
+      expect(fs.readFileSync(target, 'utf8')).toBe(proposedArgs.content);
+    } finally {
+      releaseContinuation();
+      client.off('agent:response', collect);
+    }
+  });
+
+  it('persists a confirmed exact write and completes without another model continuation', async () => {
+    clearAllPendingConfirmationsForTests();
+    mocks.runWithTools.mockClear();
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const target = path.join(String(process.env.LUMI_DATA_DIR), `confirmed-fast-${suffix}.txt`);
+    const content = `LC confirmed fast ${suffix}`;
+    const proposalRequestId = `fast-proposal-${suffix}`;
+    const confirmationRequestId = `fast-confirm-${suffix}`;
+    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+      expect(args[11].requestId).toBe(proposalRequestId);
+      expect(await args[11].requestConfirmation('write_file', { path: target, content })).toBe(false);
+      return { text: 'waiting confirmation', toolCalls: [], usageRecords: [] };
+    });
+    const send = async (currentRequestId: string, text: string) => {
+      const terminal = waitForRequestEvent<Record<string, any>>(client, 'agent:response', currentRequestId);
+      expect(await client.timeout(5_000).emitWithAck('agent:chat', {
+        text, history: [], agentId: 'lumi', domain: 'personal', source,
+        requestId: currentRequestId, conversationId: isolated.id,
+      })).toMatchObject({ ok: true });
+      return terminal;
+    };
+    expect((await send(proposalRequestId, `在 ${target} 新建文本文件，只写入“${content}”。先请求我确认。`)).reason)
+      .toBe('waiting_confirmation');
+    const response = await send(confirmationRequestId, '确认');
+    expect(response.blocked).toBe(false);
+    expect(response.text).toContain(target);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(target, 'utf8')).toBe(content);
+    const receipts = await querySQL('SELECT taskId,toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [confirmationRequestId]);
+    expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'write_file', outcome: 'verified_success' })]));
+    expect(await querySQL('SELECT status,activeRequestId FROM conversation_action_tasks WHERE id=?', [receipts[0].taskId]))
+      .toEqual([expect.objectContaining({ status: 'completed', activeRequestId: '' })]);
+  });
+
+  it('persists main-loop evidence before a thrown cancellation finalizes the task', async () => {
+    clearAllPendingConfirmationsForTests();
+    mocks.runWithTools.mockClear();
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const target = path.join(String(process.env.LUMI_DATA_DIR), `main-cancel-${suffix}.csv`);
+    fs.writeFileSync(target, 'item,quantity,price\ncup,2,12\n');
+    const currentRequestId = `main-cancel-${suffix}`;
+    let signalStarted!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    mocks.runWithTools.mockImplementation(async (...args: any[]) => {
+      const context = args[11];
+      const record = await executeToolCall({
+        registry: toolRegistry, name: 'read_file', arguments: { path: target }, context,
+        id: `main-read-${suffix}`,
+      });
+      expect(record.error).toBeUndefined();
+      args[3](record);
+      signalStarted();
+      await new Promise<void>(resolve => args[2].signal.addEventListener('abort', () => resolve(), { once: true }));
+      throw new DOMException('cancelled after read', 'AbortError');
+    });
+    const terminal = waitForRequestEvent<Record<string, any>>(client, 'agent:response', currentRequestId);
+    expect(await client.timeout(5_000).emitWithAck('agent:chat', {
+      text: `读取 ${target}，计算每项金额和总额，不修改原文件。`, history: [], agentId: 'lumi',
+      domain: 'personal', source, requestId: currentRequestId, conversationId: isolated.id,
+    })).toMatchObject({ ok: true });
+    await Promise.race([started, terminal.then(value => { throw new Error(`Ended before read: ${JSON.stringify(value)}`); })]);
+    expect(await client.timeout(5_000).emitWithAck('agent:abort_chat', {
+      requestId: currentRequestId, conversationId: isolated.id, agentId: 'lumi', domain: 'personal', source,
+    })).toMatchObject({ ok: true });
+    expect((await terminal).reason).toMatch(/cancel/u);
+    const receipts = await querySQL('SELECT taskId,toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [currentRequestId]);
+    expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'read_file', outcome: 'verified_success' })]));
+    expect(await querySQL('SELECT status,activeRequestId FROM conversation_action_tasks WHERE id=?', [receipts[0].taskId]))
+      .toEqual([expect.objectContaining({ status: 'cancelled', activeRequestId: '' })]);
+    expect(getConversationActionTurn({ conversationId: isolated.id, userId, requestId: currentRequestId }))
+      .toMatchObject({ status: 'cancelled' });
   });
 });

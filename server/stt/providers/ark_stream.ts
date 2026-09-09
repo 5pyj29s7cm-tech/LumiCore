@@ -352,11 +352,13 @@ export function createStream(
   }
 
   ws.on('open', () => {
+    if (closed) { try { ws.close(); } catch {} return; }
     logger.info('[Doubao-ASR] WebSocket connected, sending full client request');
     ws.send(buildFullClientRequest(sequence, buildRequest(language)));
   });
 
   ws.on('message', (raw: WebSocket.RawData) => {
+    if (closed) return;
     try {
       const packet = parseResponse(Buffer.isBuffer(raw) ? raw : Buffer.from(raw as any));
       if (packet.code) {
@@ -408,6 +410,14 @@ export function createStream(
   });
 
   return {
+    abort() {
+      ending = true;
+      closed = true;
+      audioQueue.length = 0;
+      if (stablePartialTimer) clearTimeout(stablePartialTimer);
+      stablePartialTimer = null;
+      try { ws.terminate(); } catch { try { ws.close(); } catch {} }
+    },
     sendAudio(chunk: Buffer) {
       if (ending) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);

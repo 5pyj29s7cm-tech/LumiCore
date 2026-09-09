@@ -65,6 +65,7 @@ export interface EmotionalProfile {
 }
 
 export interface DistillOptions {
+  signal?: AbortSignal;
   chatLog: string;
   format: 'wechat' | 'qq' | 'plain';
   targetName?: string;         // name of the person being distilled
@@ -219,6 +220,7 @@ type LLMGetters = {
   getKimi?: () => any;
   getGlm?: () => any;
   getRelay?: () => any;
+  signal?: AbortSignal;
   preferredConfig?: {
     provider: string;
     model: string;
@@ -235,6 +237,7 @@ async function callDistillLLM(
   provider: 'deepseek' | 'qwen' = 'deepseek',
   model?: string,
 ): Promise<string> {
+  llmGetters.signal?.throwIfAborted();
   const messages: NormalizedMessage[] = [{ role: 'user', content: prompt }];
   const selectedProvider = llmGetters.preferredConfig?.provider || provider;
   const selectedModel = llmGetters.preferredConfig?.model
@@ -250,12 +253,14 @@ async function callDistillLLM(
       fallbackCandidates: llmGetters.preferredConfig?.fallbackCandidates,
       allowCloudFallback: llmGetters.preferredConfig?.allowCloudFallback,
       source: 'personality_distillation',
+      signal: llmGetters.signal,
       maxTokens: 3000,
     },
     llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
     llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
     llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
   );
+  llmGetters.signal?.throwIfAborted();
   return result.text || '';
 }
 
@@ -591,10 +596,12 @@ Output ONLY the narrative text, no labels.`;
 // ── Main Entry Point ──
 
 export async function distillPersona(options: DistillOptions, llmGetters: LLMGetters): Promise<DistillResult> {
+  options.signal?.throwIfAborted();
   const { chatLog, format, targetName: providedName, relationshipType: providedRel, userId, audioTranscript } = options;
   const preferred = getScopedPreferredLLM(userId);
   const configuredGetters: LLMGetters = {
     ...llmGetters,
+    signal: options.signal,
     preferredConfig: {
       provider: preferred.provider,
       model: preferred.model,

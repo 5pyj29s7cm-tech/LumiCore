@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { attachLAPWebSocket, setLocalAgent } from '../server/lap/transport';
 import { createPairingTicket, resetPairingTicketsForTests } from '../server/lap/pairing';
-import { resetLAPSessionsForTests } from '../server/lap/session';
+import { approveSession, resetLAPSessionsForTests } from '../server/lap/session';
 
 type WireMessage = Record<string, any>;
 
@@ -56,6 +56,23 @@ describe('LAP WebSocket pairing boundary', () => {
   afterEach(async () => {
     for (const ws of sockets) ws.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+
+  it('does not accept inbound work when this instance has no delegated-task executor', async () => {
+    const { initDatabase } = await import('../db_layer');
+    await initDatabase();
+    const ticket = createPairingTicket({ userId: 'owner', domain: 'personal', orgId: '' }, ['delegate_task']);
+    const peer = { agentId: 'agent_delegate_test', userId: 'remote-owner', name: 'Peer', capabilities: ['task_delegation'], publicKey: 'ed25519:delegate-test-key' };
+    const ws = await connect(url);
+    sockets.push(ws);
+    const paired = waitForMessage(ws, message => message.id === 'paired');
+    ws.send(JSON.stringify({ lap: '2.0', id: 'paired', sessionId: '', timestamp: new Date().toISOString(), method: 'lap.handshake', pairingToken: ticket.token, agent: peer, proposedScope: ['delegate_task'], nonce: 'd'.repeat(64) }));
+    const session = await paired;
+    expect(session.accepted).toBe(true);
+    approveSession(session.sessionId);
+    const delegated = waitForMessage(ws, message => message.id === 'delegate');
+    ws.send(JSON.stringify({ lap: '2.0', id: 'delegate', sessionId: session.sessionId, timestamp: new Date().toISOString(), method: 'lap.task.delegate', task: { taskId: 'unexecutable', type: 'web_search', priority: 'normal', payload: { query: 'synthetic' } } }));
+    expect(await delegated).toMatchObject({ accepted: false, reason: expect.stringContaining('does not currently execute') });
   });
 
   it('does not consume a pairing ticket on malformed handshake and consumes it once on success', async () => {

@@ -620,26 +620,6 @@ export function AgentChatPage({
     isElectron ? uiMessage('agent-chat-page.local-node.da9f577e7d') : uiMessage('agent-chat-page.browser-channel.61c3c86e02'),
   ];
   const operationModeMeta = (() => {
-    if (operationMode === 'chat') {
-      return {
-        label: t.modeChat || uiMessage('agent-chat-page.chat.1594b2f45c'),
-        detail: t.modeChatHint || uiMessage('agent-chat-page.conversation-only.33f7067683'),
-        badgeClass: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200',
-        subtleClass: 'border-emerald-400/15 bg-emerald-400/10 text-emerald-100/75',
-        dotClass: 'bg-emerald-300',
-        Icon: MessageCircle,
-      };
-    }
-    if (operationMode === 'autonomous') {
-      return {
-        label: t.modeAutonomy || t.modeAutoExecute || uiMessage('agent-chat-page.autonomy.6aea974e38'),
-        detail: t.modeAutonomyHint || t.modeAutoExecuteHint || uiMessage('agent-chat-page.24h-autonomous-work.81b1d75d6b'),
-        badgeClass: 'border-cyan-300/30 bg-cyan-400/12 text-cyan-100',
-        subtleClass: 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100/80',
-        dotClass: 'bg-cyan-300 animate-pulse',
-        Icon: Zap,
-      };
-    }
     if (operationMode === 'meeting') {
       return {
         label: t.modeMeeting || uiMessage('agent-chat-page.meeting.e16a90b510'),
@@ -651,8 +631,8 @@ export function AgentChatPage({
       };
     }
     return {
-      label: t.modeAssistant || uiMessage('agent-chat-page.assistant.4a363bbe1a'),
-      detail: t.modeAssistantHint || uiMessage('agent-chat-page.foreground-full-access.a5a81a90e7'),
+      label: 'Lumi',
+      detail: 'Lumi',
       badgeClass: 'border-celestial-saturn/30 bg-celestial-saturn/12 text-celestial-saturn',
       subtleClass: 'border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn/85',
       dotClass: 'bg-celestial-saturn',
@@ -662,6 +642,7 @@ export function AgentChatPage({
   const OperationModeIcon = operationModeMeta.Icon;
   const socket = socketService.connect();
   const { threads: focusThreads } = useFocusThreads({
+    userId: user?.uid,
     domain: activeDomain,
     orgId: activeOrgId,
     enabled: isOpen && Boolean(user),
@@ -672,6 +653,7 @@ export function AgentChatPage({
     error: runtimeStatusError,
     refresh: refreshRuntimeStatus,
   } = useRuntimeStatus({
+    userId: user?.uid,
     enabled: isOpen && isOfficeCommandCenter && Boolean(user),
     scopeKey: `${activeDomain}:${activeDomain === 'work' ? activeOrgId || '' : ''}`,
   });

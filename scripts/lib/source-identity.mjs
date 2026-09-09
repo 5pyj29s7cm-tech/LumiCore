@@ -34,7 +34,8 @@ export function fingerprintSourceSnapshot({
   updateHashPart(hash, 'head', head);
   updateHashPart(hash, 'status', status);
   updateHashPart(hash, 'diff', diff);
-  for (const item of [...untracked].sort((left, right) => left.path.localeCompare(right.path))) {
+  // Rust String::sort orders UTF-8 bytes. Locale sorting differs across hosts.
+  for (const item of [...untracked].sort((left, right) => Buffer.compare(Buffer.from(left.path, 'utf8'), Buffer.from(right.path, 'utf8')))) {
     updateHashPart(hash, 'untracked-path', item.path);
     updateHashPart(hash, 'untracked-content', item.content);
   }

@@ -12,6 +12,7 @@ import {
   publishWorkflowDefinition,
   redactWorkflowValue,
   retireWorkflowDefinition,
+  validateWorkflowSteps,
   type WorkflowDefinition as VersionedWorkflowDefinition,
   type WorkflowStepDefinition,
 } from '../workflows/runtime';
@@ -65,9 +66,10 @@ function inferredDraftInputRef(stepIndex: number, path: string[]): { $inputRef: 
 
 function parameterizeInferredDraftValue(value: unknown, stepIndex: number, path: string[] = []): unknown {
   if (Array.isArray(value)) {
-    return value.map((item, index) => parameterizeInferredDraftValue(item, stepIndex, [...path, String(index)]));
+    return inferredDraftInputRef(stepIndex, path);
   }
   if (!value || typeof value !== 'object') {
+    if (typeof value === 'number' || typeof value === 'boolean') return inferredDraftInputRef(stepIndex, path);
     if (typeof value === 'string' && INFERRED_DRAFT_PII_VALUE_RE.test(value)) {
       return inferredDraftInputRef(stepIndex, path);
     }
@@ -103,7 +105,7 @@ function workflowDraftInputSchema(steps: WorkflowDefinition['steps']): Record<st
   const names = Array.from(refs).sort();
   return {
     type: 'object',
-    properties: Object.fromEntries(names.map(name => [name, { type: 'string' }])),
+    properties: Object.fromEntries(names.map(name => [name, { description: 'Fresh runtime value for the reviewed argument; may be a scalar, array, or object.' }])),
     required: names,
     additionalProperties: true,
   };
@@ -254,6 +256,7 @@ export function saveWorkflowDraftCandidate(
         : redactedArgs) as Record<string, any>,
     };
   });
+  const validatedSteps = validateWorkflowSteps(runtimeSteps(redactedSteps));
   const legacy = saveWorkflow(userId, name, description, redactedSteps, category, scope);
   const draft = createWorkflowDefinitionDraft({
     workflowId: legacy.runtimeWorkflowId || legacy.id,
@@ -264,7 +267,7 @@ export function saveWorkflowDraftCandidate(
     triggerPolicy: { mode: 'explicit_only' },
     inputSchema: workflowDraftInputSchema(redactedSteps),
     outputSchema: {},
-    steps: runtimeSteps(redactedSteps),
+    steps: validatedSteps,
     provenance,
   });
   const db = readDB();

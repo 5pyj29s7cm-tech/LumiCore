@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, MicOff, Phone, Loader2, Volume2, Trash2, Plus, Sparkles, CheckCircle2, XCircle, History, Play, Pause, Cpu, Upload, FileAudio } from 'lucide-react';
 import { useVoiceCloning } from '../hooks/useVoiceCloning';
-import { deleteVoice, synthesizeSpeech } from '../services/voiceService';
+import { deleteVoice } from '../services/voiceService';
+import { useVoicePreview } from '../hooks/useVoicePreview';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
@@ -502,42 +503,10 @@ export function VoiceForge({ t, compact, onCloneSuccess }: { t: any; compact?: b
 
 function VoiceCard({ voice, onDelete, isCloned = false }: { voice: any, onDelete?: () => void, isCloned?: boolean }) {
   const t = useT();
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const audioRef = React.useRef<HTMLAudioElement | null>(null);
-
-  const handlePlay = async () => {
-    if (isPlaying) {
-      audioRef.current?.pause();
-      setIsPlaying(false);
-      return;
-    }
-    setIsLoading(true);
-    try {
-      if (voice.provider === 'ark' && voice.demoAudio) {
-        const audio = new Audio(voice.demoAudio);
-        audioRef.current = audio;
-        audio.onended = () => setIsPlaying(false);
-        audio.onerror = () => { setIsPlaying(false); toast.error(t.playbackFailed || 'Playback failed'); };
-        await audio.play();
-        setIsPlaying(true);
-        return;
-      }
-      const buffer = await synthesizeSpeech(translate('voicePreviewSample'), voice.voiceId || voice.id, voice.provider, voice.model);
-      const blob = new Blob([buffer], { type: 'audio/mp3' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => { setIsPlaying(false); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setIsPlaying(false); URL.revokeObjectURL(url); toast.error(t.playbackFailed || 'Playback failed'); };
-      await audio.play();
-      setIsPlaying(true);
-    } catch {
-      toast.error(t.failedToPlaySample || 'Failed to play voice sample');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const { playingId, isLoading, play, stop } = useVoicePreview(message => toast.error(message || t.failedToPlaySample || 'Failed to play voice sample'));
+  const isPlaying = Boolean(playingId) && !isLoading;
+  useEffect(() => stop, [voice.voiceId, voice.provider, voice.model, stop]);
+  const handlePlay = () => play(voice, translate('voicePreviewSample'));
 
   return (
     <motion.div

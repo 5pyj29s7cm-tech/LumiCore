@@ -37,7 +37,7 @@ export type LumiModelRoleId = typeof LUMI_MODEL_ROLE_IDS[number];
 
 /** Safe model-id defaults used when a user has not chosen a role-specific id. */
 export const LUMI_OFFICIAL_DEFAULT_MODELS: Readonly<Record<LumiModelRoleId, string>> = {
-  reasoning: 'aliyun/qwen-plus',
+  reasoning: 'aliyun/deepseek-v4-flash',
   vision: 'aliyun/qwen2.5-vl-72b',
   world: 'aliyun/qwen3-vl-flash',
   image_generation: 'aliyun/qwen-image',
@@ -49,6 +49,17 @@ export const LUMI_OFFICIAL_DEFAULT_MODELS: Readonly<Record<LumiModelRoleId, stri
   speech_recognition: 'aliyun/qwen-audio-3.0-asr-flash-streaming',
   speech_synthesis: 'aliyun/cosyvoice-v3-flash',
 };
+
+/** Versioned migration of defaults emitted by older official configurations. */
+export const LUMI_OFFICIAL_REASONING_DEFAULTS_VERSION = 1;
+
+/** Only use for legacy/default values, never for a newly explicit model choice. */
+export function migrateLumiOfficialReasoningDefault(value: unknown): string {
+  const model = normalizeLumiOfficialModel('reasoning', value);
+  return model === 'aliyun/qwen-plus' || model === 'qwen-plus'
+    ? LUMI_OFFICIAL_DEFAULT_MODELS.reasoning
+    : model;
+}
 
 /**
  * Model ids emitted by older builds as generic provider placeholders. They

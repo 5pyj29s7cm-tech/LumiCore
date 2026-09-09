@@ -3,16 +3,16 @@ import type { OperationMode } from '../cognition/operation_modes';
 const HAN_RE = /[\u3400-\u9fff]/u;
 
 const ENGLISH_MODE_LABELS: Record<OperationMode, string> = {
-  chat: 'Chat mode',
-  assistant: 'Assistant mode',
-  autonomous: 'Autonomy mode',
+  chat: 'Lumi',
+  assistant: 'Lumi',
+  autonomous: 'Lumi',
   meeting: 'Meeting mode',
 };
 
 const CHINESE_MODE_LABELS: Record<OperationMode, string> = {
-  chat: '聊天模式',
-  assistant: '助手模式',
-  autonomous: '自主模式',
+  chat: 'Lumi',
+  assistant: 'Lumi',
+  autonomous: 'Lumi',
   meeting: '会议模式',
 };
 
@@ -21,6 +21,9 @@ export function formatOperationModeSwitchResponse(
   synced: boolean,
   userText: string,
 ): string {
+  if (mode !== 'meeting') return HAN_RE.test(userText)
+    ? 'Lumi 的对话、办事和学习共用一个核心，无需切换模式。'
+    : 'Lumi uses one core for conversation, tasks and learning; no mode switch is needed.';
   if (HAN_RE.test(userText)) {
     const label = CHINESE_MODE_LABELS[mode];
     return synced

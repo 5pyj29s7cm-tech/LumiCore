@@ -8,7 +8,10 @@ import {
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 const ALLOWED_KEYS = new Set<keyof SafetyGateConfig>([
-  'autonomyLevel',
+  'autoProcessEnabled',
+  'requireIdle',
+  'maxTokensPerHour',
+  'maxConsecutiveTasks',
 ]);
 
 function pickGatePatch(args: Record<string, any>): Partial<SafetyGateConfig> {
@@ -24,7 +27,7 @@ function pickGatePatch(args: Record<string, any>): Partial<SafetyGateConfig> {
 export function registerAutonomyTools(registry: ToolRegistry): void {
   registry.register({
     name: 'autonomy_get_policy',
-    description: 'Read Lumi autonomous work policy derived from the desktop modes: chat/reactive, assistant/semi, autonomous/full, plus compatibility safety fields.',
+    description: 'Read enabled background processing, idle requirements, workflow limits and token budgets. Lumi has no selectable operation modes.',
     parameters: {
       type: 'object',
       properties: {},
@@ -42,11 +45,14 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'autonomy_update_policy',
-    description: 'Update Lumi autonomous work policy after explicit user confirmation. Prefer changing the desktop operation mode; autonomyLevel exists for compatibility with chat/reactive, assistant/semi, and autonomous/full.',
+    description: 'Update background processing and resource limits after explicit user confirmation. This changes only background-work settings; conversation, memory and requested tasks use the same Lumi core.',
     parameters: {
       type: 'object',
       properties: {
-        autonomyLevel: { type: 'string', enum: ['reactive', 'semi', 'full'], description: 'Compatibility field mirroring desktop modes: chat=reactive, assistant=semi, autonomous=full.' },
+        autoProcessEnabled: { type: 'boolean', description: 'Enable or pause authorized background workflows.' },
+        requireIdle: { type: 'boolean', description: 'Run background work only while the user is idle.' },
+        maxTokensPerHour: { type: 'number', minimum: 100, maximum: 250000 },
+        maxConsecutiveTasks: { type: 'number', minimum: 1, maximum: 50 },
         reason: { type: 'string', description: 'Short reason/user instruction for auditability.' },
       },
       required: [],
@@ -58,9 +64,10 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       }
       const updated = saveGateConfig(patch, context?.userId);
       const persistedPolicy = loadGateConfig(context?.userId);
-      const requestedLevel = patch.autonomyLevel;
-      if (requestedLevel && persistedPolicy.autonomyLevel !== requestedLevel) {
-        throw new Error('Autonomy policy was not persisted with the requested level.');
+      for (const key of Object.keys(patch) as Array<keyof SafetyGateConfig>) {
+        if (JSON.stringify(persistedPolicy[key]) !== JSON.stringify(updated[key])) {
+          throw new Error(`Background policy field was not persisted: ${key}`);
+        }
       }
       return JSON.stringify({
         ok: true,
@@ -69,7 +76,7 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
         updated,
         persistedPolicy,
         reason: args.reason || '',
-        note: 'Autonomy policy updated. Background execution still checks desktop mode, the active policy fields, token budget, confirmed workflows, and tool safety gates.',
+        note: 'Autonomy policy updated. Background execution still checks the active policy fields, token budget, confirmed workflows, and tool safety gates.',
       }, null, 2);
     },
     permission: 'user',
@@ -84,11 +91,11 @@ export function registerAutonomyTools(registry: ToolRegistry): void {
       verification: {
         strategy: 'state_diff',
         required: true,
-        requiredFields: ['ok', 'status', 'persisted', 'persistedPolicy.autonomyLevel'],
+        requiredFields: ['ok', 'status', 'persisted', 'persistedPolicy.autoProcessEnabled'],
         requiredValues: { ok: true, status: 'updated', persisted: true },
         successStatuses: ['updated'],
         failureStatuses: ['failed', 'unverified'],
-        successSignals: ['persisted autonomy policy reread matches the requested level'],
+        successSignals: ['persisted background policy reread matches the updated fields'],
         limitations: ['This changes policy only; every later action still passes its own permission and confirmation gates.'],
       },
     }),

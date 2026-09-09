@@ -192,6 +192,34 @@ describe('Action Constitution', () => {
     expect(executed).toBe(false);
   });
 
+  it('keeps write confirmation scoped to writes while allowing normally authorized local readback', () => {
+    const actionIntent = '在 notes.txt 新建文本文件。先等待我确认才能写入，不得自行确认。写完回读并告诉我全文。';
+    expect(canAutoApproveAction('read_file', { path: 'notes.txt' }, { actionIntent })).toBe(true);
+    expect(canAutoApproveAction('read_files_batch', { paths: ['notes.txt'] }, { actionIntent })).toBe(true);
+    expect(canAutoApproveAction('write_file', { path: 'notes.txt', content: 'replace' }, { actionIntent })).toBe(false);
+    expect(canAutoApproveAction('write_file', { path: 'second.txt', content: 'new' }, { actionIntent })).toBe(false);
+    expect(canAutoApproveAction('mcp_unknown_read', { path: 'notes.txt' }, { actionIntent })).toBe(false);
+    expect(evaluateActionConstitution('extract_document_text', { path: 'notes.txt' }, 'safe', {
+      actionIntent: `${actionIntent}读取前也要等待我确认。`,
+    })).toMatchObject({ level: 'confirm', requiresUserConfirmation: true });
+    expect(canAutoApproveAction('read_file', { path: 'notes.txt' }, {
+      actionIntent: 'Wait until my approval before writing. Do not self-confirm. Read back the result.',
+    })).toBe(true);
+  });
+
+  it.each([
+    '先等待我确认才能写入，不得自行确认。读取前确认。',
+    '先等待我确认才能写入，不得自行确认。读取前也要等待我确认。',
+    '先等待我确认才能写入。任何操作都先等待我确认。',
+    '不得自行确认。',
+    'Wait for my approval before reading this file.',
+  ])('respects an explicit or unspecific read confirmation boundary: %s', actionIntent => {
+    const unrelatedReceipt = { name: 'write_file', arguments: { path: 'unrelated.txt' }, terminalVerification: { status: 'verified' } };
+    expect(canAutoApproveAction('read_file', { path: 'notes.txt' }, {
+      actionIntent, priorToolRecords: [unrelatedReceipt],
+    } as any)).toBe(false);
+  });
+
   it('forbids destructive generic commands', () => {
     const decision = evaluateActionConstitution('desktop_run_command', { command: 'rm -rf C:\\important' }, 'confirm');
     expect(decision.level).toBe('forbidden');

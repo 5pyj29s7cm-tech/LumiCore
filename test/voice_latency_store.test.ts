@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { sanitizeRuntimeLogLine } from '../server/runtime/file_logger';
 import {
   getVoiceLatencyStats,
   markVoiceLatencyMilestone,
+  recordVoicePlaybackMetrics,
   resetVoiceLatencyStoreForTests,
   startVoiceLatencyTrace,
 } from '../server/monitor/voice_latency_store';
@@ -50,5 +52,55 @@ describe('voice latency timeline', () => {
     markVoiceLatencyMilestone('voice-3', 'firstModelTokenAt', 180);
 
     expect(getVoiceLatencyStats(200)).toMatchObject({ completedTurns: 0, activeTurns: 1 });
+  });
+
+  it('distinguishes preparation, shared model runner, synthesis and client decode durations', () => {
+    startVoiceLatencyTrace({ requestId: 'stages', pipelineStartedAt: 100 });
+    markVoiceLatencyMilestone('stages', 'firstModelRequestAt', 300);
+    markVoiceLatencyMilestone('stages', 'firstModelTokenAt', 900);
+    markVoiceLatencyMilestone('stages', 'firstTtsRequestedAt', 950);
+    markVoiceLatencyMilestone('stages', 'firstTtsReadyAt', 1_400);
+    recordVoicePlaybackMetrics('stages', { clientDecodeMs: 42, clientReceiptToPlaybackMs: 80 });
+    markVoiceLatencyMilestone('stages', 'firstPlaybackAt', 1_500);
+    expect(getVoiceLatencyStats(2_000).stages).toMatchObject({
+      pipelineToFirstModelRequest: { lastMs: 200 },
+      modelRequestToFirstToken: { lastMs: 600 },
+      ttsSynthesis: { lastMs: 450 },
+      clientDecode: { lastMs: 42 },
+      clientReceiptToPlayback: { lastMs: 80 },
+    });
+  });
+
+  it('ignores invalid or repeated playback metrics without corrupting stage averages', () => {
+    startVoiceLatencyTrace({ requestId: 'bounded', pipelineStartedAt: 100 });
+    markVoiceLatencyMilestone('bounded', 'firstModelRequestAt', NaN);
+    recordVoicePlaybackMetrics('bounded', { clientDecodeMs: -1, clientReceiptToPlaybackMs: Infinity });
+    recordVoicePlaybackMetrics('bounded', { clientDecodeMs: 10, clientReceiptToPlaybackMs: 120_001 });
+    recordVoicePlaybackMetrics('bounded', { clientDecodeMs: 999, clientReceiptToPlaybackMs: 30 });
+    markVoiceLatencyMilestone('bounded', 'firstPlaybackAt', 300);
+    recordVoicePlaybackMetrics('bounded', { clientDecodeMs: 888 });
+    expect(getVoiceLatencyStats(400).stages).toMatchObject({
+      pipelineToFirstModelRequest: { count: 0 },
+      clientDecode: { count: 1, lastMs: 10 },
+      clientReceiptToPlayback: { count: 1, lastMs: 30 },
+    });
+  });
+
+  it('keeps numeric timing evidence in the existing sanitized runtime log', () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      startVoiceLatencyTrace({ requestId: 'voice-log', provider: 'relay', domain: 'personal', pipelineStartedAt: 100 });
+      markVoiceLatencyMilestone('voice-log', 'firstModelRequestAt', 200);
+      markVoiceLatencyMilestone('voice-log', 'firstModelTokenAt', 300);
+      recordVoicePlaybackMetrics('voice-log', { clientDecodeMs: 12, clientReceiptToPlaybackMs: 20 });
+      markVoiceLatencyMilestone('voice-log', 'firstPlaybackAt', 400);
+      const line = sanitizeRuntimeLogLine(log.mock.calls[0]);
+      expect(line).toContain('VoiceLatency');
+      expect(line).toContain("requestId: 'voice-log'");
+      expect(line).toContain('firstModelRequestAt: 200');
+      expect(line).toContain('firstModelTokenAt: 300');
+      expect(line).toContain('clientDecodeMs: 12');
+      expect(Object.keys(log.mock.calls[0][1])).not.toEqual(expect.arrayContaining(['text', 'audio', 'prompt']));
+    } finally { log.mockRestore(); }
   });
 });

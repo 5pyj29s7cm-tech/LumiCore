@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useDragControls, useMotionValue, useTransform } from 'motion/react';
-import { GlobalNodeMap } from './GlobalNodeMap';
 import { sounds } from '../services/soundService';
 import {
   Rocket,
@@ -54,9 +53,9 @@ import {
   BatteryIndicator,
   DayInkLandscape,
   MeetingModeButton,
-  ThemeWidget,
 } from './DesktopShellAuxiliary';
 import { CursorGlow } from './CursorGlow';
+import { DesktopDeviceWidget } from './DesktopDeviceWidget';
 import { WorkModeSwitch } from './org/WorkModeSwitch';
 import { PetAvatar } from './SpriteAnimator';
 import { getDefaultPets } from '../pets/defaults';
@@ -537,9 +536,9 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
   isOpen: boolean;
   onClose: () => void;
   t: any;
-  brightness: number;
+  brightness: number | null;
   setBrightness: (v: number) => void;
-  volume: number;
+  volume: number | null;
   setVolume: (v: number) => void;
   lang: 'en' | 'zh';
   setLang: (l: 'en' | 'zh') => void;
@@ -547,6 +546,8 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
 }) {
   const { selectedVoiceId, unreadCount } = useApp();
 
+  const brightnessSaving = useRef(false);
+  const volumeSaving = useRef(false);
   if (!isOpen) return null;
 
   return (
@@ -589,36 +590,42 @@ function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, 
         <div className="col-span-1 bg-white/5 rounded-[1.5rem] p-5 flex flex-col justify-between">
            <div className="space-y-2">
              <div className="flex justify-between items-center text-xs font-bold text-white/40 uppercase">
-               <span>{t.display || 'Display'}</span>
+               <span>{t.display || 'Display'}{brightness === null ? ` (${t.systemControlUnavailable || 'Unavailable'})` : ''}</span>
                <Moon size={12} className="text-blue-300/70" />
              </div>
              <div className="h-4 w-full bg-white/5 rounded-full relative group cursor-pointer" onClick={(e) => {
                const rect = e.currentTarget.getBoundingClientRect();
                const percent = (e.clientX - rect.left) / rect.width;
                const v = Math.min(100, Math.max(0, Math.round(percent * 100)));
-               setBrightness(v);
-               systemService.setBrightness(v);
+               if (brightness === null || brightnessSaving.current) return;
+               brightnessSaving.current = true;
+               void systemService.setBrightness(v).then(() => setBrightness(v))
+                 .catch(error => toast.error(String(error?.message || error)))
+                 .finally(() => { brightnessSaving.current = false; });
              }}>
                <motion.div 
-                 animate={{ width: `${brightness}%` }}
+                 animate={{ width: `${brightness ?? 0}%` }}
                  className="h-full bg-white/60 rounded-full" 
                />
              </div>
            </div>
            <div className="space-y-2">
              <div className="flex justify-between items-center text-xs font-bold text-white/40 uppercase">
-               <span>{t.sound || 'Sound'}</span>
+               <span>{t.sound || 'Sound'}{volume === null ? ` (${t.systemControlUnavailable || 'Unavailable'})` : ''}</span>
                <Volume2 size={12} />
              </div>
              <div className="h-4 w-full bg-white/5 rounded-full relative group cursor-pointer" onClick={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect();
                 const percent = (e.clientX - rect.left) / rect.width;
                 const v = Math.min(100, Math.max(0, Math.round(percent * 100)));
-                setVolume(v);
-                systemService.setVolume(v);
+                if (volume === null || volumeSaving.current) return;
+                volumeSaving.current = true;
+                void systemService.setVolume(v).then(() => setVolume(v))
+                  .catch(error => toast.error(String(error?.message || error)))
+                  .finally(() => { volumeSaving.current = false; });
              }}>
                <motion.div
-                 animate={{ width: `${volume}%` }}
+                 animate={{ width: `${volume ?? 0}%` }}
                  className="h-full bg-celestial-saturn rounded-full"
                />
              </div>
@@ -1697,16 +1704,6 @@ export function DesktopUI({
     }
   }, [canCustomizeLumiAppearance, lang, petStorageKeys]);
 
-  const [theme, setTheme] = useState<string>('celestial');
-  useEffect(() => {
-    const themeForMode: Partial<Record<OperationMode, string>> = {
-      chat: 'celestial',
-      assistant: 'nebula',
-      autonomous: 'cyber',
-    };
-    const nextTheme = themeForMode[operationMode];
-    if (nextTheme && theme !== nextTheme) setTheme(nextTheme);
-  }, [operationMode, theme]);
   const [clientPermissions, setClientPermissions] = useState<ClientPermissionSnapshot>({});
   const [clientRuntime, setClientRuntime] = useState<ClientRuntimeSnapshot>({});
   const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
@@ -1714,8 +1711,8 @@ export function DesktopUI({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('general');
   const [personalizationSection, setPersonalizationSection] = useState<'appearance' | 'voice'>('appearance');
-  const [brightness, setBrightness] = useState(85);
-  const [volume, setVolume] = useState(60);
+  const [brightness, setBrightness] = useState<number | null>(null);
+  const [volume, setVolume] = useState<number | null>(null);
   const [time, setTime] = useState(new Date());
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
   const [wallpaperPresentation, setWallpaperPresentation] = useState<WallpaperPresentation>('workbench');
@@ -2242,7 +2239,6 @@ export function DesktopUI({
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
-  const autonomousTaskStatusRef = useRef<Map<string, string>>(new Map());
   const readMeetingItem = useCallback((scopedKey: string, legacyKey: string): string | null => (
     localStorage.getItem(scopedKey)
       ?? (workDomain === 'personal' ? localStorage.getItem(legacyKey) : null)
@@ -3345,8 +3341,8 @@ export function DesktopUI({
 
   // Restore real system volume/brightness on mount
   useEffect(() => {
-    systemService.getVolume().then(v => setVolume(v));
-    systemService.getBrightness().then(b => setBrightness(b));
+    systemService.getVolume().then(setVolume).catch(() => setVolume(null));
+    systemService.getBrightness().then(setBrightness).catch(() => setBrightness(null));
   }, []);
 
   const applyWallpaperMode = useCallback(async (
@@ -3842,48 +3838,8 @@ export function DesktopUI({
       }
     };
 
-    const normalizeAutonomousTask = (data: any, status: WorkflowTask['status']): WorkflowTask | null => {
-      const raw = data?.task || data;
-      const id = String(raw?.id || data?.taskId || '');
-      if (!id) return null;
-      return {
-        id,
-        title: raw?.title || data?.title || id,
-        status: (raw?.status || status) as WorkflowTask['status'],
-        toolCallsCount: Number(raw?.toolCallsCount || 0),
-        error: raw?.error,
-        resultPreview: raw?.resultPreview || raw?.result,
-        updatedAt: raw?.updatedAt || raw?.timestamp,
-        completionFeedback: normalizeTaskCompletionFeedback(raw?.completionFeedback || data?.completionFeedback),
-      };
-    };
-
-    const recordAutonomousTaskStep = (task: WorkflowTask) => {
-      const previousStatus = autonomousTaskStatusRef.current.get(task.id);
-      if (previousStatus === task.status) return;
-      autonomousTaskStatusRef.current.set(task.id, task.status);
-      const isActive = task.status === 'queued' || task.status === 'running' || task.status === 'cancelling';
-      const isFailed = task.status === 'failed';
-      setAgentStatus(isActive ? 'background' : isFailed ? 'error' : 'done');
-      setWorkflowSteps(prev => [...prev, {
-        id: `autonomous-task-${task.id}-${task.status}-${Date.now()}`,
-        type: isFailed ? 'error' : task.status === 'completed' ? 'response' : 'background',
-        text: `${t.workflowAutonomousTask || 'Autonomous task'}: ${task.status}`,
-        detail: task.title || task.id,
-        time: Date.now(),
-      }]);
-    };
-
-    const autonomousTaskListener = (status: WorkflowTask['status']) => (data: any) => {
-      const task = normalizeAutonomousTask(data, status);
-      if (task) recordAutonomousTaskStep(task);
-    };
-    const onAutonomousStarted = autonomousTaskListener('running');
-    const onAutonomousPaused = autonomousTaskListener('paused');
-    const onAutonomousRetry = autonomousTaskListener('queued');
-    const onAutonomousCompleted = autonomousTaskListener('completed');
-    const onAutonomousFailed = autonomousTaskListener('failed');
-    const onAutonomousCancelled = autonomousTaskListener('cancelled');
+    // AutonomousFeed and CommandCenter own background task projections.
+    // These events cannot settle or replace the foreground conversation.
 
     const onDesktopControlState = (data: any) => {
       const id = `desktop-control-${String(data?.leaseId || data?.taskId || 'current')}`;
@@ -3906,12 +3862,6 @@ export function DesktopUI({
     };
 
     socket.on('agent:status', onStatus);
-    socket.on('autonomous:task_started', onAutonomousStarted);
-    socket.on('autonomous:task_paused', onAutonomousPaused);
-    socket.on('autonomous:task_retry_scheduled', onAutonomousRetry);
-    socket.on('autonomous:task_completed', onAutonomousCompleted);
-    socket.on('autonomous:task_failed', onAutonomousFailed);
-    socket.on('autonomous:task_cancelled', onAutonomousCancelled);
     socket.on('agent:desktop_control_state', onDesktopControlState);
     socket.on('agent:tool_call', onToolCall);
     socket.on('agent:tool', onToolCall);
@@ -3979,12 +3929,6 @@ export function DesktopUI({
 
     return () => {
       socket.off('agent:status', onStatus);
-      socket.off('autonomous:task_started', onAutonomousStarted);
-      socket.off('autonomous:task_paused', onAutonomousPaused);
-      socket.off('autonomous:task_retry_scheduled', onAutonomousRetry);
-      socket.off('autonomous:task_completed', onAutonomousCompleted);
-      socket.off('autonomous:task_failed', onAutonomousFailed);
-      socket.off('autonomous:task_cancelled', onAutonomousCancelled);
       socket.off('agent:desktop_control_state', onDesktopControlState);
       socket.off('agent:tool_call', onToolCall);
       socket.off('agent:tool', onToolCall);
@@ -4007,7 +3951,6 @@ export function DesktopUI({
     socket,
     t.workflowAnalyzing,
     t.workflowBackgroundStep,
-    t.workflowAutonomousTask,
     t.workflowCalling,
     t.workflowError,
     t.workflowResponseReady,
@@ -5126,7 +5069,7 @@ export function DesktopUI({
     ...openWindows
       .filter(windowId => windowId !== 'chat' && windowId !== 'personalization' && !appIcons.some(app => app.id === windowId))
       .map(getWindowMeta),
-  ];
+  ].filter(app => app.id !== 'devices');
   const operationModeOptions = [
     {
       id: 'meeting' as const,
@@ -5135,30 +5078,6 @@ export function DesktopUI({
       description: t.modeMeetingDesc || (uiMessage('desktop-ui.starts-speech-to-text-records.eae4abc712', (lang === 'zh') ? 'zh' : 'en')),
       hint: t.modeMeetingHint || (uiMessage('desktop-ui.live-notes.578276ba0a', (lang === 'zh') ? 'zh' : 'en')),
       icon: <FileText size={16} />,
-    },
-    {
-      id: 'chat' as const,
-      label: t.modeChat || (uiMessage('desktop-ui.chat.1594b2f45c', (lang === 'zh') ? 'zh' : 'en')),
-      title: t.modeChatTitle || (uiMessage('desktop-ui.chat-mode.fc9f4d73b6', (lang === 'zh') ? 'zh' : 'en')),
-      description: t.modeChatDesc || (uiMessage('desktop-ui.pure-conversation-answers-and-discussion.10bb20f365', (lang === 'zh') ? 'zh' : 'en')),
-      hint: t.modeChatHint || (uiMessage('desktop-ui.conversation-only.33f7067683', (lang === 'zh') ? 'zh' : 'en')),
-      icon: <MessageSquare size={16} />,
-    },
-    {
-      id: 'assistant' as const,
-      label: t.modeAssistant || (uiMessage('desktop-ui.assistant.90c4ae600c', (lang === 'zh') ? 'zh' : 'en')),
-      title: t.modeAssistantTitle || (uiMessage('desktop-ui.assistant-mode.cc5acf7cf6', (lang === 'zh') ? 'zh' : 'en')),
-      description: t.modeAssistantDesc || (uiMessage('desktop-ui.user-present-full-permission-helper.fac834ab73', (lang === 'zh') ? 'zh' : 'en')),
-      hint: t.modeAssistantHint || (uiMessage('desktop-ui.foreground-full-access.a5a81a90e7', (lang === 'zh') ? 'zh' : 'en')),
-      icon: <Sparkles size={16} />,
-    },
-    {
-      id: 'autonomous' as const,
-      label: t.modeAutonomy || t.modeAutoExecute || (uiMessage('desktop-ui.autonomy.6aea974e38', (lang === 'zh') ? 'zh' : 'en')),
-      title: t.modeAutonomyTitle || t.modeAutoExecuteTitle || (uiMessage('desktop-ui.autonomy-mode.f6d90bbb04', (lang === 'zh') ? 'zh' : 'en')),
-      description: t.modeAutonomyDesc || t.modeAutoExecuteDesc || (uiMessage('desktop-ui.same-permissions-as-assistant-plus.ba90411459', (lang === 'zh') ? 'zh' : 'en')),
-      hint: t.modeAutonomyHint || t.modeAutoExecuteHint || (uiMessage('desktop-ui.24h-autonomous-work.81b1d75d6b', (lang === 'zh') ? 'zh' : 'en')),
-      icon: <Zap size={16} />,
     },
   ];
   const pendingOperationModeOption = pendingOperationMode
@@ -5209,11 +5128,7 @@ export function DesktopUI({
       onContextMenu={handleShellContextMenu}
       className={`fixed inset-0 overflow-hidden cursor-default select-none transition-all duration-1000 ${resolvedAppearanceMode === 'light' ? 'lumi-light-shell' : 'lumi-dark-shell'} ${
       isWallpaperMode ? `bg-transparent ${isWallpaperDesktopControl ? 'pointer-events-none' : ''}` :
-      resolvedAppearanceMode === 'light' ? 'bg-[#e9efe6]' :
-      theme === 'celestial' ? 'bg-[#010103]' :
-      theme === 'nebula' ? 'bg-[#050010]' :
-      theme === 'cyber' ? 'bg-[#000808]' :
-      'bg-black'
+      resolvedAppearanceMode === 'light' ? 'bg-[#f8fbff]' : 'bg-[#010103]'
     }`}
       style={{
         ...(wallpaper === 'custom' && wallpaperUrl && !isWallpaperMode ? {
@@ -5257,7 +5172,7 @@ export function DesktopUI({
       {/* Immersive Environment Layer (Wallpaper OS Foundation) */}
       <div 
         className={`fixed inset-0 z-0 overflow-hidden transition-all duration-1000 ${
-          isWallpaperMode ? 'bg-transparent opacity-0' : resolvedAppearanceMode === 'light' ? 'bg-[#e9efe6] opacity-100' : 'bg-[#010103] opacity-100'
+          isWallpaperMode ? 'bg-transparent opacity-0' : resolvedAppearanceMode === 'light' ? 'bg-[#f8fbff] opacity-100' : 'bg-[#010103] opacity-100'
         }`}
       >
         <div className="absolute inset-0">
@@ -5267,15 +5182,8 @@ export function DesktopUI({
               opacity: viewMode === 'world' ? [0, 0.4, 0] : 0,
             }}
             transition={{ duration: 0.8 }}
-            className={`absolute inset-0 z-50 pointer-events-none ${
-              theme === 'nebula' ? 'bg-purple-900' : theme === 'cyber' ? 'bg-emerald-900' : 'bg-white'
-            }`}
+            className="absolute inset-0 z-50 pointer-events-none bg-white"
           />
-
-          {/* Global Node Map Background */}
-          <div className="absolute inset-0 z-0 pointer-events-none">
-             <GlobalNodeMap variant="subtle" />
-          </div>
 
           {/* Personal Desktop Wallpaper Layer */}
           <motion.div
@@ -5287,73 +5195,28 @@ export function DesktopUI({
             className="absolute inset-0 pointer-events-none"
           >
             <div className="absolute inset-0">
-               <AnimatePresence mode="wait">
-                {theme === 'celestial' && (
-                  <motion.div 
-                    key="celestial-wp"
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    transition={{ duration: 1 }}
-                    className="absolute inset-0"
-                  >
-                    {resolvedAppearanceMode === 'light' ? (
-                      <DayInkLandscape variant="celestial" />
-                    ) : (
-                      <>
-                        <div className="star-field opacity-20" />
-                        <div className="undulating-bg opacity-30 scale-125" />
-                        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80" />
-                      </>
-                    )}
-                  </motion.div>
+              <motion.div
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                transition={{ duration: 1 }}
+                className="absolute inset-0"
+              >
+                {resolvedAppearanceMode === 'light' ? (
+                  <DayInkLandscape />
+                ) : (
+                  <>
+                    <div className="star-field opacity-20" />
+                    <div className="undulating-bg opacity-30 scale-125" />
+                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/20 to-black/80" />
+                  </>
                 )}
-                {theme === 'nebula' && (
-                  <motion.div 
-                    key="nebula-wp"
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    transition={{ duration: 1 }}
-                    className="absolute inset-0"
-                  >
-                    {resolvedAppearanceMode === 'light' ? (
-                      <DayInkLandscape variant="nebula" />
-                    ) : (
-                      <>
-                        <div className="star-field opacity-10" />
-                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(168,85,247,0.1)_0%,transparent_70%)]" />
-                        <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/60" />
-                      </>
-                    )}
-                  </motion.div>
-                )}
-                {theme === 'cyber' && (
-                  <motion.div 
-                    key="cyber-wp"
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    transition={{ duration: 1 }}
-                    className="absolute inset-0"
-                  >
-                    {resolvedAppearanceMode === 'light' ? (
-                      <DayInkLandscape variant="cyber" />
-                    ) : (
-                      <>
-                        <div className="absolute inset-0 bg-[linear-gradient(rgba(16,185,129,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(16,185,129,0.05)_1px,transparent_1px)] bg-[size:40px_40px]" />
-                        <div className="absolute inset-0 bg-gradient-to-b from-black/0 to-black/80" />
-                      </>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              </motion.div>
             </div>
           </motion.div>
         </div>
 
         {/* Hyper-tunnel edges */}
-        <div className={`absolute inset-0 pointer-events-none ${resolvedAppearanceMode === 'light' ? 'shadow-[inset_0_0_190px_rgba(72,88,74,0.20)]' : 'shadow-[inset_0_0_300px_rgba(0,0,0,1)]'}`} />
+        <div className={`absolute inset-0 pointer-events-none ${resolvedAppearanceMode === 'light' ? 'shadow-[inset_0_0_140px_rgba(73,109,142,0.045)]' : 'shadow-[inset_0_0_300px_rgba(0,0,0,1)]'}`} />
         
-        {/* Brightness Overlay */}
-        <div 
-          className="absolute inset-0 pointer-events-none z-[1000] transition-opacity duration-300" 
-          style={{ backgroundColor: 'black', opacity: (100 - brightness) / 100 * 0.7 }} 
-        />
       </div>
 
       {/* Nexus Globe — WebGL 3D Earth with constellation + globe + neural layers */}
@@ -5367,7 +5230,7 @@ export function DesktopUI({
             transition={{ duration: 1.2 }}
             className="lumi-ink-view fixed inset-0 z-0 overflow-hidden"
           >
-            <Suspense fallback={null}><InkWorldLazy theme={theme as 'celestial' | 'nebula' | 'cyber'} syncRate={syncRate} /></Suspense>
+            <Suspense fallback={null}><InkWorldLazy syncRate={syncRate} /></Suspense>
           </motion.div>
         )}
       </AnimatePresence>
@@ -5948,15 +5811,7 @@ export function DesktopUI({
             </div>
 
             <div className="lumi-desktop-widget-rail flex flex-col gap-6 w-full lg:w-96">
-              {/* Modern Widgets Grid */}
-              <ThemeWidget
-                t={t}
-                lang={lang}
-                theme={theme}
-                setTheme={setTheme}
-                operationMode={operationMode}
-                onModeChange={requestOperationModeChange}
-              />
+              <DesktopDeviceWidget lang={lang} socket={socket} onOpen={() => toggleWindow('devices')} />
 
               {/* Notification Preview */}
               {false && notifications.filter(n => !n.read).length > 0 && (
@@ -6461,6 +6316,7 @@ export function DesktopUI({
       {knowledgeLoaded && (
         <Suspense fallback={null}>
           <KnowledgeBase
+            scopeKey={`${user?.uid || 'guest'}:${workDomain}:${orgConnection?.orgId || ''}`}
             t={t}
             isOpen={knowledgeOpen}
             onClose={closeKnowledgeBase}

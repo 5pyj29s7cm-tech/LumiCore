@@ -209,10 +209,12 @@ export function registerCalendarTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'calendar_modify',
-    description: 'Modify a real event in the platform default calendar, matched by its current subject.',
+    description: 'Modify a real event in the platform default calendar, using the observed eventId and calendarId; subject is an additional identity check.',
     parameters: {
       type: 'object',
       properties: {
+        eventId: { type: 'string', description: 'Stable event id returned by calendar observation.' },
+        calendarId: { type: 'string', description: 'Calendar id returned with that event.' },
         subject: { type: 'string', description: 'Current event subject.' },
         newSubject: { type: 'string', description: 'Optional replacement subject.' },
         newStart: { type: 'string', description: 'Optional ISO 8601 start time.' },
@@ -220,10 +222,12 @@ export function registerCalendarTools(registry: ToolRegistry): void {
         newLocation: { type: 'string', description: 'Optional replacement location.' },
         newBody: { type: 'string', description: 'Optional replacement notes.' },
       },
-      required: ['subject'],
+      required: ['subject', 'eventId', 'calendarId'],
     },
     handler: async args => JSON.stringify(await getProductivityAdapter().modifyEvent({
       subject: String(args.subject || ''),
+      eventId: String(args.eventId || ''),
+      calendarId: String(args.calendarId || ''),
       newSubject: args.newSubject === undefined ? undefined : String(args.newSubject),
       newStart: args.newStart === undefined ? undefined : String(args.newStart),
       newEnd: args.newEnd === undefined ? undefined : String(args.newEnd),
@@ -246,7 +250,7 @@ export function registerCalendarTools(registry: ToolRegistry): void {
         requiredValues: { ok: true, status: 'updated', updated: true },
         successStatuses: ['updated'],
         successSignals: ['the calendar provider acknowledged the event update and returned its id'],
-        limitations: ['Subject matching can be ambiguous when duplicate event subjects exist.'],
+        limitations: ['Recurring events require an occurrence-aware adapter; ambiguous targets are refused.'],
       },
     })),
     evidence: capabilityEvidence({ id: 'calendar.event.modify', operation: 'mutate', subjectArgument: 'subject' }),
@@ -254,18 +258,20 @@ export function registerCalendarTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'calendar_delete',
-    description: 'Delete a real event from the platform default calendar by subject after explicit confirmation.',
+    description: 'Delete a real event from the platform default calendar by observed eventId and calendarId after explicit confirmation.',
     parameters: {
       type: 'object',
       properties: {
+        eventId: { type: 'string', description: 'Stable event id returned by calendar observation.' },
+        calendarId: { type: 'string', description: 'Calendar id returned with that event.' },
         subject: { type: 'string', description: 'Event subject to match.' },
         confirmDelete: { type: 'boolean', description: 'Must be true after the user confirms deletion.' },
       },
-      required: ['subject', 'confirmDelete'],
+      required: ['subject', 'eventId', 'calendarId', 'confirmDelete'],
     },
     handler: async args => {
       if (args.confirmDelete !== true) throw new Error('Calendar deletion requires confirmDelete=true.');
-      return JSON.stringify(await getProductivityAdapter().deleteEvent({ subject: String(args.subject || '') }), null, 2);
+      return JSON.stringify(await getProductivityAdapter().deleteEvent({ subject: String(args.subject || ''), eventId: String(args.eventId || ''), calendarId: String(args.calendarId || '') }), null, 2);
     },
     permission: 'user',
     securityLevel: 'confirm',

@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { flushDBOrThrow } from '../../db_layer';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
+import { sendDurableMutation } from './durable_mutation';
 import { requireAuth, resolveDomain } from '../middleware/auth';
 import { getGateConfig, saveGateConfig } from '../autonomy/safety_gate';
 import {
+  autonomousTaskMatchesScope,
   cancelTask,
   getTaskHistory,
   getTaskQueue,
@@ -64,16 +66,7 @@ function withCompletionFeedback<T extends {
   };
 }
 
-export function autonomousTaskMatchesScope(task: AutonomousTask, scope: TaskScope): boolean {
-  // Autonomous execution is currently personal-only (the executor enforces the
-  // same boundary). Keep future persisted scope fields forward-compatible.
-  const record = task as AutonomousTask & { domain?: string; orgId?: string };
-  const domain = record.domain === 'work' ? 'work' : 'personal';
-  const orgId = domain === 'work' ? String(record.orgId || '').trim() : '';
-  if (scope.domain === 'work' && !scope.orgId.trim()) return false;
-  if (domain === 'work' && !orgId) return false;
-  return domain === scope.domain && (domain === 'personal' || orgId === scope.orgId);
-}
+export { autonomousTaskMatchesScope } from '../autonomy/task_queue';
 
 function autonomousControls(status: string) {
   return {
@@ -155,9 +148,9 @@ export function autonomyRoutes(): Router {
     res.json(getGateConfig(req.user!.uid));
   });
 
-  router.put('/gate_config', requireAuth, (req, res) => {
+  router.put('/gate_config', requireAuth, async (req, res) => {
     const updated = saveGateConfig(req.body || {}, req.user!.uid);
-    res.json(updated);
+    await sendDurableMutation(req, res, updated);
   });
 
   // Canonical, scope-bound task-center projection. It deliberately excludes
@@ -167,7 +160,7 @@ export function autonomyRoutes(): Router {
     res.json(getRuntimeWorkSnapshot(req.user!.uid, undefined, scope));
   });
 
-  router.post('/work/:id/pause', requireAuth, (req, res) => {
+  router.post('/work/:id/pause', requireAuth, async (req, res) => {
     const scope = resolveDomain(req.user!);
     const before = getRuntimeWorkSnapshot(req.user!.uid, undefined, scope);
     const task = before.items.find(item => item.id === req.params.id);
@@ -175,14 +168,15 @@ export function autonomyRoutes(): Router {
     if (!task.controls.canPause) return res.status(409).json({ error: 'Runtime work item is not pausable.', task });
     const result = pauseRuntimeWork({ userId: req.user!.uid, taskId: task.id, kinds: [task.kind], scope });
     const outcome = runtimeControlHttpOutcome('pause', result);
-    res.status(outcome.httpStatus).json({
+    res.status(outcome.httpStatus);
+    await sendDurableMutation(req, res, {
       ...result,
       ok: outcome.accepted,
       ...(outcome.error ? { error: outcome.error } : {}),
-    });
+    }, undefined, { retryable: false });
   });
 
-  router.post('/work/:id/resume', requireAuth, (req, res) => {
+  router.post('/work/:id/resume', requireAuth, async (req, res) => {
     const scope = resolveDomain(req.user!);
     const before = getRuntimeWorkSnapshot(req.user!.uid, undefined, scope);
     const task = before.items.find(item => item.id === req.params.id);
@@ -190,11 +184,12 @@ export function autonomyRoutes(): Router {
     if (!task.controls.canResume) return res.status(409).json({ error: 'Runtime work item is not resumable.', task });
     const result = resumeRuntimeWork({ userId: req.user!.uid, taskId: task.id, kinds: [task.kind], scope });
     const outcome = runtimeControlHttpOutcome('resume', result);
-    res.status(outcome.httpStatus).json({
+    res.status(outcome.httpStatus);
+    await sendDurableMutation(req, res, {
       ...result,
       ok: outcome.accepted,
       ...(outcome.error ? { error: outcome.error } : {}),
-    });
+    }, undefined, { retryable: false });
   });
 
   router.post('/work/:id/cancel', requireAuth, async (req, res) => {
@@ -280,7 +275,7 @@ export function autonomyRoutes(): Router {
     }
   });
 
-  router.post('/tasks/:id/pause', requireAuth, (req, res) => {
+  router.post('/tasks/:id/pause', requireAuth, async (req, res) => {
     const scope = resolveDomain(req.user!);
     const existing = getTaskQueue(req.user!.uid).find(task => (
       task.id === req.params.id && autonomousTaskMatchesScope(task, scope)
@@ -291,10 +286,10 @@ export function autonomyRoutes(): Router {
     }
     const task = requestPauseAutonomousTask(req.params.id, req.user!.uid);
     if (!task) return res.status(404).json({ error: 'Task not found or not pausable' });
-    res.json({ task: projectAutonomousTask(task) });
+    await sendDurableMutation(req, res, { task: projectAutonomousTask(task) }, undefined, { retryable: false });
   });
 
-  router.post('/tasks/:id/resume', requireAuth, (req, res) => {
+  router.post('/tasks/:id/resume', requireAuth, async (req, res) => {
     const scope = resolveDomain(req.user!);
     const existing = getTaskQueue(req.user!.uid).find(task => (
       task.id === req.params.id && autonomousTaskMatchesScope(task, scope)
@@ -305,7 +300,7 @@ export function autonomyRoutes(): Router {
     }
     const task = resumeAutonomousTask(req.params.id, req.user!.uid);
     if (!task) return res.status(404).json({ error: 'Task not found or not resumable' });
-    res.json({ task: projectAutonomousTask(task) });
+    await sendDurableMutation(req, res, { task: projectAutonomousTask(task) }, undefined, { retryable: false });
   });
 
   return router;

@@ -12,6 +12,7 @@ import { runRetrievalRequest } from './retrieval_request';
 type EmbeddingSelection = Pick<EmbeddingModelSelection, 'provider' | 'model'>;
 
 export interface EmbeddingResult {
+  route?: 'primary' | 'fallback';
   provider: string;
   model: string;
   vector: number[];
@@ -146,13 +147,13 @@ export function getEmbeddingRoute(userId = 'anonymous'): EmbeddingRoute {
   };
 }
 
-export async function generateConfiguredEmbedding(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<EmbeddingResult> {
+export async function generateConfiguredEmbedding(text: string, userId = 'anonymous', options: { signal?: AbortSignal; allowFallback?: boolean } = {}): Promise<EmbeddingResult> {
   const route = getEmbeddingRoute(userId);
   try {
-    return await runEmbedding(route.primary, text, options.signal);
+    return { ...await runEmbedding(route.primary, text, options.signal), route: 'primary' };
   } catch (primaryError) {
     options.signal?.throwIfAborted();
-    if (!route.fallback) throw primaryError;
-    return runEmbedding(route.fallback, text, options.signal);
+    if (!route.fallback || options.allowFallback === false) throw primaryError;
+    return { ...await runEmbedding(route.fallback, text, options.signal), route: 'fallback' };
   }
 }

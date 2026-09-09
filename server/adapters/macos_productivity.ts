@@ -49,11 +49,23 @@ const CALENDAR_LOOKUP = `
 
 const EVENT_JSON = `event => ({
   id: String(event.uid()),
+  calendarId: String(calendar.uid()),
   subject: String(event.summary()),
   start: new Date(event.startDate()).toISOString(),
   end: new Date(event.endDate()).toISOString(),
   location: String(event.location() || '')
 })`;
+
+const CALENDAR_TARGET = `
+  if (!payload.eventId || !payload.calendarId) return JSON.stringify({ ok: false, status: 'target_required', provider: 'macos_calendar', note: 'Observe the event first and supply its eventId and calendarId.' });
+  const app = Application('Calendar');
+  const calendar = app.calendars().find(item => String(item.uid()) === String(payload.calendarId));
+  const matches = calendar ? calendar.events().filter(item => String(item.uid()) === String(payload.eventId)) : [];
+  if (matches.length !== 1) return JSON.stringify({ ok: false, status: matches.length ? 'ambiguous' : 'not_found', provider: 'macos_calendar' });
+  const event = matches[0];
+  if (String(event.summary()) !== String(payload.subject)) return JSON.stringify({ ok: false, status: 'stale_target', provider: 'macos_calendar', note: 'The event changed after observation. Observe it again.' });
+  if (typeof event.recurrence === 'function' && event.recurrence()) return JSON.stringify({ ok: false, status: 'unsupported', provider: 'macos_calendar', note: 'Recurring event changes require explicit occurrence support.' });
+`;
 
 export const macosProductivityAdapter: ProductivityAdapter = {
   id: 'macos.calendar_mail_jxa',
@@ -122,27 +134,23 @@ ${CALENDAR_LOOKUP}
     alldayEvent: Boolean(payload.allDay)
   });
   calendar.events.push(event);
-  return JSON.stringify({ ok: true, status: 'created', created: true, provider: 'macos_calendar', eventId: String(event.uid()), subject: String(payload.subject) });
+  return JSON.stringify({ ok: true, status: 'created', created: true, provider: 'macos_calendar', eventId: String(event.uid()), calendarId: String(calendar.uid()), subject: String(payload.subject) });
 `, input),
 
   modifyEvent: async input => runJxa(`
-${CALENDAR_LOOKUP}
-  const event = calendar.events().find(item => String(item.summary()) === String(payload.subject));
-  if (!event) return JSON.stringify({ ok: false, status: 'not_found', updated: false, provider: 'macos_calendar', subject: String(payload.subject) });
+${CALENDAR_TARGET}
   if (payload.newSubject) event.summary = String(payload.newSubject);
   if (payload.newStart) event.startDate = new Date(String(payload.newStart));
   if (payload.newEnd) event.endDate = new Date(String(payload.newEnd));
   if (payload.newLocation !== undefined) event.location = String(payload.newLocation);
   if (payload.newBody !== undefined) event.description = String(payload.newBody);
-  return JSON.stringify({ ok: true, status: 'updated', updated: true, provider: 'macos_calendar', eventId: String(event.uid()), subject: String(event.summary()) });
+  return JSON.stringify({ ok: true, status: 'updated', updated: true, provider: 'macos_calendar', eventId: String(event.uid()), calendarId: String(calendar.uid()), subject: String(event.summary()) });
 `, input),
 
   deleteEvent: async input => runJxa(`
-${CALENDAR_LOOKUP}
-  const event = calendar.events().find(item => String(item.summary()) === String(payload.subject));
-  if (!event) return JSON.stringify({ ok: false, status: 'not_found', deleted: false, provider: 'macos_calendar', subject: String(payload.subject) });
+${CALENDAR_TARGET}
   const eventId = String(event.uid());
   app.delete(event);
-  return JSON.stringify({ ok: true, status: 'deleted', deleted: true, provider: 'macos_calendar', eventId, subject: String(payload.subject) });
+  return JSON.stringify({ ok: true, status: 'deleted', deleted: true, provider: 'macos_calendar', eventId, calendarId: String(calendar.uid()), subject: String(payload.subject) });
 `, input),
 };

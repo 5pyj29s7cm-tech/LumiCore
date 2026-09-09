@@ -7,7 +7,7 @@
  */
 import * as EDB from '../org/db';
 import { generateEmbeddingWithIdentity, cosineSimilarity } from '../memory/store';
-import { chunkLegalText } from './parser';
+import { indexArticle } from '../org/kb';
 import { getStatuteAuthorityCheck, type StatuteAuthorityCheck } from './statute_authority_store';
 import { authorizeOrganizationResource, getOrganizationResourcePolicy } from '../org/resource_acl';
 
@@ -81,32 +81,10 @@ export function createLegalArticle(
   });
 }
 
-export async function indexLegalArticle(orgId: string, articleId: string, actorUserId?: string): Promise<number> {
-  const article = EDB.getKbArticle(orgId, articleId);
-  if (!article) return 0;
-
-  EDB.deleteKbEmbeddings(articleId);
-
-  const chunks = chunkLegalText(article.content, 800, 150);
-  if (chunks.length === 0) return 0;
-
-  let indexed = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const embedding = await generateEmbeddingWithIdentity(chunks[i], actorUserId || article.authorId);
-      if (embedding) {
-        EDB.saveKbEmbedding(articleId, i, embedding.vector, chunks[i], `${embedding.provider}/${embedding.model}`);
-        indexed++;
-      }
-      if (i > 0 && i % 5 === 0) {
-        await new Promise(r => setTimeout(r, 200));
-      }
-    } catch (err) {
-      console.error(`[LegalKB] Failed to embed chunk ${i} of ${articleId}:`, err);
-    }
-  }
-
-  return indexed;
+export async function indexLegalArticle(orgId: string, articleId: string, actorUserId?: string, options: { signal?: AbortSignal } = {}): Promise<number> {
+  // Legal parsing and metadata remain domain-specific; persistence, revision
+  // fencing and ingestion receipts belong to the shared knowledge pipeline.
+  return indexArticle(orgId, articleId, actorUserId, options);
 }
 
 // ── Case Similarity Search ──────────────────────────────────────────────

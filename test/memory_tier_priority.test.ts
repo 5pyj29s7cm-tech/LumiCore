@@ -15,7 +15,7 @@ describe('memory tier priority', () => {
     while (created.length) removeMemory(created.pop()!);
   });
 
-  it('keeps core identity ahead of episodic memories with and without a query', () => {
+  it('keeps identity priority for browsing but ranks explicit searches by relevance', () => {
     const episodic = addMemory({
       userId,
       type: 'fact',
@@ -58,7 +58,7 @@ describe('memory tier priority', () => {
       minConfidence: 0,
       limit: 10,
     });
-    expect(withQuery.findIndex(item => item.id === identity.id))
-      .toBeLessThan(withQuery.findIndex(item => item.id === episodic.id));
+    expect(withQuery.findIndex(item => item.id === episodic.id))
+      .toBeLessThan(withQuery.findIndex(item => item.id === identity.id));
   });
 });

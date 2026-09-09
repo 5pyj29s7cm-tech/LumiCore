@@ -26,7 +26,7 @@ import { resetExternalCommitRuntimeCacheForTests, toolRegistry } from '../server
 import { runtimeBackgroundWork } from '../server/runtime/shutdown_work';
 import { retryAutonomousTaskFinalizations } from '../server/autonomy/task_executor';
 import { listCommandCenterPlans } from '../server/command_center/plans';
-import { MIGRATIONS, runMigrations } from '../server/db/migrations';
+import { migrateSchema } from '../server/db/migrations';
 import type { ToolContext } from '../server/tools/types';
 
 const userId = 'round6-synthetic-schedule-user';
@@ -129,14 +129,26 @@ describe('scheduled plans through authenticated routes, real scheduler handlers,
     console.info('CONTROL', { singleTaskAcrossDatabaseReopen: true, singleTaskAcrossRehydration: true, modelCalls: 2, tools: 1, state: 'completed' });
   });
 
-  it('preserves the assistant-mode gate and executes the same waiting slot only after explicit mode change', async () => {
+  it('executes a due plan without requiring a switch out of a legacy assistant posture', async () => {
     const plan = await createPlan(); due(plan);
     await tick('command_center_plan_dispatch');
     const task = getTaskQueue(userId)[0];
     for (let i = 0; i < 2; i++) { await tick('command_center_plan_dispatch'); await tick('autonomous_work_cycle'); }
-    expect(getTaskQueue(userId)[0]).toMatchObject({ id: task.id, status: 'pending', source: 'scheduler' });
-    expect(mocks.model).not.toHaveBeenCalled(); expect(handler).not.toHaveBeenCalled(); expect(mocks.generate).not.toHaveBeenCalled();
-    mode('autonomous'); await tick('autonomous_work_cycle');
+    expect(getTaskHistory(50, 0, userId)[0]).toMatchObject({ id: task.id, status: 'completed' });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(await querySQL('SELECT status FROM autonomous_tasks WHERE id = ?', [task.id])).toEqual([{ status: 'completed' }]);
+  });
+
+  it('keeps a due slot pending while background processing is paused, then resumes the same slot', async () => {
+    saveGateConfig({ autoProcessEnabled: false }, userId);
+    const plan = await createPlan(); due(plan);
+    await tick('command_center_plan_dispatch');
+    const task = getTaskQueue(userId)[0];
+    await tick('autonomous_work_cycle');
+    expect(getTaskQueue(userId)[0]).toMatchObject({ id: task.id, status: 'pending' });
+    expect(handler).not.toHaveBeenCalled();
+    saveGateConfig({ autoProcessEnabled: true }, userId);
+    await tick('autonomous_work_cycle');
     expect(getTaskHistory(50, 0, userId)[0]).toMatchObject({ id: task.id, status: 'completed' });
     expect(handler).toHaveBeenCalledOnce();
   });
@@ -307,9 +319,16 @@ describe('scheduled plans through authenticated routes, real scheduler handlers,
     const legacyDb = new sqlite3.Database(':memory:');
     const exec = (sql: string) => new Promise<void>((resolve, reject) => legacyDb.exec(sql, error => error ? reject(error) : resolve()));
     try {
-      await exec(MIGRATIONS.find(migration => migration.version === 37)!.sql);
-      await exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, appliedAt TEXT NOT NULL); INSERT INTO schema_version VALUES (44, 'synthetic'); INSERT INTO command_center_plans (id,userId,kind,title,instruction,createdAt,updatedAt,domain,orgId) VALUES ('legacy','synthetic','daily_task','Legacy title','Synthetic only','synthetic','synthetic','work','synthetic-org')");
-      expect(await runMigrations(legacyDb)).toEqual([45, 46]);
+      // Use the real startup schema as the surrounding legacy database, then
+      // remove the newer columns. The production migration must restore them.
+      await flushDBOrThrow();
+      const baseTables = await querySQL("SELECT sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL");
+      for (const table of baseTables) await exec(table.sql);
+      await exec("ALTER TABLE command_center_plans DROP COLUMN membershipAuthorization; ALTER TABLE command_center_plans DROP COLUMN authorizationBlockedReason; INSERT INTO command_center_plans (id,userId,kind,title,instruction,createdAt,updatedAt,domain,orgId) VALUES ('legacy','synthetic','daily_task','Legacy title','Synthetic only','synthetic','synthetic','work','synthetic-org')");
+      const before = await new Promise<any[]>((resolve, reject) => legacyDb.all('PRAGMA table_info(command_center_plans)', (error, rows) => error ? reject(error) : resolve(rows)));
+      expect(before.some(column => column.name === 'membershipAuthorization' || column.name === 'authorizationBlockedReason')).toBe(false);
+      await migrateSchema(legacyDb);
+      await migrateSchema(legacyDb); // Existing columns are an idempotent replay.
       const row = await new Promise<any>((resolve, reject) => legacyDb.get('SELECT title,membershipAuthorization,authorizationBlockedReason FROM command_center_plans', (error, row) => error ? reject(error) : resolve(row)));
       expect(row).toEqual({ title: 'Legacy title', membershipAuthorization: '', authorizationBlockedReason: '' });
     } finally { await new Promise<void>((resolve, reject) => legacyDb.close(error => error ? reject(error) : resolve())); }

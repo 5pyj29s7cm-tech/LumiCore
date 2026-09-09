@@ -367,7 +367,7 @@ describe('scheduler capability execution protocol', () => {
     expect(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'))
       .toBeLessThan(run.indexOf('task.lastStatus = completedTask.lastStatus'));
 
-    const registrations = source.match(/scheduler\.register\(\{/g) || [];
+    const registrations = source.match(/scheduler\.register\((?:\{|createReminderCheckTask\(\))/g) || [];
     const declarations = source.match(/executionClass:\s*'(?:maintenance|proactive_delivery|client_probe|autonomous_orchestration)'/g) || [];
     expect(registrations).toHaveLength(26);
     expect(declarations).toHaveLength(registrations.length);

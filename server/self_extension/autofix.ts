@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { buildSelfExtensionPlan } from './pipeline';
 import {
-  isCapabilityLearningRecordVerified,
+  isCapabilityLearningRecordUsable,
   listCapabilityLearningRecords,
   upsertCapabilityLearningRecord,
   type CapabilityExperimentRecord,
@@ -157,9 +157,10 @@ function reusableLearnedRecord(
   orgId: string,
   domain: string,
   goal: string,
+  availableTools: string[],
 ): CapabilityLearningRecord | undefined {
   return listCapabilityLearningRecords({ userId, scopeDomain, orgId, domain, goal, limit: 6 })
-    .find(isCapabilityLearningRecordVerified);
+    .find(record => isCapabilityLearningRecordUsable(record, availableTools));
 }
 
 function routeFromExistingCoverage(plan: ReturnType<typeof buildSelfExtensionPlan>, toolNamesForRoute: string[]): CapabilityRoute {
@@ -388,7 +389,7 @@ export async function runCapabilityGapAutofix(options: CapabilityGapAutofixOptio
     capabilityManifest: options.capabilityManifest,
   });
   const failureEvidence = hasFailureEvidence(options);
-  const learned = reusableLearnedRecord(userId, scopeDomain, scopeDomain === 'work' ? orgId : '', plan.domain, goal);
+  const learned = reusableLearnedRecord(userId, scopeDomain, scopeDomain === 'work' ? orgId : '', plan.domain, goal, tools.filter(tool => tool.securityLevel !== 'forbidden').map(tool => tool.name));
   if (learned && !failureEvidence) {
     return {
       plan,

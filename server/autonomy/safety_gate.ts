@@ -167,12 +167,6 @@ function normalizeAutonomyLevel(value: any): AutonomyLevel | null {
   return value === 'reactive' || value === 'semi' || value === 'full' ? value : null;
 }
 
-export function autonomyLevelForOperationMode(mode: string): AutonomyLevel | null {
-  if (mode === 'chat') return 'reactive';
-  if (mode === 'assistant') return 'semi';
-  if (mode === 'autonomous') return 'full';
-  return null;
-}
 
 function deriveAutonomyLevel(input: Partial<SafetyGateConfig>): AutonomyLevel {
   if (!input.autoProcessEnabled) return 'reactive';
@@ -210,13 +204,11 @@ export function isAutonomousWorkAllowed(userId?: string): { allowed: boolean; re
     return { allowed: false, reason: 'Always Online is disabled' };
   }
 
-  if (cfg.autonomyLevel === 'reactive' || !cfg.autoProcessEnabled) {
-    return { allowed: false, reason: 'Autonomous level is reactive; automatic processing is disabled' };
+  if (!cfg.autoProcessEnabled) {
+    return { allowed: false, reason: 'Background processing is disabled' };
   }
 
-  if (cfg.autonomyLevel === 'full') {
-    return { allowed: true };
-  }
+  // Every background workflow observes its configured limits, including legacy full presets.
 
   // 1. Time-of-day gate
   const inAllowedHours = cfg.allowedHours.some(

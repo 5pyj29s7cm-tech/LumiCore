@@ -15,6 +15,7 @@ export function getUserTimezone(userId: string): string {
 }
 
 export function setUserTimezone(userId: string, tz: string): void {
+  new Intl.DateTimeFormat('en', { timeZone: tz }).format();
   const db = readDB();
   if (!db.settings) db.settings = [];
   const existing = db.settings.findIndex((s: any) => s.key === `timezone_${userId}`);
@@ -26,41 +27,44 @@ export function setUserTimezone(userId: string, tz: string): void {
   writeDB(db);
 }
 
-// ── Timezone offset map (UTC hours) ──
-const TZ_OFFSETS: Record<string, number> = {
-  'Asia/Shanghai': 8,
-  'Asia/Tokyo': 9,
-  'Asia/Seoul': 9,
-  'Asia/Singapore': 8,
-  'Asia/Hong_Kong': 8,
-  'Asia/Taipei': 8,
-  'Asia/Bangkok': 7,
-  'Asia/Kolkata': 5.5,
-  'Asia/Dubai': 4,
-  'Europe/London': 0,
-  'Europe/Paris': 1,
-  'Europe/Berlin': 1,
-  'Europe/Moscow': 3,
-  'America/New_York': -5,
-  'America/Chicago': -6,
-  'America/Denver': -7,
-  'America/Los_Angeles': -8,
-  'Pacific/Auckland': 12,
-  'Australia/Sydney': 10,
-};
+function zonedParts(userId: string, instant: Date): number[] {
+  let timeZone = getUserTimezone(userId);
+  try { new Intl.DateTimeFormat('en', { timeZone }); } catch { timeZone = 'Asia/Shanghai'; }
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(instant);
+  return ['year', 'month', 'day', 'hour', 'minute', 'second']
+    .map(type => Number(parts.find(part => part.type === type)!.value));
+}
 
+/** Wall-clock calendar fields for display. Use Date.now() for elapsed time. */
 export function getUserNow(userId: string): Date {
-  const tz = getUserTimezone(userId);
-  const offset = TZ_OFFSETS[tz] ?? 8;
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  return new Date(utc + offset * 3600000);
+  const [year, month, day, hour, minute, second] = zonedParts(userId, new Date());
+  return new Date(year, month - 1, day, hour, minute, second);
+}
+
+/** Convert user-local midnight boundaries to actual UTC instants (including DST). */
+export function getUserDayRange(userId: string, instant = new Date()): { after: string; before: string } {
+  const [year, month, day] = zonedParts(userId, instant);
+  const midnight = (target: number) => {
+    let guess = target;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const [y, m, d, h, min, s] = zonedParts(userId, new Date(guess));
+      const correction = target - Date.UTC(y, m - 1, d, h, min, s);
+      if (!correction) break;
+      guess += correction;
+    }
+    return new Date(guess).toISOString();
+  };
+  return { after: midnight(Date.UTC(year, month - 1, day)), before: midnight(Date.UTC(year, month - 1, day + 1)) };
 }
 
 // ── Date queries ──
 
 export function getDateString(userId: string): string {
-  return getUserNow(userId).toISOString().slice(0, 10);
+  const now = getUserNow(userId);
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
 export function getDayOfWeek(userId: string): string {

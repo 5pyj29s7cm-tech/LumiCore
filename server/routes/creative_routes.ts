@@ -2,6 +2,7 @@ import { Router, Request, NextFunction } from 'express';
 import { makeLLMCall } from '../llm/providers';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { requireAuth } from '../middleware/auth';
+import { createRequestAbortController } from '../http/request_abort';
 import { isAudioTranscriptionUnavailable, transcribeAudioFile } from '../stt/file_transcription';
 import {
   buildPixelPetDesignPrompt,
@@ -32,11 +33,14 @@ export function mountCreativeRoutes(
   router.post("/audio/transcribe", requireAuth, asyncHandler(async (req, res) => {
     const { audio, fileName } = req.body || {};
     if (!audio) return res.status(400).json({ error: "Audio data is required" });
+    const request = createRequestAbortController(req, res);
     try {
       const result = await transcribeAudioFile(Buffer.from(audio, 'base64'), {
         fileName: fileName || 'audio.mp3',
         language: 'zh',
+        signal: request.signal,
       });
+      request.signal.throwIfAborted();
       res.json({
         text: result.text,
         provider: result.provider,
@@ -44,12 +48,15 @@ export function mountCreativeRoutes(
         warnings: result.warnings,
       });
     } catch (err: any) {
-      res.json({
+      if (request.signal.aborted) return;
+      res.status(isAudioTranscriptionUnavailable(err) ? 503 : 502).json({
         text: '',
         ...(isAudioTranscriptionUnavailable(err)
           ? { note: err.message }
           : { error: err?.message || String(err) }),
       });
+    } finally {
+      request.dispose();
     }
   }));
 

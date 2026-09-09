@@ -454,7 +454,7 @@ export function SystemExplorer({ t, onSectionChange, onAsk }: {
   onAsk?: (prompt: string) => void;
 }) {
   const { isDesktop, isTauri } = usePlatform();
-  const { workDomain, orgConnection } = useApp();
+  const { user, workDomain, orgConnection } = useApp();
   const isZh = t?.langCode !== 'en';
   const localizedCopy = systemExplorerCopy(isZh ? 'zh' : 'en');
   const consentCopy = localizedCopy.consent;
@@ -466,12 +466,12 @@ export function SystemExplorer({ t, onSectionChange, onAsk }: {
     status: structuredRuntimeStatus,
     loading: structuredRuntimeLoading,
     error: structuredRuntimeError,
-  } = useRuntimeStatus({ scopeKey: runtimeScopeKey });
+  } = useRuntimeStatus({ scopeKey: runtimeScopeKey, userId: user?.uid, enabled: Boolean(user) });
   const {
     scene: runtimeScene,
     loading: runtimeSceneLoading,
     error: runtimeSceneError,
-  } = useLumiScene({ scopeKey: runtimeScopeKey });
+  } = useLumiScene({ scopeKey: runtimeScopeKey, userId: user?.uid, enabled: Boolean(user) });
   const [latest, setLatest] = useState<SystemSnapshot | null>(null);
   const [history, setHistory] = useState<SystemSnapshot[]>([]);
   const [profiles, setProfiles] = useState<ProfessionProfile[]>([]);

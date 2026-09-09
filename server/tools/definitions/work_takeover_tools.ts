@@ -1,14 +1,19 @@
 import fs from 'fs';
+import { randomUUID } from 'node:crypto';
+import { readDB, writeDB, flushDBOrThrow } from '../../../db_layer';
+import { ensureBackgroundConversationActionTask, appendConversationActionReceipts } from '../../conversation/action_ledger';
 import { ToolRegistry } from '../registry';
-import { executeToolCallOrThrow } from '../execution_engine';
+import { executeToolCall } from '../execution_engine';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
-import type { CapabilityOperation, CapabilityRisk, CapabilitySideEffect } from '../types';
+import type { CapabilityOperation, CapabilityRisk, CapabilitySideEffect, ToolExecutionRecord } from '../types';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import {
   continueWorkTakeoverTask,
   createWorkTakeoverTask,
   createWorkTakeoverTaskFromWechatIntake,
   getWorkTakeoverTask,
+  isWorkTakeoverTaskCurrent,
+  registerWorkTakeoverExecutor,
   listWorkTakeoverTasks,
   updateWorkTakeoverTask,
   type WorkTakeoverStatus,
@@ -71,6 +76,7 @@ function evidenceBlueprints(value: unknown): EvidenceWorkflowStepBlueprint[] {
       : item.verificationRequired === true,
     requiredEvidence: asStringArray(item?.requiredEvidence),
     confirmationRequired: asStringArray(item?.confirmationRequired),
+    targetIdentity: item?.targetIdentity ? String(item.targetIdentity) : undefined,
   }));
 }
 
@@ -1259,18 +1265,65 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       }
 
       const toolArgs = args.toolArgs && typeof args.toolArgs === 'object' ? args.toolArgs : {};
+      if (task.domain !== domain || (domain === 'work' && (!orgId || task.orgId !== orgId))) {
+        throw new Error('The work takeover task was not found in the current scope.');
+      }
+      const controller = new AbortController();
+      const stop = () => controller.abort(new DOMException('Work takeover execution was cancelled or changed.', 'AbortError'));
+      const unregister = registerWorkTakeoverExecutor(task, stop);
+      const parentSignal = context?.executionSignal;
+      parentSignal?.addEventListener('abort', stop, { once: true });
+      if (parentSignal?.aborted || context?.isCancelled?.()) stop();
       const startedAt = new Date().toISOString();
+      const requestId = `wt_request_${randomUUID()}`;
+      const turnId = String(context?.turnId || `wt_turn_${randomUUID()}`);
+      let executionRecord: ToolExecutionRecord | undefined;
       let result = '';
       try {
-        result = await executeToolCallOrThrow({
+        const ledgerDb = readDB();
+        const actionTask = ensureBackgroundConversationActionTask(ledgerDb, {
+          taskId: task.id, userId, domain, orgId,
+          conversationId: `work_takeover:${task.id}`,
+          goal: task.title || task.summary || toolName,
+          target: String(toolArgs.filePath || toolArgs.path || toolArgs.target || toolArgs.url || ''),
+          requestId, source: 'work_takeover_task_run_suggested_tool',
+          context: { taskId: task.id, executionOwner: 'work_takeover', ownerTaskId: task.id },
+        });
+        // An identity archive for canonical receipts, never a second task
+        // controller. Runtime/focus project the owning takeover task instead.
+        actionTask.status = 'created';
+        actionTask.activeRequestId = '';
+        actionTask.context = JSON.stringify({ taskId: task.id, executionOwner: 'work_takeover', ownerTaskId: task.id, source: 'work_takeover_task_run_suggested_tool' });
+        writeDB(ledgerDb);
+        await flushDBOrThrow();
+        if (controller.signal.aborted || !isWorkTakeoverTaskCurrent(task)) throw new Error('Work takeover execution stopped before adapter admission.');
+        executionRecord = await executeToolCall({
           registry,
           name: toolName,
           arguments: toolArgs,
           context: {
             ...(context || {}),
             source: 'work_takeover_task_run_suggested_tool',
+            taskId: task.id,
+            requestId,
+            turnId,
+            executionSignal: controller.signal,
+            isCancelled: () => controller.signal.aborted || context?.isCancelled?.() === true || !isWorkTakeoverTaskCurrent(task),
           },
         });
+        const verificationFailure = executionRecord.error || (executionRecord.terminalVerification?.status !== 'verified'
+          ? executionRecord.terminalVerification?.reason || 'The nested tool did not produce verified evidence.' : '');
+        const receiptDb = readDB();
+        appendConversationActionReceipts(receiptDb, {
+          task: actionTask, records: [executionRecord], requestId, turnId,
+        });
+        writeDB(receiptDb);
+        await flushDBOrThrow();
+        if (verificationFailure) throw new Error(verificationFailure);
+        result = executionRecord.result;
+        if (controller.signal.aborted || !isWorkTakeoverTaskCurrent(task)) {
+          throw new Error('Work takeover execution stopped; a late result cannot replace the current task state.');
+        }
       } catch (err: any) {
         const failure = {
           id: `wt_tool_run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1282,8 +1335,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
           finishedAt: new Date().toISOString(),
           error: String(err?.message || err).slice(0, 4000),
         };
-        if (args.record !== false) {
+        if (args.record !== false && !controller.signal.aborted && isWorkTakeoverTaskCurrent(task)) {
           updateWorkTakeoverTask(userId, task.id, {
+            expectedRevision: task.revision || 0,
             status: 'blocked',
             blockedBy: uniqueStrings([...task.blockedBy, `工具 ${toolName} 执行失败：${failure.error}`]),
             metadata: {
@@ -1293,6 +1347,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
           } as any);
         }
         throw err;
+      } finally {
+        unregister();
+        parentSignal?.removeEventListener('abort', stop);
       }
 
       const run = {
@@ -1309,6 +1366,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       let updatedTask = task;
       if (shouldRecord) {
         updatedTask = updateWorkTakeoverTask(userId, task.id, {
+          expectedRevision: task.revision || 0,
           status: task.status === 'queued' ? 'in_progress' : task.status,
           result: `工具 ${toolName} 已执行。\n${run.result}`,
           artifact: {
@@ -1393,6 +1451,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
               verificationRequired: { type: 'boolean' },
               requiredEvidence: { type: 'array' },
               confirmationRequired: { type: 'array' },
+              targetIdentity: { type: 'string', description: 'Exact intended artifact/resource identity before execution. Required for tool-backed completion; never copy an unrelated receipt target.' },
             },
             required: ['id', 'label', 'stage', 'executionMode'],
           },
@@ -1437,7 +1496,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         id: { type: 'string', description: 'Work takeover task id.' },
         stepId: { type: 'string', description: 'Evidence workflow step id.' },
         status: { type: 'string', description: 'pending, running, waiting_confirmation, waiting_human, completed, skipped, or failed.' },
-        receiptIds: { type: 'array', description: 'Optional exact action receipt ids. When omitted for completion, the latest eligible verified receipt is selected.' },
+        receiptIds: { type: 'array', description: 'Exact verified action receipt ids bound to this task and the step target. May be omitted only when exactly one eligible receipt exists.' },
         outputSummary: { type: 'string' },
         blocker: { type: 'string' },
       },

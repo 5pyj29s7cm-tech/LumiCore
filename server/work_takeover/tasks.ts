@@ -73,6 +73,8 @@ export interface WorkTakeoverTask {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** Older stored tasks start at revision zero. */
+  revision?: number;
   events: WorkTakeoverEvent[];
 }
 
@@ -101,6 +103,7 @@ export interface WorkTakeoverCreateInput {
 }
 
 export interface WorkTakeoverUpdateInput {
+  expectedRevision?: number;
   status?: WorkTakeoverStatus;
   title?: string;
   summary?: string;
@@ -122,6 +125,26 @@ export interface WorkTakeoverUpdateInput {
 
 const SETTINGS_KEY = 'work_takeover_tasks_v1';
 const MAX_TASKS = 500;
+const activeExecutors = new Map<string, () => void>();
+
+export function hasActiveWorkTakeoverExecutor(userId: string, taskId: string): boolean {
+  return activeExecutors.has(`${userId}:${taskId}`);
+}
+
+export function isWorkTakeoverTaskCurrent(task: WorkTakeoverTask): boolean {
+  const current = getWorkTakeoverTask(task.userId, task.id);
+  return Boolean(current && !['cancelled', 'delivered'].includes(current.status)
+    && (current.revision || 0) === (task.revision || 0));
+}
+
+/** Bind one adapter invocation to the task revision it accepted. */
+export function registerWorkTakeoverExecutor(task: WorkTakeoverTask, stop: () => void): () => void {
+  const key = `${task.userId}:${task.id}`;
+  if (!isWorkTakeoverTaskCurrent(task)) throw new Error('The work takeover task changed or ended before execution.');
+  if (activeExecutors.has(key)) throw new Error('This work takeover task already has an active executor.');
+  activeExecutors.set(key, stop);
+  return () => { if (activeExecutors.get(key) === stop) activeExecutors.delete(key); };
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -253,6 +276,7 @@ export function createWorkTakeoverTask(input: WorkTakeoverCreateInput): WorkTake
     createdAt: timestamp,
     updatedAt: timestamp,
     events: [event('created', 'Work takeover task created.')],
+    revision: 0,
   };
 
   const tasks = readStoredTasks();
@@ -325,6 +349,12 @@ export function updateWorkTakeoverTask(userId: string, taskId: string, input: Wo
   const index = tasks.findIndex(task => task.id === taskId && task.userId === userId);
   if (index < 0) return null;
   const task = tasks[index];
+  if (input.expectedRevision !== undefined && input.expectedRevision !== (task.revision || 0)) {
+    throw new Error('The work takeover task changed before this result could be saved.');
+  }
+  if (['cancelled', 'delivered'].includes(task.status) && input.status && input.status !== task.status) {
+    throw new Error('A terminal work takeover task cannot return to an active state. Create a new task to start new work.');
+  }
   const timestamp = nowIso();
 
   if (input.title !== undefined) task.title = String(input.title).slice(0, 140);
@@ -372,8 +402,10 @@ export function updateWorkTakeoverTask(userId: string, taskId: string, input: Wo
   if (input.note) task.events.push(event('note', String(input.note).slice(0, 1000)));
   task.events.push(event('updated', 'Work takeover task updated.'));
   task.updatedAt = timestamp;
+  task.revision = (task.revision || 0) + 1;
   tasks[index] = task;
   writeStoredTasks(tasks);
+  try { activeExecutors.get(`${userId}:${taskId}`)?.(); } catch { /* A stop callback cannot undo the saved task revision. */ }
   return task;
 }
 
@@ -387,7 +419,7 @@ export function continueWorkTakeoverTask(userId: string, taskId?: string): {
   const task = taskId
     ? getWorkTakeoverTask(userId, taskId)
     : listWorkTakeoverTasks({ userId, status: 'active', limit: 1 })[0] || null;
-  if (!task) return null;
+  if (!task || ['cancelled', 'delivered'].includes(task.status)) return null;
 
   const currentAction = task.nextActions[task.currentActionIndex];
   const nextAction = task.nextActions[task.currentActionIndex + 1];

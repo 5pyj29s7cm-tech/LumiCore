@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { runWithTools } from "../llm/adapter";
+import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCallOrThrow } from "../tools/execution_engine";
@@ -395,7 +396,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       console.warn(`[Chat] Ignoring request provider ${reqProvider}; using primary brain ${provider}/${model} for user ${userId}`);
     }
 
+    const request = createRequestAbortController(req, res);
     try {
+      request.signal.throwIfAborted();
       let responseText = '';
 
       if (isBYOK) {
@@ -407,7 +410,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           const contents = messages
             ? messages.map((m: any) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }))
             : [{ role: 'user', parts: [{ text: prompt }] }];
-          responseText = (await modelInstance.generateContent({ contents })).response.text();
+          responseText = (await modelInstance.generateContent({ contents }, { signal: request.signal })).response.text();
         } else if (provider === "anthropic") {
           const client = new Anthropic({ apiKey: userKey });
           const response = await client.messages.create({
@@ -415,22 +418,24 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             max_tokens: 1024,
             system: systemInstruction,
             messages: buildRestAnthropicMessages(messages, prompt),
-          });
+          }, { signal: request.signal });
           responseText = response.content[0].type === 'text' ? response.content[0].text : '';
         } else {
           const client = new OpenAI({ apiKey: userKey, baseURL: provider === "deepseek" ? "https://api.deepseek.com/v1" : provider === "qwen" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : undefined });
           const response = await client.chat.completions.create({
             model: model || (provider === "deepseek" ? "deepseek-v4-flash" : provider === "qwen" ? "qwen-plus" : "gpt-4o"),
             messages: buildRestProviderMessages(messages, prompt, systemInstruction),
-          });
+          }, { signal: request.signal });
           responseText = response.choices[0].message.content || '';
         }
+        request.signal.throwIfAborted();
         const outbound = await finalizeRestChatResponse({
           taskText: routeText,
           responseText,
           source: 'rest_chat',
           flow: restTurnDispatch.flow,
         });
+        request.signal.throwIfAborted();
         const finalized = outbound.finalization;
         responseText = finalized.text;
         recordLatency('llm', Date.now() - llmStart);
@@ -458,7 +463,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         ) => runWithTools(
           turnMessages,
           toolRegistry,
-          { provider, model, userId, domain, orgId },
+          { provider, model, userId, domain, orgId, signal: request.signal },
           onToolRecord,
           restModelToolPolicy.maxIterations || 3,
           llm.getDeepSeek,
@@ -467,7 +472,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           llm.getAnthropic,
           llm.getQwen,
           onChunk,
-          { ...toolContext, source },
+          { ...toolContext, source, executionSignal: request.signal, isCancelled: () => request.signal.aborted },
           llm.getOllama,
           llm.getLmStudio,
           llm.getArk,
@@ -482,6 +487,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           result: Awaited<ReturnType<typeof runRestToolTurn>>,
           source: string,
         ) => {
+          request.signal.throwIfAborted();
           const usageRecords = [...(result.usageRecords || [])];
           const outbound = await finalizeRestChatResponse({
             taskText: routeText,
@@ -510,6 +516,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
               };
             },
           });
+          request.signal.throwIfAborted();
           return { outbound, usageRecords };
         };
 
@@ -527,6 +534,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             normalizedMessages,
             undefined,
             (chunk) => {
+              if (request.signal.aborted) return;
               if (!deferRestStream) {
                 const safeText = restTextGate.push(chunk);
                 if (safeText) {
@@ -603,14 +611,24 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         notification: finalized.notification,
       });
     } catch (error: any) {
+      if (request.signal.aborted) return;
       console.error("AI Proxy Error:", error);
       const publicError = sanitizeChatAgentErrorPayload({
         code: chatPublicErrorCodeForException(error),
       });
+      if (res.headersSent) {
+        if (!res.destroyed && !res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ error: publicError.message, code: publicError.code, done: true, failed: true })}\n\n`);
+          res.end();
+        }
+        return;
+      }
       res.status(publicError.code === 'CHAT_PRIVACY_RESTRICTED' ? 403 : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
         error: publicError.message,
         code: publicError.code,
       });
+    } finally {
+      request.dispose();
     }
   });
 
@@ -712,6 +730,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         error: 'Organization viewers may only run contract review without case persistence.',
       });
     }
+    const request = createRequestAbortController(req, res);
+    const deepSignal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
     const llmReview = executeToolCallOrThrow({
       registry: toolRegistry,
       name: 'legal_review_contract',
@@ -722,6 +742,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         orgId,
         llmGetters: llm,
         source: 'legal-contract-review',
+        executionSignal: deepSignal,
+        isCancelled: () => deepSignal.aborted,
         authenticated: true,
         authRole: req.user!.role,
         orgRole: req.user!.orgRole,
@@ -731,15 +753,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     llmReview.catch(() => undefined);
 
     try {
-      const text = await Promise.race([
-        llmReview,
-        new Promise<string>((_, reject) => {
-          setTimeout(() => reject(new Error('合同深度审查超时，已改用本地规则审查')), 15_000);
-        }),
-      ]);
+      const text = await llmReview;
+      request.signal.throwIfAborted();
 
       return res.json({ text, degraded: false });
     } catch (err: any) {
+      if (request.signal.aborted || res.destroyed) return;
       console.warn('[LegalContractReview] Deep review unavailable:', redactDiagnosticSecrets(err?.message || err).slice(0, 500));
       try {
         const fallback = await executeToolCallOrThrow({
@@ -751,12 +770,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             domain,
             orgId,
             source: 'legal-contract-review-fallback',
+            executionSignal: request.signal,
+            isCancelled: () => request.signal.aborted,
             authenticated: true,
             authRole: req.user!.role,
             orgRole: req.user!.orgRole,
             localExecution: false,
           } as any,
         });
+        request.signal.throwIfAborted();
         return res.json({
           text: `${fallback}\n\n*提示：深度 LLM 审查暂未及时完成，已先返回本地规则审查结果。*`,
           degraded: true,
@@ -764,12 +786,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           warningCode: 'LEGAL_REVIEW_FALLBACK_USED',
         });
       } catch (fallbackErr: any) {
+        if (request.signal.aborted || res.destroyed) return;
         console.warn('[LegalContractReview] Fallback failed:', redactDiagnosticSecrets(fallbackErr?.message || fallbackErr).slice(0, 500));
         return res.status(500).json({
           error: 'Contract review failed',
           code: 'LEGAL_CONTRACT_REVIEW_FAILED',
         });
       }
+    } finally {
+      request.dispose();
     }
   }));
 

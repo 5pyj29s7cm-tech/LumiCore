@@ -10,7 +10,6 @@ import { InkCamera } from './InkCamera';
 import { InkPostProcessing } from './InkPostProcessing';
 
 export interface InkWorldProps {
-  theme: 'celestial' | 'nebula' | 'cyber';
   syncRate: number;
 }
 
@@ -22,7 +21,7 @@ function LoadingFallback() {
   );
 }
 
-export function InkWorld({ theme, syncRate }: InkWorldProps) {
+export function InkWorld({ syncRate }: InkWorldProps) {
   return (
     <div className="h-full w-full">
       <Suspense fallback={<LoadingFallback />}>
@@ -38,7 +37,7 @@ export function InkWorld({ theme, syncRate }: InkWorldProps) {
           <InkTerrain syncRate={syncRate} />
           <InkRiver />
           <InkTrees />
-          <InkParticles syncRate={syncRate} theme={theme} />
+          <InkParticles syncRate={syncRate} />
           <InkPostProcessing />
         </Canvas>
       </Suspense>

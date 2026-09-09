@@ -1,7 +1,10 @@
 import { ToolRegistry } from '../registry';
+import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../../runtime/shutdown_work';
 import { createHash } from 'crypto';
 import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent } from '../../org/membership_authorization';
 import type { CapabilityManifestEntry } from '../types';
+import { workflowCaptureBlocker, workflowTransformationBlocker } from '../../skills/worklog';
+import { classifySkillAuthoringIntent } from '../../skills/authoring_intent';
 import {
   attachedExternalCommitReconciliationFingerprint,
   executeAttachedExternalCommitReconciliation,
@@ -196,6 +199,16 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
   if (!name) throw new Error('Workflow name is required');
   if (!steps.length) throw new Error('At least one step is required');
 
+  const saveIntent = String(context?.actionIntent || '');
+  const sameConversationTrace = context?.conversationId && classifySkillAuthoringIntent(saveIntent) === 'save'
+    ? getRecentWorkflows(userId, workflowScope(context).domain, workflowScope(context).orgId, context.conversationId).at(-1)
+    : undefined;
+  const transformationIntent = [description, saveIntent, sameConversationTrace?.userIntent || ''].join(' ');
+  const transformationBlocker = workflowTransformationBlocker(transformationIntent, steps.map((step: any) => ({
+    operation: context?.toolRegistry?.getCapabilityManifestEntry(step.tool, context?.toolPolicy, context)?.operation,
+  })));
+  if (transformationBlocker) throw new Error(transformationBlocker);
+
   const wf = saveWorkflowDraftCandidate(
     userId,
     name,
@@ -262,6 +275,8 @@ async function handlePublishWorkflow(args: Record<string, any>, context?: any): 
   const currentNamed = getWorkflow(userId, name, scope);
   const currentDefinition = currentNamed ? getSavedWorkflowRuntimeDefinition(currentNamed) : null;
   if (!currentNamed || !currentDefinition) throw new Error(`Workflow draft "${name}" was not found.`);
+  const transformationBlocker = workflowTransformationBlocker(currentDefinition.description, currentDefinition.steps.map(step => ({ operation: step.capabilitySnapshot?.operation })));
+  if (transformationBlocker) throw new Error(transformationBlocker);
   if (currentNamed.runtimeHash !== expectedHash) throw new Error('Workflow changed before publication. Review the latest version.');
   if (!context?.toolRegistry) throw new Error('Capability registry is unavailable; the workflow cannot be reviewed safely.');
   const refreshedSteps = currentDefinition.steps.map(step => {
@@ -323,10 +338,38 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
   if (!name) throw new Error('Workflow name is required. Ask the user what to call this workflow.');
 
   const scope = workflowScope(context);
-  const recent = getRecentWorkflows(userId, scope.domain, scope.orgId);
-  if (recent.length === 0) return 'No recent activity to capture. Try doing something first.';
+  const conversationId = String(context?.conversationId || '').trim();
+  if (!conversationId) throw new Error('Capture requires the current conversation identity. Use save_workflow for an explicitly authored definition.');
+  const scopedRecent = getRecentWorkflows(userId, scope.domain, scope.orgId, conversationId);
+  const requestedTaskId = String(args.sourceTaskId || '').trim();
+  const recent = requestedTaskId ? scopedRecent.filter(record => record.taskId === requestedTaskId) : scopedRecent;
+  if (recent.length === 0) {
+    const availableSources = [...new Map([...scopedRecent].reverse()
+      .filter(record => record.taskId)
+      .map(record => [record.taskId, record])).values()].slice(0, 5).map(record => ({
+      sourceTaskId: record.taskId,
+      sourceConversationId: conversationId,
+      sourceIntent: record.userIntent,
+      observedTools: record.toolSequence.map(step => step.name),
+      needsAuthoring: Boolean(workflowCaptureBlocker(record)),
+    }));
+    return JSON.stringify({
+      ok: false, status: 'failed', name,
+      code: requestedTaskId ? 'source_task_not_found' : 'no_recent_activity',
+      error: requestedTaskId
+        ? 'The requested sourceTaskId is not a recorded task in this conversation. A file name, label, or workflow name is not a task ID.'
+        : 'No recent activity is recorded in this conversation. No workflow draft was saved.',
+      requestedSourceTaskId: requestedTaskId || undefined,
+      availableSources,
+      nextAction: availableSources.length
+        ? 'Use one exact sourceTaskId listed here, or omit sourceTaskId to capture this conversation\'s latest trace. Do not substitute a different task silently. If pure computation must be authored, call generate_skill with runtime inputs and the requested transformation; keep installation separate.'
+        : 'For an explicit skill-authoring request, call generate_skill with the user-specified pure input-dependent transformation. Do not claim a past trace was captured or search another conversation.',
+    }, null, 2);
+  }
 
   const last = recent[recent.length - 1];
+  const blocker = workflowCaptureBlocker(last);
+  if (blocker) return JSON.stringify({ ok: false, status: 'needs_authoring', name, sourceConversationId: conversationId, sourceTaskId: last.taskId, sourceIntent: last.userIntent, observedTools: last.toolSequence.map(step => step.name), reason: blocker, nextAction: 'Call generate_skill now for the missing pure input-dependent transformation and return its draft review. Do not install, publish, or run it unless separately requested and approved. A later saved workflow can bind the reader output to the reviewed skill. No draft was saved by capture.' });
   const toolTrace = last.toolSequence.map(s => ({
     name: s.name,
     args: s.args,
@@ -334,7 +377,7 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
   }));
 
   const wf = captureRecentAsWorkflow(userId, name, toolTrace, scope);
-  if (!wf) return 'No tool calls found in recent activity.';
+  if (!wf) return JSON.stringify({ ok: false, status: 'failed', name, code: 'empty_trace', error: 'No tool calls found in recent activity. No draft was saved.' });
   await persistWorkflowRuntimeBarrier();
 
   return JSON.stringify({
@@ -345,20 +388,45 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
     hash: wf.runtimeHash,
     name,
     stepCount: wf.steps.length,
+    sourceConversationId: conversationId,
+    sourceTaskId: last.taskId,
     nextAction: 'Review and publish the captured draft before execution.',
   }, null, 2);
 }
 
 const activeWorkflowWorkers = new Map<string, Promise<void>>();
+// Approval pauses must not discard this run's inputs. Keep them only in
+// bounded, expiring process memory; never persist secret values in the ledger.
+const workflowEphemeralInputs = new Map<string, { userId: string; expires: number; inputs: Record<string, any> }>();
 
 function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: string): void {
   const userId = context?.userId || 'system';
   const scheduledRun = getWorkflowRun(runId, userId);
   const leaseId = scheduledRun?.lease?.leaseId;
   if (!scheduledRun || scheduledRun.status !== 'running' || !leaseId) return;
+  for (const [key, value] of workflowEphemeralInputs) {
+    const current = getWorkflowRun(key, value.userId);
+    if (value.expires <= Date.now() || !current || ['completed', 'cancelled'].includes(current.status)) workflowEphemeralInputs.delete(key);
+  }
+  const retained = workflowEphemeralInputs.get(runId);
+  const inputs = { ...(retained?.userId === userId ? retained.inputs : {}), ...(args.inputs || {}) };
+  args = { ...args, inputs };
+  if (JSON.stringify(inputs).length <= 1_000_000) {
+    if (workflowEphemeralInputs.size >= 100 && !workflowEphemeralInputs.has(runId)) workflowEphemeralInputs.delete(workflowEphemeralInputs.keys().next().value!);
+    workflowEphemeralInputs.set(runId, { userId, expires: Date.now() + 30 * 60_000, inputs: structuredClone(inputs) });
+  }
   const generationKey = `${runId}:${leaseId}`;
   if (activeWorkflowWorkers.has(generationKey)) return;
   const controller = new AbortController();
+  const onStopped = () => {
+    const current = getWorkflowRun(runId, userId);
+    if (current?.status === 'running' && current.lease?.leaseId === leaseId
+      && !current.cancelRequestedAt && !current.pauseRequestedAt) {
+      requestWorkflowCancel({ runId, userId, expectedRevision: current.revision, actor: 'runtime-shutdown' });
+    }
+  };
+  controller.signal.addEventListener('abort', onStopped, { once: true });
+  const unregisterShutdown = runtimeShutdownCancellation.register(controller);
   let authorityStopped = false;
   const stop = () => {
     if (!controller.signal.aborted) controller.abort(new DOMException('Workflow execution stopped.', 'AbortError'));
@@ -388,7 +456,7 @@ function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: 
     executionSignal: controller.signal,
     isCancelled: check,
   };
-  const promise = Promise.resolve().then(async () => {
+  const promise = runtimeBackgroundWork.track(Promise.resolve().then(async () => {
     let renewing = false;
     const heartbeatMs = Math.max(10, Number(context?.workflowHeartbeatMs) || 20_000);
     const heartbeat = setInterval(() => {
@@ -435,8 +503,12 @@ function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: 
       await persistWorkflowRuntimeBarrier();
     }
   }).finally(() => {
+    const current = getWorkflowRun(runId, userId);
+    if (!current || ['completed', 'cancelled'].includes(current.status)) workflowEphemeralInputs.delete(runId);
+    unregisterShutdown();
+    controller.signal.removeEventListener('abort', onStopped);
     activeWorkflowWorkers.delete(generationKey);
-  });
+  }));
   activeWorkflowWorkers.set(generationKey, promise);
   // Failed persistence remains dirty and observable through the run reader's
   // strict barrier; a detached worker must not create an unhandled rejection.
@@ -680,6 +752,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     const resolvedArguments = resolveWorkflowValue(
       step.argumentsTemplate || {},
       args.inputs || {},
+      0, run,
     ) as Record<string, any>;
     if (step.confirmation?.required) {
       const approval = run.stepApprovals?.[step.stepId];
@@ -1113,6 +1186,7 @@ async function handleReconcileWorkflowRun(args: Record<string, any>, context?: a
   const resolvedArguments = resolveWorkflowValue(
     step.argumentsTemplate || {},
     args.inputs || {},
+    0, run,
   ) as Record<string, any>;
   const executionKey = workflowReconciliationExecutionKey(run, step.stepId);
   let record;
@@ -1215,7 +1289,7 @@ async function handleReconcileWorkflowRun(args: Record<string, any>, context?: a
 export function registerWorkflowTools(registry: ToolRegistry): void {
   registry.register({
     name: 'save_workflow',
-    description: 'Save a named multi-step workflow that can be recalled and run later. Use this when the user says "remember this workflow" or wants to save a useful process pattern.',
+    description: 'Save a reviewable named workflow draft. Steps execute real registered tools: use {"$inputRef":"inputs.name"} for fresh inputs and {"$stepOutputRef":"step_1.optional.path"} to pass a complete verified earlier result into a later tool. Include every computation as an executable tool; a read followed by model arithmetic is not a complete saved algorithm. Review get_workflow and publish the exact hash before running.',
     parameters: {
       type: 'object',
       properties: {
@@ -1228,7 +1302,7 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
             properties: {
               description: { type: 'string' },
               tool: { type: 'string' },
-              args: { type: 'object' },
+              args: { type: 'object', description: 'Arguments template. Example: {"path":{"$inputRef":"inputs.sourcePath"}} or {"csvText":{"$stepOutputRef":"step_1"}}. The reference is a nested JSON object, NEVER a quoted string containing braces or reference syntax.' },
               reconciliationCapabilityId: {
                 type: 'string',
                 description: 'Optional read-only observe/test capability that can verify this exact target after an interrupted side effect. It is frozen into the published version.',
@@ -1342,17 +1416,33 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'capture_recent_workflow',
-    description: 'Capture the most recent tool execution as a named workflow. Use this when the user says "remember this", "记下这个流程", "保存这个流程", or wants to save what they just did as a reusable workflow.',
+    description: 'Capture the most recent verified business trace from this exact conversation as a draft. Normally omit sourceTaskId; never guess it from a filename. Failed, discovery-only, unscoped, or model-only transformation traces require generate_skill authoring instead. If the user explicitly requests a new calculation draft, generate_skill can be called directly. No automatic publication or claim of complete algorithm capture.',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'A descriptive name for this workflow (e.g., "morning briefing", "daily report")' },
+        sourceTaskId: { type: 'string', description: 'Optional exact source task ID returned by this server for this conversation. Omit for the latest trace. Never supply a filename, file stem, display label, or guessed task ID; invalid IDs return scoped availableSources without capturing anything.' },
       },
       required: ['name'],
     },
     handler: handleCaptureRecentWorkflow,
     permission: 'user',
     securityLevel: 'safe',
+    capability: capabilityContract({
+      id: 'workflow.definition.capture', family: 'workflow', lane: 'agents', operation: 'create', risk: 'medium',
+      sideEffects: [{ type: 'local_state_change', scope: 'reviewable workflow draft from this conversation only', reversible: true }],
+      verification: {
+        strategy: 'terminal_receipt', required: true,
+        requiredFields: ['ok', 'status', 'name', 'workflowId', 'hash'], requiredValues: { ok: true, status: 'draft' },
+        successStatuses: ['draft'], failureStatuses: ['failed', 'needs_authoring'],
+        successSignals: ['the workflow store persisted an actual scoped draft'],
+        limitations: ['Captured reads do not encode subsequent model-only computation; draft creation does not authorize publication or execution.'],
+      },
+    }),
+    evidence: capabilityEvidence({
+      id: 'workflow.definition.capture', operation: 'create', subjectArgument: 'name',
+      limitations: ['The receipt proves only persistence of the named, conversation-scoped draft; it does not prove complete computation, publication, or execution.'],
+    }),
   });
 
   registry.register({

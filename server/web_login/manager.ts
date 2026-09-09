@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { execFileSync } from 'child_process';
+import { getWebLoginCredentialKey } from './credential_key';
+import { hostPrivateFilePersistenceAdapter } from '../adapters/private_persistence';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright-core';
 import { getDataPath } from '../config/data_path';
 import { getWebLoginSitePreset } from './legal_presets';
@@ -208,9 +209,9 @@ export function classifyLoginPageSnapshot(snapshot: LoginPageSnapshot): LoginPag
 }
 
 function ensureStore(): void {
-  fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
-  fs.mkdirSync(path.dirname(SESSION_ROOT), { recursive: true });
-  if (!fs.existsSync(STORE_FILE)) fs.writeFileSync(STORE_FILE, '[]', 'utf-8');
+  hostPrivateFilePersistenceAdapter.ensurePrivateDirectory(path.dirname(STORE_FILE), process.platform !== 'win32');
+  hostPrivateFilePersistenceAdapter.ensurePrivateDirectory(path.dirname(SESSION_ROOT), process.platform !== 'win32');
+  if (!fs.existsSync(STORE_FILE)) hostPrivateFilePersistenceAdapter.writeTextAtomic(STORE_FILE, '[]', 0o600, process.platform !== 'win32');
 }
 
 function readProfiles(): WebLoginProfile[] {
@@ -225,7 +226,7 @@ function readProfiles(): WebLoginProfile[] {
 
 function writeProfiles(profiles: WebLoginProfile[]): void {
   ensureStore();
-  fs.writeFileSync(STORE_FILE, JSON.stringify(profiles, null, 2), 'utf-8');
+  hostPrivateFilePersistenceAdapter.writeTextAtomic(STORE_FILE, JSON.stringify(profiles, null, 2), 0o600, process.platform !== 'win32');
 }
 
 function scopeDefaults(scope?: WebLoginScope) {
@@ -302,65 +303,7 @@ function inferHosts(loginUrl: string, matchHosts?: string[]): string[] {
 }
 
 function getSecret(): Buffer {
-  fs.mkdirSync(path.dirname(SECRET_FILE), { recursive: true });
-  if (fs.existsSync(SECRET_FILE)) {
-    const stored = fs.readFileSync(SECRET_FILE, 'utf-8').trim();
-    if (stored.startsWith('dpapi:')) {
-      const protectedKey = stored.slice('dpapi:'.length);
-      try {
-        const script = [
-          "$ErrorActionPreference='Stop'",
-          'Add-Type -AssemblyName System.Security',
-          '$raw=[Convert]::FromBase64String($env:LUMI_DPAPI_INPUT)',
-          '$plain=[Security.Cryptography.ProtectedData]::Unprotect($raw,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
-          '[Console]::Out.Write([Convert]::ToBase64String($plain))',
-        ].join(';');
-        const plain = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-          encoding: 'utf-8',
-          windowsHide: true,
-          timeout: 10_000,
-          env: { ...process.env, LUMI_DPAPI_INPUT: protectedKey },
-        }).trim();
-        return Buffer.from(plain, 'base64');
-      } catch (error) {
-        throw new Error(`Could not unlock the web-login credential key for this Windows user: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    const encoded = stored.startsWith('plain:') ? stored.slice('plain:'.length) : stored;
-    const legacyKey = Buffer.from(encoded, 'base64');
-    if (process.platform === 'win32' && legacyKey.length === 32) {
-      writeSecretKey(legacyKey);
-    }
-    return legacyKey;
-  }
-  const key = crypto.randomBytes(32);
-  writeSecretKey(key);
-  return key;
-}
-
-function writeSecretKey(key: Buffer): void {
-  let serialized = `plain:${key.toString('base64')}`;
-  if (process.platform === 'win32') {
-    try {
-      const script = [
-        "$ErrorActionPreference='Stop'",
-        'Add-Type -AssemblyName System.Security',
-        '$raw=[Convert]::FromBase64String($env:LUMI_DPAPI_INPUT)',
-        '$protected=[Security.Cryptography.ProtectedData]::Protect($raw,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
-        '[Console]::Out.Write([Convert]::ToBase64String($protected))',
-      ].join(';');
-      const protectedKey = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-        encoding: 'utf-8',
-        windowsHide: true,
-        timeout: 10_000,
-        env: { ...process.env, LUMI_DPAPI_INPUT: key.toString('base64') },
-      }).trim();
-      if (protectedKey) serialized = `dpapi:${protectedKey}`;
-    } catch (error) {
-      console.warn('[WebLogin] Windows credential-key protection unavailable; using the file-permission fallback.', error);
-    }
-  }
-  fs.writeFileSync(SECRET_FILE, serialized, { encoding: 'utf-8', mode: 0o600 });
+  return getWebLoginCredentialKey(SECRET_FILE);
 }
 
 function encryptSecret(value: string): string {

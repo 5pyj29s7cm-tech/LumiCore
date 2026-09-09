@@ -315,6 +315,8 @@ export interface ToolContext {
    * visible user message, but it must not replace actionIntent for risk checks.
    */
   routedTaskText?: string;
+  /** Resolved once by the shared pipeline from authorized server state. */
+  acceptedTaskTarget?: import('../conversation/task_target_anchor').AcceptedTaskTarget;
   /** True only after the registry's confirmation callback approved this tool call. */
   userConfirmed?: boolean;
   /**
@@ -368,6 +370,10 @@ export interface ToolContext {
   onProgress?: (step: string) => void;
   /** Lifecycle callback fired immediately before an LLM-selected tool begins. */
   onToolStart?: (call: { id?: string; name: string; arguments: Record<string, any> }) => void;
+  /** Observation only: the canonical receipt is available before execution returns. */
+  onToolRecord?: (record: ToolExecutionRecord) => void;
+  /** Observation only: releases a started-call observer, including durable lifecycle failures. */
+  onToolFinished?: (call: { id?: string; name: string; recorded: boolean }) => void;
   /** Fired only after policy/confirmation checks, immediately before an adapter handler starts. */
   onAdapterStart?: (call: { name: string; attempt: number; idempotencyKey?: string }) => void | Promise<void>;
   /**
@@ -434,6 +440,9 @@ export interface ToolDefinition {
     context?: ToolContext,
   ) => void | Promise<void>;
   handler: (args: Record<string, any>, context?: ToolContext) => Promise<string>;
+  /** Host code only; never loaded from a Skill/MCP declaration. Corroborates
+   * an actual adapter result without overriding structural/failure checks. */
+  corroborateTerminalResult?: (record: ToolExecutionRecord) => Promise<ToolExecutionRecord['terminalVerification'] | null>;
   /**
    * Keep the generic local side-effect fence only while the handler is in
    * flight, then let the handler's durable idempotency store describe a later

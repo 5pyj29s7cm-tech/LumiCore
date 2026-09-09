@@ -5,7 +5,7 @@ import { mcpManager } from '../mcp/client';
 import { getExtensionRuntimeStates, type ExtensionRuntimeStatus } from '../skills/runtime_state';
 import { CapabilityManifestEntry, ToolDefinition } from '../tools/types';
 import {
-  isCapabilityLearningRecordVerified,
+  isCapabilityLearningRecordUsable,
   listCapabilityLearningRecords,
 } from './capability_memory';
 
@@ -232,7 +232,7 @@ export function buildSelfExtensionPlan(options: SelfExtensionPlanOptions): SelfE
     domain: record.domain,
     goal: record.goal,
     status: record.status,
-    verified: isCapabilityLearningRecordVerified(record),
+    verified: isCapabilityLearningRecordUsable(record, tools.filter(tool => tool.securityLevel !== 'forbidden').map(tool => tool.name)),
     route: record.selectedRoute.label,
     preferredTools: record.nextUse.preferredTools,
     summary: record.experiment.summary,

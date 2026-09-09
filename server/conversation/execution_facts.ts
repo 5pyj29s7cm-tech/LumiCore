@@ -1,4 +1,5 @@
 import { readDB } from '../../db_layer';
+import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from '../regions/packs/cn/conversation_execution_facts_messages';
 import { isPriorTurnToolReceiptQuestion } from '../cognition/normalized_action_intent';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
@@ -21,6 +22,8 @@ export interface ConversationExecutionFacts {
   priorTurnToolCalls?: ConversationExecutionToolFact[];
   tasks: Array<{ id: string; status: string }>;
   recentUserMessages?: string[];
+  /** Final assistant deliveries from this exact persisted conversation. */
+  deliveredResults?: Array<{ requestId: string; messageId: string; text: string; timestamp: string }>;
 }
 
 export interface ConversationExecutionToolFact {
@@ -57,6 +60,8 @@ function parseToolCalls(value: unknown): any[] {
 export function isConversationExecutionFactQuestion(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
+  if (classifySkillAuthoringIntent(normalized) !== 'none') return false;
+  if (isPriorWorkDeliveryFactQuestion(normalized)) return true;
   if (isPriorFailureExplanationQuestion(normalized)) return true;
   if (isPriorTurnToolReceiptQuestion(normalized)) return true;
   if (isPriorSingleFileReadFactQuestion(normalized)) return true;
@@ -68,6 +73,16 @@ export function isConversationExecutionFactQuestion(text: string): boolean {
   const executionSubject = /(?:(?:调用|执行|使用|跑).{0,10}(?:工具|插件|技能)|(?:创建|新建|建立).{0,10}(?:任务|计划))|\b(?:call|use|run|execute)(?:d|ing)?\s+(?:any\s+)?tools?\b|\bcreat(?:e|ed|ing)\s+(?:any\s+)?tasks?\b/iu.test(normalized);
   const asksVerifiedClientNavigation = /(?:成功|实际|真实|回执).{0,24}(?:客户端)?(?:导航|界面动作|页面动作)|(?:哪一个|哪个|什么).{0,24}(?:客户端)?(?:导航动作|界面动作)/u.test(normalized);
   return (conversationScope && asksWhether && executionSubject) || asksVerifiedClientNavigation;
+}
+
+function isPriorWorkDeliveryFactQuestion(text: string): boolean {
+  // Detailed proof questions belong to the existing task-status projection,
+  // which retains the exact action target and verification evidence. A broad
+  // delivered-result recap must not reduce them to operation counts.
+  // i18n-allow: multilingual request recognition, not user-visible copy.
+  if (/(?:什么|哪些|哪项|何种).{0,8}(?:证据|凭证)|(?:证据|凭证).{0,16}(?:证明|验证|成功)|\bwhat\s+(?:evidence|proof)\b|\b(?:evidence|proof)\b.{0,24}\b(?:prov\w*|succeed\w*|verif\w*)\b/iu.test(text)) return false;
+  // i18n-allow: read-only questions about previous work and file changes.
+  return /(?:刚才|刚刚|之前|这次|本次|上一轮)[^。！？!?\n]{0,20}(?:实际|已经|已|都)?(?:完成|做|处理)[^。！？!?\n]{0,14}(?:什么|哪些|哪一步)|(?:原|源)文件[^。！？!?\n]{0,12}(?:改过|修改过|写过|变过)(?:吗|没有|没)|\bwhat\s+(?:did|have)\s+you\s+(?:actually\s+)?(?:complete|finish|do|done)|\b(?:was|did)\b[^.!?\n]{0,30}\b(?:original|source)\s+file\b[^.!?\n]{0,20}\b(?:change|modif)/iu.test(text);
 }
 
 function parseRecordArguments(value: unknown): Record<string, unknown> {
@@ -346,7 +361,24 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
     .map((item: any) => String(item.message || '').trim())
     .filter(Boolean)
     .slice(-24);
-  return { toolCalls, priorTurnToolCalls, tasks, recentUserMessages };
+  const finalTurns = (db.conversationActionTurns || []).filter((turn: any) => (
+    turn.conversationId === scope.conversationId && turn.userId === scope.userId
+    && (turn.domain || 'personal') === domain && (turn.orgId || '') === orgId
+    && turn.status === 'terminal' && turn.requestId !== scope.currentRequestId
+    && (!scope.taskId || turn.taskId === scope.taskId)
+  ));
+  const deliveredResults = interactions.filter((item: any) => {
+    if (item.role !== 'assistant' || !item.requestId || item.requestId === scope.currentRequestId) return false;
+    const feedback = parseRecordArguments(item.completionFeedback);
+    const message = String(item.message || '').trim();
+    return feedback.status === 'completed' && Boolean(message)
+      && !/(?:这次|这项操作)还没完成|没有取得可用的分析结果/u.test(message) // i18n-allow: inconsistent legacy terminal exclusion.
+      && finalTurns.some((turn: any) => turn.requestId === item.requestId && turn.terminalMessageId === item.id);
+  }).slice(-3).map((item: any) => ({
+    requestId: String(item.requestId), messageId: String(item.id),
+    text: String(item.message || '').trim().slice(0, 1_800), timestamp: String(item.timestamp || ''),
+  }));
+  return { toolCalls, priorTurnToolCalls, tasks, recentUserMessages, deliveredResults };
 }
 
 function priorTurnToolOutcome(record: ConversationExecutionToolFact): 'success' | 'failed' {
@@ -527,7 +559,7 @@ function receiptFailed(record: ConversationExecutionToolFact): boolean {
 function failureActionLabel(name: string): string {
   if (/(?:ocr|vision|capture_screen|computer_vision)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionVision;
   if (/(?:wechat|message|send_file|send_message)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionMessaging;
-  if (/(?:read_pdf|read_docx|read_file|extract_document)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionFileRead;
+  if (/(?:read_pdf|read_docx|read_xlsx|read_file|extract_document)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionFileRead;
   if (/(?:desktop_open|browser_open|open_item)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionOpen;
   if (/(?:desktop|keyboard|mouse|computer_use)/iu.test(name)) return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionDesktop;
   return CN_CONVERSATION_EXECUTION_FACT_MESSAGES.failureActionGeneric;
@@ -538,6 +570,29 @@ export function formatConversationExecutionFactAnswer(
   text: string,
 ): string {
   const zh = /[\u3400-\u9fff]/u.test(text);
+  if (isPriorWorkDeliveryFactQuestion(text)) {
+    const successful = facts.toolCalls.filter(record => priorTurnToolOutcome(record) === 'success');
+    const operationCounts = new Map<string, number>();
+    for (const record of successful) {
+      const label = zh ? failureActionLabel(record.name)
+        : /^(?:read_|extract_document)/iu.test(record.name) ? 'file read'
+          : /(?:open)/iu.test(record.name) ? 'open target' : 'operation';
+      operationCounts.set(label, (operationCounts.get(label) || 0) + 1);
+    }
+    const operations = [...operationCounts].map(([label, count]) => ({ label, count }));
+    const fileMutations = facts.toolCalls.filter(record => /^(?:write_file|desktop_write_text_file|modify_|create_(?:xlsx|docx|ppt|pdf)|delete_file|move_file|copy_file|desktop_(?:delete|move|copy))/iu.test(record.name));
+    const latestDelivery = facts.deliveredResults?.at(-1);
+    // The model's already-delivered calculation is a transcript fact, not a
+    // missing tool call. Quote it without upgrading it to a filesystem write.
+    return [
+      zh ? (successful.length ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.verifiedOperations(operations) : CN_CONVERSATION_EXECUTION_FACT_MESSAGES.noVerifiedOperations)
+        : (successful.length ? `Verified operations in this conversation: ${operations.map(item => `${item.label} (${item.count})`).join(', ')}.` : 'No verified successful tool operation was recorded in this conversation.'),
+      zh ? (fileMutations.length ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.fileMutationRecorded : CN_CONVERSATION_EXECUTION_FACT_MESSAGES.noFileMutation)
+        : (fileMutations.length ? 'File mutation calls were recorded; their individual receipts determine their outcome.' : 'No file write or modification was recorded in this conversation.'),
+      latestDelivery ? (zh ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.latestDeliveredResult : 'The latest result already sent to you was:') : (zh ? CN_CONVERSATION_EXECUTION_FACT_MESSAGES.noDeliveredResult : 'No completed, persisted result reply was found.'),
+      latestDelivery?.text || '',
+    ].filter(Boolean).join('\n');
+  }
   if (isPriorSingleFileReadFactQuestion(text)) {
     const read = priorSingleFileReadFacts(facts);
     if (read.status === 'missing') {

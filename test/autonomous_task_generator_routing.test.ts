@@ -148,7 +148,7 @@ describe('autonomous task generator model routing', () => {
       choices: [{ message: { role: 'assistant', content: '[]' } }],
     }));
     await generateAutonomousTasks(userId, {
-      getDeepSeek: () => ({ chat: { completions: { create } } }),
+      getDeepSeek: () => null,
       getGemini: () => null,
       getOpenAI: () => null,
       getAnthropic: () => null,
@@ -159,7 +159,7 @@ describe('autonomous task generator model routing', () => {
       getXiaomi: () => null,
       getKimi: () => null,
       getGlm: () => null,
-      getRelay: () => null,
+      getRelay: () => ({ chat: { completions: { create } } }),
     });
 
     expect(create).toHaveBeenCalled();

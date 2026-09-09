@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { getDatabasePersistenceStatus, readDB, writeDB, isDbDirty } from "../../db_layer";
 import { projectAutonomousTaskFinalization } from "../autonomy/task_finalization";
+import { sendDurableMutation } from './durable_mutation';
 import { logger } from "../../logger";
 import { getDataRoot } from "../config/data_path";
 import { toolRegistry } from "../tools/registry";
@@ -38,7 +39,7 @@ import {
   getUserRetrievalModelPreferences,
   upsertUserRetrievalModelPreferences,
 } from "../llm/retrieval_model_preferences";
-import { getUserPreferredLLM, upsertUserPreferredLLM } from "../llm/user_preferences";
+import { DEFAULT_MODELS, getUserPreferredLLM, upsertUserPreferredLLM } from "../llm/user_preferences";
 import { listModelRoutingReceipts } from "../llm/model_routing_receipts";
 import {
   assessProviderAvailability,
@@ -713,6 +714,9 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     if (current.tts === 'relay' || selectedTts === 'relay' || requestedTtsModel) {
       resetCircuit('relay-tts');
     }
+    if ((next.stt !== undefined && (current.stt === 'relay' || selectedStt === 'relay')) || requestedSttModel) {
+      resetCircuit('relay-stt');
+    }
     res.json({
       success: true,
       pref,
@@ -830,6 +834,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         !!(process.env[envKey] && process.env[envKey]!.length > 0) || !!stored[storeKey];
       const ollamaConfig = getLocalModelConfig('ollama');
       const lmstudioConfig = getLocalModelConfig('lmstudio');
+      const reasoningPreference = getUserPreferredLLM(req.user!.uid);
       const extensionProviders = listRegisteredProviders(req.user!.uid).map(({ userId: _userId, ...provider }) => provider);
       const status = (
         provider: string,
@@ -868,7 +873,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
           relay: status(
             'relay',
             relayConfigured(),
-            process.env.RELAY_REASONING_MODEL || process.env.RELAY_MODEL || 'aliyun/qwen-plus',
+            reasoningPreference.models.relay || DEFAULT_MODELS.relay,
           ),
           ollama: status('ollama', ollamaConfig.detected, ollamaConfig.models[0] || 'local', ollamaConfig.detected),
           lmstudio: status('lmstudio', lmstudioConfig.detected, lmstudioConfig.models[0] || 'local', lmstudioConfig.detected),
@@ -993,11 +998,11 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   // API Keys — read/write user-configured keys
   // LLM model preferences — read/write per user
-  router.put("/preferences/llm", requireAuth, (req, res) => {
+  router.put("/preferences/llm", requireAuth, async (req, res) => {
     try {
       const uid = getUserIdFromRequest(req, jwtSecret);
       const updated = upsertUserPreferredLLM(uid, req.body || {});
-      res.json({ success: true, ...updated, scope: 'lumi', organizationOverridesSupported: false });
+      return await sendDurableMutation(req, res, { success: true, ...updated, scope: 'lumi', organizationOverridesSupported: false });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -1083,14 +1088,14 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     }
   });
 
-  router.put("/preferences/vision", requireAuth, (req, res) => {
+  router.put("/preferences/vision", requireAuth, async (req, res) => {
     try {
       if (!isVisionProvider(req.body?.provider)) {
         return res.status(400).json({ error: 'Invalid vision provider' });
       }
       const uid = getUserIdFromRequest(req, jwtSecret);
       const updated = upsertUserPreferredVision(uid, req.body || {});
-      res.json({ success: true, ...updated });
+      return await sendDurableMutation(req, res, { success: true, ...updated });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -1105,7 +1110,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     }
   });
 
-  router.put("/preferences/generation", requireAuth, (req, res) => {
+  router.put("/preferences/generation", requireAuth, async (req, res) => {
     try {
       const imageProvider = req.body?.image?.provider;
       const videoProvider = req.body?.video?.provider;
@@ -1114,7 +1119,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       }
       const uid = getUserIdFromRequest(req, jwtSecret);
       const prefs = upsertUserPreferredGenerationModels(uid, req.body);
-      res.json({ success: true, ...prefs });
+      return await sendDurableMutation(req, res, { success: true, ...prefs });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1129,14 +1134,14 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     }
   });
 
-  router.put("/preferences/world", requireAuth, (req, res) => {
+  router.put("/preferences/world", requireAuth, async (req, res) => {
     try {
       if (!isWorldModelProvider(req.body?.provider)) {
         return res.status(400).json({ error: 'Invalid world model provider' });
       }
       const uid = getUserIdFromRequest(req, jwtSecret);
       const prefs = upsertUserWorldModelPrefs(uid, req.body);
-      res.json({ success: true, ...prefs, resolved: getUserPreferredWorldModel(uid) });
+      return await sendDurableMutation(req, res, { success: true, ...prefs, resolved: getUserPreferredWorldModel(uid) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1151,10 +1156,10 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     }
   });
 
-  router.put("/preferences/retrieval-model", requireAuth, (req, res) => {
+  router.put("/preferences/retrieval-model", requireAuth, async (req, res) => {
     try {
       const uid = getUserIdFromRequest(req, jwtSecret);
-      res.json(upsertUserRetrievalModelPreferences(uid, req.body));
+      return await sendDurableMutation(req, res, upsertUserRetrievalModelPreferences(uid, req.body));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1239,7 +1244,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   });
 
   // Generic settings store — for tool overrides, security prefs, etc.
-  router.post("/settings", requireAuth, (req, res) => {
+  router.post("/settings", requireAuth, async (req, res) => {
     try {
       const { key, value } = req.body || {};
       if (!key || typeof key !== 'string' || value === undefined || !USER_SCOPED_SETTING_KEYS.has(key)) {
@@ -1256,7 +1261,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         db.settings.push({ key: persistedKey, value: JSON.stringify(normalized) });
       }
       writeDB(db);
-      res.json({ success: true });
+      await sendDurableMutation(req, res, { success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -95,6 +95,9 @@ export async function withCloudResilience<T>(
 ): Promise<T> {
   const { provider, model, maxRetries = 2, baseDelayMs = 500, signal, timeoutMs } = options;
 
+  // An already cancelled request must not probe or change provider health.
+  if (signal?.aborted) throw abortError(signal);
+
   // 1. Circuit breaker gate
   if (!isCircuitClosed(provider, model)) {
     const err = new Error(
@@ -103,7 +106,8 @@ export async function withCloudResilience<T>(
     );
     // Ensure the error is classified as circuit_open for upstream fallback logic
     (err as any).cloudCategory = 'circuit_open' as CloudErrorCategory;
-    recordFailure(provider, model, err);
+    // A skipped request is not another provider failure and must not extend
+    // the existing recovery window.
     throw err;
   }
 
@@ -143,8 +147,17 @@ export async function withCloudResilience<T>(
 
     // 4. Failure — classify and record
     const classified = classifyCloudError(err, provider);
+    const unavailableAccount = classified.category === 'auth'
+      || (classified.category === 'quota' && !classified.isRetryable);
+    const stalledLocalInference = (provider === 'lmstudio' || provider === 'ollama')
+      && (classified.category === 'timeout' || classified.category === 'network');
     recordFailure(provider, model, err, {
-      openImmediately: classified.category === 'auth' || classified.category === 'quota',
+      openImmediately: unavailableAccount || classified.category === 'quota' || stalledLocalInference,
+      // Account rejection cannot recover through another immediate turn.
+      // Likewise a hung local fallback must not add a minute to every reply.
+      // Existing credential updates reset these same circuits immediately.
+      ...(unavailableAccount ? { cooldownMs: 5 * 60_000 }
+        : stalledLocalInference ? { cooldownMs: 2 * 60_000 } : {}),
     });
 
     // Attach classification to error for upstream handling

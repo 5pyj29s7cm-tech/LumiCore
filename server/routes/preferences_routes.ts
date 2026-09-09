@@ -75,7 +75,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
       if (!mode) return res.status(400).json({ error: 'mode is required' });
       const saved = saveStoredOperationMode(uid, mode);
       broadcastPreferenceChange(uid, 'operation_mode', { mode: saved.mode });
-      res.json({ ok: true, autonomyLevel: saved.autonomyLevel });
+      res.json({ ok: true, mode: saved.mode });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

@@ -466,12 +466,7 @@ export class WeChatClawBotAdapter implements MessageAdapter {
 
     if (!res.ok) throw new Error(`WeChat send failed: HTTP ${res.status}`);
     const data = await res.json();
-    if (data.ret && data.ret !== 0) {
-      const reason = data.errmsg || data.errcode || `ret=${data.ret}`;
-      console.error('[WeChat] Send failed:', reason);
-      throw new Error(`WeChat send failed: ${reason}`);
-    }
-    return data.message_id || clientId;
+    return requireWeChatSendAcknowledgement(data, clientId);
   }
 
   hasConversationContext(toUser: string): boolean {
@@ -567,11 +562,9 @@ export class WeChatClawBotAdapter implements MessageAdapter {
       headers: this.makeHeaders(),
       body: JSON.stringify({ msg, base_info: this.baseInfo() }),
     });
-    const sendResult: any = await sendResponse.json().catch(() => ({}));
-    if (!sendResponse.ok || (sendResult.ret && sendResult.ret !== 0)) {
-      throw new Error(`WeChat file send failed: ${sendResult.errmsg || sendResult.errcode || sendResponse.status}`);
-    }
-    return String(sendResult.message_id || clientId);
+    if (!sendResponse.ok) throw new Error(`WeChat file send failed: HTTP ${sendResponse.status}`);
+    const sendResult: any = await sendResponse.json();
+    return requireWeChatSendAcknowledgement(sendResult, clientId);
   }
 
   async sendCard(_chatId: string, _card: CardPayload): Promise<string> {
@@ -582,6 +575,25 @@ export class WeChatClawBotAdapter implements MessageAdapter {
   getLoginQRUrl(): string {
     return '/api/wechat/qrcode';
   }
+}
+
+function requireWeChatSendAcknowledgement(data: unknown, clientId: string): string {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('WeChat send outcome unknown: invalid acknowledgement');
+  }
+  const receipt = data as Record<string, unknown>;
+  const codes = ['ret', 'errcode'].filter(key => Object.prototype.hasOwnProperty.call(receipt, key));
+  for (const key of codes) {
+    const value = receipt[key];
+    if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '' || Number(value) !== 0) {
+      throw new Error(`WeChat send failed: ${String(receipt.errmsg || `${key}=${String(value)}`)}`);
+    }
+  }
+  const remoteId = typeof receipt.message_id === 'string' ? receipt.message_id.trim() : '';
+  if (codes.length === 0 && !remoteId) throw new Error('WeChat send outcome unknown: missing acknowledgement');
+  // An explicit zero code acknowledges acceptance; clientId is correlation,
+  // never a substitute for an absent or negative provider acknowledgement.
+  return remoteId || clientId;
 }
 
 function decodeWeChatAesKey(value: string): Buffer {

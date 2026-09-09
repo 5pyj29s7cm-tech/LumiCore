@@ -23,11 +23,11 @@ describe('capability access explanations', () => {
     expect(isOperationModeInventoryQuestion(text)).toBe(true);
     expect(isCapabilityMetaQuestion(text)).toBe(true);
     const response = buildOperationModeMetaResponse({ text, operationMode: 'assistant' }) || '';
-    expect(response).toMatch(/(?:3 \u79cd|exactly 3)/i);
-    expect(response).toContain('chat');
-    expect(response).toContain('assistant');
-    expect(response).toContain('autonomous');
-    expect(response).toContain('meeting');
+    expect(response).toMatch(/(?:统一的个人人格核心|one personal core)/i);
+    expect(response).not.toContain('set_client_mode');
+    expect(response).toContain('Lumi');
+    expect(response).not.toContain('permission tiers');
+    expect(response).toMatch(/会议|meeting/i);
     expect(response).not.toMatch(/scholar|office|mentor|celebrate|companion|founder|comfort/i);
     expect(response).not.toContain('client.modes');
   });
@@ -42,7 +42,7 @@ describe('capability access explanations', () => {
     expect(isCurrentOperationModeQuestion(text)).toBe(true);
     expect(isOperationModeInventoryQuestion(text)).toBe(false);
     const response = buildOperationModeMetaResponse({ text, operationMode: 'assistant' }) || '';
-    expect(response).toContain('assistant');
+    expect(response).toContain('Lumi');
     expect(response).not.toMatch(/\u5df2\u9a8c\u8bc1|\u5df2\u8bfb\u53d6|client\.modes/u);
   });
 
@@ -53,7 +53,8 @@ describe('capability access explanations', () => {
   ])('does not consume a mode action or unrelated UI mode as taxonomy meta: %s', (text) => {
     expect(isOperationModeInventoryQuestion(text)).toBe(false);
     expect(isCurrentOperationModeQuestion(text)).toBe(false);
-    expect(buildOperationModeMetaResponse({ text, operationMode: 'assistant' })).toBeNull();
+    if (text.includes('切换到自主模式')) expect(buildOperationModeMetaResponse({ text, operationMode: 'assistant' })).toContain('统一');
+    else expect(buildOperationModeMetaResponse({ text, operationMode: 'assistant' })).toBeNull();
   });
 
   it('answers a first-user self introduction without old-task or unverified service claims', () => {
@@ -105,7 +106,7 @@ describe('capability access explanations', () => {
       source: 'command-center-chat',
     });
 
-    expect(response).toContain('\u5df2\u7ecf\u662f\u52a9\u624b\u6a21\u5f0f');
+    expect(response).toContain('不需要切换模式');
     expect(response).toContain('\u552f\u4e00\u7684\u6587\u5b57\u5165\u53e3');
     expect(response).toContain('\u6bcf\u8f6e\u53ea\u9009\u51fa');
     expect(response).toContain('\u8def\u7531\u95ee\u9898');

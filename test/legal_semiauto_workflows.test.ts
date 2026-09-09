@@ -284,7 +284,7 @@ describe('semi-automated legal workflows', () => {
     expect(output).toContain('legal_message_intake_to_case -> legal_case_workspace');
     expect(output).toContain('legal_generate_citation_verification_report -> legal_finalize_delivery_package');
     expect(output).toContain('三段论分析');
-    expect(output).toContain('底层必经');
+    expect(output).toContain('尚未形成完整法律分析底稿');
     expect(output).toContain('证据目录与三性审查矩阵');
     expect(output).toContain('三性审查矩阵');
     expect(output).toContain('真实性核验');
@@ -399,6 +399,7 @@ describe('semi-automated legal workflows', () => {
         caseName: '案件归档闭环测试案',
         documentType: '代理词',
         outputDir: dir,
+        reasoningMatrix: 'Major premise: The cited civil statute provides a contractual damages remedy subject to proof.\nMinor premise: The synthetic contract and delivery records show an unpaid obligation.\nConclusion: Apply the contractual damages provision to proven delivery and nonpayment, subject to lawyer review.',
         includeDocx: false,
         content: [
           '# 代理词草稿',
@@ -999,7 +1000,7 @@ describe('semi-automated legal workflows', () => {
       });
 
       expect(output).toContain('正式交付包未生成');
-      expect(output).toContain('三段论推理链硬门槛未通过');
+      expect(output).toContain('推理底稿结构不完整');
       expect(output).toContain('legal_case_reasoning_matrix');
       expect(fs.existsSync(path.join(dir, '00_reasoning-gate-blocked.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
@@ -1175,7 +1176,7 @@ describe('semi-automated legal workflows', () => {
       });
 
       expect(output).toContain('正式交付包已生成');
-      expect(output).toContain('三段论推理链硬门槛：通过');
+      expect(output).toContain('推理底稿结构检查：通过');
       expect(fs.existsSync(path.join(deliveryDir, '00_manifest.md'))).toBe(true);
       expect(fs.existsSync(path.join(deliveryDir, '00_reasoning-gate-blocked.md'))).toBe(false);
       const sourceRegister = fs.readFileSync(path.join(deliveryDir, '03_source-register.md'), 'utf-8');

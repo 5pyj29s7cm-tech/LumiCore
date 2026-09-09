@@ -1,4 +1,5 @@
 import { createHash, createHmac } from 'crypto';
+import { preservedSourceWriteBlockReason, requestedArtifactFormatBlockReason } from '../cognition/artifact_write_scope';
 import { getJwtSecret } from '../config/local_identity';
 import type { ToolContext, ToolExecutionRecord } from './types';
 import { externalCommitInputDigest, type ToolRegistry } from './registry';
@@ -166,6 +167,15 @@ function guardCurrentTurnToolCall(input: {
       reason: 'Current turn is conversational and has no server-owned execution authority.',
     };
   }
+  const formatBlockReason = requestedArtifactFormatBlockReason(serverTargetPolicyTaskText(input.context), input.toolName, input.arguments);
+  if (formatBlockReason) return { allowed: false, arguments: input.arguments, reason: formatBlockReason };
+  const writeBlockReason = preservedSourceWriteBlockReason({
+    text: serverTargetPolicyTaskText(input.context),
+    toolName: input.toolName,
+    arguments: input.arguments,
+    acceptedTarget: input.context?.acceptedTaskTarget,
+  });
+  if (writeBlockReason) return { allowed: false, arguments: input.arguments, reason: writeBlockReason };
   if (!/^(?:desktop_open|browser_open_task)$/i.test(input.toolName)) {
     return { allowed: true, arguments: input.arguments };
   }
@@ -522,12 +532,13 @@ export async function executeToolCall(
         || { allowed: true, arguments: preparedArguments }
       : currentTurnPolicy;
   const callerArguments = callerPreflight.arguments || preparedArguments;
-  const targetPolicy = callerPreflight.allowed && isFileTargetTask(targetPolicyTaskText)
+  const targetPolicy = callerPreflight.allowed && (isFileTargetTask(targetPolicyTaskText) || input.context?.acceptedTaskTarget)
     ? guardTaskTargetToolCall({
         taskText: targetPolicyTaskText,
         toolName: semanticToolName,
         arguments: callerArguments,
         toolRecords: serverTargetPolicyEvidence(input.context, targetPolicyTaskText),
+        acceptedTaskTarget: input.context?.acceptedTaskTarget,
         enforceStructuredFileRead: Boolean(
           capability
           && ['files', 'office'].includes(capability.lane)
@@ -622,6 +633,8 @@ export async function executeToolCall(
     }
     const finalized = brandCanonicalToolExecutionRecord(record, toolExecutionInputDigests(executionArguments));
     rememberServerTargetPolicyRecord(input.context, targetPolicyTaskText, finalized);
+    try { input.context?.onToolRecord?.(finalized); } catch { /* Observation never changes execution. */ }
+    try { input.context?.onToolFinished?.({ id: record.id, name: record.name, recorded: true }); } catch { /* Observation only. */ }
     return finalized;
   };
 
@@ -673,13 +686,26 @@ export async function executeToolCall(
     // Durable lifecycle observers own the execution fence. Converting their
     // branded failure into a normal record would let callers publish a false
     // terminal state or retry an adapter whose start may already be durable.
-    if (isToolLifecyclePersistenceFailure(error)) throw error;
+    if (isToolLifecyclePersistenceFailure(error)) {
+      try { input.context?.onToolFinished?.({ id: record.id, name: record.name, recorded: false }); } catch { /* Observation only. */ }
+      throw error;
+    }
     // The registry callback distinguishes a denied/preflight call from an
     // adapter that may already have committed a side effect before failing.
     record.adapterStarted = adapterStarted;
     record.error = String(error?.message || error || 'Tool execution failed.');
   }
   record.terminalVerification = verifyCapabilityReceipt(capability, record);
+  const corroborate = input.registry.get(input.name)?.corroborateTerminalResult;
+  if (corroborate && !record.error && record.adapterStarted
+    && record.terminalVerification.status === 'unverified') {
+    try {
+      const proof = await corroborate(record);
+      if (proof) record.terminalVerification = verifyCapabilityReceipt(capability, record, proof);
+    } catch {
+      // A changed runtime or unavailable host proof cannot promote the receipt.
+    }
+  }
   return finalizeRecord();
 }
 

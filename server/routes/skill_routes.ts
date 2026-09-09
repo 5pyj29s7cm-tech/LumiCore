@@ -9,12 +9,14 @@ import {
   normalizeSkillInstallName,
   requireSafeMCPServerName,
   unregisterServerTools,
+  SKILLS_DIR,
 } from "../mcp";
 import {
   generateSkill,
   isGeneratedSkillDraftLocation,
   readGeneratedSkillDraft,
   validateGeneratedSkillDraftForInstall,
+  computeGeneratedSkillArtifactHash,
 } from "../skills/generator";
 import { getRecentWorkflows } from "../skills/worklog";
 import { loadKeys } from "../config/keys";
@@ -22,6 +24,8 @@ import { requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from ".
 import { isLoopbackAddress } from "../config/local_identity";
 import { getExtensionRuntimeStates } from "../skills/runtime_state";
 import { toolRegistry } from "../tools/registry";
+import { getDataPath } from '../config/data_path';
+import { listGeneratedSkillHistory } from '../skills/generated_history';
 import {
   DESKTOP_SESSION_HEADER,
   verifyDesktopSessionProof,
@@ -216,6 +220,32 @@ export function mountSkillRoutes(
   });
 
   // Generate a skill from description or workflows
+  router.get("/skills/generated", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, (_req, res) => {
+    try {
+      res.json({ skills: listGeneratedSkillHistory({ draftsRoot: getDataPath('skill-drafts'), skillsRoot: SKILLS_DIR,
+        runtimeStates: getExtensionRuntimeStates(toolRegistry.getCapabilityManifest()) }) });
+    } catch { res.status(500).json({ error: 'Generated skill history could not be loaded.' }); }
+  });
+
+  // Opening a saved draft refreshes its exact review; it never authorizes installation.
+  router.post("/skills/generated/review", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, (req, res) => {
+    try {
+      const draftId = String(req.body?.draftId || '');
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,220}$/.test(draftId)) return res.status(400).json({ error: 'Invalid draft identity.' });
+      const directory = path.join(getDataPath('skill-drafts'), draftId);
+      if (!isGeneratedSkillDraftLocation(directory) || fs.lstatSync(directory).isSymbolicLink()) return res.status(400).json({ error: 'Invalid draft location.' });
+      const read = (name: string) => {
+        const file = path.join(directory, name); const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) throw new Error('Invalid draft file');
+        return fs.readFileSync(file, 'utf8');
+      };
+      const code = read('index.ts'), manifest = read('package.json'), lock = read('package-lock.json');
+      const draft = readGeneratedSkillDraft(directory);
+      if (!draft || computeGeneratedSkillArtifactHash(code, manifest, lock) !== draft.review.contentHash) return res.status(409).json({ error: 'The draft changed since validation. Generate and review a fresh draft.' });
+      return res.json({ ...draft, directory, generatedCode: code, toolName: '', ...issueGeneratedDraftApproval(req, directory, draft.review.contentHash) });
+    } catch { return res.status(400).json({ error: 'This saved draft is unavailable or invalid.' }); }
+  });
+
   router.post("/skills/generate", requireAuth, requireAdmin, requirePersonalHostSkillScope, requireLocalRequest, requireNativeDesktopSession, asyncHandler(async (req, res) => {
     try {
       const { description, provider, model } = req.body;

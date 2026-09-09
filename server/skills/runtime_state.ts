@@ -76,7 +76,7 @@ export function getExtensionRuntimeStates(
       configured: Boolean(serverConfig),
       enabled: serverConfig?.enabled === true,
       keyReady: configuredKeyReady(serverConfig),
-      broken: local?.broken === true,
+      broken: local?.broken === true || health[name]?.status === 'failed',
       connected: connected.has(name),
       healthStatus: String(health[name]?.status || 'unknown'),
       registered: manifestEntries.length > 0,
@@ -84,6 +84,7 @@ export function getExtensionRuntimeStates(
         serverConfig?.enabled === true
         && configuredKeyReady(serverConfig)
         && local?.broken !== true
+        && health[name]?.status !== 'failed'
         && manifestEntries.length > 0
       ),
       toolNames: manifestEntries.map(entry => entry.toolName),

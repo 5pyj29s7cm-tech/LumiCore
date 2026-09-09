@@ -44,9 +44,6 @@ function acceptedTaskResponse(record: TaskRecord): LAPTaskDelegateResponse {
     ...(record.result ? { result: immutableJson(record.result) } : {}),
     ...(record.error ? { error: record.error } : {}),
     ...(record.lateResultAt ? { lateResultAt: record.lateResultAt } : {}),
-    estimatedCompletion: record.status === 'accepted'
-      ? record.task.type === 'code_review' ? '~5min' : record.task.type === 'web_search' ? '~30s' : undefined
-      : undefined,
   };
 }
 
@@ -181,6 +178,7 @@ function boundedOutput(output: Record<string, any>): Record<string, any> {
 }
 
 export function getTask(taskId: string, sessionId?: string): TaskRecord | undefined {
+  expirePendingTasks();
   if (sessionId) return tasks.get(taskKey(sessionId, taskId));
   // Legacy in-process callers may omit scope only when the ID is unambiguous.
   const matches = Array.from(tasks.values()).filter(record => record.task.taskId === taskId);
@@ -188,10 +186,12 @@ export function getTask(taskId: string, sessionId?: string): TaskRecord | undefi
 }
 
 export function getTasksForSession(sessionId: string): TaskRecord[] {
+  expirePendingTasks();
   return Array.from(tasks.values()).filter(t => t.sessionId === sessionId);
 }
 
 export function getTasksForAgent(agentId: string): TaskRecord[] {
+  expirePendingTasks();
   return Array.from(tasks.values()).filter(t => t.from === agentId || t.to === agentId);
 }
 
@@ -244,4 +244,15 @@ export function buildTaskListResponse(tasks: TaskRecord[], options: { includeRes
 
 export function resetLAPTasksForTests(): void {
   tasks.clear();
+}
+
+function expirePendingTasks(): void {
+  for (const record of tasks.values()) {
+    if (['pending', 'accepted', 'running'].includes(record.status) && record.task.deadline
+      && Date.parse(record.task.deadline) <= Date.now()) {
+      record.status = 'unknown';
+      record.error = 'The task deadline passed without a terminal peer receipt.';
+      record.updatedAt = new Date().toISOString();
+    }
+  }
 }

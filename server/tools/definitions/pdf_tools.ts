@@ -106,31 +106,21 @@ async function createPdf(args: Record<string, any>): Promise<string> {
   const hasCJK = content ? /[一-鿿㐀-䶿豈-﫿぀-ゟ゠-ヿ가-힯]/.test(content) : false;
   let font;
   if (hasCJK) {
+    doc.registerFontkit(require('@pdf-lib/fontkit'));
     const systemFonts = [
       'C:\\Windows\\Fonts\\simhei.ttf',
       'C:\\Windows\\Fonts\\simsunb.ttf',
-      'C:\\Windows\\Fonts\\msyh.ttc',
-      'C:\\Windows\\Fonts\\simsun.ttc',
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf',
+      '/Library/Fonts/Arial Unicode.ttf',
     ];
     let fontLoaded = false;
     for (const fontPath of systemFonts) {
       if (fs.existsSync(fontPath)) {
         try {
           const fontBytes = fs.readFileSync(fontPath);
-          const magic = fontBytes.toString('ascii', 0, 4);
-          if (magic === 'ttcf') {
-            const numFonts = fontBytes.readUInt32BE(8);
-            if (numFonts > 0) {
-              const firstOffset = fontBytes.readUInt32BE(12);
-              const nextOffset = numFonts > 1 ? fontBytes.readUInt32BE(16) : fontBytes.length;
-              const faceBytes = fontBytes.slice(firstOffset, nextOffset);
-              font = await doc.embedFont(faceBytes);
-              fontLoaded = true;
-            }
-          } else {
-            font = await doc.embedFont(fontBytes);
-            fontLoaded = true;
-          }
+          font = await doc.embedFont(fontBytes, { subset: true });
+          const supported = new Set<number>(font.getCharacterSet());
+          fontLoaded = Array.from(String(content)).every(char => /\s/u.test(char) || supported.has(char.codePointAt(0)!));
           if (fontLoaded) break;
         } catch (e) {
           console.warn(`[createPdf] Failed to load font ${fontPath}:`, e);
@@ -138,7 +128,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
       }
     }
     if (!fontLoaded) {
-      font = await doc.embedFont(StandardFonts.Helvetica);
+      throw new Error('No installed font can render all requested PDF characters. Install a compatible CJK TrueType/OpenType font; no PDF was created.');
     }
   } else {
     font = await doc.embedFont(StandardFonts.Helvetica);
@@ -150,7 +140,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
     const paragraphs = content.split('\n');
     for (const para of paragraphs) {
       if (!para.trim()) { lines.push(''); continue; }
-      const chars = para.split('');
+      const chars = Array.from(String(para));
       let line = '';
       for (const ch of chars) {
         const testLine = line + ch;
@@ -184,7 +174,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
   // ── Embed images ──
   if (images && Array.isArray(images)) {
     for (const imgDef of images) {
-      if (!imgDef.path || !fs.existsSync(imgDef.path)) continue;
+      if (!imgDef.path || !fs.existsSync(imgDef.path)) throw new Error(`Required PDF image was not found: ${String(imgDef.path || '(missing path)')}`);
 
       const ext = path.extname(imgDef.path).toLowerCase();
       let imgBytes = fs.readFileSync(imgDef.path);
@@ -194,8 +184,8 @@ async function createPdf(args: Record<string, any>): Promise<string> {
         try {
           const sharp = require('sharp');
           imgBytes = await sharp(imgBytes).png().toBuffer();
-        } catch {
-          continue; // skip unsupported formats
+        } catch (error: any) {
+          throw new Error(`Required PDF image could not be converted: ${imgDef.path}: ${error?.message || error}`);
         }
       }
 
@@ -235,7 +225,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
   if (title) doc.setTitle(title);
 
   const outDir = ensureOutputDir();
-  const fileName = `${title || 'document'}_${Date.now()}.pdf`;
+  const fileName = `${String(title || 'document').replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.pdf`;
   const outPath = path.join(outDir, fileName);
   const pdfBytes = await doc.save();
   fs.writeFileSync(outPath, pdfBytes);

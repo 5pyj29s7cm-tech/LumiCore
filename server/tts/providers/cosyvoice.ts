@@ -92,7 +92,7 @@ export async function synthesizeSpeech(
   const body = { model: resolvedModel, input };
 
   const json = await withCloudResilience(
-    async () => {
+    async operationSignal => {
       const res = await fetch(BASE_URL, {
       method: 'POST',
       headers: {
@@ -100,7 +100,7 @@ export async function synthesizeSpeech(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal,
+      signal: operationSignal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: res.statusText }));
@@ -112,7 +112,7 @@ export async function synthesizeSpeech(
       }
       return payload;
     },
-    { provider: 'cosyvoice', maxRetries: 1 },
+    { provider: 'cosyvoice', maxRetries: 1, signal },
   );
   const audioUrl = json.output?.audio?.url;
 

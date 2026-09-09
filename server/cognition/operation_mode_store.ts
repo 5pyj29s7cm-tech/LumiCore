@@ -1,5 +1,4 @@
 import { readDB, writeDB } from '../../db_layer';
-import { autonomyLevelForOperationMode, saveGateConfig } from '../autonomy/safety_gate';
 import {
   normalizeOperationMode,
   parseStoredOperationMode,
@@ -30,7 +29,6 @@ export function saveStoredOperationMode(userId: string, requestedMode: string): 
   else db.settings.push({ key, value });
   writeDB(db);
 
-  const autonomyLevel = autonomyLevelForOperationMode(mode);
-  if (autonomyLevel) saveGateConfig({ autonomyLevel }, userId);
-  return autonomyLevel ? { mode, autonomyLevel } : { mode };
+  // Compatibility state must never rewrite background-work authorization or budgets.
+  return { mode };
 }

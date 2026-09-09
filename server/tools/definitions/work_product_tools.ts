@@ -96,7 +96,7 @@ export function registerWorkProductTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'work_product_verify',
-    description: 'Verify a work product against a plan or acceptance criteria. Checks artifact paths, file size/readability, required text, and returns pass/partial/fail/blocked plus repair actions. Call this before claiming a real task is complete, and call it again after repairs.',
+    description: 'Check artifact paths, file size/readability and required text against a plan or acceptance criteria. This optional verifier supplies evidence to the shared execution flow; it does not decide task completion or require a final chat reply. Do not repeat unchanged checks. Use domain-specific verification for criteria this file checker cannot evaluate.',
     parameters: {
       type: 'object',
       properties: {
@@ -111,7 +111,7 @@ export function registerWorkProductTools(registry: ToolRegistry): void {
         completedCriteria: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Acceptance criteria that Lumi has explicitly satisfied through prior tool results, final text, or domain checks.',
+          description: 'Legacy completion claims. These do not count as verification; provide artifacts and use the relevant domain verification capability.',
         },
         repairCycle: { type: 'number', description: 'Current repair cycle number, starting at 0.' },
       },

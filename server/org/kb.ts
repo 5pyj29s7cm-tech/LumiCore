@@ -315,7 +315,8 @@ const CHUNK_OVERLAP = 120;
 
 const articleIndexGenerations = new Map<string, number>();
 
-export async function indexArticle(orgId: string, articleId: string, actorUserId?: string): Promise<number> {
+export async function indexArticle(orgId: string, articleId: string, actorUserId?: string, options: { signal?: AbortSignal } = {}): Promise<number> {
+  options.signal?.throwIfAborted();
   const article = getArticle(orgId, articleId, actorUserId, 'write');
   if (!article) return 0;
   const generation = (articleIndexGenerations.get(articleId) || 0) + 1;
@@ -373,17 +374,21 @@ export async function indexArticle(orgId: string, articleId: string, actorUserId
     try {
       embeddingResults[i] = await generateConfiguredEmbedding(
         `${contextPrefix}\n\n${chunks[i].text}`,
-        article.authorId,
+        actorUserId || article.authorId,
+        { signal: options.signal },
       );
+      options.signal?.throwIfAborted();
       if (i > 0 && i % 5 === 0) {
         await new Promise(r => setTimeout(r, 200));
       }
     } catch (err: any) {
+      options.signal?.throwIfAborted();
       embeddingResults[i] = { error: String(err?.message || err || 'embedding_failed').slice(0, 300) };
       console.error(`[KB] Failed to embed chunk ${i} of article ${articleId}:`, err);
     }
   }
 
+  options.signal?.throwIfAborted();
   const latest = EDB.getKbArticle(orgId, articleId);
   if (!latest
     || articleIndexGenerations.get(articleId) !== generation

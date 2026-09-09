@@ -218,8 +218,8 @@ describe('Lumi execution decision', () => {
     });
 
     expect(dispatch.boundary).toBe('tool_action');
-    expect(dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(dispatch.flow.autoPromoteToAssistant).toBe(false);
+    expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(decision.allowToolUse).toBe(true);
     expect(decision.baseToolPolicy.allowedTools).toEqual(['*']);
     expect(decision.toolPolicy.allowedTools).toEqual(expect.arrayContaining([
@@ -1029,7 +1029,7 @@ describe('Lumi execution decision', () => {
 
     const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f', 'chat');
     expect(autonomousMode.dispatch.boundary).toBe('client_action');
-    expect(autonomousMode.dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(autonomousMode.dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['*']);
     expect(autonomousMode.decision.promptOverlay).toContain('Lumi Execution Decision');
 

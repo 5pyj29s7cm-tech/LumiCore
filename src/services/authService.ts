@@ -119,10 +119,13 @@ export async function getMe(): Promise<{ user: User } | null> {
   }
 }
 
-export async function logout(): Promise<void> {
-  await apiFetch("/api/auth/logout", { method: "POST" });
-  try {
-    localStorage.removeItem('lumi_auth_token');
-    localStorage.removeItem('lumi_desktop_session_proof');
-  } catch {}
+export async function logout(): Promise<{ remoteRevoked: boolean }> {
+  // apiFetch captures the current authentication headers synchronously. Clear
+  // local identity immediately, including when revocation is offline or hangs.
+  const revocation = apiFetch('/api/auth/logout', { method: 'POST', signal: AbortSignal.timeout(6_000) });
+  for (const key of ['lumi_auth_token', 'lumi_desktop_session_proof']) {
+    try { localStorage.removeItem(key); } catch {}
+  }
+  try { return { remoteRevoked: (await revocation).ok }; }
+  catch { return { remoteRevoked: false }; }
 }

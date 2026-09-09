@@ -300,7 +300,9 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       },
       handler: repeatedWrite,
     });
-    const readback = vi.fn(async () => 'confirmation continuation readback');
+    const readback = vi.fn(async () => encodeToolResult('exact requested content', {
+      ok: true, status: 'verified', path: 'C:\\Users\\me\\Desktop\\note.txt',
+    }));
     registerReadOnlyProbe(registry, 'read_file', readback);
 
     const confirmedRecord: ToolExecutionRecord = {
@@ -343,7 +345,7 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       })
       .mockResolvedValueOnce({
         text: 'using independent readback instead',
-        toolCalls: [{ id: 'readback-after-confirmation', name: 'read_file', arguments: {} }],
+        toolCalls: [{ id: 'readback-after-confirmation', name: 'read_file', arguments: { path: 'C:\\Users\\me\\Desktop\\note.txt' } }],
       })
       .mockResolvedValueOnce({ text: 'The write and exact readback are verified.' });
 

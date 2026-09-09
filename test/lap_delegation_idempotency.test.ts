@@ -24,6 +24,15 @@ describe('LAP immutable delegation identities', () => {
   beforeEach(() => resetLAPTasksForTests());
   afterEach(() => { vi.restoreAllMocks(); resetLAPTasksForTests(); });
 
+  it('projects a missing peer result as unknown after its deadline', () => {
+    const scope = session('expired-outbound');
+    const input = request(scope);
+    input.task.deadline = new Date(Date.now() + 1000).toISOString();
+    registerOutboundTask(input.task, scope, scope.peerA.agentId);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
+    expect(getTask(input.task.taskId, scope.sessionId)).toMatchObject({ status: 'unknown', error: expect.stringContaining('deadline') });
+  });
+
   it.each(['completed', 'failed', 'unknown'] as LAPTaskStatus[])('returns an existing %s receipt after its deadline without resetting it', status => {
     const scope = session('a');
     const input = request(scope);

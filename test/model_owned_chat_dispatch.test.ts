@@ -108,9 +108,9 @@ describe('model-owned main chat architecture', () => {
 
   it('keeps a stable bounded client manifest visible in hard chat mode', () => {
     expect(buildOperationModeToolPolicy('chat')).toMatchObject({
-      allowedTools: ['client_get_state', 'client_action'],
+      allowedTools: ['*'],
       forbiddenTools: [],
-      maxIterations: 4,
+      maxIterations: 80,
     });
   });
 
@@ -123,8 +123,8 @@ describe('model-owned main chat architecture', () => {
       operationMode: 'chat',
       targetIsLumi: true,
     });
-    expect(advisory.flow.requestedMode).toBe('autonomous');
-    expect(advisory.flow.effectiveOperationMode).toBe('chat');
+    expect(advisory.flow.requestedMode).toBeNull();
+    expect(advisory.flow.effectiveOperationMode).toBe('assistant');
 
     const structured = buildLumiTurnDispatch({
       userId: 'model_owned_mode_boundary_user',
@@ -135,7 +135,7 @@ describe('model-owned main chat architecture', () => {
       requestedMode: 'autonomous',
       targetIsLumi: true,
     });
-    expect(structured.flow.effectiveOperationMode).toBe('autonomous');
+    expect(structured.flow.effectiveOperationMode).toBe('assistant');
   });
 
   it('executes an ordinary foreground request from Chat without persisting a UI-mode flip', () => {
@@ -174,7 +174,7 @@ describe('model-owned main chat architecture', () => {
       }] as any,
     });
 
-    expect(dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(dispatch.flow.modelToolAccess).toBe('manifest');
     expect(buildModelCapabilityPolicy(execution).allowedTools).toEqual(expect.arrayContaining([
       'desktop_list_apps',
@@ -208,7 +208,7 @@ describe('model-owned main chat architecture', () => {
     expect(shouldAllowToolUseForTurn(trace.text, trace.source, trace.operationMode)).toBe(true);
     expect(trace).toMatchObject({
       allowToolUse: true,
-      decisionReason: expect.stringContaining('Assistant capabilities may be borrowed'),
+      decisionReason: expect.stringContaining('explicit tool or work action'),
       blockedBy: [],
     });
   });

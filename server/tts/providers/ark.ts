@@ -333,8 +333,8 @@ export async function synthesizeSpeech(
   requireNotStrict('Doubao speech synthesis');
   const credentials = requireDoubaoSpeechCredentials();
   return withCloudResilience(
-    () => synthesizeWithApiKey(text, credentials, voiceId, signal, speechRate, pitch, volume, fetchImpl),
-    { provider: 'doubao-tts', maxRetries: 1 },
+    operationSignal => synthesizeWithApiKey(text, credentials, voiceId, operationSignal, speechRate, pitch, volume, fetchImpl),
+    { provider: 'doubao-tts', maxRetries: 1, signal },
   );
 }
 

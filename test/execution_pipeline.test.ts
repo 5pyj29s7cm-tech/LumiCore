@@ -3,6 +3,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { registerAllTools } from '../server/tools/definitions';
 import { ToolRegistry } from '../server/tools/registry';
+import { buildActionContract } from '../server/cognition/action_contract';
+import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
+import { hasExplicitNoToolInstruction } from '../server/cognition/tool_intent';
 
 beforeAll(async () => {
   const { initDatabase } = await import('../db_layer');
@@ -16,6 +19,123 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it.each(['chat', 'voice'] as const)('does not open %s execution for a memory question with forbidden search', channel => {
+    const text = '你还记得岚桥记忆复核项目的专用标记和资料盒位置吗？如果没有已保存的记忆，请直接说不知道，不要猜测或搜索聊天记录。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'memory-lookup-only', channel,
+      source: 'local_acceptance_harness', operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
+    expect({ allow: pipeline.turnIntent.flow.allowToolUseForTurn, boundary: pipeline.turnIntent.boundary,
+      action: pipeline.executionRequested, trace: pipeline.intentTrace }).toMatchObject({ allow: false, action: false, boundary: 'conversation' });
+    expect(pipeline.turnIntent.flow.completionEvidenceNeeded).toBe(false);
+    expect(pipeline.turnIntent.flow.modelToolAccess).toBe('hard_off');
+    expect(finalizeLumiResponse({ taskText: text, responseText: '我不知道，没有找到对应的已保存记忆。', source: channel, toolRecords: [], flow: pipeline.turnIntent.flow }).blocked).toBe(false);
+  });
+
+  it.each(['chat', 'voice'] as const)('preserves a positive search after a %s recall question', channel => {
+    const text = '你还记得项目标记吗？搜索官网公开资料。不要读取聊天记录。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'memory-recall-plus-action', channel, source: channel,
+      operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.turnIntent.flow.modelToolAccess).toBe('manifest');
+  });
+  it.each(['chat', 'voice'] as const)('binds short plan acceptance to the latest user goal for %s', channel => {
+    const text = '按刚才的计划执行。';
+    const goal = '读取 C:/Users/Administrator/Documents/orders.csv，计算每项金额和总额';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'plan-acceptance', channel, source: channel,
+      operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+      persistedConversationHistory: [
+        { role: 'user', message: '数量改成4。' },
+        { id: 'latest-plan', role: 'user', message: goal + '。先只告诉我准备怎么做，暂时不要读取文件。原文件不动。' },
+        { role: 'assistant', message: 'I will read a different file instead.' },
+      ] });
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.turnIntent.flow.routeText).toContain(goal);
+    expect(pipeline.turnIntent.flow.routeText).not.toContain('数量改成4');
+    expect(pipeline.turnIntent.flow.routeText).not.toContain('暂时不要');
+    expect(pipeline.modelToolProjection.toolNames).toContain('read_file');
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('write_file');
+    expect(pipeline.trustedActionContinuation).toBe(false);
+    expect(pipeline.turnIntent.promptOverlay).toContain('latest-plan');
+  });
+  it.each(['chat', 'voice'] as const)('keeps a visible-client planning request in discussion through %s finalization', channel => {
+    const text = 'LC-UI-统一验收：我要处理 C:/Users/Administrator/LumiCore/task-skill-acceptance-20260908/LC-TASK-ORDERS.csv，计算每项金额和总额。先只告诉我准备怎么做，暂时不要读取文件。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: {
+      userId: 'visible-planning', channel, source: channel, operationMode: 'assistant', text, targetIsLumi: true,
+    }, registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
+    expect(pipeline.executionRequested).toBe(false);
+    expect(buildActionContract(text).applies).toBe(false);
+    const reply = '计划是：得到你的确认后读取这份 CSV，按数量乘单价计算各项金额，再求和。现在尚未读取文件。';
+    const finalized = finalizeLumiResponse({ taskText: text, responseText: reply, source: channel, toolRecords: [], flow: pipeline.turnIntent.flow });
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.text).toBe(reply);
+    expect(hasExplicitNoToolInstruction('不要只告诉我准备怎么做，现在读取文件并计算。')).toBe(false);
+    expect(hasExplicitNoToolInstruction('读取文件，只告诉我总额。')).toBe(false);
+  });
+  it.each(['chat', 'voice'] as const)('keeps the exact XLSX producer and reader in the %s model declarations', channel => {
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'exact-xlsx-user', channel, source: channel, operationMode: 'assistant', targetIsLumi: true,
+        text: '新建 C:/Users/Administrator/Documents/LC-ORDERS.xlsx，只有一个工作表“订单”，表头为商品、数量、单价、金额，只有一条数据：水杯，2，12，24。实际保存后回读表格并告诉我内容。',
+      },
+      registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+    });
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.modelToolProjection.requiredToolNames).toContain('create_xlsx');
+    expect(pipeline.modelToolProjection.requiredToolNames).toContain('read_xlsx');
+    expect(pipeline.modelToolProjection.toolNames).toContain('create_xlsx');
+    expect(pipeline.modelToolProjection.toolNames).toContain('read_xlsx');
+  });
+
+  it.each(['chat', 'voice'] as const)('allows a separately saved result while preserving the source in %s', channel => {
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'scoped-copy-user', channel, source: channel, operationMode: 'assistant', targetIsLumi: true,
+        text: '读取 C:/Users/Administrator/Documents/orders.csv，不修改原文件，将结果另存为 C:/Users/Administrator/Documents/result.xlsx。',
+      },
+      registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+    });
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.authorizationPolicy.forbiddenTools).not.toContain('create_xlsx');
+    expect(pipeline.modelToolProjection.toolNames).toContain('create_xlsx');
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('work_takeover_task_create');
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('desktop_open');
+  });
+
+  it.each(['chat', 'voice'] as const)('recovers the same persisted user file target for %s without reviving the plan-only task', channel => {
+    const registry = createRegistry();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'continuity-user', channel, source: channel, operationMode: 'assistant',
+        text: '现在执行刚才的读取和计算，把每项金额和总额告诉我，不修改原文件。', targetIsLumi: true,
+      },
+      registry,
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+      persistedConversationHistory: [{ id: 'user-plan', role: 'user', message: '读取 C:/Users/Administrator/Documents/orders.csv 并算总额，现在只说明计划，不要执行操作。' }],
+    });
+    expect(pipeline.turnIntent.flow.acceptedTaskTarget?.sourceId).toBe('user-plan');
+    expect(pipeline.turnIntent.flow.acceptedTaskTarget?.target.path.replaceAll('\\', '/')).toBe('C:/Users/Administrator/Documents/orders.csv');
+    expect(pipeline.trustedActionContinuation).toBe(false);
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('write_file');
+  });
+
+  it('does not grant execution because a plan mentions a concrete target', () => {
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: {
+        userId: 'continuity-plan', channel: 'chat', source: 'chat', operationMode: 'assistant',
+        text: '读取 C:/Users/Administrator/Documents/orders.csv 并算总额，现在只说明计划，不要读取文件，也不要执行操作。', targetIsLumi: true,
+      },
+      registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+    });
+    expect(pipeline.turnIntent.flow.acceptedTaskTarget?.target.path).toBeTruthy();
+    expect(pipeline.executionRequested).toBe(false);
+  });
+
   it('routes a new persistent task to the task hub while keeping external sends fenced', () => {
     const registry = createRegistry();
     const text = '\u8bf7\u521b\u5efa\u4e00\u4e2a\u53ef\u8de8\u91cd\u542f\u7ee7\u7eed\u7684\u6301\u4e45\u4efb\u52a1\u3002\u6807\u9898\u201c\u9752\u7a79\u5ba2\u6237\u8ddf\u8fdb\u95ed\u73af\u201d\uff0c\u7c7b\u522b customer\uff0c\u6765\u6e90 chat\u3002\u73b0\u5728\u53ea\u521b\u5efa\u5e76\u6301\u4e45\u5316\u4efb\u52a1\uff0c\u4e0d\u8981\u53d1\u9001\u4efb\u4f55\u6d88\u606f\u3002';

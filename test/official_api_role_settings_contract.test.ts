@@ -58,7 +58,7 @@ describe('Lumi official API role settings contract', () => {
     expect(manifest.LUMI_OFFICIAL_BASE_URL).toBe('https://zhuan.huaczy.com/v1');
     expect(manifest.LUMI_OFFICIAL_DOCS_URL).toBe('https://zhuan.huaczy.com/console/help');
     expect(manifest.LUMI_OFFICIAL_RECHARGE_URL).toBe('https://zhuan.huaczy.com/console/recharge');
-    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.reasoning).toBe('aliyun/qwen-plus');
+    expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.reasoning).toBe('aliyun/deepseek-v4-flash');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.vision).toBe('aliyun/qwen2.5-vl-72b');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.world).toBe('aliyun/qwen3-vl-flash');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.video_generation).toBe('aliyun/Wan2.2-T2V-A14B');

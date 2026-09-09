@@ -13,6 +13,7 @@ import { getSkillSettingsTarget } from '../../shared/model_service_settings';
 import { ExternalCapabilityIntakeDialog, ExternalCapabilityManagerSection } from './ExternalCapabilityCenter';
 import { externalCapabilityCopy } from '../i18n/locales/externalCapabilities';
 import { fetchExternalCapabilities, type ExternalCapabilityProjection } from '@/services/externalCapabilities';
+import { GeneratedSkillHistory } from './GeneratedSkillHistory';
 
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
 
@@ -1671,6 +1672,8 @@ export function SkillCenter({
 
         {activeTab === 'generate' && (
           <motion.div key="generate" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+            <GeneratedSkillHistory lang={lang} refreshToken={generatedDraft?.review.contentHash}
+              onReview={draft => setGeneratedDraft(draft)} onInstalled={() => setActiveTab('installed')} />
             <div className="lumi-panel p-6 space-y-4">
               <div className="flex items-center gap-3">
                 <Sparkles className="text-celestial-saturn" size={18} />

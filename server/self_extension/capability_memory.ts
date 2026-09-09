@@ -71,6 +71,12 @@ export function isCapabilityLearningRecordVerified(record: CapabilityLearningRec
   return checks.length > 0 && checks.every(check => check.passed === true);
 }
 
+export function isCapabilityLearningRecordUsable(record: CapabilityLearningRecord, availableTools: string[]): boolean {
+  const required = [...new Set([...record.selectedRoute.preferredTools, ...record.nextUse.preferredTools])];
+  return isCapabilityLearningRecordVerified(record) && required.length > 0
+    && required.every(name => availableTools.includes(name));
+}
+
 const SETTINGS_KEY = 'capability_learning_records_v1';
 const MAX_RECORDS = 250;
 
@@ -171,8 +177,12 @@ function mergeIndexFor(input: Omit<CapabilityLearningRecord, 'id' | 'createdAt' 
 
 function mergeRecord(previous: CapabilityLearningRecord | null, incoming: CapabilityLearningRecord): CapabilityLearningRecord {
   if (!previous) return incoming;
+  const failedNow = ['experiment_failed', 'blocked', 'deprecated'].includes(incoming.status)
+    || incoming.experiment.status === 'blocked'
+    || incoming.experiment.verification.some(check => check.passed === false)
+    || incoming.experiment.toolCalls.some(call => call.status === 'failed' || Boolean(call.error));
   const preserveVerifiedExperience = isCapabilityLearningRecordVerified(previous)
-    && !isCapabilityLearningRecordVerified(incoming);
+    && !isCapabilityLearningRecordVerified(incoming) && !failedNow;
   return {
     ...incoming,
     id: previous.id,
@@ -225,7 +235,11 @@ export function listCapabilityLearningRecords(filter: {
 export function upsertCapabilityLearningRecord(input: Omit<CapabilityLearningRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): CapabilityLearningRecord {
   const records = readRecords();
   const timestamp = nowIso();
-  const existingIndex = input.id ? records.findIndex(record => record.id === input.id) : mergeIndexFor(input, records);
+  const existingIndex = input.id ? records.findIndex(record => record.id === input.id
+    && record.userId === input.userId && record.scopeDomain === input.scopeDomain && record.orgId === input.orgId) : mergeIndexFor(input, records);
+  if (input.id && existingIndex < 0 && records.some(record => record.id === input.id)) {
+    throw new Error('Capability learning record was not found in the current scope.');
+  }
   const previous = existingIndex >= 0 ? records[existingIndex] : null;
   const incoming: CapabilityLearningRecord = {
     ...input,

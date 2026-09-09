@@ -5,6 +5,7 @@ import {
 } from './learning_interface';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { LumiTurnFlow } from './turn_flow';
+import { isTestLearningSource } from '../memory/provenance';
 import {
   recordReadOnlyToolPattern,
   type ReadOnlyToolPatternRow,
@@ -32,7 +33,7 @@ export interface LumiPostTurnLearningContext {
 export function shouldPersistPostTurnLearningSource(source?: string): boolean {
   const normalized = String(source || '').trim().toLowerCase();
   if (!normalized) return true;
-  return !/^(?:acceptance|e2e|probe|smoke)(?:[-_:]|$)/i.test(normalized);
+  return !isTestLearningSource(normalized);
 }
 
 export interface LumiPostTurnLearningOptions {

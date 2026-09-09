@@ -1,4 +1,5 @@
 import { ToolPolicy } from '../personality/types';
+import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
 import {
   ToolRegistry,
 } from '../tools/registry';
@@ -858,6 +859,11 @@ export function routeToolsForTurn(
   const available = new Set(
     availableNames.filter(name => !name.startsWith('mcp_filesystem_')),
   );
+  const authoring = classifySkillAuthoringIntent(primaryInstructionText);
+  if (authoring !== 'none') {
+    const toolNames = skillAuthoringTools(authoring).filter(name => available.has(name)).slice(0, maxTools);
+    return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false };
+  }
   const routingManifest: CapabilityRoutingProjection[] = options?.capabilityManifest?.length
     ? options.capabilityManifest
     : declarations.map(projectToolDeclarationForRouting);

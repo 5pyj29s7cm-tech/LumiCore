@@ -1,4 +1,5 @@
 import {
+  autonomousTaskMatchesScope,
   cancelTask,
   getTaskHistory,
   getTaskQueue,
@@ -7,6 +8,7 @@ import {
   type AutonomousTask,
 } from '../autonomy/task_queue';
 import {
+  hasActiveWorkTakeoverExecutor,
   listWorkTakeoverTasks,
   updateWorkTakeoverTask,
   type WorkTakeoverTask,
@@ -20,8 +22,17 @@ import {
   redactDiagnosticSecrets,
   sanitizeDiagnosticValue,
 } from '../client/diagnostic_sanitizer';
+import {
+  getWorkflowDefinition,
+  getWorkflowRun,
+  listWorkflowRuns,
+  requestWorkflowCancel,
+  requestWorkflowPause,
+  workflowStepExecutionKey,
+  type WorkflowRun,
+} from '../workflows/runtime';
 
-export type RuntimeWorkKind = 'autonomy' | 'takeover';
+export type RuntimeWorkKind = 'autonomy' | 'takeover' | 'workflow';
 
 export type RuntimeWorkPhase =
   | 'queued'
@@ -243,8 +254,8 @@ function autonomyItem(task: AutonomousTask): RuntimeWorkItem {
     updatedAt: task.updatedAt || task.startedAt || task.createdAt,
     cancellationRequested: Boolean(task.cancelRequestedAt),
     pauseRequested: Boolean(task.pauseRequestedAt),
-    scope: { domain: 'personal' },
-    conversationId: '',
+    scope: normalizedScope(task.domain, task.orgId),
+    conversationId: bounded(task.conversationId, 180),
     parentTaskId: bounded(task.planId, 180),
     source: bounded(task.source, 120),
     nextAttemptAt: bounded(task.nextAttemptAt, 80),
@@ -271,7 +282,12 @@ function autonomyItem(task: AutonomousTask): RuntimeWorkItem {
 }
 
 function takeoverItem(task: WorkTakeoverTask): RuntimeWorkItem {
-  const rawPhase = phaseForStatus(task.status);
+  // Saving cancellation fences future writes; the accepted executor still
+  // owns its in-flight call until it actually settles and unregisters.
+  const awaitingCancellation = task.status === 'cancelled'
+    && hasActiveWorkTakeoverExecutor(task.userId, task.id);
+  const projectedStatus = awaitingCancellation ? 'cancelling' : task.status;
+  const rawPhase = phaseForStatus(projectedStatus);
   const verification = task.metadata?.workTakeoverVerification as {
     passed?: boolean;
     status?: string;
@@ -290,10 +306,10 @@ function takeoverItem(task: WorkTakeoverTask): RuntimeWorkItem {
     id: task.id,
     kind: 'takeover',
     title,
-    status: task.status,
+    status: projectedStatus,
     phase,
     updatedAt: task.updatedAt,
-    cancellationRequested: false,
+    cancellationRequested: task.status === 'cancelled',
     pauseRequested: false,
     scope: normalizedScope(task.domain, task.orgId),
     conversationId: bounded(task.metadata?.conversationId, 180),
@@ -333,10 +349,51 @@ function takeoverItem(task: WorkTakeoverTask): RuntimeWorkItem {
     },
     completionFeedback: completionFeedbackProjection({
       title,
-      status: task.status,
+      status: projectedStatus,
       reason: blocker,
       accepted: task.status === 'delivered' && verification?.passed === true,
     }),
+  };
+}
+
+function workflowItem(run: WorkflowRun): RuntimeWorkItem {
+  const phase: RuntimeWorkPhase = run.status === 'cancelled' || run.status === 'completed'
+    ? phaseForStatus(run.status)
+    : run.cancelRequestedAt && run.status === 'running' ? 'cancelling'
+      : run.pauseRequestedAt && run.status === 'running' ? 'pausing'
+        : phaseForStatus(run.status);
+  const verified = run.receipts.filter(receipt => receipt.status === 'verified');
+  const completedSteps = new Set(verified.filter(receipt => receipt.idempotencyKey === workflowStepExecutionKey(run, receipt.stepId)).map(receipt => receipt.stepId));
+  const accepted = run.status === 'completed' && run.planSnapshot.every(step => completedSteps.has(step.stepId));
+  const title = bounded(getWorkflowDefinition(run.workflowId, run.definitionVersion, run.userId)?.title, 240) || run.workflowId;
+  const blocker = run.blockedReason ? 'Workflow requires attention. Inspect its run details before continuing.' : '';
+  return {
+    id: run.runId, kind: 'workflow', title, status: run.status, phase,
+    updatedAt: run.updatedAt, cancellationRequested: Boolean(run.cancelRequestedAt),
+    pauseRequested: Boolean(run.pauseRequestedAt), scope: normalizedScope(run.scope.domain, run.scope.orgId),
+    conversationId: bounded(run.pendingExecution?.originContext?.conversationId, 180),
+    parentTaskId: run.workflowId, source: 'workflow-runtime', nextAttemptAt: '', blocker,
+    nextAction: phase === 'paused' ? 'resume_workflow_run' : nextActionForPhase(phase, ''),
+    progress: {
+      checkpoint: bounded(run.checkpoint?.stepId || run.currentStepId, 120),
+      completedUnits: completedSteps.size, totalUnits: run.planSnapshot.length,
+      receiptCount: run.receipts.length, toolCallCount: run.receipts.length,
+      attempt: 0, recoveryCount: 0,
+    },
+    controls: {
+      ...controlsForPhase(phase, true),
+      canPause: ['queued', 'working', 'waiting_confirmation'].includes(phase),
+      // Resuming requires the reviewed workflow and any ephemeral inputs. The
+      // existing workflow resume capability remains the authoritative entry.
+      canResume: false,
+    },
+    evidence: {
+      terminal: run.status === 'completed' || run.status === 'cancelled',
+      verification: accepted ? 'verified' : phase === 'blocked' ? 'failed' : phase === 'cancelled' ? 'unverified' : 'pending',
+      evidenceCount: verified.length, toolCount: run.receipts.length,
+      reasonCode: bounded(run.blockedKind, 120),
+    },
+    completionFeedback: completionFeedbackProjection({ title, status: run.status, reason: blocker, accepted }),
   };
 }
 
@@ -348,9 +405,9 @@ function itemMatchesScope(item: RuntimeWorkItem, scope?: RuntimeWorkScope): bool
 
 function normalizeKinds(kinds?: RuntimeWorkKind[]): Set<RuntimeWorkKind> {
   const valid = (kinds || []).filter((kind): kind is RuntimeWorkKind => (
-    kind === 'autonomy' || kind === 'takeover'
+    kind === 'autonomy' || kind === 'takeover' || kind === 'workflow'
   ));
-  return new Set(valid.length > 0 ? valid : ['autonomy', 'takeover']);
+  return new Set(valid.length > 0 ? valid : ['autonomy', 'takeover', 'workflow']);
 }
 
 export function getRuntimeWorkSnapshot(
@@ -377,17 +434,16 @@ export function getRuntimeWorkSnapshot(
     };
   }
   if (selected.has('autonomy')) {
-    if (!scope || scope.domain === 'personal') {
       try {
         const byId = new Map<string, AutonomousTask>();
         for (const task of [...getTaskQueue(userId), ...getTaskHistory(50, 0, userId)]) {
+          if (!autonomousTaskMatchesScope(task, scope || normalizedScope(task.domain, task.orgId))) continue;
           if (!byId.has(task.id)) byId.set(task.id, task);
         }
         items.push(...Array.from(byId.values()).map(autonomyItem));
       } catch {
         diagnostics.push({ source: 'autonomy', code: 'runtime_work_source_unavailable' });
       }
-    }
   }
   if (selected.has('takeover')) {
     try {
@@ -403,6 +459,15 @@ export function getRuntimeWorkSnapshot(
       items.push(...Array.from(byId.values()).map(takeoverItem));
     } catch {
       diagnostics.push({ source: 'takeover', code: 'runtime_work_source_unavailable' });
+    }
+  }
+  if (selected.has('workflow')) {
+    try {
+      items.push(...listWorkflowRuns(userId)
+        .filter(run => run.scope.domain !== 'work' || Boolean(run.scope.orgId?.trim()))
+        .map(workflowItem));
+    } catch {
+      diagnostics.push({ source: 'workflow', code: 'runtime_work_source_unavailable' });
     }
   }
   const scopedItems = items.filter(item => itemMatchesScope(item, scope));
@@ -443,14 +508,23 @@ export function pauseRuntimeWork(input: {
   const matched = before.items.filter(item => (
     (!input.taskId || item.id === input.taskId)
     && item.controls.canPause
-    && item.kind === 'autonomy'
+    && (item.kind === 'autonomy' || item.kind === 'workflow')
   ));
   const items: RuntimeWorkItem[] = [];
   for (const item of matched) {
+    if (item.kind === 'workflow') {
+      const run = getWorkflowRun(item.id, input.userId);
+      if (run) {
+        try {
+          items.push(workflowItem(requestWorkflowPause({ runId: run.runId, expectedRevision: run.revision, userId: input.userId, actor: 'runtime-work-control' })));
+        } catch { /* A concurrent revision is reported as a failed control. */ }
+      }
+      continue;
+    }
     const task = requestPauseAutonomousTask(item.id, input.userId);
     if (task) items.push(autonomyItem(task));
   }
-  const pausingCount = items.filter(item => item.status === 'pausing').length;
+  const pausingCount = items.filter(item => item.phase === 'pausing').length;
   const pausedCount = items.filter(item => item.status === 'paused').length;
   const requestRejected = invalidWorkScope(input.scope) || Boolean(input.taskId && matched.length === 0);
   const failedCount = Math.max(0, matched.length - pausedCount - pausingCount) + (requestRejected ? 1 : 0);
@@ -555,6 +629,16 @@ export function cancelRuntimeWork(input: {
       if (cancelTask(item.id, input.userId)) acceptedIds.add(item.id);
       continue;
     }
+    if (item.kind === 'workflow') {
+      const run = getWorkflowRun(item.id, input.userId);
+      if (run) {
+        try {
+          const updated = requestWorkflowCancel({ runId: run.runId, expectedRevision: run.revision, userId: input.userId, actor: 'runtime-work-control' });
+          if (updated.status === 'cancelled' || updated.cancelRequestedAt) acceptedIds.add(item.id);
+        } catch { /* A concurrent revision is reported as a failed control. */ }
+      }
+      continue;
+    }
     const updated = updateWorkTakeoverTask(input.userId, item.id, {
       status: 'cancelled',
       note: 'Cancelled by the user through runtime work control.',
@@ -592,7 +676,7 @@ export function cancelRuntimeWork(input: {
     return remaining;
   });
   const cancellingCount = outcomeItems.filter(item => (
-    item.status === 'cancelling'
+    item.phase === 'cancelling'
     || (item.status === 'running' && item.cancellationRequested)
   )).length;
   const cancelledCount = outcomeItems.filter(item => item.phase === 'cancelled').length;

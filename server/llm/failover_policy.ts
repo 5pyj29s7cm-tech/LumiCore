@@ -53,7 +53,14 @@ export function compileReasoningFailoverCandidates(input: {
     }] : []),
   ];
 
-  if (preferred) {
+  // The official service owns its model routes. Remembered BYOK settings are
+  // not fallback authorization: adding every configured vendor resurrected
+  // old qwen-plus requests even after the official route was changed.
+  const officialRoute = input.primaryProvider === 'relay'
+    || preferred?.provider === 'relay'
+    || (preferred && ['auto', 'ollama', 'lmstudio'].includes(preferred.provider)
+      && preferred.autoFallbackProvider === 'relay');
+  if (preferred && !officialRoute) {
     for (const provider of REASONING_FAILOVER_PRIORITY) {
       raw.push({
         provider,

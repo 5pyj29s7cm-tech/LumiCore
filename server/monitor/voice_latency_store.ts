@@ -2,7 +2,9 @@ export type VoiceLatencyMilestone =
   | 'speechEndedAt'
   | 'asrFinalAt'
   | 'pipelineStartedAt'
+  | 'firstModelRequestAt'
   | 'firstModelTokenAt'
+  | 'firstTtsRequestedAt'
   | 'firstTtsReadyAt'
   | 'firstPlaybackAt';
 
@@ -15,9 +17,14 @@ export interface VoiceLatencyTrace {
   speechEndedAt?: number;
   asrFinalAt?: number;
   pipelineStartedAt?: number;
+  /** Entering the shared reply runner, including retries; not a network-only TTFT. */
+  firstModelRequestAt?: number;
   firstModelTokenAt?: number;
+  firstTtsRequestedAt?: number;
   firstTtsReadyAt?: number;
   firstPlaybackAt?: number;
+  clientDecodeMs?: number;
+  clientReceiptToPlaybackMs?: number;
 }
 
 interface StageStats {
@@ -68,13 +75,36 @@ export function markVoiceLatencyMilestone(
   timestamp = Date.now(),
 ): void {
   const trace = activeTraces.get(requestId);
-  if (!trace || trace[milestone] !== undefined) return;
+  if (!trace || trace[milestone] !== undefined || !Number.isFinite(timestamp) || timestamp < 0) return;
   trace[milestone] = timestamp;
   if (milestone === 'firstPlaybackAt') {
     trace.completedAt = timestamp;
     activeTraces.delete(requestId);
     completedTraces.push({ ...trace });
+    // Numeric stage evidence survives the short in-memory metrics window.
+    // No transcript, generated text, audio, or credential is recorded.
+    console.info('[VoiceLatency] completed', {
+      requestId, provider: trace.provider, domain: trace.domain,
+      ...Object.fromEntries(Object.entries(trace).filter(([key, value]) => key.endsWith('At') && typeof value === 'number')),
+      clientDecodeMs: trace.clientDecodeMs,
+      clientReceiptToPlaybackMs: trace.clientReceiptToPlaybackMs,
+    });
     prune(timestamp);
+  }
+}
+
+/** Client durations use its own clock; never subtract a browser timestamp from a server timestamp. */
+export function recordVoicePlaybackMetrics(requestId: string, metrics: {
+  clientDecodeMs?: unknown;
+  clientReceiptToPlaybackMs?: unknown;
+}): void {
+  const trace = activeTraces.get(requestId);
+  if (!trace) return;
+  for (const key of ['clientDecodeMs', 'clientReceiptToPlaybackMs'] as const) {
+    const value = metrics[key];
+    if (trace[key] === undefined && typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 120_000) {
+      trace[key] = Math.round(value);
+    }
   }
 }
 
@@ -98,6 +128,10 @@ function computeStage(
         : null;
     })
     .filter((value): value is number => value !== null);
+  return computeValues(values);
+}
+
+function computeValues(values: number[]): StageStats {
   if (values.length === 0) return { avgMs: 0, p50Ms: 0, p95Ms: 0, lastMs: 0, count: 0 };
   const sorted = [...values].sort((a, b) => a - b);
   return {
@@ -119,10 +153,15 @@ export function getVoiceLatencyStats(now = Date.now()) {
     stages: {
       endpointToAsrFinal: computeStage(recent, 'speechEndedAt', 'asrFinalAt'),
       asrFinalToPipeline: computeStage(recent, 'asrFinalAt', 'pipelineStartedAt'),
+      pipelineToFirstModelRequest: computeStage(recent, 'pipelineStartedAt', 'firstModelRequestAt'),
+      modelRequestToFirstToken: computeStage(recent, 'firstModelRequestAt', 'firstModelTokenAt'),
       pipelineToFirstModelToken: computeStage(recent, 'pipelineStartedAt', 'firstModelTokenAt'),
       pipelineToFirstTtsReady: computeStage(recent, 'pipelineStartedAt', 'firstTtsReadyAt'),
+      ttsSynthesis: computeStage(recent, 'firstTtsRequestedAt', 'firstTtsReadyAt'),
       ttsReadyToFirstPlayback: computeStage(recent, 'firstTtsReadyAt', 'firstPlaybackAt'),
       endpointToFirstPlayback: computeStage(recent, 'speechEndedAt', 'firstPlaybackAt'),
+      clientDecode: computeValues(recent.flatMap(trace => trace.clientDecodeMs === undefined ? [] : [trace.clientDecodeMs])),
+      clientReceiptToPlayback: computeValues(recent.flatMap(trace => trace.clientReceiptToPlaybackMs === undefined ? [] : [trace.clientReceiptToPlaybackMs])),
     },
   };
 }

@@ -174,6 +174,7 @@ export const CN_VOICE_WORK_MESSAGES = {
 
 export const CN_TASK_EXECUTION_MESSAGES = {
   persistenceUnknown: '本轮最终状态未能可靠保存，我没有把它标记为完成。若刚才涉及外部操作，请先核对实际结果后再重试。',
+  cancellationOutcomeUnknown: '已停止继续执行，已完成的步骤会保留。但还有已开始的操作未返回可靠结果，请先核对实际情况后再重试。',
   noResumableTask: '现在没有可续接的工作任务。',
   goalWithCurrentStep: (goal: string, step: string) => `${goal}；当前步骤：${step}`,
   completed: (goal: string, receiptCount: number) => `“${goal}”已完成${receiptCount ? `，已核对${receiptCount}个执行回执` : ''}。`,
@@ -247,6 +248,9 @@ export const CN_TASK_EXECUTION_MESSAGES = {
 } as const;
 
 export const CN_RESULT_GROUNDING_MESSAGES = {
+  artifactSavedReadback: (path: string) => `已保存并回读文件：${path}`,
+  artifactReadbackHeading: '回读结果：',
+  artifactReadbackExcerpt: (limit: number) => `这里只展示回读内容的前 ${limit} 个字符。`,
   desktopObservationLabel: '桌面状态读取',
   priorDiagnosticUnsupported: '刚才没有可核实的客户端自检工具回执。我不能把延迟解释成“在跑自检”；只能确认那一轮没有记录到客户端自检。',
   clientStateProtocolBlocked: '我还没有读取到当前客户端状态，不能把内部工具请求当作回答。',

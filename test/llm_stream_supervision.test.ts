@@ -71,7 +71,7 @@ function callAnthropic(client: any, attemptTimeouts: Partial<ModelAttemptTimeout
 function callRelay(
   client: any,
   attemptTimeouts: Partial<ModelAttemptTimeouts>,
-  options: { onChunk?: (chunk: string) => void; toolDeclarations?: any[]; relayStreaming?: boolean } = {},
+  options: { onChunk?: (chunk: string) => void; toolDeclarations?: any[]; relayStreaming?: boolean; signal?: AbortSignal } = {},
 ) {
   return makeLLMCallStreamingDirect(
     [{ role: 'user', content: 'test' }],
@@ -80,6 +80,7 @@ function callRelay(
       provider: 'relay',
       model: 'aliyun/qwen-plus',
       relayStreaming: options.relayStreaming,
+      signal: options.signal,
       attemptTimeouts: { ...generous, ...attemptTimeouts },
     },
     options.onChunk || (() => {}),
@@ -109,6 +110,50 @@ afterEach(() => {
 });
 
 describe('provider-independent streaming attempt supervision', () => {
+  it('gives a non-stream official answer its generation budget, not the connection deadline', async () => {
+    const create = vi.fn(async (_params: any, _options: any) => {
+      await delay(35);
+      return { choices: [{ message: { role: 'assistant', content: 'complete official answer' } }] };
+    });
+    const chunks: string[] = [];
+    await expect(callRelay({ chat: { completions: { create } } }, {
+      requestMs: 10, semanticContentMs: 100,
+    }, { onChunk: chunk => chunks.push(chunk) })).resolves.toMatchObject({ text: 'complete official answer' });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ stream: false });
+    expect(chunks).toEqual(['complete official answer']);
+  });
+
+  it('still bounds a hung non-stream official answer and suppresses its late output', async () => {
+    let complete!: (value: any) => void;
+    let signal!: AbortSignal;
+    const create = vi.fn((_params: any, options: any) => {
+      signal = options.signal;
+      return new Promise(resolve => { complete = resolve; });
+    });
+    const onChunk = vi.fn();
+    await expect(callRelay({ chat: { completions: { create } } }, {
+      requestMs: 10, semanticContentMs: 25,
+    }, { onChunk })).rejects.toMatchObject({ stage: 'semantic_content' });
+    expect(signal.aborted).toBe(true);
+    complete({ choices: [{ message: { content: 'too late' } }] });
+    await delay(1);
+    expect(onChunk).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours caller cancellation during a non-stream official answer without damaging health', async () => {
+    const controller = new AbortController();
+    const create = vi.fn(async () => new Promise<never>(() => {}));
+    const onChunk = vi.fn();
+    const pending = callRelay({ chat: { completions: { create } } }, {}, { signal: controller.signal, onChunk });
+    setTimeout(() => controller.abort(new DOMException('user stopped', 'AbortError')), 5);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getCircuitStatus()).toEqual([]);
+    expect(onChunk).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it('enforces the request deadline even when create() never settles', async () => {
     const client = { chat: { completions: { create: () => new Promise<never>(() => {}) } } };
     await expect(callDeepSeek(client, { requestMs: 15 }))

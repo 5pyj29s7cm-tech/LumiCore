@@ -1,7 +1,10 @@
 import fs from 'fs';
+import { withLegalExecution, assertLegalExecutionActive, legalExecutionSignal, legalExecutionContext, legalWrite } from '../../../legal/execution';
+import { transformWordDocument } from '../../../tools/definitions/document_tools';
+import { inspectLegalReasoningStructure } from './legal_reasoning_structure';
+import type { ToolDefinition } from '../../../tools/types';
 import os from 'os';
 import path from 'path';
-import { execSync } from 'child_process';
 import { ToolRegistry } from '../../../tools/registry';
 import { capabilityContract, capabilityEvidence } from '../../../tools/capability_contracts';
 import { encodeToolResult } from '../../../tools/result_envelope';
@@ -31,6 +34,7 @@ import { loadStatuteAuthorityRefreshState } from '../../../legal/statute_authori
 import { getDataDirectory } from '../../../config/data_path';
 
 async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Promise<string | null> {
+  assertLegalExecutionActive(context);
   const getters = context?.llmGetters;
   if (!getters) return null;
   const userId = context?.userId || 'anonymous';
@@ -38,7 +42,7 @@ async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Pro
   const response = await makeLLMCall(
     messages,
     [],
-    getUserPreferredLLMConfig(userId, { maxTokens, domain: context?.domain, orgId: context?.orgId }),
+    { ...getUserPreferredLLMConfig(userId, { maxTokens, domain: context?.domain, orgId: context?.orgId }), signal: context?.executionSignal || legalExecutionSignal() },
     getters.getDeepSeek,
     getters.getGemini,
     getters.getOpenAI,
@@ -52,25 +56,27 @@ async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Pro
     getters.getGlm,
     getters.getRelay,
   );
+  assertLegalExecutionActive(context);
   return response.text || null;
 }
 
-async function runLegalLLMWithin(
-  prompt: string,
-  context: any,
-  maxTokens: number,
-  timeoutMs: number,
-): Promise<string | null> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+async function runLegalLLMWithin(prompt: string, context: any, maxTokens: number, timeoutMs: number): Promise<string | null> {
+  assertLegalExecutionActive(context);
+  const controller = new AbortController();
+  const parent = context?.executionSignal || legalExecutionSignal();
+  const abort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abort();
+  parent?.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(() => controller.abort(new DOMException('Legal model subtask timed out.', 'TimeoutError')), timeoutMs);
   try {
-    return await Promise.race([
-      runLegalLLM(prompt, context, maxTokens),
-      new Promise<null>(resolve => {
-        timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
+    return await runLegalLLM(prompt, { ...context, executionSignal: controller.signal }, maxTokens);
+  } catch (error) {
+    assertLegalExecutionActive(context);
+    if (controller.signal.aborted) return null;
+    throw error;
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    clearTimeout(timeout);
+    parent?.removeEventListener('abort', abort);
   }
 }
 
@@ -301,14 +307,14 @@ function uniqueLegalFolder(baseDir: string, caseName: string, suffix: string): s
     candidate = path.join(baseDir, `${base}_${counter}`);
     counter += 1;
   }
-  fs.mkdirSync(candidate, { recursive: true });
+  legalWrite(() => fs.mkdirSync(candidate, { recursive: true }));
   return candidate;
 }
 
 function resolveWritableOutputDir(input: string, fallbackRoot: string, caseName: string, suffix: string): string {
   if (input) {
     const resolved = path.resolve(expandLocalPath(input));
-    fs.mkdirSync(resolved, { recursive: true });
+    legalWrite(() => fs.mkdirSync(resolved, { recursive: true }));
     return resolved;
   }
   return uniqueLegalFolder(fallbackRoot, caseName, suffix);
@@ -528,10 +534,7 @@ function collectLegalReasoningGateText(args: Record<string, any>, sourceText: st
 
 function evaluateLegalReasoningGate(args: Record<string, any>, sourceText: string): LegalReasoningGateResult {
   const text = collectLegalReasoningGateText(args, sourceText);
-  const explicitMatrix = /法律分析三段论底稿|三段论|大前提|小前提|涵摄|major\s+premise|minor\s+premise|subsumption|reasoning\s+matrix/i.test(text);
-  const hasMajorPremise = explicitMatrix || /法律依据|现行有效法律|法条|司法解释|裁判规则|类案|法律适用|《[^》]{1,80}》|statute|legal\s+(?:authority|basis)|case\s+law/i.test(text);
-  const hasMinorPremise = explicitMatrix || /事实|证据|待证|举证|质证|原告|被告|当事人|合同关系|履行|付款|交付|欠款|聊天记录|转账|发票|材料|facts?|evidence|proof/i.test(text);
-  const hasConclusion = explicitMatrix || /结论|涵摄|适用|应当|请求|支持|承担|构成|成立|不成立|风险|代理意见|法律意见|据此|故|therefore|conclusion|application|liable/i.test(text);
+  const { hasMajorPremise, hasMinorPremise, hasConclusion } = inspectLegalReasoningStructure(text);
   const missing = [
     hasMajorPremise ? '' : '大前提：现行有效法律、司法解释或类案裁判规则',
     hasMinorPremise ? '' : '小前提：待证事实、证据材料、举证质证',
@@ -912,13 +915,13 @@ function appendLegalCaseMaterial(args: {
   if (!args.caseId) return null;
   const caseFile = LegalCases.getCase(args.orgId, args.caseId, args.userId, 'write');
   if (!caseFile) return null;
-  return LegalCases.addMaterial(args.orgId, args.userId, args.caseId, {
+  return legalWrite(() => LegalCases.addMaterial(args.orgId, args.userId, args.caseId, {
     type: args.type,
     title: args.title,
     content: args.content,
     localPath: args.localPath,
     source: 'tool',
-  });
+  }));
 }
 
 function archiveLegalReportToCase(args: Record<string, any>, params: {
@@ -947,23 +950,23 @@ function archiveLegalReportToCase(args: Record<string, any>, params: {
     return '- 案件空间：未归档（caseId 不存在或无权限）';
   }
   if (!caseFile) {
-    caseFile = LegalCases.createCase(params.orgId, params.userId, {
+    caseFile = legalWrite(() => LegalCases.createCase(params.orgId, params.userId, {
       title: explicitCaseName || params.caseName,
       party: textArg(args, 'parties') || roleLabel(textArg(args, 'role')),
       cause: params.cause || textArg(args, 'caseType') || textArg(args, 'cause'),
       court: params.court || textArg(args, 'court'),
       stage: normalizeLegalCaseStage(textArg(args, 'stage')),
       notes: params.content.slice(0, 3000),
-    });
+    }));
   }
 
-  const material = LegalCases.addMaterial(params.orgId, params.userId, caseFile.id, {
+  const material = legalWrite(() => LegalCases.addMaterial(params.orgId, params.userId, caseFile.id, {
     type: params.type || 'note',
     title: params.title,
     content: params.content,
     localPath: params.localPath,
     source: 'tool',
-  });
+  }));
   return material
     ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
     : `- 案件空间：未归档 caseId=${caseFile.id}`;
@@ -1297,13 +1300,13 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
     if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     if (!caseFile) {
-      caseFile = LegalCases.createCase(orgId, userId, {
+      caseFile = legalWrite(() => LegalCases.createCase(orgId, userId, {
         title: caseName,
         party: textArg(args, 'participants'),
         cause: textArg(args, 'caseType') || textArg(args, 'cause'),
         stage: normalizeLegalCaseStage(textArg(args, 'stage')),
         notes: transcript.slice(0, 3000),
-      });
+      }));
     }
   }
 
@@ -1331,34 +1334,34 @@ async function meetingMinutesToCaseHandler(args: Record<string, any>, context?: 
     caseUpdateMarkdown,
   ].join('\n\n'), args, orgId);
   const markdown = `${baseMarkdown}\n\n${liveBriefMarkdown}\n\n${preflightSection}`;
-  fs.writeFileSync(minutesPath, markdown, 'utf-8');
-  fs.writeFileSync(actionItemsPath, actionItemsMarkdown, 'utf-8');
-  fs.writeFileSync(caseUpdatePath, caseUpdateMarkdown, 'utf-8');
-  fs.writeFileSync(liveBriefPath, liveBriefMarkdown, 'utf-8');
+  legalWrite(() => fs.writeFileSync(minutesPath, markdown, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(actionItemsPath, actionItemsMarkdown, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(caseUpdatePath, caseUpdateMarkdown, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(liveBriefPath, liveBriefMarkdown, 'utf-8'));
 
   let archiveLine = '- 案件空间：未归档（persistCase=false）';
   if (persist && caseFile) {
-    const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'consultation',
       title: `${caseName}法律会议纪要`,
       content: markdown,
       localPath: minutesPath,
       source: 'meeting',
-    });
-    LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    }));
+    legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'note',
       title: `${caseName}会议行动项与期限`,
       content: actionItemsMarkdown,
       localPath: actionItemsPath,
       source: 'meeting',
-    });
-    LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    }));
+    legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'note',
       title: `${caseName}会议案件更新`,
       content: caseUpdateMarkdown,
       localPath: caseUpdatePath,
       source: 'meeting',
-    });
+    }));
     archiveLine = material
       ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
       : `- 案件空间：未归档 caseId=${caseFile.id}`;
@@ -1502,7 +1505,7 @@ async function reasoningMatrixHandler(args: Record<string, any>, context?: any):
       'reasoning_matrix',
     );
     reasoningPath = path.join(outputDir, 'legal-reasoning-matrix.md');
-    fs.writeFileSync(reasoningPath, markdown, 'utf-8');
+    legalWrite(() => fs.writeFileSync(reasoningPath, markdown, 'utf-8'));
   }
 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
@@ -1512,22 +1515,22 @@ async function reasoningMatrixHandler(args: Record<string, any>, context?: any):
     caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
     if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     if (!caseFile) {
-      caseFile = LegalCases.createCase(orgId, userId, {
+      caseFile = legalWrite(() => LegalCases.createCase(orgId, userId, {
         title: caseName,
         party: textArg(args, 'parties') || roleLabel(textArg(args, 'role')),
         cause: textArg(args, 'caseType') || textArg(args, 'cause'),
         court: textArg(args, 'court'),
         stage: normalizeLegalCaseStage(textArg(args, 'stage')),
         notes: (textArg(args, 'facts') || textArg(args, 'materials') || '').slice(0, 3000),
-      });
+      }));
     }
-    const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'note',
       title: `${caseName}法律分析三段论底稿`,
       content: markdown,
       localPath: reasoningPath || undefined,
       source: 'tool',
-    });
+    }));
     archiveLine = material
       ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
       : `- 案件空间：未归档 caseId=${caseFile.id}`;
@@ -1590,14 +1593,14 @@ async function caseWorkspaceHandler(args: Record<string, any>, context?: any): P
       ].filter(Boolean).join('\n'),
     };
     caseFile = caseFile
-      ? LegalCases.updateCase(orgId, userId, caseFile.id, patch) || caseFile
-      : LegalCases.createCase(orgId, userId, patch);
+      ? legalWrite(() => LegalCases.updateCase(orgId, userId, caseFile.id, patch)) || caseFile
+      : legalWrite(() => LegalCases.createCase(orgId, userId, patch));
 
     for (const material of workspaceMaterialInputs(args)) {
-      LegalCases.addMaterial(orgId, userId, caseFile.id, {
+      legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
         ...material,
         source: 'tool',
-      });
+      }));
     }
     caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
   }
@@ -1834,7 +1837,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
   const persistCase = args.persistCase !== false;
   const caseName = explicitCaseName || hints.caseNumber || `远程法律消息 ${new Date().toISOString().slice(0, 10)}`;
   if (!caseFile && persistCase) {
-    caseFile = LegalCases.createCase(orgId, userId, {
+    caseFile = legalWrite(() => LegalCases.createCase(orgId, userId, {
       title: caseName,
       caseNumber: hints.caseNumber || '',
       court: hints.court || textArg(args, 'court'),
@@ -1843,7 +1846,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
       hearingDate: hints.hearingDate || '',
       stage: normalizeLegalCaseStage(textArg(args, 'stage') || (hints.hearingDate ? 'trial' : 'consultation')),
       notes: messageText.slice(0, 3000),
-    });
+    }));
   } else if (caseFile) {
     const patch: Partial<LegalCases.OrgLegalCaseFile> = {};
     if (hints.caseNumber && !caseFile.caseNumber) patch.caseNumber = hints.caseNumber;
@@ -1851,7 +1854,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
     if (hints.cause && !caseFile.cause) patch.cause = hints.cause;
     if (hints.hearingDate && !caseFile.hearingDate) patch.hearingDate = hints.hearingDate;
     if (Object.keys(patch).length > 0) {
-      caseFile = LegalCases.updateCase(orgId, userId, caseFile.id, patch) || caseFile;
+      caseFile = legalWrite(() => LegalCases.updateCase(orgId, userId, caseFile.id, patch)) || caseFile;
     }
   }
 
@@ -1880,13 +1883,13 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
   let materialId = '';
   const attachmentMaterialIds: string[] = [];
   if (caseFile) {
-    const material = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+    const material = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
       type: 'consultation',
       title: `${legalRemoteMessagePlatformLabel(platform)}法律消息原文`,
       content: rawMaterialContent,
       fileName: attachmentNames.length === 1 ? attachmentNames[0] : undefined,
       source: legalRemoteMessageMaterialSource(platform),
-    });
+    }));
     materialId = material?.id || '';
     if (Array.isArray(args.attachments)) {
       for (const item of args.attachments) {
@@ -1896,14 +1899,14 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
         const localPath = String(attachment.localPath || '').trim();
         const extractedText = String(attachment.extractedText || attachment.text || attachment.content || '').trim();
         if (!fileName && !localPath && !extractedText) continue;
-        const attachmentMaterial = LegalCases.addMaterial(orgId, userId, caseFile.id, {
+        const attachmentMaterial = legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
           type: 'note',
           title: `远程附件：${fileName || '未命名附件'}`,
           content: extractedText || '附件已保存到案件空间，当前类型未抽取到可读文本。',
           fileName: fileName || undefined,
           localPath: localPath || undefined,
           source: legalRemoteMessageMaterialSource(platform),
-        });
+        }));
         if (attachmentMaterial?.id) attachmentMaterialIds.push(attachmentMaterial.id);
       }
     }
@@ -1948,7 +1951,7 @@ async function legalMessageIntakeToCaseHandler(args: Record<string, any>, contex
           if (caseFile.stage === 'consultation') linkedPatch.stage = 'trial';
         }
         if (Object.keys(linkedPatch).length > 0) {
-          caseFile = LegalCases.updateCase(orgId, userId, caseFile.id, linkedPatch) || caseFile;
+          caseFile = legalWrite(() => LegalCases.updateCase(orgId, userId, caseFile.id, linkedPatch)) || caseFile;
         }
       }
       if (/授权网页登录协作|登录|验证码|人脸|短信验证|访问受限|平台限制/.test(report)) {
@@ -2091,35 +2094,19 @@ async function writeDocxFromMarkdown(markdown: string, filePath: string): Promis
 
   const doc = new Document({ sections: [{ properties: {}, children }] });
   const buffer = await Packer.toBuffer(doc);
-  fs.writeFileSync(filePath, buffer);
+  legalWrite(() => fs.writeFileSync(filePath, buffer));
 }
 
-function tryConvertDocxToPdf(docxPath: string): { ok: boolean; pdfPath?: string; error?: string } {
+async function tryConvertDocxToPdf(docxPath: string): Promise<{ ok: boolean; pdfPath?: string; error?: string }> {
   const pdfPath = docxPath.replace(/\.docx$/i, '.pdf');
-  const script = `
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$doc = $word.Documents.Open('${psEscape(docxPath)}')
-$doc.SaveAs([ref]'${psEscape(pdfPath)}', [ref]17)
-$doc.Close()
-$word.Quit()
-Write-Output '${psEscape(pdfPath)}'
-`;
-  const tmpFile = path.join(os.tmpdir(), `lumi_legal_docx2pdf_${Date.now()}.ps1`);
-  fs.writeFileSync(tmpFile, `\uFEFF${script}`, 'utf-8');
+  assertLegalExecutionActive();
   try {
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`, {
-      timeout: 45000,
-      encoding: 'utf-8',
-      windowsHide: true,
-    });
-    return fs.existsSync(pdfPath)
-      ? { ok: true, pdfPath }
-      : { ok: false, error: 'Microsoft Word conversion finished but PDF was not created.' };
-  } catch (err: any) {
-    return { ok: false, error: err?.stderr || err?.message || String(err) };
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
+    await transformWordDocument(docxPath, pdfPath, 'pdf', '', legalExecutionContext());
+    assertLegalExecutionActive();
+    return { ok: true, pdfPath };
+  } catch (error: any) {
+    assertLegalExecutionActive();
+    return { ok: false, error: String(error?.message || error) };
   }
 }
 
@@ -3456,7 +3443,7 @@ async function generateLitigationPacketHandler(args: Record<string, any>, contex
 
       for (const document of documents) {
         const markdownPath = path.join(outputDir, `${document.baseName}.md`);
-        fs.writeFileSync(markdownPath, document.markdown, 'utf-8');
+        legalWrite(() => fs.writeFileSync(markdownPath, document.markdown, 'utf-8'));
         markdownPaths.set(document.baseName, markdownPath);
 
         if (includeDocx) {
@@ -3496,7 +3483,7 @@ async function generateLitigationPacketHandler(args: Record<string, any>, contex
       ].join('\n');
 
       manifestPath = path.join(outputDir, '99_manifest.md');
-      fs.writeFileSync(manifestPath, manifestMarkdown, 'utf-8');
+      legalWrite(() => fs.writeFileSync(manifestPath, manifestMarkdown, 'utf-8'));
       if (includeDocx) {
         const manifestDocxPath = path.join(outputDir, '99_manifest.docx');
         try {
@@ -4137,10 +4124,10 @@ ${skippedLines}
   ];
 
   if (writeFiles) {
-    fs.mkdirSync(outputDir, { recursive: true });
+    legalWrite(() => fs.mkdirSync(outputDir, { recursive: true }));
     for (const item of outputs) {
       const target = path.join(outputDir, item.name);
-      fs.writeFileSync(target, item.content, 'utf-8');
+      legalWrite(() => fs.writeFileSync(target, item.content, 'utf-8'));
       item.path = target;
     }
   }
@@ -4149,15 +4136,15 @@ ${skippedLines}
   if (args.importToKb === true || args.confirmedForKb === true) {
     const orgId = legalWorkspaceId(args, context);
     const userId = textArg(args, 'userId') || context?.userId || 'system';
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 代理词工作底稿`,
       content: outputs.map(item => `# ${item.name}\n\n${item.content}`).join('\n\n---\n\n'),
       articleType: 'pleading',
       category: 'legal_pleading',
       tags: ['legal:folder-argument', `caseName:${caseName}`, `caseType:${caseType}`],
       metadata: { articleType: 'pleading' },
-    });
-    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     kbLine = `\n- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -4213,7 +4200,7 @@ async function importMaterialsToKbHandler(args: Record<string, any>, context?: a
       return;
     }
     const metadata = articleType === 'judgment' ? extractLegalMetadata(text) : undefined;
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title,
       content: buildImportedMaterialContent(args, { title, text, source, format, articleType }),
       category: materialCategory(articleType),
@@ -4229,8 +4216,8 @@ async function importMaterialsToKbHandler(args: Record<string, any>, context?: a
         statutesCited: metadata.statutesCited,
         jurisdiction: metadata.court,
       } : { articleType },
-    });
-    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     imported.push({ title, articleId: article.id, chunks, category: article.category });
   };
 
@@ -4450,7 +4437,7 @@ ${browserSteps}
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const base = safeFileSegment(`${stamp}_${caseName || materialTitle}`, 'notice_link');
     const rawPath = path.join(intakeDir, `${base}${ext === '.bin' ? '.txt' : ext}`);
-    fs.writeFileSync(rawPath, body, 'utf-8');
+    legalWrite(() => fs.writeFileSync(rawPath, body, 'utf-8'));
 
     const extractedText = ext === '.html' ? stripHtmlToText(body) : body.trim();
     const report = [
@@ -4470,11 +4457,11 @@ ${browserSteps}
       extractedText.slice(0, 30000) || '未提取到可读文本。',
     ].join('\n');
     const reportPath = path.join(intakeDir, `${base}_source-note.md`);
-    fs.writeFileSync(reportPath, report, 'utf-8');
+    legalWrite(() => fs.writeFileSync(reportPath, report, 'utf-8'));
 
     let kbLine = '- 知识库：未导入。若律师已确认来源和使用权限，可再次设置 confirmedForKb=true，或使用 legal_import_materials_to_kb 导入。';
     if (confirmedForKb) {
-      const article = createLegalArticle(orgId, userId, {
+      const article = legalWrite(() => createLegalArticle(orgId, userId, {
         title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
         content: report,
         articleType: 'case_material',
@@ -4485,8 +4472,8 @@ ${browserSteps}
           caseNumber: hints.caseNumber,
           court: hints.court,
         },
-      });
-      const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+      }));
+      const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
       kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
     }
 
@@ -4529,7 +4516,7 @@ ${kbLine}
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const base = safeFileSegment(`${stamp}_${caseName || materialTitle}`, 'notice_link');
   const filePath = path.join(intakeDir, `${base}${ext}`);
-  fs.writeFileSync(filePath, bytes);
+  legalWrite(() => fs.writeFileSync(filePath, bytes));
 
   let parsedText = '';
   let parseStatus = '未解析文本';
@@ -4561,12 +4548,12 @@ ${kbLine}
     parsedText ? parsedText.slice(0, 30000) : '二进制材料已保存；如需文本，请使用 read_pdf / extract_document_text 或人工确认后导入。',
   ].join('\n');
   const reportPath = path.join(intakeDir, `${base}_source-note.md`);
-  fs.writeFileSync(reportPath, report, 'utf-8');
+  legalWrite(() => fs.writeFileSync(reportPath, report, 'utf-8'));
 
   let kbLine = '- 知识库：未导入。若律师已确认来源和使用权限，可再次设置 confirmedForKb=true，或使用 legal_import_materials_to_kb 导入保存文件。';
   if (confirmedForKb) {
     const content = parsedText || report;
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: caseName ? `${caseName} ${materialTitle}` : materialTitle,
       content,
       articleType: 'case_material',
@@ -4577,8 +4564,8 @@ ${kbLine}
         caseNumber: hints.caseNumber,
         court: hints.court,
       },
-    });
-    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -4698,7 +4685,7 @@ ${statusRows}
 
   let kbLine = '- 知识库：未导入。律师确认来源和授权范围后，可设置 confirmedForKb=true 入库。';
   if (args.confirmedForKb === true && orderedResults.length > 0) {
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 外部法律数据库检索`,
       content: report,
       articleType: 'research_note',
@@ -4711,8 +4698,8 @@ ${statusRows}
       metadata: {
         articleType: 'research_note',
       },
-    });
-    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
@@ -4789,7 +4776,7 @@ ${statusRows}
 
   let kbLine = '- 知识库：未导入。律师确认来源和使用权限后，可设置 confirmedForKb=true 入库。';
   if (args.confirmedForKb === true && companies.length > 0) {
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 企业主体信息`,
       content: report,
       articleType: 'company_report',
@@ -4802,8 +4789,8 @@ ${statusRows}
       metadata: {
         articleType: 'company_report',
       },
-    });
-    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const chunks = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     kbLine = `- 知识库：已导入（articleId=${article.id}，索引块=${chunks}）。`;
   }
 
@@ -4955,18 +4942,18 @@ async function generateCitationVerificationReportHandler(args: Record<string, an
   );
   const report = formatCitationReportMarkdown({ ...args, caseName, orgId }, input.text, input.source);
   const reportPath = path.join(outputDir, 'citation-verification-report.md');
-  fs.writeFileSync(reportPath, report, 'utf-8');
+  legalWrite(() => fs.writeFileSync(reportPath, report, 'utf-8'));
 
   let kbLine = '- 知识库：未导入。';
   if (args.importToKb === true || args.confirmedForKb === true) {
-    const article = createLegalArticle(orgId, userId, {
+    const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 引用核验报告`,
       content: report,
       articleType: 'research_note',
       category: 'legal_research_note',
       tags: ['legal:citation-verification', `caseName:${caseName}`],
-    });
-    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+    }));
+    const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
     kbLine = `- 知识库：已导入 articleId=${article.id}，索引块数=${indexed}`;
   }
 
@@ -5046,7 +5033,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     `- 文书类型：${documentType}`,
     `- 生成时间：${new Date().toISOString()}`,
     `- 输出目录：${outputDir}`,
-    `- 状态：律师复核稿（现行有效法律硬门槛、类案/案号来源硬门槛、三段论推理链硬门槛已通过）`,
+    `- 状态：律师复核稿（引用来源与底稿结构检查已通过；事实、证据与法律结论仍待律师复核）`,
     '',
     '## 文件清单',
     '- 01_formal-document.md：正式文书复核稿',
@@ -5097,9 +5084,9 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       sourcePath,
       gate: currentLawGate,
     });
-    fs.writeFileSync(reportPath, citationReport, 'utf-8');
-    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
-    fs.writeFileSync(gatePath, gateReport, 'utf-8');
+    legalWrite(() => fs.writeFileSync(reportPath, citationReport, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(sourcePath, sourceRegister, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(gatePath, gateReport, 'utf-8'));
     const blockedMaterial = appendLegalCaseMaterial({
       orgId,
       userId,
@@ -5143,9 +5130,9 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       sourcePath,
       gate: currentLawGate,
     });
-    fs.writeFileSync(reportPath, citationReport, 'utf-8');
-    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
-    fs.writeFileSync(caseSourceGatePath, gateReport, 'utf-8');
+    legalWrite(() => fs.writeFileSync(reportPath, citationReport, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(sourcePath, sourceRegister, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(caseSourceGatePath, gateReport, 'utf-8'));
     const blockedMaterial = appendLegalCaseMaterial({
       orgId,
       userId,
@@ -5202,9 +5189,9 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       '- The formal package must show a reviewable chain from current law, to facts/evidence, to application/conclusion.',
       '',
     ].join('\n');
-    fs.writeFileSync(reportPath, citationReport, 'utf-8');
-    fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
-    fs.writeFileSync(reasoningGatePath, reasoningReport, 'utf-8');
+    legalWrite(() => fs.writeFileSync(reportPath, citationReport, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(sourcePath, sourceRegister, 'utf-8'));
+    legalWrite(() => fs.writeFileSync(reasoningGatePath, reasoningReport, 'utf-8'));
     const blockedMaterial = appendLegalCaseMaterial({
       orgId,
       userId,
@@ -5224,7 +5211,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
       `- 案件：${caseName}`,
       `- 文书类型：${documentType}`,
       `- 输出目录：${outputDir}`,
-      '- 阻断原因：三段论推理链硬门槛未通过。缺少可复核的大前提、小前提或涵摄结论。',
+      '- 阻断原因：推理底稿结构不完整。缺少有实质内容的大前提、小前提或涵摄结论；结构完整也不代表法律结论已核实。',
       `- 大前提：${reasoningGate.hasMajorPremise ? '已识别' : '缺失'}`,
       `- 小前提：${reasoningGate.hasMinorPremise ? '已识别' : '缺失'}`,
       `- 涵摄结论：${reasoningGate.hasConclusion ? '已识别' : '缺失'}`,
@@ -5237,11 +5224,11 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     ].join('\n');
   }
 
-  fs.writeFileSync(manifestPath, manifest, 'utf-8');
-  fs.writeFileSync(formalPath, formalMarkdown, 'utf-8');
-  fs.writeFileSync(reportPath, citationReport, 'utf-8');
-  fs.writeFileSync(sourcePath, sourceRegister, 'utf-8');
-  fs.writeFileSync(checklistPath, filingChecklist, 'utf-8');
+  legalWrite(() => fs.writeFileSync(manifestPath, manifest, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(formalPath, formalMarkdown, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(reportPath, citationReport, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(sourcePath, sourceRegister, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(checklistPath, filingChecklist, 'utf-8'));
 
   const docxLines: string[] = [];
   if (args.includeDocx !== false) {
@@ -5249,7 +5236,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     await writeDocxFromMarkdown(formalMarkdown, docxPath);
     docxLines.push(`- DOCX：${docxPath}`);
     if (args.includePdf === true) {
-      const pdf = tryConvertDocxToPdf(docxPath);
+      const pdf = await tryConvertDocxToPdf(docxPath);
       docxLines.push(pdf.ok ? `- PDF：${pdf.pdfPath}` : `- PDF：未生成（${String(pdf.error || '').slice(0, 300)}）`);
     }
   }
@@ -5292,7 +5279,7 @@ async function finalizeDeliveryPackageHandler(args: Record<string, any>, context
     caseArchiveLine,
     ...docxLines,
     '- 现行有效法律硬门槛：通过',
-    '- 三段论推理链硬门槛：通过',
+    '- 推理底稿结构检查：通过；事实、证据与法律结论仍待律师复核',
     `- 引用风险项：${riskCount}`,
     '',
     '## 人工边界',
@@ -5398,9 +5385,9 @@ async function prepareExternalBrowserWorkspaceHandler(args: Record<string, any>,
   const runbookPath = path.join(outputDir, '00_browser-workspace.md');
   const registerPath = path.join(outputDir, '01_source-register.csv');
   const commandsPath = path.join(outputDir, '02_web-login-commands.md');
-  fs.writeFileSync(runbookPath, runbook, 'utf-8');
-  fs.writeFileSync(registerPath, sourceRegisterCsv, 'utf-8');
-  fs.writeFileSync(commandsPath, commandsMd, 'utf-8');
+  legalWrite(() => fs.writeFileSync(runbookPath, runbook, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(registerPath, sourceRegisterCsv, 'utf-8'));
+  legalWrite(() => fs.writeFileSync(commandsPath, commandsMd, 'utf-8'));
 
   return [
     '# 外部网页登录工作区已生成',
@@ -5526,7 +5513,7 @@ async function importJudgmentHandler(args: Record<string, any>, context?: any): 
     ? `${metadata.caseNumber} ${metadata.causeOfAction || ''}`
     : (filePath ? filePath.split('/').pop()?.split('\\').pop() || '裁判文书' : '裁判文书');
 
-  const article = createLegalArticle(orgId, userId, {
+  const article = legalWrite(() => createLegalArticle(orgId, userId, {
     title,
     content: text,
     articleType: 'judgment',
@@ -5539,9 +5526,9 @@ async function importJudgmentHandler(args: Record<string, any>, context?: any): 
       judgmentDate: metadata.judgmentDate,
       statutesCited: metadata.statutesCited,
     },
-  });
+  }));
 
-  const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId);
+  const indexed = await indexLegalArticle(orgId, article.id, context?.userId || userId, { signal: context?.executionSignal || legalExecutionSignal() });
 
   return `裁判文书导入成功。
 
@@ -5697,7 +5684,16 @@ function legalEvidence(
 // ── Register All ────────────────────────────────────────────────────────
 
 export function registerLegalTools(registry: ToolRegistry): void {
-  registry.register({
+  const register = (definition: ToolDefinition) => registry.register({
+    ...definition,
+    handler: (args, context) => withLegalExecution(context, async () => {
+      assertLegalExecutionActive();
+      const result = await definition.handler(args, context);
+      assertLegalExecutionActive();
+      return result;
+    }),
+  });
+  register({
     name: 'legal_search_case',
     description: '类案检索 — 根据案由或事实描述在本地裁判文书库中搜索相似案例，返回案号、法院、相似度分数、摘要。数据来源：本地导入的中国裁判文书网公开文书。',
     parameters: {
@@ -5714,7 +5710,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_search_statute',
     description: '法条检索候选 — 按关键词或法条号搜索法名状态、权威网页结果及本地法条库。正式交付仅接受带权威来源和已核验条文范围的引用；未核验结果不得标记为现行有效。',
     parameters: {
@@ -5734,7 +5730,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_generate_bid',
     description: '标书生成 — 导入招标文件要求，生成对应投标书框架（商务标+技术标）。使用住建部合同模板作为参考。',
     parameters: {
@@ -5773,7 +5769,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.bid.generate', 'create', 'projectName'),
   });
 
-  registry.register({
+  register({
     name: 'legal_review_contract',
     description: '合同审查 — 对照本地案例库审查合同条款风险，标注风险等级、法律依据和修改建议。所有法条引用均会标注来源。',
     parameters: {
@@ -5795,7 +5791,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_draft_contract',
     description: '合同起草 — 基于中国住建部示范文本生成合同。支持施工合同、买卖合同、工程总承包、劳动合同等类型。',
     parameters: {
@@ -5825,7 +5821,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.contract.draft', 'create', 'type'),
   });
 
-  registry.register({
+  register({
     name: 'legal_trace_assets',
     description: '财产线索追踪 — 查询被执行人企业信息、公开执行记录、失信记录等财产线索。企查查仅在配置官方 API 凭证后自动查询；未配置时输出授权网页登录协作步骤。后续可查询婚姻状况和股权穿透。',
     parameters: {
@@ -5846,7 +5842,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_equity_penetration',
     description: '股权穿透分析 — 追溯目标公司的股东结构，多层穿透识别实际控制人和关联财产线索。企查查仅在配置官方 API 凭证后自动查询；未配置时输出授权网页登录协作和材料入库步骤。',
     parameters: {
@@ -5867,7 +5863,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_case_strategy',
     description: '诉讼策略分析 — 给定案件事实，结合相关法条和相似判例，制定应诉方案，包括：案由确定、证据建议、保全策略、风险预估。所有分析基于真实法条和判例，绝不编造。',
     parameters: {
@@ -5896,7 +5892,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.case.strategy.generate', 'create', 'facts'),
   });
 
-  registry.register({
+  register({
     name: 'legal_case_workspace',
     description: '统一案件工作台 — 创建或更新案件空间，归集身份信息、事实、证据、争议焦点、法源、类案、文书包、立案状态，并输出下一步工具链。用于把会议、聊天、材料、诉讼文书和外部检索串成同一个案件闭环。',
     parameters: {
@@ -5937,7 +5933,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.case.workspace.update', 'mutate', 'caseId'),
   });
 
-  registry.register({
+  register({
     name: 'legal_case_workflow_status',
     description: '案件闭环状态评估 — 只读取已有案件或临时案件材料，不创建文书；输出材料入案、身份主体、事实时间线、证据三性、三段论、现行有效法律、类案来源、文书策略、立案协作、正式交付的完成度、阻断项、待补项和下一步推荐工具。适合聊天、语音、飞书/企微里询问“这个案子还缺什么/下一步做什么/能不能正式交付”。',
     parameters: {
@@ -5974,7 +5970,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_message_intake_to_case',
     description: '远程法律消息入案 — 把微信、飞书、企微、短信或聊天里转发的案件材料、法院短信链接、通知链接、附件说明和沟通记录写入统一案件空间，归档原文、识别案号/法院/日期、半自动处理链接，并返回案件闭环状态和下一步。适合 Lumi bot 收到“把这个发给 Lumi 入案/归档到案件/法院短信链接/案件材料”时使用。',
     parameters: {
@@ -6014,7 +6010,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.case.message-intake.archive', 'create', 'message'),
   });
 
-  registry.register({
+  register({
     name: 'legal_meeting_minutes_to_case',
     description: '法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。',
     parameters: {
@@ -6053,7 +6049,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.case.meeting-minutes.generate', 'create', 'transcript'),
   });
 
-  registry.register({
+  register({
     name: 'legal_case_reasoning_matrix',
     description: '法律分析三段论底稿 — 围绕争议焦点生成“大前提/小前提/涵摄结论”办案分析矩阵，覆盖检索法律、解释法律、类案补强、待证事实、证据材料、举证质证和可转化文书成果，并可归档到案件空间。',
     parameters: {
@@ -6101,7 +6097,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.case.reasoning-matrix.generate', 'create', 'caseName'),
   });
 
-  registry.register({
+  register({
     name: 'legal_generate_litigation_packet',
     description: '半自动诉讼文书包 — 根据我方身份和案件材料生成起诉/答辩/质证/委托/立案组卷等律师工作底稿，并明确所有人工确认点。不会自动提交或签发。',
     parameters: {
@@ -6145,7 +6141,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.litigation.packet.generate', 'create', 'caseName'),
   });
 
-  registry.register({
+  register({
     name: 'legal_prepare_filing_handoff',
     description: '半自动立案网交接单 — 根据案件材料生成法院在线服务/网上立案字段映射、上传材料清单、文件命名建议、人工确认点和授权网页登录动作。不会自动提交、签名、缴费或确认送达。',
     parameters: {
@@ -6177,7 +6173,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.filing.handoff.prepare', 'create', 'caseName'),
   });
 
-  registry.register({
+  register({
     name: 'legal_extract_dispute_focus',
     description: '争议焦点提炼 — 根据起诉状、证据材料、庭审笔录、会议记录等案件材料，整理争议焦点、待证事实、证据对应、质证/抗辩点和外部检索关键词。用于聊天或语音办案结果，需律师复核。',
     parameters: {
@@ -6205,7 +6201,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_generate_argument_or_opinion',
     description: '代理词/法律意见书生成 — 根据案件事实、争议焦点、证据材料、对方观点和办理目标，生成代理词、法律意见书、庭审提纲或应对策略草稿。保留法条核验、证据补强和律师人工确认节点。',
     parameters: {
@@ -6240,7 +6236,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.argument-or-opinion.generate', 'create', 'documentType'),
   });
 
-  registry.register({
+  register({
     name: 'legal_analyze_folder_and_draft_argument',
     description: '一句话案件文件夹代理词 — 读取本地案件材料文件夹，自动分析案情、提炼争议焦点、整理证据目录、生成代理词草稿，并默认保存 Markdown 工作底稿到案件文件夹下。适合用户说“读取桌面某案件文件夹，分析并生成代理词”。图片/扫描件会提示 OCR，不编造法条和类案。',
     parameters: {
@@ -6273,7 +6269,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_import_materials_to_kb',
     description: '法律材料导入知识库 — Lumi 自主解析本地文件、案件文件夹或粘贴文本，导入组织知识库并建立法律标签。支持起诉状、证据、庭审笔录、合同、裁判文书、网页摘录、检索笔记等材料；外部网站材料需由律师确认来源和权限后再入库。',
     parameters: {
@@ -6310,7 +6306,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.materials.import-to-kb', 'create', 'folderPath'),
   });
 
-  registry.register({
+  register({
     name: 'legal_process_notice_link',
     description: '短信/法院通知链接处理 — 从法院短信、开庭通知、送达通知中的链接半自动下载 PDF/DOCX/网页材料，保存本地留痕；需要登录、验证码、人脸或短信验证时生成授权网页登录步骤，不绕过平台限制。律师确认来源和权限后可导入组织知识库。',
     parameters: {
@@ -6353,7 +6349,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.notice-link.process', 'create', 'url'),
   });
 
-  registry.register({
+  register({
     name: 'legal_download_and_extract_document',
     description: '文书链接自动下载与正文提取 — 用户发送裁判文书、起诉状、合同、法院通知等 PDF/DOCX/网页链接后，Lumi 自动下载原文件、保存来源留痕、提取正文内容并返回摘要；需要登录/验证码时转授权浏览器协作，不绕过平台限制。',
     parameters: {
@@ -6379,7 +6375,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_external_source_status',
     description: '外部法律数据源接入状态 — 明确企查查、Alpha、法蝉、裁判文书网、人民法院案例库、国家企业信用等数据源当前是官方 API 接入、授权网页登录协作还是材料导入，不夸大自动抓取能力。',
     parameters: {
@@ -6391,7 +6387,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_search_external_authorities',
     description: '外部法律数据库 API 检索 — 调用已配置授权网关（如北大法宝、通义法睿）检索法规、法条、案例和裁判规则；未配置时明确降级到授权网页登录协作，不抓取平台数据库。',
     parameters: {
@@ -6420,7 +6416,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_company_database_lookup',
     description: '企业主体数据库 API 查询 — 调用已配置的企查查/天眼查官方 API 查询公司、股东和被执行主体基础信息；未配置时输出网页登录协作和材料入库步骤。',
     parameters: {
@@ -6447,7 +6443,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_external_research_plan',
     description: '半自动外部检索行动单 — 生成法条、人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务的检索顺序、网页登录预设和来源登记表。',
     parameters: {
@@ -6469,7 +6465,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_generate_citation_verification_report',
     description: '引用核验报告 — 对文书全文或文件中的法条、案号引用生成可落盘的核验报告，统计现行有效、已废止、未确认存在的风险项，并可导入组织知识库。',
     parameters: {
@@ -6504,7 +6500,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.citation-verification-report.generate', 'create', 'filePath'),
   });
 
-  registry.register({
+  register({
     name: 'legal_finalize_delivery_package',
     description: '正式文书交付包 — 将代理词、起诉状、答辩状、法律意见书、证据目录等草稿整理为律所交付包，生成正式 Markdown、DOCX、引用核验报告、来源登记表和提交签署清单。不会自动签发、提交、缴费或送达。',
     parameters: {
@@ -6556,7 +6552,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.delivery-package.finalize', 'create', 'outputDir'),
   });
 
-  registry.register({
+  register({
     name: 'legal_prepare_external_browser_workspace',
     description: '外部网页登录工作区 — 为人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务等生成可见浏览器登录命令、检索词、来源登记表和授权边界说明。',
     parameters: {
@@ -6593,7 +6589,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.external-browser-workspace.prepare', 'create', 'outputDir'),
   });
 
-  registry.register({
+  register({
     name: 'legal_refresh_authoritative_sources',
     description: '立即巡检现行法权威来源 — 逐项访问国家法律法规数据库，核对版本日期、施行日期、效力状态、官方记录 ID、条文范围和稳定指纹。发现变化即阻断正式文书交付并进入人工复核，不会把网络失败当成有效。',
     parameters: {
@@ -6616,7 +6612,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     evidence: legalEvidence('legal.authoritative-sources.refresh', 'mutate', 'timeoutMs'),
   });
 
-  registry.register({
+  register({
     name: 'legal_authority_source_status',
     description: '查看现行法权威来源巡检状态 — 显示最近运行时间、已验证法源、待人工复核项目和暂时不可用来源，不发起新的外部请求。',
     parameters: { type: 'object', properties: {} },
@@ -6625,7 +6621,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_verify_citation',
     description: '引用校验 — 验证法条引用和案例引用是否真实有效。可检查单个引用或全文中的所有引用，标注：存在/不存在、有效/已废止。禁止使用虚构法条和案例。',
     parameters: {
@@ -6641,7 +6637,7 @@ export function registerLegalTools(registry: ToolRegistry): void {
     securityLevel: 'safe',
   });
 
-  registry.register({
+  register({
     name: 'legal_import_judgment',
     description: '导入裁判文书 — 上传或粘贴裁判文书全文（PDF/DOCX/TXT），自动提取案号、法院、当事人、法条引用等元数据，分块并向量化索引到组织知识库。导入后可通过类案检索查询。',
     parameters: {

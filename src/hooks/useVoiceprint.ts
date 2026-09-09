@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { requestMicrophoneStream } from '@/services/sensorPermissionService';
+import { releaseSensorStream, requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
 
 // ── MFCC extraction (pure JS, 16kHz mono PCM) ──
@@ -242,6 +242,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const captureAbortRef = useRef<AbortController | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onVoiceprintResultRef = useRef<((r: VoiceprintResult) => void) | null>(null);
   const verifyingRef = useRef(false);
@@ -349,12 +350,19 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
 
   const startListening = useCallback(async () => {
     if (audioContextRef.current) return true; // already running
+    if (captureAbortRef.current) return false;
+    const controller = new AbortController();
+    captureAbortRef.current = controller;
     try {
       const stream = await requestMicrophoneStream({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
-      });
+      }, controller.signal);
+      if (controller.signal.aborted || captureAbortRef.current !== controller) {
+        releaseSensorStream('microphone', stream);
+        return false;
+      }
       streamRef.current = stream;
       audioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
       const source = audioContextRef.current.createMediaStreamSource(stream);
@@ -381,12 +389,21 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       zeroGain.connect(audioContextRef.current.destination);
       return true;
     } catch {
+      if (controller.signal.aborted || captureAbortRef.current !== controller) return false;
+      captureAbortRef.current = null;
+      if (processorRef.current) { try { processorRef.current.disconnect(); } catch {} processorRef.current = null; }
+      void closeAudioContext(audioContextRef.current);
+      audioContextRef.current = null;
+      if (streamRef.current) releaseSensorStream('microphone', streamRef.current);
+      streamRef.current = null;
       // Microphone is unavailable; voiceprint capture should fail softly.
       return false;
     }
   }, [acceptVoicedFrame]);
 
   const stopListening = useCallback(() => {
+    captureAbortRef.current?.abort();
+    captureAbortRef.current = null;
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
     void closeAudioContext(audioContextRef.current);
@@ -651,14 +668,8 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (processorRef.current) processorRef.current.disconnect();
-      void closeAudioContext(audioContextRef.current);
-      audioContextRef.current = null;
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    };
-  }, []);
+    return stopListening;
+  }, [stopListening]);
 
   return {
     result,

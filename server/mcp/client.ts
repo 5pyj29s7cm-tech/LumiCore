@@ -143,7 +143,11 @@ interface MCPConfigFile {
   [key: string]: any;
 }
 
-const SKILLS_DIR = path.join(os.homedir(), 'lumi_skills');
+// Database isolation alone is insufficient: migration/installation also touches
+// executable packages. Test workers must never scan the real user's Skills.
+const SKILLS_DIR = process.env.VITEST
+  ? path.join(process.env.LUMI_TEST_TMPDIR || os.tmpdir(), `lumi-test-skills-${process.pid}-${process.env.VITEST_POOL_ID || '0'}`)
+  : path.join(os.homedir(), 'lumi_skills');
 const PENDING_SKILL_MARKER = '.lumi-pending';
 const RESERVED_RUNTIME_NAMES = new Set(['.', '..', '__proto__', 'constructor', 'prototype']);
 const FORBIDDEN_MANAGED_ENV_KEYS = new Set([

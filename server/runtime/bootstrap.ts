@@ -1,3 +1,4 @@
+import { repairTestMemoryProvenance } from '../memory/provenance';
 import {
   readDB,
   writeDB,
@@ -130,6 +131,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     // bootstrap route remains fail-closed until this succeeds.
     initializeDesktopBootstrapProof();
     await ensureDatabaseInitialized();
+    repairTestMemoryProvenance();
     const initializedDb = readDB();
     const migrationCounts = {
       quickCheck: requireDatabaseStartupQuickCheck(),
@@ -190,7 +192,7 @@ export async function bootstrap(ctx: BootstrapContext) {
   }
 
   // Register LumiCore capabilities.
-  registerAllTools(toolRegistry, { getDeepSeek: llm.getDeepSeek, getGemini: llm.getGemini, getOpenAI: llm.getOpenAI, getAnthropic: llm.getAnthropic, getQwen: llm.getQwen });
+  registerAllTools(toolRegistry, llm);
   console.log(`[Tools] Registered ${toolRegistry.list().length} built-in tools`);
   const extensionHydration = await hydrateActiveExtensions(toolRegistry);
   if (extensionHydration.activated > 0 || extensionHydration.failed > 0) {
