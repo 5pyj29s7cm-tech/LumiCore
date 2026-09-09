@@ -2,6 +2,7 @@ import type {
   ConversationTaskReceipt,
   ConversationTaskStatus,
 } from '../cognition/task_execution_ledger';
+import { mediaGenerationIntent } from '../cognition/normalized_action_intent';
 import {
   allowedTaskSearchRoots,
   buildTaskTargetAnchorProjection,
@@ -1084,6 +1085,21 @@ export function buildTaskCapsuleV1(
 
 export function formatTaskCapsuleForPrompt(capsule: TaskCapsuleV1): string {
   const normalized = normalizeCapsule(capsule);
+  const mediaIntent = mediaGenerationIntent(normalized.goal);
+  if (mediaIntent) return [
+    'Current task capsule (TaskCapsuleV1):',
+    `- taskId: ${normalized.taskId}`,
+    `- status: ${normalized.status}`,
+    `- unfinished: ${normalized.unfinished ? 'yes' : 'no'}`,
+    `- goal: ${normalized.goal}`,
+    `- currentInstruction: ${normalized.currentInstruction}`,
+    `- generator: ${mediaIntent.target}`,
+    `- blocker: ${redactSecrets(normalized.blocker, 380)}`,
+    ...normalized.toolSummaries.slice(-3).map(summary => `- receipt: ${redactSecrets(summary, 240)}`),
+    'Use the retained brief and current correction. A text-to-image/video task needs no existing document or filename.',
+    'Only a verified media artifact completes this task. Discovery and health checks do not.',
+    'Status questions do not authorize generation. For an accepted retry, reconcile unknown prior provider outcomes before submitting again.',
+  ].join('\n');
   const target = normalized.target;
   const promptPaths = normalized.paths.slice(-4).map(path => redactSecrets(path, 240));
   const promptCompletedSteps = normalized.completedSteps.slice(-6);

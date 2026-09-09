@@ -49,6 +49,7 @@ function isExpectedExternalTool(
   entry: CapabilityManifestEntry,
 ): boolean {
   if (!isExternal(entry)) return false;
+  if (intent.kind === 'media_generation') return entry.toolName === intent.target;
   if (intent.kind === 'messaging_send') {
     return entry.family === 'messaging'
       || entry.lane === 'messaging'
@@ -96,7 +97,9 @@ export function compareLumiRoutingShadow(input: {
     legacyClass,
     normalizedKind: input.normalizedIntent.kind,
     legacyExternalTools: legacyExternalEntries.map(entry => entry.toolName),
-    blockedExternalTools: externalCommitBlocked ? allExternalTools : [],
+    blockedExternalTools: externalCommitBlocked ? allExternalTools
+      : input.normalizedIntent.kind === 'media_generation'
+        ? allExternalTools.filter(name => name !== input.normalizedIntent.target) : [],
     aligned,
     externalCommitBlocked,
     reason,
@@ -120,7 +123,7 @@ export function applyLumiRoutingShadowGuard(
   execution: LumiExecutionDecision,
   comparison: LumiRoutingShadowComparison,
 ): LumiExecutionDecision {
-  if (!comparison.externalCommitBlocked) return execution;
+  if (!comparison.blockedExternalTools.length) return execution;
   const blocked = new Set(comparison.blockedExternalTools);
   const toolPolicy = blockPolicyExternalTools(execution.toolPolicy, comparison.blockedExternalTools);
   const baseToolPolicy = blockPolicyExternalTools(execution.baseToolPolicy, comparison.blockedExternalTools);
@@ -134,7 +137,7 @@ export function applyLumiRoutingShadowGuard(
         ]),
         reasons: unique([
           ...execution.toolRoute.reasons,
-          `shadow route blocked external commit: ${comparison.reason}`,
+          `shadow route restricted external tools: ${comparison.reason}`,
         ]),
       }
     : execution.toolRoute;
@@ -152,7 +155,9 @@ export function applyLumiRoutingShadowGuard(
     promptOverlay: [
       execution.promptOverlay,
       '## External Commit Shadow Gate',
-      `External commit tools are disabled for this turn because route comparison diverged: ${comparison.reason}.`,
+      comparison.externalCommitBlocked
+        ? `External commit tools are disabled for this turn because route comparison diverged: ${comparison.reason}.`
+        : 'Only the explicitly requested media generator is authorized among external tools. Unrelated external actions remain disabled.',
       'Do not retry through a legacy, desktop, browser, or alternate-provider path.',
     ].filter(Boolean).join('\n'),
   };

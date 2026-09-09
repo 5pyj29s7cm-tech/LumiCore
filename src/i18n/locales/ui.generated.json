@@ -36,8 +36,8 @@
     "zh": "Lumi \u5b98\u65b9 API"
   },
   "settings.lumi-official-service-description.2c8f6a1e05": {
-    "en": "Use the documented Lumi/ModelDepot endpoint and keep the API key on the backend. The default endpoint is https://zhuan.huaczy.com/v1. It covers reasoning, vision, world actions, embeddings, reranking, image/video generation, and configurable speech adapters.",
-    "zh": "使用随附文档中的 ModelDepot 官方接口，并将 API 密钥只保存在后端。默认地址为 https://zhuan.huaczy.com/v1；角色模型覆盖推理、视觉、世界操作、嵌入、重排、图像、视频，以及可配置的语音适配器。"
+    "en": "Use the documented Lumi/ModelDepot endpoint and keep the API key on the backend. The default endpoint is https://lumi.xingcyj.com/v1. It covers reasoning, vision, world actions, embeddings, reranking, image/video generation, and configurable speech adapters.",
+    "zh": "使用随附文档中的 ModelDepot 官方接口，并将 API 密钥只保存在后端。默认地址为 https://lumi.xingcyj.com/v1；角色模型覆盖推理、视觉、世界操作、嵌入、重排、图像、视频，以及可配置的语音适配器。"
   },
   "settings.lumi-official-relay.7d3b1f9c24": {
     "en": "Lumi Official API endpoint",

@@ -65,6 +65,7 @@ import {
 } from '../i18n/regions/cn/legal';
 import {
   LUMI_OFFICIAL_BASE_URL,
+  normalizeLumiOfficialBaseUrl,
   LUMI_OFFICIAL_DEFAULT_MODELS,
   LUMI_OFFICIAL_DOCS_URL,
   LUMI_OFFICIAL_RECHARGE_URL,
@@ -155,7 +156,10 @@ function refreshLumiOfficialCatalog(): void {
 
 function readStoredRelayBaseUrl(): string {
   try {
-    return String(localStorage.getItem('lumi_relay_url') || '').trim();
+    const stored = String(localStorage.getItem('lumi_relay_url') || '').trim();
+    const normalized = normalizeLumiOfficialBaseUrl(stored);
+    if (stored !== normalized) localStorage.setItem('lumi_relay_url', normalized);
+    return normalized;
   } catch {
     return '';
   }

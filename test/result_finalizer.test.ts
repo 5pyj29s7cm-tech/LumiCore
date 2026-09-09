@@ -13,6 +13,23 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it.each([
+    '好，我来重新生成。上次两次都失败了。这次简化提示词。我这就调用图片生成。',
+    '现在我再发一次，稍等。',
+    '你说得对。这一轮我真正发起这一次生成请求，完成后给你。',
+  ])('rejects multi-sentence promises without execution: %s', async responseText => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    expect(finalizeLumiResponse({ taskText: '可以', responseText, toolRecords: [], source: 'chat' }).blocked).toBe(true);
+  });
+  it('reports actual generation failures and converts milliseconds accurately', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({ taskText: '帮我生成一张图片', responseText: '600秒超时了，我再试一次。', source: 'chat',
+      toolRecords: [{ name: 'generate_image', arguments: {}, result: '', error: 'Lumi Official API request timed out after 60000ms' }] });
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('60 秒');
+    expect(result.text).not.toContain('600秒');
+    expect(result.text).not.toContain('桌面');
+  });
   it('replaces a fabricated seven-mode answer with canonical operation-mode facts', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
@@ -24,8 +41,8 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.reason).toBe('canonical_operation_mode_facts');
-    expect(result.text).toContain('3 \u79cd');
-    expect(result.text).toContain('autonomous');
+    expect(result.text).toContain('统一的个人人格核心'); // i18n-allow: canonical unified-core reply.
+    expect(result.text).toContain('会议转写'); // i18n-allow: independent meeting capture.
     expect(result.text).not.toMatch(/7 \u79cd|scholar|office|autonomy\u3001/u);
     expect(result.text).not.toContain('client.modes');
   });
@@ -197,7 +214,7 @@ describe('Lumi result finalizer', () => {
 
     expect(result.blocked).toBe(false);
     expect(result.reason).toBe('canonical_operation_mode_facts');
-    expect(result.text).toContain('assistant');
+    expect(result.text).toContain('不再分成聊天、助手或自主模式'); // i18n-allow: removed mode choices.
     expect(result.text).not.toBe(responseText);
   });
 
@@ -1122,46 +1139,45 @@ describe('Lumi result finalizer', () => {
     expect(result.reason).toContain('Structured evidence correction');
   });
 
-  it('blocks a claimed client mode switch when the current turn has no action receipt', async () => {
+  it('blocks a claimed client chat navigation when the current turn has no action receipt', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
-      taskText: '\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f',
-      responseText: '\u5df2\u7ecf\u5207\u6362\u5230\u804a\u5929\u6a21\u5f0f\u3002',
+      taskText: '\u6253\u5f00\u804a\u5929\u754c\u9762',
+      responseText: '\u5df2\u7ecf\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
       toolRecords: [],
       source: 'chat',
-      flow: { clientActionOnlyTurn: true, requestedMode: 'chat' } as any,
+      flow: { clientActionOnlyTurn: true } as any,
     });
 
     expect(result.blocked).toBe(true);
   });
 
-  it('completes a client mode switch from an exact verified client_action receipt', async () => {
+  it('completes a client chat navigation from an exact verified client_action receipt', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
-      taskText: '\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f',
+      taskText: '\u6253\u5f00\u804a\u5929\u754c\u9762',
       responseText: '\u8fd9\u6b21\u8fd8\u6ca1\u6709\u5b8c\u6210\u3002',
       toolRecords: [{
         name: 'client_action',
-        arguments: { action: 'set_client_mode', mode: 'chat' },
+        arguments: { action: 'open_chat' },
         result: JSON.stringify({
           ok: true,
-          action: 'set_client_mode',
-          mode: 'chat',
+          action: 'open_chat',
           verification: { status: 'verified' },
         }),
       }],
       source: 'chat',
-      flow: { clientActionOnlyTurn: true, requestedMode: 'chat' } as any,
+      flow: { clientActionOnlyTurn: true } as any,
     });
 
     expect(result.blocked).toBe(false);
   });
 
-  it('does not complete a client mode switch from a verified receipt for another client action', async () => {
+  it('does not complete a client chat navigation from a verified receipt for another client action', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
-      taskText: '\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f',
-      responseText: '\u5df2\u7ecf\u5207\u6362\u5230\u804a\u5929\u6a21\u5f0f\u3002',
+      taskText: '\u6253\u5f00\u804a\u5929\u754c\u9762',
+      responseText: '\u5df2\u7ecf\u6253\u5f00\u804a\u5929\u754c\u9762\u3002',
       toolRecords: [{
         name: 'client_action',
         arguments: { action: 'open_command_center' },
@@ -1173,7 +1189,7 @@ describe('Lumi result finalizer', () => {
         }),
       }],
       source: 'chat',
-      flow: { clientActionOnlyTurn: true, requestedMode: 'chat' } as any,
+      flow: { clientActionOnlyTurn: true } as any,
     });
 
     expect(result.blocked).toBe(true);

@@ -41,6 +41,7 @@ export type NormalizedActionIntentKind =
   | 'client_navigation'
   | 'client_state'
   | 'desktop_operation'
+  | 'media_generation'
   | 'cad_drafting'
   | 'scheduled_task'
   | 'work_task'
@@ -466,9 +467,17 @@ export function isPriorTurnToolReceiptQuestion(text: string): boolean {
   return (priorTurn || recordedReceiptScope) && toolReceipt && asksFact;
 }
 
+/** Status queries must survive retirement of the completed task's live pointer. */
+export function isTerseExecutionStatusQuestion(text: string): boolean {
+  // i18n-allow: Read-only execution-status input recognition, not action authorization.
+  return /^(?:你)?(?:到底|真的|已经)?(?:调用|发起|发送|执行)(?:了)?(?:吗|没有|没)[？?。\s]*$/u.test(text)
+    || /^(?:你发了吗[，,]\s*)?(?:为什么|你为什么|没发为什么|你发了吗).{0,60}(?:没去|没有|没发|没调用|没执行|没发起|说.*再发|说.*发起)/u.test(text);
+}
+
 export function isRecentActionReceiptQuery(text: string): boolean {
   const value = currentTurnText(String(text || '')).replace(/\s+/gu, ' ').trim();
-  return isPriorTurnToolReceiptQuestion(value)
+  return isTerseExecutionStatusQuestion(value)
+    || isPriorTurnToolReceiptQuestion(value)
     || RECENT_ACTION_RECEIPT_QUERY_RE.test(value)
     || RECORDED_RECEIPT_STATUS_QUERY_RE.test(value);
 }
@@ -955,6 +964,20 @@ function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null
   };
 }
 
+/** Media creation spends provider capacity; it is an explicit external action. */
+export function mediaGenerationIntent(value: string): NormalizedActionIntent | null {
+  const text = currentTurnText(value).trim();
+  const head = text.split(/[：:，,。；;\n]/u)[0]; // i18n-allow: instruction/creative-brief boundary.
+  // Only an affirmative creation/edit imperative owns a new generation. A
+  // prompt, script, configuration question or historical result does not.
+  if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|编辑|修改|重绘|替换).{0,50}(?:图片|图像|照片|插画|海报|视频|短片)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
+  if (/(?:提示词|脚本|文案|方案|大纲|字幕|标题|配置|模型|代码|网页|组件|是否|了吗|了没|吗[？?]?|不要生成|不要创建)|\b(?:prompt|script|copy|plan|outline|caption|configuration|model|code|webpage)\b|\?/iu.test(head)) return null; // i18n-allow: non-media deliverables and questions.
+  const target = /^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:编辑|修改|重绘|替换)|^(?:please\s+)?(?:edit|modify|redraw)\b/iu.test(head) // i18n-allow: media editing.
+    ? 'ai_edit_image' : /视频|短片|\b(?:video|clip)\b/iu.test(head) ? 'generate_video' : 'generate_image'; // i18n-allow: media kind.
+  return { kind: 'media_generation', operation: 'create', subject: 'user', target,
+    payload: text, sideEffectClass: 'external_commit', relation: 'new', confidence: 0.98, rule: 'explicit-media-generation' };
+}
+
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
@@ -985,6 +1008,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const priority = [
     correctionOrExplanation(text),
     statusQuery(text),
+    mediaGenerationIntent(text),
     persistentWorkTaskCreation(text),
     artifactCreation,
     artifactRead,

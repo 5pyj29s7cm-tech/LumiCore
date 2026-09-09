@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { hasImmediateExecutionPromise } from './execution_claims';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { guardCompletionClaims, type CompletionGuardResult } from '../work_product/completion_guard';
 import { containsCompactToolEvidenceMarker } from '../conversation/summary_grounding';
@@ -28,6 +29,7 @@ import {
   CN_VOICE_QUICK_WORK_MESSAGES,
   formatCnClientActionTargetLabel,
   formatCnToolFailureDetail,
+  formatCnMediaGenerationFailure,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import {
   formatArtifactCreatedAndOpened,
@@ -642,9 +644,13 @@ function unsupportedOngoingExecutionClaim(
   // An unknown/short user utterance must not make a concrete immediate action
   // promise exempt from checking simply because routing classified it as chat.
   // i18n-allow: Immediate externally observable action promise, not quoted advice.
-  const concreteImmediatePromise = /^(?:好的?[，,\s]*)?(?:我)?(?:这就|马上|现在就)(?:帮你|为你|给你)?(?:打开|播放|启动|发送|生成|创建)[^？?\n]{1,80}[。.!！]?$/u.test(response);
+  const concreteImmediatePromise = hasImmediateExecutionPromise(response);
   if (concreteImmediatePromise && !(input.toolRecords || []).length) {
     return isChineseText(response) ? CN_RESULT_GROUNDING_MESSAGES.actionNotStarted : 'No action started in this turn.';
+  }
+  if (concreteImmediatePromise && includeActionPlans && !hasVerifiedOngoingExecutionReceipt(input)) {
+    return isChineseText(response) ? CN_RESULT_GROUNDING_MESSAGES.executionEndedWithoutCompletion
+      : 'This attempt ended without verified completion; no background execution is running.';
   }
   if (!claimsInventedToolChain && !(includeActionPlans && actionRequested && claimsExecutionActivity)) return null;
   if (claimsExecutionActivity && hasVerifiedOngoingExecutionReceipt(input)) return null;
@@ -2848,6 +2854,11 @@ export function tryFinalizeVerifiedBoundedAction(
   const records = coalesceToolExecutionRecords(input.toolRecords || [])
     .filter(record => recordMatchesCurrentTurnIdentity(input, record));
   const scopedInput = { ...input, toolRecords: records, responseText: '' };
+  // The same verified-media projection owns both loop termination and channel
+  // delivery. A complete generation needs no second model call; compound
+  // publication/delivery tasks and missing artifacts still fail this check.
+  const media = groundedMediaGeneration(scopedInput);
+  if (media) return media;
   const contract = taskActionContract(scopedInput);
   if (!hasCoreActionEvidence(contract, records, task, undefined, {
     requestId: input.requestId, taskId: input.taskId,
@@ -2897,6 +2908,9 @@ export function tryFinalizeVerifiedBoundedAction(
 }
 
 export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResultFinalizerResult {
+  if (input.completionGuard?.blocked && ['model_failed_before_tool_execution', 'media_generation_failed'].includes(input.completionGuard.reason || '')) {
+    return { text: input.completionGuard.text, blocked: true, reason: input.completionGuard.reason };
+  }
   input = {
     ...input,
     // Keep this projection local to finalization. Legacy/MCP adapters may put
@@ -2934,6 +2948,18 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (knowledgeObservation) return { text: knowledgeObservation, blocked: false, reason: 'Grounded current-turn knowledge observation.' };
   const mediaGeneration = groundedMediaGeneration(input);
   if (mediaGeneration) return mediaGeneration;
+  const mediaIntent = normalizeActionIntent(actionText);
+  const mediaFailures = mediaIntent.kind === 'media_generation'
+    ? (input.toolRecords || []).filter(record => record.name === mediaIntent.target && record.error && recordMatchesCurrentTurnIdentity(input, record))
+    : [];
+  if (mediaFailures.length && !(input.toolRecords || []).some(record => record.name === mediaIntent.target
+    && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error))) {
+    // i18n-allow: Receipt-grounded failed-generation result and bounded retry offer.
+    const text = isChineseText(actionText)
+      ? formatCnMediaGenerationFailure(mediaFailures.map(record => record.error || ''))
+      : 'Generation did not complete. A retry must reconcile any unknown prior provider outcome before resubmitting.';
+    return { text, blocked: true, reason: 'media_generation_failed' };
+  }
   const desktopReview = findDesktopCompletionReview(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId });
   if (desktopReview
     && !hasMediaPlaybackEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId })) {
@@ -3077,6 +3103,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
+  const immediatePromiseFailure = hasImmediateExecutionPromise(input.responseText)
+    ? unsupportedOngoingExecutionClaim(input, !hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText))
+    : null;
+  if (immediatePromiseFailure) return { text: immediatePromiseFailure, blocked: true,
+    reason: 'Response promised another action after execution ended.' };
   const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
   if (diagnosticResult) {
     const diagnosticCompleted = hasSuccessfulSubstantiveClientDiagnosticReceipt(input.toolRecords || []);

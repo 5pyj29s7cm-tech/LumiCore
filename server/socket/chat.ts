@@ -2890,6 +2890,7 @@ export function registerChatHandler(
       ].filter(Boolean).join('\n\n');
 
       const executionPipeline = buildLumiExecutionPipeline({
+        structuredMediaRequest,
         dispatch: {
           userId: uid,
           text: currentTurnDecisionText,
@@ -2916,6 +2917,9 @@ export function registerChatHandler(
       });
       const turnDispatch = executionPipeline.turnIntent;
       const turnFlow = turnDispatch.flow;
+      const completionTaskText = executionPipeline.trustedActionContinuation
+        ? conversation?.actionContinuationState?.goal || executionTaskText
+        : executionTaskText;
       const turnSurface = turnDispatch.surface;
       if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
         effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
@@ -4768,7 +4772,7 @@ export function registerChatHandler(
       const responseCompletionFeedback = durableTaskId
         ? buildForegroundTaskCompletionFeedback({
             taskId: durableTaskId,
-            taskLabel: executionTaskText,
+            taskLabel: completionTaskText,
             toolRecords: taskAwareRecords(allToolRecords),
             blocked: finalResponse.blocked,
             reason: finalResponse.reason,
@@ -4809,7 +4813,7 @@ export function registerChatHandler(
         completionFeedback: durableTaskId
           ? buildForegroundTaskCompletionFeedback({
               taskId: durableTaskId,
-              taskLabel: executionTaskText,
+              taskLabel: completionTaskText,
               toolRecords: taskAwareRecords(allToolRecords),
               status: 'persistence_unknown',
               reason: 'Terminal persistence outcome is unknown.',

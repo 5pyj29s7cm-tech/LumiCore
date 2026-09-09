@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { Server } from 'socket.io';
 import { io as createClient, type Socket } from 'socket.io-client';
 
-const fixture = vi.hoisted(() => ({ model: vi.fn(), extract: vi.fn(), beforeFlush: null as null | (() => Promise<void>), beforeDelete: null as null | (() => Promise<void>) }));
+const fixture = vi.hoisted(() => ({ model: vi.fn(), memoryPlan: vi.fn(), beforeFlush: null as null | (() => Promise<void>), beforeDelete: null as null | (() => Promise<void>) }));
 vi.mock('../server/llm/adapter', async original => ({
   ...await original<typeof import('../server/llm/adapter')>(), runWithTools: fixture.model,
 }));
@@ -13,7 +13,7 @@ vi.mock('../server/llm/providers', async original => ({
 }));
 vi.mock('../server/memory', async original => ({
   ...await original<typeof import('../server/memory')>(),
-  queryMemories: vi.fn(() => []), queryMemoriesVector: vi.fn(async () => []), extractMemories: fixture.extract,
+  queryMemories: vi.fn(() => []), queryMemoriesVector: vi.fn(async () => []),
 }));
 vi.mock('../server/agents/rag', async original => ({
   ...await original<typeof import('../server/agents/rag')>(), retrieveChunks: vi.fn(async () => []),
@@ -86,12 +86,13 @@ async function openChat() {
   const gate = deferred();
   unblock.push(gate.resolve);
   fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'memory_turn') return outcome(JSON.stringify(await fixture.memoryPlan(args[2])));
     if (args[2]?.source === 'chat_intent_classifier') return outcome('{"category":"question","confidence":0.99,"entities":{}}');
     entered.resolve();
     await gate.promise;
     return outcome();
   });
-  fixture.extract.mockResolvedValue({ memories: [], reminders: [] });
+  fixture.memoryPlan.mockResolvedValue({ changes: [] });
   const finished = deferred();
   const errors: unknown[] = [];
   const emitted: Array<[string, any]> = [];
@@ -138,7 +139,7 @@ it('control: ordinary completed chat persists a reply and starts eligible memory
   await vi.waitFor(() => expect(h.emitted.some(([event, payload]) => event === 'agent:response' && payload.text?.includes(marker))).toBe(true));
   expect(h.errors).toEqual([]);
   expect(readDB().interactions.some(row => row.conversationId === h.conversationId && row.message.includes(marker))).toBe(true);
-  expect(fixture.extract).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(fixture.memoryPlan).toHaveBeenCalledOnce());
   expect((await querySQL('SELECT * FROM chat_execution_terminal_receipts WHERE conversationId = ?', [h.conversationId])).length).toBeGreaterThan(0);
   const removed = await h.remove();
   expect(removed.status).toBe(200);
@@ -171,7 +172,7 @@ it('deleting while a model is pending prevents late transcript, recovery receipt
   expect(orphanRows).toHaveLength(0);
   expect(diskRows).toHaveLength(0);
   expect(visibleHistory.some((row: any) => row.conversationId === h.conversationId)).toBe(false);
-  expect(fixture.extract).not.toHaveBeenCalled();
+  expect(fixture.memoryPlan).not.toHaveBeenCalled();
   expect(JSON.stringify(h.emitted)).not.toContain(marker);
   expect(await querySQL('SELECT * FROM chat_execution_terminal_receipts WHERE conversationId = ?', [h.conversationId])).toHaveLength(0);
   expect((await h.recover()).ok).toBe(false);
@@ -194,7 +195,7 @@ it('deletion during a staged terminal flush also prevents recovery and enrichmen
   expect(await querySQL('SELECT * FROM interactions WHERE conversationId = ?', [h.conversationId])).toHaveLength(0);
   expect(await querySQL('SELECT * FROM chat_execution_terminal_receipts WHERE conversationId = ?', [h.conversationId])).toHaveLength(0);
   expect(JSON.stringify(h.emitted)).not.toContain(marker);
-  expect(fixture.extract).not.toHaveBeenCalled();
+  expect(fixture.memoryPlan).not.toHaveBeenCalled();
 });
 
 it('deletion waits for an in-flight recovery write and removes its private receipt before success', async () => {
@@ -222,7 +223,7 @@ it('deletion waits for an in-flight recovery write and removes its private recei
     expect(await querySQL('SELECT * FROM interactions WHERE conversationId = ?', [h.conversationId])).toHaveLength(0);
     expect(await querySQL('SELECT * FROM chat_execution_terminal_receipts WHERE conversationId = ?', [h.conversationId])).toHaveLength(0);
     expect(JSON.stringify(h.emitted)).not.toContain(marker);
-    expect(fixture.extract).not.toHaveBeenCalled();
+    expect(fixture.memoryPlan).not.toHaveBeenCalled();
   } finally { gate.resolve(); spy.mockRestore(); }
 });
 
@@ -232,9 +233,9 @@ it.each([false, true])('deletion blocks late enrichment writes, including correc
   const gate = deferred();
   unblock.push(gate.resolve);
   let signal: AbortSignal | undefined;
-  fixture.extract.mockImplementation(async (context: any) => {
+  fixture.memoryPlan.mockImplementation(async (context: any) => {
     signal = context.signal; entered.resolve(); await gate.promise;
-    return { memories: [{ content: marker, type: 'fact', keywords: ['synthetic'], confidence: 0.9 }], reminders: [{ content: marker, dueAt: '2099-01-01T00:00:00.000Z' }] };
+    return { changes: [{ operation: 'save', content: marker, type: 'fact', keywords: ['synthetic'], evidence: '我们之前记录的项目安排' }] }; // i18n-allow: actual user-turn memory evidence.
   });
   if (correction) {
     await client.timeout(5000).emitWithAck('agent:chat', { text: '不对，我们之前记录的项目安排是另一个日期。', history: [], agentId: 'lumi', domain: 'personal', orgId: '', source: 'command-center-chat', conversationId: h.conversationId, requestId: h.requestId });

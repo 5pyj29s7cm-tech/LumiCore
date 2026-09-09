@@ -502,6 +502,21 @@ function isBlockedTaskReadinessAcknowledgement(
     || BARE_BLOCKED_TASK_READINESS_RE.test(text);
 }
 
+/** Acceptance resumes an evidenced, blocked task only when its last reply
+ * actually proposed retrying it. It never reconstructs a lost confirmation. */
+export function isBlockedTaskRetryAcceptance(
+  text: string,
+  state?: ConversationActionContinuationState | null,
+): boolean {
+  if (!state?.taskId || !state.unfinished || state.status !== 'blocked'
+    || !state.receipts?.length || conversationActionRequiresFreshConfirmationReview(state)
+    || !isExplicitConfirmationReply(text.trim())) return false;
+  const age = Date.now() - Date.parse(state.updatedAt);
+  if (!Number.isFinite(age) || age < 0 || age > REFERENTIAL_CONTEXT_MAX_AGE_MS) return false;
+  // i18n-allow: Server-bound retry-offer recognition, not user-facing copy.
+  return /(?:我|这次|现在|可以|要不要).{0,30}(?:再试一次|重试|重新生成|再生成|再发起)|\b(?:I (?:can|will|could)|shall I|try)\b.{0,45}\b(?:retry|try again|generate again)\b/iu.test(state.assistantState || '');
+}
+
 function normalizeMediaTarget(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
@@ -829,7 +844,8 @@ export function normalizeConversationActionState(
       .slice(0, 8),
     latestBlocker: status === 'completed' || status === 'waiting_confirmation' || status === 'cancelled'
       ? ''
-      : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
+      : value.latestBlocker === 'model_failed_before_tool_execution'
+        ? value.latestBlocker : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
     unfinished,
     evidenceTools: Array.from(new Set(Array.isArray(value.evidenceTools) ? value.evidenceTools : []))
       .map(name => compact(name, 120))
@@ -962,6 +978,7 @@ export function classifyConversationActionFollowupIntent(
   if (
     isBlockedTaskReadinessAcknowledgement(compactText, durableState)
   ) return 'execute';
+  if (isBlockedTaskRetryAcceptance(compactText, durableState)) return 'execute';
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
   if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
   const normalizedIntent = normalizeActionIntent(text);

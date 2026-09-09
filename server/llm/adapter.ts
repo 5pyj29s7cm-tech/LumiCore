@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } from '../regions/packs/cn/voice_fast_path_messages';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage, type NormalizedLLMResponse } from '../tools/types';
@@ -1756,6 +1757,16 @@ export async function runWithTools(
       };
     }
     const checkpointRecords = [...priorToolRecords, ...observedRecords];
+    if (priorToolRecords.length > 0 && observedRecords.length === 0
+      && priorToolRecords.every(record => Boolean(record.error))) {
+      // Prior failures cannot prove that this model attempt reached a tool.
+      // i18n-allow: Current model failure, distinct from historical tool failures.
+      const text = /[\u3400-\u9fff]/u.test(getPrimaryUserText(messages))
+        ? CN_MODEL_FAILURE_BEFORE_EXECUTION
+        : 'The model call failed before any new action started. The original task and prior failure records are retained; you can retry.';
+      return { text, toolCalls: priorToolRecords, usageRecords: observedUsageRecords,
+        completionGuard: { text, blocked: true, reason: 'model_failed_before_tool_execution' } };
+    }
     const primaryTask = String(context?.routedTaskText || '').trim()
       || getPrimaryUserText(messages);
     if (
@@ -2530,6 +2541,19 @@ async function runWithToolsInternal(
       if (desktopControlPauseReason(context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
         return { text: buildDesktopControlPausedSummary(primaryTask), toolCalls: executionLog, usageRecords };
+      }
+
+      // A failed paid generation ends this attempt, including queued calls in
+      // the same batch. The model must not rewrite the user's brief or retry
+      // behind the finalizer; a later user turn owns any authorized retry.
+      if (record.error && ['generate_image', 'ai_edit_image', 'generate_video'].includes(record.name)
+        && !isConfirmationBlockedToolRecord(record)) {
+        const text = /[\u3400-\u9fff]/u.test(primaryTask)
+          ? formatCnMediaGenerationFailure([record.error])
+          : 'Generation did not complete. No further generation was submitted in this turn. A retry must reconcile any unknown prior provider outcome before resubmitting.';
+        recordWorkflowIfToolsUsed(executionLog, messages, config);
+        return { text, toolCalls: executionLog, usageRecords,
+          completionGuard: { text, blocked: true, reason: 'media_generation_failed' } };
       }
 
       // The native loop already stopped at an uncertain completion candidate.

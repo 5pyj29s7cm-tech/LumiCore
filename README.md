@@ -94,12 +94,12 @@ LumiCore 支持以下模型来源，具体可用模型由用户账号、服务�
 
 ### Lumi 官方 API（ModelDepot）
 
-如果使用 Lumi 官方服务，设置页中的 Base URL 应填写 `https://zhuan.huaczy.com/v1`，API Key 只保存在后端。模型名使用 `供应商/模型名` 格式，例如 `aliyun/qwen-plus` 或 `aliyun/bge-m3`。官方目录会在设置页实时同步，并按推理、视觉、世界操作、图像生成、AI 图像编辑、文生视频、图生视频、嵌入、重排、语音识别和语音合成十一类角色筛选。
+如果使用 Lumi 官方服务，设置页中的 Base URL 应填写 `https://lumi.xingcyj.com/v1`，API Key 只保存在后端。模型名使用 `供应商/模型名` 格式，例如 `aliyun/qwen-plus` 或 `aliyun/bge-m3`。官方目录会在设置页实时同步，并按推理、视觉、世界操作、图像生成、AI 图像编辑、文生视频、图生视频、嵌入、重排、语音识别和语音合成十一类角色筛选。
 
 官方目录更新供应商命名空间后，可使用设置页的“一键适配”迁移已知旧模型名：只有旧 ID 已下架、同一角色的同族新 ID 存在时才迁移，并保留仍可用的选择。自定义模型不可用时会要求显式选择替代模型；刷新目录不会修改偏好。完整实时音频对话模型的 `audio_realtime` 协议暂未接入这十一类角色，不能直接用作独立的语音识别或合成模型。
 
-- API 调用说明：<https://zhuan.huaczy.com/console/help>
-- 官方充值入口：<https://zhuan.huaczy.com/console/recharge>
+- API 调用说明：<https://lumi.xingcyj.com/docs>
+- 官方充值入口：<https://lumi.xingcyj.com/console/recharge>
 - 聊天、嵌入、图片和视频使用 `/v1` 兼容接口；重排按文档使用 `/api/v1/rerank`。
 - 实时语音识别使用 `/v1/audio/transcriptions/stream` WebSocket，按文档先发送 `run-task`，收到 `task-started` 后发送单声道音频，最后发送 `finish-task`；语音合成使用 `/v1/audio/speech`。
 - 文件语音识别会从 WAV/MP3/Opus/AAC 头读取源采样率后再建立任务；无法自描述采样率的编码文件需要调用方显式提供采样率或选择其他文件识别提供商，避免把 24/44.1/48 kHz 音频误报为 16 kHz。

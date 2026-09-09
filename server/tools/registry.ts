@@ -1,4 +1,5 @@
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
+import { isDefiniteOfficialImageRejection } from '../llm/official_api';
 import {
   CapabilityAdapterContract,
   CapabilityLane,
@@ -1547,7 +1548,7 @@ export class ToolRegistry {
       } catch (error: any) {
         if (error?.externalCommitUnknown === true) throw error;
         if (externalCommit) {
-          if (!handlerEntered) {
+          if (!handlerEntered || (['generate_image', 'ai_edit_image'].includes(name) && isDefiniteOfficialImageRejection(error))) {
             await settleExternalCommitAttempt({
               idempotencyKey,
               claimToken,

@@ -76,11 +76,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe('bounded cumulative model-wait lifecycle', () => {
   it('returns a verified checkpoint when the model never settles after a completed tool', async () => {
+    vi.useFakeTimers();
+    let modelStalled!: () => void;
+    const stalled = new Promise<void>(resolve => { modelStalled = resolve; });
     const { registry, verified } = deadlineRegistry();
     mocks.makeLLMCallStreaming
       .mockResolvedValueOnce({
@@ -88,10 +92,10 @@ describe('bounded cumulative model-wait lifecycle', () => {
         toolCalls: [{ id: 'context-1', name: 'verified_context', arguments: {} }],
         usage: { promptTokens: 12, completionTokens: 4, totalTokens: 16 },
       })
-      .mockImplementationOnce(() => new Promise<never>(() => {}));
+      .mockImplementationOnce(() => { modelStalled(); return new Promise<never>(() => {}); });
 
     const startedAt = Date.now();
-    const result = await runWithTools(
+    const pending = runWithTools(
       [{ role: 'user', content: '告诉我青穹客户跟进的目标、状态和下一步。' }],
       registry,
       {
@@ -106,7 +110,14 @@ describe('bounded cumulative model-wait lifecycle', () => {
       () => {},
     );
 
-    expect(Date.now() - startedAt).toBeLessThan(250);
+    await stalled;
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(34);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(Date.now() - startedAt).toBe(35);
     expect(verified).toHaveBeenCalledTimes(1);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].terminalVerification?.status).toBe('verified');

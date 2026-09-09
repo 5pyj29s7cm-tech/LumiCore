@@ -1,6 +1,7 @@
 import {
   classifyConversationActionFollowupIntent,
   conversationActionRequiresFreshConfirmationReview,
+  isBlockedTaskRetryAcceptance,
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
@@ -172,6 +173,7 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = normalizeActionIntent(normalized);
+  if (isBlockedTaskRetryAcceptance(normalized, state)) return 'retry';
   // A runtime-work status query asks about Lumi's global execution ledger,
   // not the status of the adjacent conversation action. It must enter the
   // deterministic runtime_work_status path as an independent read even when
@@ -181,6 +183,7 @@ function feedbackKind(
     && normalizedIntent.operation === 'status'
     && normalizedIntent.target === 'runtime_work'
   ) return 'new_task';
+  if (classifyConversationActionFollowupIntent(normalized, state) === 'status') return 'status';
   if (
     normalizedIntent.relation === 'correction'
     && normalizedIntent.kind !== 'none'

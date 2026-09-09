@@ -5,6 +5,17 @@ import {
   shouldForwardPreFinalizationProgress,
 } from '../server/cognition/response_delivery';
 import type { LumiTurnFlow } from '../server/cognition/turn_flow';
+import { hasImmediateExecutionPromise } from '../server/cognition/execution_claims';
+
+it('holds an immediate action promise split across streamed chunks', () => {
+  const gate = createPreFinalizationTextGate();
+  const output = ['好。现在我再', '发一次生成请求。请等结果。'].map(chunk => gate.push(chunk)).join('');
+  expect(output).not.toContain('发一次');
+  expect(gate.finish().withheld).toBe(true);
+  expect(hasImmediateExecutionPromise('你说“我马上生成”，并没有实际做。')).toBe(false);
+  expect(hasImmediateExecutionPromise('如果你需要，我马上生成。')).toBe(false);
+  expect(hasImmediateExecutionPromise('我不会发送消息。')).toBe(false);
+});
 import { resolveWorkSurfaceRoute } from '../server/cognition/work_surface';
 
 function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
+import { OfficialApiHttpError } from '../server/llm/official_api';
 import {
   ToolRegistry,
   externalCommitInputDigest,
@@ -112,6 +113,23 @@ afterEach(() => {
 });
 
 describe('external commit unknown-outcome safety', () => {
+  it('keeps a definite official image rejection retryable but a timeout uncertain', async () => {
+    const durable = durableJournalAdapter();
+    configureExternalCommitJournal(durable.adapter);
+    const registry = new ToolRegistry();
+    const handler = vi.fn().mockRejectedValueOnce(new OfficialApiHttpError(400, '/images/generations', 'request rejected'))
+      .mockRejectedValueOnce(new Error('Lumi Official API request timed out after 120000ms'));
+    registerExternalCommit(registry, 'generate_image', handler);
+    const context = confirmedContext('official-image-rejection-retry');
+    const args = { target: 'image', payload: 'blue cup' };
+    await expect(registry.execute('generate_image', args, context)).rejects.toThrow('request rejected');
+    expect(durable.rows.get(context.idempotencyKey)?.state).toBe('not_started');
+    await expect(registry.execute('generate_image', args, context)).rejects.toThrow('outcome is unknown');
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(durable.rows.get(context.idempotencyKey)?.state).toBe('unknown');
+    await expect(registry.execute('generate_image', args, context)).rejects.toThrow();
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
   it('uses an installation-keyed digest for low-entropy external commit inputs', () => {
     const name = 'external_commit_low_entropy_test';
     const args = { target: '13800138000', payload: '1234' };

@@ -92,16 +92,15 @@ describe('Lumi action contract', () => {
     }], text)).toBe(true);
   });
 
-  it('requires the exact verified client action receipt before completing a client mode switch', () => {
-    const task = '\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+  it('requires the exact verified client action receipt before completing a client chat navigation', () => {
+    const task = '\u6253\u5f00\u804a\u5929\u754c\u9762';
     const contract = buildActionContract(task);
-    const verifiedChatModeReceipt = {
+    const verifiedChatNavigationReceipt = {
       name: 'client_action',
-      arguments: { action: 'set_client_mode', mode: 'chat' },
+      arguments: { action: 'open_chat' },
       result: JSON.stringify({
         ok: true,
-        action: 'set_client_mode',
-        mode: 'chat',
+        action: 'open_chat',
         verification: { status: 'verified' },
       }),
     };
@@ -112,9 +111,9 @@ describe('Lumi action contract', () => {
       preferredTools: ['client_get_state', 'client_action'],
     });
     expect(hasCoreActionEvidence(contract, [], task)).toBe(false);
-    expect(hasCoreActionEvidence(contract, [verifiedChatModeReceipt], task)).toBe(true);
+    expect(hasCoreActionEvidence(contract, [verifiedChatNavigationReceipt], task)).toBe(true);
     expect(hasCoreActionEvidence(contract, [{
-      ...verifiedChatModeReceipt,
+      ...verifiedChatNavigationReceipt,
       arguments: { action: 'open_command_center' },
       result: JSON.stringify({
         ok: true,

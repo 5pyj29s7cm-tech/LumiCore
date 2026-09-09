@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { normalizeLumiOfficialBaseUrl } from '../shared/model_provider_capabilities';
 import {
   officialApiBinary,
   officialApiWebSocketUrl,
@@ -35,6 +36,32 @@ afterEach(() => {
 });
 
 describe('official API transport', () => {
+  it('upgrades the retired official host for chat, media, retrieval and voice without rewriting custom gateways', async () => {
+    process.env.RELAY_API_KEY = 'test-relay-key';
+    process.env.RELAY_BASE_URL = 'https://zhuan.huaczy.com/v1/';
+    const urls: string[] = [];
+    for (const route of ['/chat/completions', '/images/generations', '/videos/generations', '/embeddings', '/api/v1/rerank']) {
+      await officialApiRequest(route, { method: 'GET', fetchImpl: async url => {
+        urls.push(String(url)); return jsonResponse({ ok: true });
+      } });
+    }
+    expect(urls).toEqual([
+      'https://lumi.xingcyj.com/v1/chat/completions',
+      'https://lumi.xingcyj.com/v1/images/generations',
+      'https://lumi.xingcyj.com/v1/videos/generations',
+      'https://lumi.xingcyj.com/v1/embeddings',
+      'https://lumi.xingcyj.com/api/v1/rerank',
+    ]);
+    expect(officialApiWebSocketUrl('/audio/transcriptions/stream'))
+      .toBe('wss://lumi.xingcyj.com/v1/audio/transcriptions/stream');
+    expect(normalizeLumiOfficialBaseUrl('https://zhuan.huaczy.com/')).toBe('https://lumi.xingcyj.com/v1');
+    for (const custom of ['https://custom.example/v1', 'https://zhuan.huaczy.com/custom',
+      'https://zhuan.huaczy.com.example/v1', 'https://zhuan.huaczy.com/v1?tenant=custom',
+      'https://user:pass@zhuan.huaczy.com/v1']) {
+      expect(normalizeLumiOfficialBaseUrl(custom)).toBe(custom);
+    }
+  });
+
   it('normalizes a host-only relay URL to the conventional /v1 root', () => {
     process.env.RELAY_API_KEY = 'test-relay-key';
     process.env.RELAY_BASE_URL = 'https://relay.example.test';

@@ -439,6 +439,11 @@ function requestsExplicitCadFileExport(text: string): boolean {
 
 function priorityToolsForRoute(categories: string[], text: string): string[] {
   const priorities: string[] = [];
+  // Keep the requested producer ahead of broad file/document helpers. The
+  // model projection is smaller than the route and otherwise drops media.
+  if (categories.includes('image_generation')) priorities.push('generate_image');
+  if (categories.includes('image_editing')) priorities.push('ai_edit_image');
+  if (categories.includes('video_generation')) priorities.push('generate_video');
   const instructionText = primaryRoutingInstruction(text);
   if (requestsBlankAutoCadDocument(instructionText)) {
     priorities.push('mcp_cad-drafting_autocad_new_document');

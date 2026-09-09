@@ -5,8 +5,10 @@ import path from 'path';
 import { createBundledSkillIdentity } from '../server/marketplace/official_identity';
 
 const ORIGINAL_LUMI_DATA_DIR = process.env.LUMI_DATA_DIR;
+const ORIGINAL_TEST_TMPDIR = process.env.LUMI_TEST_TMPDIR;
 
 let tempHome = '';
+let skillsDir = '';
 
 type ExecCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
 type ExecHandler = (command: string, options: any, callback: ExecCallback) => void;
@@ -35,6 +37,7 @@ async function importClientWithExec(
   vi.resetModules();
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_mcp_install_'));
   process.env.LUMI_DATA_DIR = path.join(tempHome, 'LumiCore');
+  process.env.LUMI_TEST_TMPDIR = path.join(tempHome, 'isolated-runtime');
 
   vi.doMock('os', async () => {
     const actual = await vi.importActual<typeof import('os')>('os');
@@ -46,13 +49,18 @@ async function importClientWithExec(
     return { ...actual, exec: execMock, execFile: execFileMock };
   });
 
-  return import('../server/mcp/client');
+  const client = await import('../server/mcp/client');
+  skillsDir = client.SKILLS_DIR;
+  expect(path.relative(tempHome, skillsDir)).not.toMatch(/^\.\.|^[A-Za-z]:/);
+  return client;
 }
 
 afterEach(() => {
   vi.useRealTimers();
   if (ORIGINAL_LUMI_DATA_DIR === undefined) delete process.env.LUMI_DATA_DIR;
   else process.env.LUMI_DATA_DIR = ORIGINAL_LUMI_DATA_DIR;
+  if (ORIGINAL_TEST_TMPDIR === undefined) delete process.env.LUMI_TEST_TMPDIR;
+  else process.env.LUMI_TEST_TMPDIR = ORIGINAL_TEST_TMPDIR;
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock('os');
@@ -244,7 +252,7 @@ describe('MCP skill install resilience', () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager, mcpServerConfigFingerprint } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    const skillDir = path.join(tempHome, 'lumi_skills', 'unsigned-cache');
+    const skillDir = path.join(skillsDir, 'unsigned-cache');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
@@ -254,7 +262,7 @@ describe('MCP skill install resilience', () => {
     }));
     const serverConfig = {
       command: 'npx',
-      args: ['tsx', '~/lumi_skills/unsigned-cache/index.ts'],
+      args: ['tsx', '${LUMI_SKILLS_DIR}/unsigned-cache/index.ts'],
       enabled: true,
       source: 'local' as const,
       transport: 'stdio' as const,
@@ -286,7 +294,7 @@ describe('MCP skill install resilience', () => {
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
     manager.saveConfig({});
-    const packageDir = path.join(tempHome, 'lumi_skills', 'directory-only');
+    const packageDir = path.join(skillsDir, 'directory-only');
     fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(path.join(packageDir, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
@@ -313,7 +321,7 @@ describe('MCP skill install resilience', () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    const skillDir = path.join(tempHome, 'lumi_skills', 'mutable-third-party');
+    const skillDir = path.join(skillsDir, 'mutable-third-party');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
       name: 'mutable-third-party',
@@ -347,7 +355,7 @@ describe('MCP skill install resilience', () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager, mcpRegistryToolName } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    const skillDir = path.join(tempHome, 'lumi_skills', 'restart-only');
+    const skillDir = path.join(skillsDir, 'restart-only');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(skillDir, 'package.json'), JSON.stringify({
@@ -402,7 +410,7 @@ describe('MCP skill install resilience', () => {
     vi.spyOn(manager, 'restartServer').mockResolvedValue(tools);
 
     const result = await manager.repairSkill('desktop-automation');
-    const installDir = path.join(tempHome, 'lumi_skills', 'desktop-automation');
+    const installDir = path.join(skillsDir, 'desktop-automation');
 
     expect(result).toMatchObject({ success: false, reviewRequired: true });
     expect(result.reason).toMatch(/non-transactional|install the official Skill Hall/i);
@@ -696,14 +704,14 @@ describe('MCP skill install resilience', () => {
 
     await expect(manager.installFromNpm('@scope/bad-skill')).rejects.toThrow('registry unavailable');
 
-    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'scope-bad-skill'))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, 'scope-bad-skill'))).toBe(false);
   });
 
   it('rejects an empty normalized npm package without touching the installed skills root', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    const skillsRoot = path.join(tempHome, 'lumi_skills');
+    const skillsRoot = skillsDir;
     fs.mkdirSync(skillsRoot, { recursive: true });
     const sentinel = path.join(skillsRoot, 'keep-this-skill');
     fs.mkdirSync(sentinel);
@@ -738,7 +746,7 @@ describe('MCP skill install resilience', () => {
     await expect(manager.installFromGitHub(repoUrl)).rejects.toThrow('dependency boom');
 
     expect(execFileMock).toHaveBeenCalledOnce();
-    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'failing-skill'))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, 'failing-skill'))).toBe(false);
   });
 
   it('rejects unsupported GitHub URLs before cloning', async () => {
@@ -829,7 +837,7 @@ describe('MCP skill install resilience', () => {
 
     const destDir = manager.installSkill('../Unsafe Skill', sourceDir);
 
-    expect(destDir).toBe(path.join(tempHome, 'lumi_skills', 'unsafe-skill'));
+    expect(destDir).toBe(path.join(skillsDir, 'unsafe-skill'));
     expect(fs.existsSync(path.join(tempHome, 'unsafe-skill'))).toBe(false);
     expect(manager.getConfig()['unsafe-skill']).toBeTruthy();
   });
@@ -846,15 +854,15 @@ describe('MCP skill install resilience', () => {
     }));
 
     const installed = await manager.installSkillValidated('atomic-skill', validSource);
-    expect(installed).toBe(path.join(tempHome, 'lumi_skills', 'atomic-skill'));
+    expect(installed).toBe(path.join(skillsDir, 'atomic-skill'));
     expect(manager.getConfig()['atomic-skill']).toBeTruthy();
 
     const invalidSource = path.join(tempHome, 'invalid-source');
     fs.mkdirSync(invalidSource, { recursive: true });
     fs.writeFileSync(path.join(invalidSource, 'package.json'), JSON.stringify({ name: 'broken' }));
     await expect(manager.installSkillValidated('broken', invalidSource)).rejects.toThrow(/index\.ts|runCommand/);
-    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', 'broken'))).toBe(false);
-    expect(fs.readdirSync(path.join(tempHome, 'lumi_skills')).some(name => name.startsWith('.staging-broken-'))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, 'broken'))).toBe(false);
+    expect(fs.readdirSync(skillsDir).some(name => name.startsWith('.staging-broken-'))).toBe(false);
   });
 
   it('rejects reserved runtime names and sources inside the installed skills root', async () => {
@@ -873,7 +881,7 @@ describe('MCP skill install resilience', () => {
       await expect(manager.repairSkill(reserved)).resolves.toMatchObject({ success: false, reason: 'Invalid skill name' });
     }
 
-    const installedRootSource = path.join(tempHome, 'lumi_skills', 'nested-source');
+    const installedRootSource = path.join(skillsDir, 'nested-source');
     fs.mkdirSync(installedRootSource, { recursive: true });
     fs.writeFileSync(path.join(installedRootSource, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(installedRootSource, 'package.json'), JSON.stringify({ name: 'nested-source' }));
@@ -1028,7 +1036,7 @@ describe('MCP skill install resilience', () => {
     }));
 
     expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
-    const installedDir = path.join(tempHome, 'lumi_skills', 'cad-drafting');
+    const installedDir = path.join(skillsDir, 'cad-drafting');
     expect(fs.readFileSync(path.join(installedDir, 'index.ts'), 'utf-8')).toContain('"old"');
     expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).lumi.installedVersion).toBe('1.5.0');
     expect(manager.getConfig()['cad-drafting']).toMatchObject({ enabled: false, installationState: 'disabled' });
@@ -1127,7 +1135,7 @@ describe('MCP skill install resilience', () => {
     manager.installSkill('runtime-verified', source, false, {
       managedSkill: createBundledSkillIdentity('skill-runtime-verified', source),
     });
-    const installedEntry = path.join(tempHome, 'lumi_skills', 'runtime-verified', 'index.ts');
+    const installedEntry = path.join(skillsDir, 'runtime-verified', 'index.ts');
     fs.writeFileSync(installedEntry, 'export const value = 999;\n');
 
     expect(() => manager.beginSkillActivation('runtime-verified')).toThrow(/content changed|runtime file changed/i);
@@ -1158,7 +1166,7 @@ describe('MCP skill install resilience', () => {
     config['runtime-signature'].command = forgedIdentity.runtime.command;
     config['runtime-signature'].managedSkill = forgedIdentity;
     manager.saveConfig(config);
-    const installedPackagePath = path.join(tempHome, 'lumi_skills', 'runtime-signature', 'package.json');
+    const installedPackagePath = path.join(skillsDir, 'runtime-signature', 'package.json');
     const installedPackage = JSON.parse(fs.readFileSync(installedPackagePath, 'utf8'));
     installedPackage.lumi.managedSkill = forgedIdentity;
     fs.writeFileSync(installedPackagePath, JSON.stringify(installedPackage, null, 2));
@@ -1237,6 +1245,6 @@ describe('MCP skill install resilience', () => {
       managedSkill: createBundledSkillIdentity(`skill-unbound-${command}`, source),
     })).rejects.toThrow(/runCommand|immutable local runtime/i);
     expect(manager.getConfig()).not.toHaveProperty(`unbound-${command}`);
-    expect(fs.existsSync(path.join(tempHome, 'lumi_skills', `unbound-${command}`))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, `unbound-${command}`))).toBe(false);
   });
 });

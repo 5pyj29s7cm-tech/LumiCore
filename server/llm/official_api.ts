@@ -162,6 +162,20 @@ function errorMessage(body: any, response: Response, credential = relayApiKey())
   return message.replace(/(?:Bearer\s+|sk-[A-Za-z0-9_-]{6,})[^\s]*/gi, '[redacted]').slice(0, 500);
 }
 
+/** Only an actual gateway response can prove rejection; timeouts cannot. */
+export class OfficialApiHttpError extends Error {
+  constructor(readonly status: number, readonly requestPath: string, message: string) {
+    super(message);
+    this.name = 'OfficialApiHttpError';
+  }
+}
+
+export function isDefiniteOfficialImageRejection(error: unknown): boolean {
+  return error instanceof OfficialApiHttpError
+    && /(?:^|\/)images\/(?:generations|edits)$/.test(error.requestPath)
+    && [400, 401, 403, 404, 413, 415, 422, 429].includes(error.status);
+}
+
 /** Preserve the gateway's FastAPI error detail through OpenAI SDK parsing. */
 export async function normalizeOfficialOpenAIErrorResponse(response: Response, credential: string): Promise<Response> {
   if (response.ok || !/json/i.test(response.headers.get('content-type') || '')) return response;
@@ -215,7 +229,8 @@ export async function officialApiRequest<T = any>(
       signal: controller.signal,
     });
     const body = await readBody(response);
-    if (!response.ok) throw new Error(`Lumi Official API request failed (${response.status}): ${errorMessage(body, response)}`);
+    if (!response.ok) throw new OfficialApiHttpError(response.status, path,
+      `Lumi Official API request failed (${response.status}): ${errorMessage(body, response)}`);
     return { response, body: body as T };
   } catch (error: any) {
     if (error?.name === 'AbortError' && !callerSignal?.aborted) {

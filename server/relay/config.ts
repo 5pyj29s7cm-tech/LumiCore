@@ -1,4 +1,5 @@
 import { getKey } from '../config/keys';
+import { normalizeLumiOfficialBaseUrl } from '../../shared/model_provider_capabilities';
 
 function isLoopbackHostname(hostname: string): boolean {
   const value = hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -38,7 +39,7 @@ export function relayApiKey(): string {
 }
 
 export function relayBaseUrl(): string {
-  return String(process.env.RELAY_BASE_URL || getKey('RELAY_BASE_URL') || '').trim().replace(/\/+$/, '');
+  return normalizeLumiOfficialBaseUrl(process.env.RELAY_BASE_URL || getKey('RELAY_BASE_URL'));
 }
 
 export function relayConfigured(): boolean {

@@ -123,6 +123,7 @@ function canonicalIntentOwnsNonClientAction(
     'payment',
     'signature',
     'cad_drafting',
+    'media_generation',
     'scheduled_task',
     'work_task',
   ].includes(kind);
@@ -466,6 +467,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
   if (canonical.kind === 'messaging_read' || canonical.kind === 'messaging_send') return true;
   if (canonical.kind === 'work_task') return true;
+  if (canonical.kind === 'media_generation') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
@@ -588,6 +590,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       : canonical.kind === 'messaging_send'
         ? ['messaging-send']
         : matchedStructuredToolRules;
+  if (canonical.kind === 'media_generation') structuredToolRules.push('media-generation');
   if (!informationOnlyQuestion && isVideoPlaybackRequest(normalized)) {
     structuredToolRules.push('video-playback');
   }

@@ -4,7 +4,7 @@ import {
   getUserRetrievalModelPreferences,
   type EmbeddingModelSelection,
 } from './retrieval_model_preferences';
-import { relayApiKey } from '../relay/config';
+import { relayApiKey, relayBaseUrl } from '../relay/config';
 import { officialApiModel, officialApiPath, officialApiRequest } from './official_api';
 import { requireLocalProvider, isStrictPrivacy, requireLocalEndpoint } from '../config/privacy';
 import { runRetrievalRequest } from './retrieval_request';
@@ -91,7 +91,7 @@ async function runEmbedding(selection: EmbeddingSelection, text: string, signal?
     },
     relay: {
       key: relayApiKey(),
-      baseUrl: normalizedBaseUrl(process.env.RELAY_BASE_URL || keys.RELAY_BASE_URL || '', ''),
+      baseUrl: relayBaseUrl(),
     },
     lmstudio: {
       key: '',

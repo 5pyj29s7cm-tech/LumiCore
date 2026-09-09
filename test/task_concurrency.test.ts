@@ -47,14 +47,14 @@ describe('active task message relation', () => {
     }
   });
 
-  it('binds an actionable client-mode correction to the same unfinished task', () => {
-    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+  it('binds an actionable client-navigation correction to the same unfinished task', () => {
+    const correction = '\u6211\u8bf4\u7684\u662f\u6253\u5f00\u804a\u5929\u754c\u9762';
     const clientTask: ConversationActionContinuationState = {
       ...activeState,
       taskId: 'task-client-mode',
       status: 'blocked',
-      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
-      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      goal: '\u6253\u5f00\u5ba2\u6237\u7aef\u9875\u9762',
+      latestInstruction: '\u6253\u5f00\u5ba2\u6237\u7aef\u8bbe\u7f6e',
       latestBlocker: 'client_action receipt missing',
       activeRequestId: 'request-client-mode',
       revision: 4,
@@ -64,7 +64,7 @@ describe('active task message relation', () => {
     expect(normalizeActionIntent(correction)).toMatchObject({
       kind: 'client_navigation',
       target: 'chat',
-      clientAction: 'set_client_mode',
+      clientAction: 'open_chat',
       relation: 'correction',
     });
     expect(resolveActiveTaskMessageRelation(correction, clientTask, {
@@ -83,7 +83,7 @@ describe('active task message relation', () => {
   });
 
   it('starts actionable corrections without a task as new work and detaches unrelated work', () => {
-    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const correction = '\u6211\u8bf4\u7684\u662f\u6253\u5f00\u804a\u5929\u754c\u9762';
     expect(resolveActiveTaskMessageRelation(correction, null)).toMatchObject({
       relation: 'queue',
       taskRelation: 'new',
@@ -97,8 +97,8 @@ describe('active task message relation', () => {
       ...activeState,
       taskId: 'task-client-mode',
       status: 'blocked',
-      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
-      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      goal: '\u6253\u5f00\u5ba2\u6237\u7aef\u9875\u9762',
+      latestInstruction: '\u6253\u5f00\u5ba2\u6237\u7aef\u8bbe\u7f6e',
       unfinished: true,
     };
     expect(resolveActiveTaskMessageRelation('\u4eca\u5929\u5929\u6c14\u600e\u4e48\u6837', clientTask)).toMatchObject({

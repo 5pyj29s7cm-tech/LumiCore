@@ -55,9 +55,9 @@ describe('Lumi official API role settings contract', () => {
 
   it('keeps the documented endpoint and model ids in one shared contract', async () => {
     const manifest = await import('../shared/model_provider_capabilities');
-    expect(manifest.LUMI_OFFICIAL_BASE_URL).toBe('https://zhuan.huaczy.com/v1');
-    expect(manifest.LUMI_OFFICIAL_DOCS_URL).toBe('https://zhuan.huaczy.com/console/help');
-    expect(manifest.LUMI_OFFICIAL_RECHARGE_URL).toBe('https://zhuan.huaczy.com/console/recharge');
+    expect(manifest.LUMI_OFFICIAL_BASE_URL).toBe('https://lumi.xingcyj.com/v1');
+    expect(manifest.LUMI_OFFICIAL_DOCS_URL).toBe('https://lumi.xingcyj.com/docs');
+    expect(manifest.LUMI_OFFICIAL_RECHARGE_URL).toBe('https://lumi.xingcyj.com/console/recharge');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.reasoning).toBe('aliyun/deepseek-v4-flash');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.vision).toBe('aliyun/qwen2.5-vl-72b');
     expect(manifest.LUMI_OFFICIAL_DEFAULT_MODELS.world).toBe('aliyun/qwen3-vl-flash');

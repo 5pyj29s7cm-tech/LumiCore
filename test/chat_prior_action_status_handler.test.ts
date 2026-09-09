@@ -648,6 +648,35 @@ describe('chat prior-action status handler', () => {
     expect(llmTripwire).not.toHaveBeenCalled();
   });
 
+  it('answers terse status questions from a completed media task after its live pointer retires', async () => {
+    const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const seedRequest = `completed-media-${suffix}`;
+    const goal = '生成一张蓝色杯子的图片。';
+    const messageId = addMessage({ userId, agentId: 'lumi', conversationId: isolated.id, role: 'user', content: goal,
+      domain: 'personal', source: 'command-center-chat', channel: 'chat', requestId: seedRequest, deferActionPreparation: true });
+    bindConversationActionExecutionTurn({ conversationId: isolated.id, userId, userText: goal, requestId: seedRequest, userMessageId: messageId });
+    addMessage({ userId, agentId: 'lumi', conversationId: isolated.id, role: 'assistant', content: '图片已生成。',
+      domain: 'personal', source: 'command-center-chat', channel: 'chat', requestId: seedRequest, taskIntent: 'task',
+      toolCalls: [{ id: 'completed-media-call', name: 'generate_image', arguments: { prompt: 'blue cup' },
+        result: JSON.stringify({ ok: true, status: 'generated', verified: true, verificationStatus: 'verified',
+          images: ['D:/generated/blue-cup.png'], artifacts: [{ type: 'image', path: 'D:/generated/blue-cup.png' }] }),
+        terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'decoded generated file' },
+        envelope: { status: 'verified_success', verification: { status: 'verified' } } }],
+    });
+    setConversationActionExecutionStatus(isolated.id, userId, 'completed', { requestId: seedRequest, assistantState: '图片已生成。' });
+    const before = (readDB().conversationActionReceipts || []).length;
+    for (const [i, question] of ['调用了吗', '你发起了吗', '你发了吗，没发为什么说你再发一次', '为什么你说完以后自己没去发起？'].entries()) {
+      const response = await sendStatusQuestion(`completed-media-query-${i}-${suffix}`, question, isolated.id);
+      expect(response).toMatchObject({ finalized: true, blocked: false });
+      expect(response.reason).toMatch(/task_status|execution_facts/);
+      expect(response.text).toContain('已完成');
+      expect(response.text).toContain('蓝色杯子');
+      expect(response.text).not.toMatch(/没有可核实|确认你的意图/);
+      expect((readDB().conversationActionReceipts || []).length).toBe(before);
+    }
+    expect(llmTripwire).not.toHaveBeenCalled();
+  });
+
   it('answers an already-recorded observation receipt with its real task status and window title', async () => {
     const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
     const seedUserMessageId = addMessage({
@@ -856,10 +885,8 @@ describe('chat prior-action status handler', () => {
       finalized: true,
       blocked: false,
     });
-    expect(response.text).toContain('3 \u79cd');
-    expect(response.text).toContain('chat');
-    expect(response.text).toContain('assistant');
-    expect(response.text).toContain('autonomous');
+    expect(response.text).toContain('统一的个人人格核心'); // i18n-allow: canonical unified-core reply.
+    expect(response.text).toContain('不再分成聊天、助手或自主模式'); // i18n-allow: removed mode choices.
     expect(response.text).not.toMatch(/7 \u79cd|scholar|office|client\.modes/u);
     expect(observedEvents.filter(item => (
       String(item.payload.requestId || '') === modeFactsRequestId

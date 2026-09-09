@@ -109,8 +109,8 @@ describe('Lumi requirement matrix pressure', () => {
     const assistant = evaluateTurn({ text, operationMode: 'assistant' });
     const autonomous = evaluateTurn({ text, operationMode: 'autonomous' });
 
-    expect(chat.dispatch.flow.autoPromoteToAssistant).toBe(true);
-    expect(chat.dispatch.flow.effectiveOperationMode).toBe('chat');
+    expect(chat.dispatch.flow.autoPromoteToAssistant).toBe(false);
+    expect(chat.dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(chat.dispatch.flow.allowToolUseForTurn).toBe(true);
     expect(chat.execution.allowToolUse).toBe(true);
     expect(chat.execution.toolRoute?.categories).toContain('messaging');
@@ -129,13 +129,13 @@ describe('Lumi requirement matrix pressure', () => {
       expect(result.execution.toolPolicy.requireConfirmation || []).not.toContain('wechat_send_message');
     }
 
-    // Chat remains the visible UI posture, but an explicit foreground task is
-    // executable in the same turn without a persistent regex-driven mode flip.
-    expect(chat.dispatch.flow.effectiveOperationMode).toBe('chat');
+    // Legacy wire values normalize to one core and cannot change its permissions.
+    expect(chat.dispatch.flow.effectiveOperationMode).toBe('assistant');
     expect(buildModelCapabilityPolicy(chat.execution).allowedTools).toContain('desktop_open');
 
     expect(assistant.execution.maxIterations).toBeGreaterThanOrEqual(80);
-    expect(autonomous.execution.maxIterations).toBeGreaterThan(assistant.execution.maxIterations);
+    expect(autonomous.execution.maxIterations).toBe(assistant.execution.maxIterations);
+    expect(buildModelCapabilityPolicy(autonomous.execution)).toEqual(buildModelCapabilityPolicy(assistant.execution));
   });
 
   it('keeps relaxed ordinary actions and hard external boundaries in the same constitution', () => {

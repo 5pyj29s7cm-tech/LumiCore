@@ -126,13 +126,13 @@ describe('recent action continuation', () => {
   });
 
   it('resumes the same unfinished client task for an actionable correction', () => {
-    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const correction = '\u6211\u8bf4\u7684\u662f\u6253\u5f00\u804a\u5929\u754c\u9762';
     const clientTask = {
       version: 2 as const,
       taskId: 'task-client-mode',
       status: 'blocked' as const,
-      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
-      latestInstruction: '\u5207\u6362\u5230\u6307\u6325\u4e2d\u5fc3',
+      goal: '\u6253\u5f00\u5ba2\u6237\u7aef\u9875\u9762',
+      latestInstruction: '\u6253\u5f00\u5ba2\u6237\u7aef\u8bbe\u7f6e',
       appTarget: '',
       sourcePaths: [],
       latestBlocker: 'client_action receipt missing',
@@ -161,7 +161,7 @@ describe('recent action continuation', () => {
     expect(prepared.kind).toBe('resume');
     expect(prepared.state).toMatchObject({
       taskId: 'task-client-mode',
-      goal: '\u5207\u6362\u5ba2\u6237\u7aef\u6a21\u5f0f',
+      goal: '\u6253\u5f00\u5ba2\u6237\u7aef\u9875\u9762',
       latestInstruction: correction,
       status: 'planning',
       unfinished: true,
@@ -171,7 +171,7 @@ describe('recent action continuation', () => {
   });
 
   it('creates new client work without durable state instead of inventing continuity', () => {
-    const correction = '\u6211\u8bf4\u7684\u662f\u5207\u6362\u5ba2\u6237\u7aef\u804a\u5929\u6a21\u5f0f';
+    const correction = '\u6211\u8bf4\u7684\u662f\u6253\u5f00\u804a\u5929\u754c\u9762';
     const prepared = prepareConversationActionTaskState(null, {
       userText: correction,
       requestId: 'request-client-new',

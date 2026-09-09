@@ -5,7 +5,7 @@ import { io as createClient, type Socket } from 'socket.io-client';
 
 const fixture = vi.hoisted(() => ({
   model: vi.fn(),
-  extract: vi.fn(),
+  memoryPlan: vi.fn(),
   beforeTerminalFlush: null as null | (() => Promise<void>),
   beforeRelease: null as null | (() => Promise<void>),
   beforeSidecarPersistenceReturn: null as null | (() => Promise<void>),
@@ -18,7 +18,7 @@ vi.mock('../server/llm/providers', async original => ({
 }));
 vi.mock('../server/memory', async original => ({
   ...await original<typeof import('../server/memory')>(),
-  queryMemories: vi.fn(() => []), queryMemoriesVector: vi.fn(async () => []), extractMemories: fixture.extract,
+  queryMemories: vi.fn(() => []), queryMemoriesVector: vi.fn(async () => []),
 }));
 vi.mock('../server/agents/rag', async original => ({
   ...await original<typeof import('../server/agents/rag')>(), retrieveChunks: vi.fn(async () => []),
@@ -109,6 +109,7 @@ async function openChat(withTask: boolean) {
   const conversationId = getOrCreateActiveConversation(userId, 'lumi', 'work', org.id).id;
   if (!toolRegistry.get('desktop_active_window')) registerAllTools(toolRegistry);
   fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'memory_turn') return outcome(JSON.stringify(await fixture.memoryPlan(args[2])));
     if (args[2]?.source === 'chat_intent_classifier') return outcome('{"category":"question","confidence":0.99,"entities":{}}');
     if (!withTask) return outcome();
     const context = args[11];
@@ -124,7 +125,7 @@ async function openChat(withTask: boolean) {
         targetIdentity: 'synthetic-project.txt', result: { content: marker }, verification: { status: 'verified' } },
     }] };
   });
-  fixture.extract.mockResolvedValue({ memories: [], reminders: [] });
+  fixture.memoryPlan.mockResolvedValue({ changes: [] });
   const finished = deferred();
   const completions = new Map<string, ReturnType<typeof deferred>>();
   const completionFor = (id: string) => {
@@ -186,7 +187,7 @@ it('an authorized conversational chat starts eligible memory extraction after re
   await h.finished;
   await h.drain();
   expect(h.errors).toEqual([]);
-  expect(fixture.extract).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(fixture.memoryPlan).toHaveBeenCalledOnce());
 });
 
 it('removal during the real terminal flush publishes only a safe cancellation and no old task relation', async () => {
@@ -212,7 +213,7 @@ it('removal during the real terminal flush publishes only a safe cancellation an
   expect(JSON.stringify(late)).not.toContain(marker);
   expect(late.some(([event]) => event === 'agent:task_relation')).toBe(false);
   expect(late.some(([event]) => event === 'chat:conversation_updated')).toBe(false);
-  expect(fixture.extract).not.toHaveBeenCalled();
+  expect(fixture.memoryPlan).not.toHaveBeenCalled();
 });
 
 it('removal while releasing a completed chat prevents starting a derived memory model', async () => {
@@ -224,13 +225,13 @@ it('removal while releasing a completed chat prevents starting a derived memory 
   await h.send();
   await entered.promise;
   await vi.waitFor(() => expect(h.emitted.some(([event, payload]) => event === 'agent:response' && payload.text.includes(marker))).toBe(true));
-  expect(fixture.extract).not.toHaveBeenCalled();
+  expect(fixture.memoryPlan).not.toHaveBeenCalled();
   removeMember(h.org.id, h.userId);
   gate.resolve();
   await h.finished;
   await h.drain();
   expect(h.errors).toEqual([]);
-  expect(fixture.extract).not.toHaveBeenCalled();
+  expect(fixture.memoryPlan).not.toHaveBeenCalled();
 });
 
 it('settles a revoked cancel sidecar once without prematurely finalizing the held foreground model', async () => {

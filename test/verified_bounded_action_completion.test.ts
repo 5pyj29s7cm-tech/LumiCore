@@ -15,6 +15,7 @@ import { ToolRegistry } from '../server/tools/registry';
 import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
 import { registerDesktopTools } from '../server/tools/definitions/desktop_tools';
 import { registerDocumentTools } from '../server/tools/definitions/document_tools';
+import { registerImageTools } from '../server/tools/definitions/image_tools';
 import { guardCompletionClaims } from '../server/work_product/completion_guard';
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from '../server/cognition/result_finalizer';
 import { resolveAcceptedTaskTarget } from '../server/conversation/task_target_anchor';
@@ -47,6 +48,37 @@ async function run(task: string, value: ReturnType<typeof fixture>, onToolCall?:
 }
 
 describe('verified bounded actions in the real shared tool loop', () => {
+  it('delivers a verified retry image before another model call or queued duplicate can replace its success', async () => {
+    const value = fixture();
+    registerImageTools(value.registry);
+    const output = value.target.replace(/\.txt$/, '.png');
+    fs.writeFileSync(output, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+    const handler = vi.fn(async () => JSON.stringify({ ok: true, status: 'generated', provider: 'fixture', model: 'fixture',
+      verified: true, verificationStatus: 'verified', images: [output], artifacts: [{ type: 'image', path: output }] }));
+    value.registry.get('generate_image')!.handler = handler;
+    const task = '生成一张蓝色杯子的图片。只提交一次。';
+    value.context.routedTaskText = task;
+    value.context.priorToolRecords = [{ name: 'generate_image', arguments: { prompt: 'blue cup' }, result: '',
+      error: 'Lumi Official API request failed (400): rejected', requestId: 'old-attempt', taskId: value.context.taskId }];
+    mocks.makeLLMCall.mockResolvedValueOnce({ text: '', toolCalls: [
+      { id: 'image', name: 'generate_image', arguments: { prompt: 'blue cup' } },
+      { id: 'duplicate-image', name: 'generate_image', arguments: { prompt: 'unwanted alternative' } },
+    ] });
+    const result = await run('可以', value);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(1);
+    expect(result.text).toBe('图片已生成。');
+    const current = result.toolCalls.filter(record => record.requestId === value.context.requestId);
+    expect(current).toHaveLength(1);
+    expect(current[0].terminalVerification?.status).toBe('verified');
+    const input = { taskText: task, responseText: '', toolRecords: result.toolCalls, source: 'chat',
+      requestId: value.context.requestId, taskId: value.context.taskId };
+    expect(finalizeLumiResponse(input)).toMatchObject({ blocked: false, text: '图片已生成。' });
+    expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText: '生成一张蓝色杯子的图片并发送邮件。' })).toBeNull();
+    expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText: '生成两张蓝色杯子的图片。' })).toBeNull();
+    expect(tryFinalizeVerifiedBoundedAction({ ...input, requestId: 'other-turn' })).toBeNull();
+  });
+
   it('creates the exact XLSX and reads that real workbook before delivering its contents', async () => {
     const value = fixture();
     registerDocumentTools(value.registry);

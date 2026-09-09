@@ -376,18 +376,17 @@ describe('normalized desktop intent priority', () => {
   });
 
   it('parses an actionable restatement as a correction of the same client action', () => {
-    const intent = normalizeActionIntent('我说的是切换客户端聊天模式');
+    const intent = normalizeActionIntent('我说的是打开聊天界面');
     expect(intent).toMatchObject({
       kind: 'client_navigation',
       operation: 'navigate',
       target: 'chat',
-      clientAction: 'set_client_mode',
-      clientActionArguments: { mode: 'chat' },
+      clientAction: 'open_chat',
       relation: 'correction',
     });
     expect(buildDeterministicClientNavigationCommand(intent)?.toolCall).toEqual({
       name: 'client_action',
-      arguments: { action: 'set_client_mode', mode: 'chat' },
+      arguments: { action: 'open_chat' },
     });
   });
 

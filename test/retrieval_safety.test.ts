@@ -7,7 +7,7 @@ vi.mock('../server/org/db', () => ({ listKbArticles: () => kbState.articles, get
 vi.mock('../server/org/resource_acl', () => ({ getOrganizationResourcePolicy: () => ({ policy: null }) }));
 vi.mock('../server/config/keys', () => ({ loadKeys: () => ({ OPENAI_API_KEY: 'synthetic', SILICONFLOW_API_KEY: 'synthetic' }) }));
 vi.mock('../server/llm/local_models', () => ({ getLocalModelConfig: () => ({ baseUrl: 'http://127.0.0.1:59999' }) }));
-vi.mock('../server/relay/config', () => ({ relayApiKey: () => '' }));
+vi.mock('../server/relay/config', () => ({ relayApiKey: () => '', relayBaseUrl: () => 'https://official.invalid/v1' }));
 vi.mock('../server/llm/official_api', () => ({ officialApiModel: (_key: string, model: string) => model, officialApiPath: (_key: string, path: string) => path, officialApiRequest: () => { throw new Error('No official transport in this fixture'); } }));
 
 import { generateConfiguredEmbedding } from '../server/llm/embedding_provider';

@@ -40,6 +40,24 @@ describe('conversation action continuation state', () => {
   beforeAll(async () => {
     await initDatabase();
   });
+  it('keeps a failed image task attached through retry acceptance and status complaints', () => {
+    const userId = `failed-media-${Date.now()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const goal = '帮我生成一张皮卡丘在精灵球里的图片';
+    addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'user', content: goal, domain: 'personal' });
+    addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'assistant',
+      content: '超时了，我再试一次。', domain: 'personal', toolCalls: [{ name: 'generate_image', arguments: { prompt: goal }, result: '',
+        error: 'Lumi Official API request timed out after 60000ms', terminalVerification: { status: 'failed', strategy: 'artifact', reason: 'timeout' } }] });
+    const taskId = getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState?.taskId;
+    expect(taskId).toBeTruthy();
+    for (const content of ['可以', '调用了吗', '你发了吗，没发为什么说你再发一次', '你发起了吗', '为什么你说完以后自己没去发起？']) {
+      addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'user', content, domain: 'personal', deferActionPreparation: true });
+      expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
+        .toMatchObject({ taskId, goal, unfinished: true });
+      addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'assistant', content: '没有新的生成结果，原任务仍未完成。', domain: 'personal' });
+    }
+    expect(durableActionState(conversation.id, userId)).toMatchObject({ taskId, goal, unfinished: true });
+  });
 
   it('keeps terminal evidence in durable history without occupying the live pointer', () => {
     const userId = `conversation-action-state-${Date.now()}-${Math.random()}`;

@@ -105,7 +105,7 @@ describe('model tool declaration projection', () => {
     operationMode => {
       const registry = new ToolRegistry();
       registerAllTools(registry);
-      const text = '我说的是切换客户端聊天模式';
+      const text = '我说的是打开聊天界面';
       const dispatch = buildLumiTurnDispatch({
         userId: `client_projection_${operationMode}`,
         text,

@@ -631,6 +631,9 @@ async function generateImageOfficial(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
+    // Generation routinely exceeds the generic API timeout. Leave time for
+    // artifact persistence inside the registry's three-minute execution limit.
+    timeoutMs: 120_000,
   });
   reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageRequestSubmitted);
   reportImageProgress(onProgress, CN_MEDIA_PROGRESS.imageGenerating);

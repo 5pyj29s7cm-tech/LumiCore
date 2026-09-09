@@ -1,4 +1,5 @@
 import type { ToolPolicy } from '../personality/types';
+import { normalizeStructuredMediaRequest, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
 import type { ConversationActionContinuationState } from './action_continuation';
 import {
@@ -74,6 +75,8 @@ export interface LumiExecutionPipeline {
 }
 
 export interface BuildLumiExecutionPipelineInput {
+  /** Validated workbench operation; a projection hint, never an authorization grant. */
+  structuredMediaRequest?: StructuredMediaRequest | null;
   dispatch: LumiTurnDispatchInput;
   /**
    * A caller may precompute the dispatch when it needs to apply a channel
@@ -335,7 +338,16 @@ export function buildLumiExecutionPipeline(
       : ''].filter(Boolean).join('\n'),
   };
   const decisionText = acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText;
-  const normalizedIntent = normalizeActionIntent(decisionText);
+  const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
+  // A bound retry inherits its authorized goal, not the side-effect class of
+  // the acknowledgement ("yes"). Keep current-turn denials authoritative below.
+  const currentIntent = normalizeActionIntent(decisionText);
+  const priorIntent = normalizeActionIntent(input.actionTaskState?.goal || '');
+  const resumesMediaGoal = trustedActionContinuation && currentIntent.kind === 'none' && priorIntent.kind === 'media_generation';
+  const normalizedIntent = resumesMediaGoal ? priorIntent : currentIntent;
+  if (resumesMediaGoal && input.actionTaskState?.goal) {
+    turnIntent.flow.routeText = [input.actionTaskState.goal, turnIntent.flow.routeText].join('\n\n');
+  }
   const visibilityContext = {
     userId: input.dispatch.userId,
     domain: input.dispatch.domain === 'work' ? 'work' as const : 'personal' as const,
@@ -344,7 +356,6 @@ export function buildLumiExecutionPipeline(
       || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
     source: input.dispatch.source || input.dispatch.channel,
   };
-  const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
   const legacyExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     text: decisionText,
@@ -405,11 +416,13 @@ export function buildLumiExecutionPipeline(
   )?.requiredTools || [];
   const actionVerificationTools = buildActionContract(decisionText).verificationTools || [];
   const requestedArtifact = requestedSingleArtifact(effectiveText);
+  const mediaRequest = normalizeStructuredMediaRequest(input.structuredMediaRequest);
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,
     pinnedTools: pinnedContinuationTools,
     requiredTools: [
+      ...(mediaRequest ? [structuredMediaToolCall(mediaRequest).name] : []),
       ...workflowRequiredTools,
       ...actionVerificationTools,
       ...preservedSourceOutputTools(effectiveText, acceptedTaskTarget),

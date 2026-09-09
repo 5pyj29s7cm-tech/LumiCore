@@ -65,6 +65,54 @@ beforeEach(() => {
 });
 
 describe('LLM tool-loop recovery and terminal truth', () => {
+  it.each(['generate_image', 'ai_edit_image', 'generate_video'])('ends a failed %s attempt before any queued or replanned generation', async (name) => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => { throw new Error('Lumi Official API request failed (400): provider rejected generation'); });
+    registerReadOnlyProbe(registry, name, handler);
+    mocks.makeLLMCall.mockResolvedValue({ text: 'I will retry with another prompt.', toolCalls: [
+      { id: 'first-attempt', name, arguments: { prompt: 'original user brief' } },
+      { id: 'queued-rewrite', name, arguments: { prompt: 'unrequested replacement' } },
+    ] });
+    const result = await runWithTools([{ role: 'user', content: 'Generate the requested media. Submit only once.' }], registry,
+      { provider: 'deepseek', model: 'test-model', userId: 'bounded-media-test' }, undefined, 5, ...getters, undefined,
+      { source: 'chat', requestId: 'media-turn', taskId: 'media-task' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(1);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.completionGuard).toMatchObject({ blocked: true, reason: 'media_generation_failed' });
+    const { recoverBlockedExecutionOnce } = await import('../server/cognition/execution_guard_recovery');
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const final = finalizeLumiResponse({ taskText: 'Generate the requested media. Submit only once.', responseText: result.text,
+      toolRecords: result.toolCalls, completionGuard: result.completionGuard, taskId: 'media-task', requestId: 'media-turn', source: 'chat' });
+    const recover = vi.fn();
+    const recovered = await recoverBlockedExecutionOnce({ task: 'Generate the requested media. Submit only once.',
+      responseText: result.text, toolRecords: result.toolCalls, finalization: final, allowToolUse: true, intent: 'action_execution',
+      attempt: recover, finalize: () => final });
+    expect(recover).not.toHaveBeenCalled();
+    expect(recovered.attempted).toBe(false);
+    expect(recovered.finalization.blocked).toBe(true);
+  });
+
+  it('does not replay an old image failure as the result of a model timeout before execution', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => '{}');
+    registerReadOnlyProbe(registry, 'generate_image', handler);
+    const prior: ToolExecutionRecord = { id: 'previous-image-call', name: 'generate_image', arguments: { prompt: 'blue cup' },
+      result: '', error: 'Lumi Official API request failed (400): IP infringement', requestId: 'previous-turn', taskId: 'media-task' };
+    mocks.makeLLMCall.mockRejectedValueOnce(new Error('Model attempt first_byte timeout after 45000ms'));
+    const result = await runWithTools([{ role: 'user', content: '可以' }], registry,
+      { provider: 'deepseek', model: 'test-model', userId: 'media-timeout-test' }, undefined, 2, ...getters, undefined,
+      { source: 'chat', requestId: 'current-turn', taskId: 'media-task', routedTaskText: '帮我生成一张图片', priorToolRecords: [prior] });
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.completionGuard).toMatchObject({ blocked: true, reason: 'model_failed_before_tool_execution' });
+    expect(result.text).toContain('未发起新的操作');
+    expect(result.text).not.toContain('IP infringement');
+    expect(getRecentWorkflows('media-timeout-test')).toHaveLength(0);
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const final = finalizeLumiResponse({ taskText: '帮我生成一张图片', responseText: result.text,
+      toolRecords: [prior], completionGuard: result.completionGuard, taskId: 'media-task', requestId: 'current-turn', source: 'chat' });
+    expect(final).toMatchObject({ text: result.text, blocked: true, reason: 'model_failed_before_tool_execution' });
+  });
   it('records the original user request instead of a server recovery prompt', async () => {
     const registry = new ToolRegistry();
     registerReadOnlyProbe(registry, 'workflow_recovery_probe', async () => encodeToolResult(

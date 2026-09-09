@@ -720,6 +720,11 @@ describe('unified acceptance and evidence state', () => {
   });
 
   it('builds foreground feedback only from a real task lifecycle or tool receipt', () => {
+    for (const taskLabel of ['请生成一张图片：蓝色杯子。完成后直接给我图片。', 'Generate a video: a quiet forest.']) { // i18n-allow: live media regression input.
+      const discovery = { ...terminalToolRecord('media-discovery'), name: 'client_capability_manifest' };
+      expect(buildForegroundTaskCompletionFeedback({ taskId: 'media-task', taskLabel,
+        toolRecords: [discovery], reason: 'task_status' })).toMatchObject({ status: 'blocked', completed: [] });
+    }
     expect(buildForegroundTaskCompletionFeedback({
       taskId: 'plain-chat',
       taskLabel: 'How are you?',

@@ -10,8 +10,11 @@ import {
 import {
   parseReceiptObject,
   toolRecordHasTerminalPayload,
+  toolRecordTerminalPayload,
 } from '../tools/receipt_payload';
 import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
+import { normalizeActionIntent } from './normalized_action_intent';
+import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 
 export type AcceptanceStage = 'registered' | 'available' | 'exercised' | 'verified';
 export type RuntimeSampleStatus = 'not_exercised' | 'unknown' | 'degraded' | 'verified';
@@ -443,8 +446,14 @@ export function buildForegroundTaskCompletionFeedback(input: {
   // status probe into completed foreground feedback. Broader action kinds are
   // adjudicated by the result finalizer, whose target rules are richer than
   // this compact cross-runtime summary layer.
-  const missingRequestedActionEvidence = contract.kind === 'task_control'
-    && !hasCoreActionEvidence(contract, records, label);
+  const mediaIntent = normalizeActionIntent(input.taskLabel);
+  const missingMediaEvidence = mediaIntent.kind === 'media_generation' && !records.some(record => (
+    record.name === mediaIntent.target
+    && record.terminalVerification?.status === 'verified'
+    && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error)
+  ));
+  const missingRequestedActionEvidence = missingMediaEvidence || (contract.kind === 'task_control'
+    && !hasCoreActionEvidence(contract, records, label));
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
     : input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence

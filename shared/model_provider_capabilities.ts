@@ -13,11 +13,25 @@ export const LUMI_OFFICIAL_PROVIDER_ID = 'relay' as const;
  * credentials are still entered and stored on the server, never in the
  * browser bundle or local storage.
  */
-export const LUMI_OFFICIAL_BASE_URL = 'https://zhuan.huaczy.com/v1' as const;
+export const LUMI_OFFICIAL_BASE_URL = 'https://lumi.xingcyj.com/v1' as const;
+
+/** Upgrade the retired official endpoint while preserving custom gateways. */
+export function normalizeLumiOfficialBaseUrl(value: unknown): string {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  try {
+    const url = new URL(raw);
+    if (url.origin === 'https://zhuan.huaczy.com' && !url.username && !url.password
+      && !url.search && !url.hash && ['/', '/v1'].includes(url.pathname)) {
+      return LUMI_OFFICIAL_BASE_URL;
+    }
+  } catch { /* Empty and custom inputs retain existing validation behavior. */ }
+  return raw;
+}
+
 
 /** Public API documentation and account pages shown in Settings. */
-export const LUMI_OFFICIAL_DOCS_URL = 'https://zhuan.huaczy.com/console/help' as const;
-export const LUMI_OFFICIAL_RECHARGE_URL = 'https://zhuan.huaczy.com/console/recharge' as const;
+export const LUMI_OFFICIAL_DOCS_URL = 'https://lumi.xingcyj.com/docs' as const;
+export const LUMI_OFFICIAL_RECHARGE_URL = 'https://lumi.xingcyj.com/console/recharge' as const;
 
 export const LUMI_MODEL_ROLE_IDS = [
   'reasoning',
