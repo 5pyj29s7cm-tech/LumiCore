@@ -20,6 +20,7 @@ import {
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from "../tools/pending_confirmation_repository";
 import { sanitizePublicExecutionText } from '../../shared/public_execution_language';
+import { collectChatArtifacts } from '../conversation/chat_artifacts';
 
 type ConversationScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -48,6 +49,8 @@ function customerAssistantText(value: unknown): string {
 }
 
 export function projectConversationMessageForCustomer(message: any): any {
+  const fileArtifacts = collectChatArtifacts(message?.toolCalls, message?.conversationId);
+  message = { ...message, fileArtifacts };
   const role = String(message?.role || '').toLowerCase();
   if (role === 'assistant' || role === 'agent') {
     return {

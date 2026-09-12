@@ -159,9 +159,11 @@ describe('chat uploads stay attached to their originating view', () => {
     const registry = new ChatViewWorkRegistry();
     const pending = registry.begin();
     const current = { current: 'conversation-a' };
+    const previews: unknown[] = [];
     const bind = callback('bindAttachmentContextToConversation', {
       attachmentConversationIdRef: current,
       invalidateChatViewWork: () => registry.invalidate(),
+      setPreviewFile: (value: unknown) => previews.push(value),
       attachmentContextStoragePrefix: 'synthetic-user:lumi:personal',
       setAttachmentContextStorageKey: noop, conversationAttachmentsRef: { current: [] },
       setConversationAttachments: noop, localStorage: { getItem: () => null, removeItem: noop },
@@ -171,6 +173,7 @@ describe('chat uploads stay attached to their originating view', () => {
     expect(current.current).toBe('conversation-b');
     expect(pending.signal.aborted).toBe(true);
     expect(pending.isCurrent()).toBe(false);
+    expect(previews).toEqual([null]);
   });
 
   it('keeps normal same-view upload and transcription behavior', async () => {

@@ -11,6 +11,7 @@ import { runConversationTurn } from '../llm/conversation_turn';
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
+import { collectChatArtifacts } from '../conversation/chat_artifacts';
 import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
 import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
 import { captureChatAuthorization } from './chat_authorization';
@@ -1027,6 +1028,9 @@ export function registerChatHandler(
       delete boundedPublicPayload.completionFeedback;
       return {
         ...boundedPublicPayload,
+        ...(event === 'agent:response'
+          ? { fileArtifacts: collectChatArtifacts(collectRequestTerminalRecords(), selectedConversationId) }
+          : {}),
         ...(event === 'agent:response' && latestMediaArtifactReceipt
           ? { artifactReceipt: latestMediaArtifactReceipt }
           : {}),

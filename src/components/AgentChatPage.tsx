@@ -8,10 +8,10 @@ import { saveFileResource } from '@/services/fileResource';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, Mic, CheckCircle2, Square, ChevronDown, ChevronRight, XCircle, Copy, Check, Paperclip, Image as ImageIcon, Video, MessageCircle, Briefcase, User, ExternalLink, FolderOpen, Upload, Plus, History, CalendarClock, Trash2 } from 'lucide-react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import { safeMarkdownComponents } from '@/lib/externalNavigation';
+import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
+import { ChatMessageMarkdown } from './ChatMessageMarkdown';
+import { chatArtifactKind, makeChatArtifact, type ChatArtifact } from '../../shared/chat_artifacts';
+import { legacyChatArtifacts } from '@/lib/chatArtifactLinks';
 import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -179,13 +179,7 @@ function makeChatMessageId(prefix = 'msg'): string {
 
 type ChatAttachment = ChatAttachmentReference;
 
-type GeneratedFileLink = {
-  id: string;
-  fileName: string;
-  path: string;
-  url: string;
-  kind: 'image' | 'video' | 'document' | 'deck' | 'sheet' | 'pdf' | 'cad' | 'file';
-};
+type GeneratedFileLink = ChatArtifact;
 
 type ChatSendOptions = {
   onRequestCreated?: (requestId: string) => void;
@@ -429,9 +423,6 @@ const CHAT_ATTACHMENT_ACCEPT = [
   '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
 ].join(',');
 
-const GENERATED_FILE_EXTS = 'docx|pptx|xlsx|xls|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg|mp4|mov';
-const WINDOWS_GENERATED_FILE_RE = new RegExp(`[A-Za-z]:\\\\[^\\n\\r"'<>|]+?\\.(?:${GENERATED_FILE_EXTS})\\b`, 'gi');
-const LUMI_OUTPUT_FILE_RE = new RegExp(`/lumi_output/[^\\s\\])"'<>]+?\\.(?:${GENERATED_FILE_EXTS})\\b`, 'gi');
 const MEDIA_GENERATION_TOOL_NAMES = new Set(['generate_image', 'ai_edit_image', 'generate_video']);
 
 function isExpectedMediaGenerationTool(expectation: MediaGenerationExpectation, toolName: string): boolean {
@@ -488,51 +479,15 @@ function extractPersistedMediaArtifacts(message: any): MediaGenerationArtifact[]
 }
 
 function generatedFileKind(fileName: string): GeneratedFileLink['kind'] {
-  const lower = fileName.toLowerCase();
-  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image';
-  if (/\.(mp4|mov)$/i.test(lower)) return 'video';
-  if (/\.pptx?$/i.test(lower)) return 'deck';
-  if (/\.xlsx?$/i.test(lower)) return 'sheet';
-  if (/\.pdf$/i.test(lower)) return 'pdf';
-  if (/\.(dxf|dwg)$/i.test(lower)) return 'cad';
-  if (/\.(docx?|txt|md|csv|json|html)$/i.test(lower)) return 'document';
-  return 'file';
+  return chatArtifactKind(fileName);
 }
 
-function buildGeneratedFileUrl(filePath: string): string {
-  if (filePath.startsWith('/lumi_output/')) return filePath;
-  return `/api/files/generated?path=${encodeURIComponent(filePath)}&inline=1`;
-}
-
-function extractGeneratedFiles(text: string): GeneratedFileLink[] {
+function extractGeneratedFiles(text: string, conversationId?: string): GeneratedFileLink[] {
   const canExposeFiles =
     /(?:Verified generated files|Generated and verified these files exist|Audio transcription result|Text file:|Output file:|Saved to:|已生成)/i.test(text || '');
   if (!canExposeFiles) return [];
 
-  const seen = new Set<string>();
-  const candidates = [
-    ...(text.match(WINDOWS_GENERATED_FILE_RE) || []),
-    ...(text.match(LUMI_OUTPUT_FILE_RE) || []),
-  ];
-
-  return candidates
-    .map(raw => raw.trim().replace(/[)\].,;，。；]+$/g, ''))
-    .filter(filePath => {
-      const key = filePath.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .map(filePath => {
-      const fileName = filePath.split(/[\\/]/).pop() || filePath;
-      return {
-        id: `generated-${filePath}`,
-        fileName,
-        path: filePath,
-        url: buildGeneratedFileUrl(filePath),
-        kind: generatedFileKind(fileName),
-      };
-    });
+  return legacyChatArtifacts(text, conversationId);
 }
 
 export function AgentChatPage({
@@ -876,6 +831,7 @@ export function AgentChatPage({
   const [conversationAttachments, setConversationAttachments] = useState<ChatAttachment[]>([]);
   const conversationAttachmentsRef = useRef<ChatAttachment[]>([]);
   const attachmentConversationIdRef = useRef('');
+  const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const [attachmentContextStorageKey, setAttachmentContextStorageKey] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const nativeDropHandledAtRef = useRef(0);
@@ -1125,6 +1081,7 @@ export function AgentChatPage({
   ) => {
     const nextConversationId = String(conversationId || '').trim();
     if (attachmentConversationIdRef.current !== nextConversationId) invalidateChatViewWork();
+    if (attachmentConversationIdRef.current !== nextConversationId) setPreviewFile(null);
     if (!nextConversationId) {
       attachmentConversationIdRef.current = '';
       setAttachmentContextStorageKey('');
@@ -1229,8 +1186,7 @@ export function AgentChatPage({
     const collected: GeneratedFileLink[] = [];
     for (const message of messages) {
       const text = getDisplayText(message);
-      if (!text) continue;
-      collected.push(...extractGeneratedFiles(text));
+      collected.push(...(message.fileArtifacts || []), ...extractGeneratedFiles(text, message.conversationId));
     }
 
     const seen = new Set<string>();
@@ -1267,7 +1223,7 @@ export function AgentChatPage({
     return true;
   }, [platform]);
 
-  const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
+  const openChatFileInSystem = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
     const payload = file.fileId
       ? { id: file.fileId }
       : file.path
@@ -1319,6 +1275,13 @@ export function AgentChatPage({
       }
     }
   }, [openNativeFilePath, scopedFileUrl]);
+
+  const openChatFile = useCallback(async (file: Pick<ChatFilePanelItem, 'fileName' | 'fileId' | 'path' | 'openUrl' | 'saveUrl'>) => {
+    const url = file.openUrl || file.saveUrl || (file.fileId
+      ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.fileId)}?inline=1`)
+      : file.path ? makeChatArtifact(file.path, attachmentConversationIdRef.current).url : '');
+    if (url) setPreviewFile({ fileName: file.fileName, path: file.path, url });
+  }, [scopedFileUrl]);
 
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
@@ -1529,7 +1492,7 @@ export function AgentChatPage({
     const agentDisplayName = agentNameRef.current || 'Lumi';
 
     const pushMessage = (message: any) => {
-      if ((!message.text || !String(message.text).trim()) && !message.mediaArtifacts?.length) return;
+      if ((!message.text || !String(message.text).trim()) && !message.mediaArtifacts?.length && !message.fileArtifacts?.length) return;
       normalized.push(message);
     };
 
@@ -1561,7 +1524,7 @@ export function AgentChatPage({
       }
 
       const mediaArtifacts = extractPersistedMediaArtifacts(m);
-      if (assistantText || mediaArtifacts.length) {
+      if (assistantText || mediaArtifacts.length || m.fileArtifacts?.length) {
         const completionFeedback = normalizeTaskCompletionFeedback(m.completionFeedback);
         pushMessage({
           id: `${baseId}-assistant`,
@@ -1573,6 +1536,8 @@ export function AgentChatPage({
           ...(legacyExecutionReport ? { legacyExecutionReport: true } : {}),
           ...(completionFeedback ? { completionFeedback } : {}),
           ...(mediaArtifacts.length ? { mediaArtifacts } : {}),
+          fileArtifacts: m.fileArtifacts || [],
+          conversationId: m.conversationId,
         });
       }
     });
@@ -2038,6 +2003,7 @@ export function AgentChatPage({
       taskRelation?: unknown;
       completionFeedback?: unknown;
       artifactReceipt?: unknown;
+      fileArtifacts?: ChatArtifact[];
     }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
@@ -2066,9 +2032,10 @@ export function AgentChatPage({
         requestId,
         ...(responseOperation ? { operation: responseOperation } : {}),
       }));
+      const responseFileArtifacts = Array.isArray(data.fileArtifacts) ? data.fileArtifacts : [];
       setIsTyping(hasRemainingRequests);
 
-      const mediaReceiptDisplayable = responseMediaArtifacts.length > 0 && isFinalizedSuccessfulResponse(data);
+      const mediaReceiptDisplayable = (responseMediaArtifacts.length > 0 || responseFileArtifacts.length > 0) && isFinalizedSuccessfulResponse(data);
       const displayable = shouldDisplayAgentResponse(data) || mediaReceiptDisplayable;
       const deliveredText = sanitizeAgentResponseTextForDisplay(
         data.text?.trim() || (mediaReceiptDisplayable ? mediaGenerationText.mediaCompleted : ''),
@@ -2084,6 +2051,8 @@ export function AgentChatPage({
                   ...message,
                   ...(completionFeedback ? { completionFeedback } : {}),
                   ...(responseMediaArtifacts.length ? { mediaArtifacts: responseMediaArtifacts } : {}),
+                  fileArtifacts: responseFileArtifacts,
+                  conversationId: data.conversationId,
                 }
               : message
           )));
@@ -2100,6 +2069,8 @@ export function AgentChatPage({
           type: 'agent',
           ...(completionFeedback ? { completionFeedback } : {}),
           ...(responseMediaArtifacts.length ? { mediaArtifacts: responseMediaArtifacts } : {}),
+          fileArtifacts: responseFileArtifacts,
+          conversationId: data.conversationId,
         }]);
       }
       streamingRawTextRef.current.delete(streamKey);
@@ -4038,6 +4009,9 @@ export function AgentChatPage({
 
   return (
     <AnimatePresence>
+      {isOpen && previewFile && <ChatFilePreview key={previewFile.url} file={previewFile} isZh={isZh}
+        onClose={() => setPreviewFile(null)}
+        onOpenSystem={() => openChatFileInSystem({ fileName: previewFile.fileName, path: previewFile.path, openUrl: previewFile.url, saveUrl: previewFile.url })} />}
       {isOpen && (
         <motion.div
           data-lumi-rendered-surface={layout === 'command-center' ? 'command-center' : 'chat'}
@@ -4703,7 +4677,10 @@ export function AgentChatPage({
                     ));
                     const embeddedImages = embeddedMedia.filter(artifact => artifact.kind === 'image');
                     const embeddedVideos = embeddedMedia.filter(artifact => artifact.kind === 'video');
-                    const generatedFiles = extractGeneratedFiles(messageText);
+                    const allFiles: ChatArtifact[] = [...(msg.fileArtifacts || []), ...extractGeneratedFiles(messageText, msg.conversationId)];
+                    const generatedFiles = allFiles.filter((file, index) =>
+                      !embeddedMedia.some(media => media.path === file.path)
+                      && allFiles.findIndex(other => other.path === file.path) === index);
                     if (embeddedMedia.length === 0 && generatedFiles.length === 0) return null;
                     return (
                       <div className="max-w-[85%] mb-1 space-y-2">
@@ -4778,9 +4755,9 @@ export function AgentChatPage({
                     }}
                   >
                     <div className={`markdown-body chat-message-markdown select-text ${msg.type === 'agent' ? 'chat-message-markdown-agent' : 'chat-message-markdown-user'}`}>
-                      <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                      <ChatMessageMarkdown conversationId={msg.conversationId || attachmentConversationIdRef.current} onPreview={setPreviewFile}>
                         {getCustomerDisplayText(msg, isZh)}
-                      </Markdown>
+                      </ChatMessageMarkdown>
                     </div>
                     {msg.type === 'agent' && msg.completionFeedback && (
                       <TaskCompletionFeedbackDetails

@@ -5,6 +5,10 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { safeMarkdownComponents } from '@/lib/externalNavigation';
+import { ChatMessageMarkdown } from './ChatMessageMarkdown';
+import { ChatArtifactCards } from './ChatArtifactCards';
+import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
+import type { ChatArtifact } from '../../shared/chat_artifacts';
 import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import {
   describeToolProgress,
@@ -32,6 +36,8 @@ export interface ChatMessage {
   error?: string;
   status?: 'running' | 'done' | 'error';
   timestamp: string;
+  fileArtifacts?: ChatArtifact[];
+  conversationId?: string;
 }
 
 interface ConvSummary {
@@ -66,6 +72,8 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
   const [conversations, setConversations] = useState<ConvSummary[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
+  useEffect(() => { setPreviewFile(null); }, [activeConvId]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -242,6 +250,8 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
       reason?: string;
       requestId?: string;
       source?: string;
+      fileArtifacts?: ChatArtifact[];
+      conversationId?: string;
     }) => {
       if (!isCurrentTaskEvent(data)) return;
       clearActiveTask(data.requestId);
@@ -278,6 +288,8 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
         id: crypto.randomUUID().slice(0, 9),
         type: 'lumi',
         content: publicText,
+        fileArtifacts: data.fileArtifacts,
+        conversationId: data.conversationId,
         timestamp: new Date().toISOString(),
       }]);
       refreshConversations();
@@ -558,6 +570,7 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
 
   return (
     <div className="flex h-full bg-[#0a0a14]/95 rounded-xl overflow-hidden">
+      {previewFile && <ChatFilePreview key={previewFile.url} file={previewFile} isZh={isZh} onClose={() => setPreviewFile(null)} />}
       {/* ── Left: Conversation Sidebar ── */}
       <div className="w-56 flex-shrink-0 border-r border-white/10 flex flex-col">
         {/* Header with connection status */}
@@ -721,10 +734,11 @@ export function ChatPanel({ socket, t, onVoiceToggle, isVoiceActive, transcript 
                 {msg.type === 'lumi' && (
                   <div className="flex justify-start group">
                     <div className="max-w-[85%] bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 relative">
+                      <ChatArtifactCards files={msg.fileArtifacts || []} isZh={isZh} onPreview={setPreviewFile} />
                       <div className="markdown-body text-white/80 text-sm leading-relaxed">
-                        <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                        <ChatMessageMarkdown conversationId={msg.conversationId || activeConvId || undefined} onPreview={setPreviewFile}>
                           {msg.content}
-                        </Markdown>
+                        </ChatMessageMarkdown>
                       </div>
                       {showTime && <span className="text-white/55 text-xs">{formatTime(msg.timestamp)}</span>}
                       {msg.content && (

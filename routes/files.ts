@@ -21,6 +21,9 @@ import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding } from '../server/
 import { createRequestAbortController } from '../server/http/request_abort';
 import { buildKnowledgeIngestionManifest, evaluateKnowledgeManifest, hashKnowledgeContent } from '../server/knowledge/ingestion_manifest';
 import { getDataPath, getGeneratedOutputDir } from '../server/config/data_path';
+import { collectChatArtifacts } from '../server/conversation/chat_artifacts';
+import { sameArtifactPath } from '../server/tools/artifact_evidence';
+import { readDocumentPreview } from '../server/files/document_preview';
 import {
   requireAdmin as requireUnifiedAdmin,
   requireAuth as requireUnifiedAuth,
@@ -353,7 +356,7 @@ const RTF_KNOWLEDGE_EXTS = /\.rtf$/i;
 const EXTRACTABLE_KNOWLEDGE_EXTS = /\.(docx|xlsx|xls|pptx|pdf)$/i;
 const IMAGE_KNOWLEDGE_EXTS = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i;
 const AUDIO_KNOWLEDGE_EXTS = AUDIO_FILE_EXTS;
-const GENERATED_FILE_EXTS = /\.(docx?|pptx?|xlsx?|pdf|txt|md|csv|json|png|jpe?g|webp|gif|svg|html|dxf|dwg|mp4|mov)$/i;
+const GENERATED_FILE_EXTS = /\.(docx?|pptx?|xlsx?|pdf|txt|md|csv|tsv|json|png|jpe?g|webp|gif|bmp|svg|html|dxf|dwg|mp4|mov|m4v|webm|mp3|wav|m4a|ogg|flac|aac|rtf|log|xml|yaml|yml|css|js|ts|tsx|jsx|py)$/i;
 const OBSIDIAN_NOTE_EXTS = /\.(md|markdown)$/i;
 const OBSIDIAN_MAX_NOTE_BYTES = Math.max(256 * 1024, Number(process.env.OBSIDIAN_NOTE_MAX_BYTES || 5 * 1024 * 1024));
 const OBSIDIAN_DEFAULT_MAX_FILES = Math.max(50, Number(process.env.OBSIDIAN_SYNC_MAX_FILES || 500));
@@ -406,6 +409,9 @@ const DOWNLOAD_MIME_TYPES: Record<string, string> = {
   '.webm': 'audio/webm',
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
+  '.m4v': 'video/mp4',
+  '.bmp': 'image/bmp',
+  '.tsv': 'text/tab-separated-values',
   '.dxf': 'application/dxf',
   '.dwg': 'application/octet-stream',
 };
@@ -428,7 +434,7 @@ function isInsideRoot(filePath: string, root: string): boolean {
   return normalizedFile === normalizedRoot || normalizedFile.startsWith(normalizedRoot + path.sep.toLowerCase());
 }
 
-function resolveGeneratedDownloadPath(value: unknown): string {
+function resolveGeneratedDownloadPath(value: unknown, req?: Request): string {
   const rawInput = String(value || '').trim();
   const normalizedRawInput = rawInput.replace(/\\/g, '/');
   const raw = normalizedRawInput.startsWith('/lumi_output/')
@@ -454,6 +460,27 @@ function resolveGeneratedDownloadPath(value: unknown): string {
   }
   const generatedRoot = fs.realpathSync.native(getGeneratedOutputDir());
   const realPath = fs.realpathSync.native(resolved);
+  // Scope conversation links to actual server-owned output receipts, including
+  // files saved outside the shared output directory. Prose grants no access.
+  const conversationId = String(req?.query.conversationId || '').trim();
+  if (conversationId) {
+    const db = readDB();
+    const conv = (db.conversations || []).find((item: any) => item.id === conversationId && item.userId === req?.user?.uid);
+    const membershipMatches = conv && (!conv.orgId || conv.orgId === req?.user?.orgId);
+    const ownedOutput = membershipMatches && (db.interactions || []).some((item: any) =>
+      item.conversationId === conversationId && item.userId === req?.user?.uid
+      && (item.role === 'assistant' || Boolean(item.response))
+      && collectChatArtifacts(item.toolCalls, conversationId).some(artifact => sameArtifactPath(artifact.path, resolved)));
+    // Reject redirected symlinks/junctions, including a replaced output parent.
+    let redirected = false;
+    for (let entry = resolved; path.dirname(entry) !== entry; entry = path.dirname(entry)) {
+      if (fs.lstatSync(entry).isSymbolicLink()) { redirected = true; break; }
+    }
+    if (!ownedOutput || redirected) {
+      throw Object.assign(new Error('File is not a verified output of this conversation'), { status: 403 });
+    }
+    return realPath;
+  }
   if (!isInsideRoot(realPath, generatedRoot)) {
     const err: any = new Error('Generated file path is outside the generated-output directory');
     err.status = 403;
@@ -483,7 +510,11 @@ function resolveKnowledgeFilePath(req: Request, idValue: unknown): string {
     err.status = 404;
     throw err;
   }
-  return fs.realpathSync.native(filePath);
+  const realPath = fs.realpathSync.native(filePath);
+  if (!isInsideRoot(realPath, fs.realpathSync.native(scopeDir))) {
+    throw Object.assign(new Error('File path is outside allowed directories'), { status: 403 });
+  }
+  return realPath;
 }
 
 function openPathWithDefaultApp(filePath: string): Promise<void> {
@@ -2366,14 +2397,18 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ── GET /files/generated?path=... — download a generated work artifact ──
-router.get('/files/generated', requireUnifiedAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, (req: Request, res: Response) => {
+router.get('/files/generated', requireUnifiedAuth, requireUnifiedAdmin, requireUnifiedLocalRequest, async (req: Request, res: Response) => {
   try {
     assertLocalHostRequest(req);
-    const filePath = resolveGeneratedDownloadPath(req.query.path);
+    const filePath = resolveGeneratedDownloadPath(req.query.path, req);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'");
+    if (req.query.preview === '1') return res.json(await readDocumentPreview(filePath));
     const fileName = path.basename(filePath);
     const mime = getDownloadMime(filePath);
     if (mime) res.setHeader('Content-Type', mime);
-    const inline = req.query.inline === '1';
+    const inline = req.query.inline === '1' && SAFE_INLINE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
     const disposition = inline ? 'inline' : 'attachment';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     const stats = fs.statSync(filePath);
@@ -2432,15 +2467,17 @@ router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
 });
 
 // ── GET /files/download/:id — download or preview a file ──
-router.get('/files/download/:id', requireAuth, (req: Request, res: Response) => {
+router.get('/files/download/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);
-    const filePath = path.join(scope.dir, safeName);
+    const filePath = resolveKnowledgeFilePath(req, req.params.id);
     if (!safeName || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.query.preview === '1') return res.json(await readDocumentPreview(filePath));
     const ext = path.extname(safeName).toLowerCase();
     const mime = getDownloadMime(ext);
     res.setHeader('Content-Type', mime || 'application/octet-stream');

@@ -2,10 +2,10 @@ import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { BrainCircuit, Building2, Send, Loader2, User, Bot, Settings, Paperclip, FileText, Mic, Image as ImageIcon, XCircle, Upload, Briefcase } from 'lucide-react';
 import { toast } from 'sonner';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import { safeMarkdownComponents } from '../../lib/externalNavigation';
+import { ChatMessageMarkdown } from '../ChatMessageMarkdown';
+import { ChatArtifactCards } from '../ChatArtifactCards';
+import { ChatFilePreview, type ChatPreviewFile } from '../ChatFilePreview';
+import type { ChatArtifact } from '../../../shared/chat_artifacts';
 import { useApp } from '../../contexts/AppContext';
 import { useSocket } from '../../hooks/useSocket';
 import { useT } from '../../lib/useT';
@@ -36,6 +36,8 @@ interface Message {
   attachments?: ChatAttachment[];
   timestamp: number;
   source?: 'socket' | 'history' | 'error' | 'system';
+  fileArtifacts?: ChatArtifact[];
+  conversationId?: string;
 }
 
 interface LumiModelPreference {
@@ -107,10 +109,13 @@ function normalizeHistoryMessage(item: any, language: 'zh' | 'en'): Message | nu
     content,
     timestamp: item.timestamp ? new Date(item.timestamp).getTime() : Date.now(),
     source: 'history',
+    fileArtifacts: item.fileArtifacts || [],
+    conversationId: item.conversationId,
   };
 }
 
 export function CentralLumiChat() {
+  const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const t = useT();
   const socket = useSocket();
   const { orgConnection, user } = useApp();
@@ -149,6 +154,7 @@ export function CentralLumiChat() {
     options: { carryCurrent?: boolean } = {},
   ) => {
     const nextConversationId = String(conversationId || '').trim();
+    if (attachmentConversationIdRef.current !== nextConversationId) setPreviewFile(null);
     if (!nextConversationId) {
       attachmentConversationIdRef.current = '';
       setAttachmentContextStorageKey('');
@@ -532,7 +538,7 @@ export function CentralLumiChat() {
       });
     };
 
-    const onResponse = (data: AgentResponseDelivery & { requestId?: string }) => {
+    const onResponse = (data: AgentResponseDelivery & { requestId?: string; fileArtifacts?: ChatArtifact[]; conversationId?: string }) => {
       if (!isCurrent(data)) return;
       setRequestNotice('');
       const finalText = sanitizeAgentResponseTextForDisplay(data.text, locale);
@@ -549,7 +555,7 @@ export function CentralLumiChat() {
         if (streamingId) {
           return prev.map(message => (
             message.id === streamingId
-              ? { ...message, content: finalText || message.content }
+              ? { ...message, content: finalText || message.content, fileArtifacts: data.fileArtifacts, conversationId: data.conversationId }
               : message
           ));
         }
@@ -558,6 +564,8 @@ export function CentralLumiChat() {
           id: makeMessageId('org-response'),
           role: 'assistant',
           content: finalText,
+          fileArtifacts: data.fileArtifacts,
+          conversationId: data.conversationId,
           timestamp: Date.now(),
           source: 'socket',
         }];
@@ -758,6 +766,7 @@ export function CentralLumiChat() {
       onDrop={handleDrop}
     >
       <AnimatePresence>
+        {previewFile && <ChatFilePreview key={previewFile.url} file={previewFile} isZh={isZh} onClose={() => setPreviewFile(null)} />}
         {dragActive && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -845,9 +854,9 @@ export function CentralLumiChat() {
                       </div>
                     );
                     return item.downloadUrl ? (
-                      <a key={item.id} href={item.downloadUrl} target="_blank" rel="noopener noreferrer" className="min-w-0 transition-opacity hover:opacity-80">
+                      <button type="button" key={item.id} onClick={() => setPreviewFile({ fileName: item.fileName, url: item.downloadUrl!, path: item.path })} className="min-w-0 transition-opacity hover:opacity-80">
                         {card}
-                      </a>
+                      </button>
                     ) : (
                       <div key={item.id} className="min-w-0">{card}</div>
                     );
@@ -855,11 +864,12 @@ export function CentralLumiChat() {
                 </div>
               )}
               <div className={`markdown-body chat-message-markdown select-text ${msg.role === 'assistant' ? 'chat-message-markdown-agent text-[15px]' : 'chat-message-markdown-user text-sm'}`}>
-                <Markdown components={safeMarkdownComponents} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                <ChatArtifactCards files={msg.fileArtifacts || []} isZh={isZh} onPreview={setPreviewFile} />
+                <ChatMessageMarkdown conversationId={msg.conversationId} onPreview={setPreviewFile}>
                   {msg.role === 'assistant'
                     ? sanitizeAgentResponseTextForDisplay(msg.content, locale)
                     : msg.content}
-                </Markdown>
+                </ChatMessageMarkdown>
               </div>
               <span className="text-xs text-white/45 mt-2 block">
                 {new Date(msg.timestamp).toLocaleTimeString(isZh ? 'zh-CN' : undefined, { hour: '2-digit', minute: '2-digit' })}

@@ -1,6 +1,7 @@
 import { Socket } from "socket.io";
 import { readDB } from "../../db_layer";
 import { resolveAuthorizedSocketScope } from './scope';
+import { collectChatArtifacts } from '../conversation/chat_artifacts';
 
 export function registerConversationHandlers(socket: Socket, getUserId: (s: Socket) => string) {
   socket.on("chat:conversations", async () => {
@@ -100,7 +101,8 @@ export function registerConversationHandlers(socket: Socket, getUserId: (s: Sock
         }
         const response = i.role === 'assistant' ? (body || i.response) : i.response;
         if (response && (!i.role || i.role === 'user' || i.role === 'assistant')) {
-          messages.push({ id: i.id + '_r', type: 'lumi', content: response, timestamp: i.timestamp });
+          messages.push({ id: i.id + '_r', type: 'lumi', content: response, timestamp: i.timestamp,
+            conversationId: data.conversationId, fileArtifacts: collectChatArtifacts(i.toolCalls, data.conversationId) });
         }
       }
       socket.emit("chat:messages", { conversationId: data.conversationId, messages });

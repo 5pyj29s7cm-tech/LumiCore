@@ -148,6 +148,9 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
     expect(result.terminal.text).toContain('60');
     expect(result.receipts.filter(row=>row.outcome==='verified_success').map(row=>row.toolName)).toEqual(['read_file','create_xlsx','read_xlsx']);
     expect((await loadXlsxWorkbook(output)).getWorksheet('订单')?.getCell('D5').value).toBe(60);
+    expect(result.terminal.fileArtifacts[0].path.replaceAll('\\', '/')).toBe(output);
+    expect(result.terminal.fileArtifacts[0].kind).toBe('sheet');
+    expect(new URL(result.terminal.fileArtifacts[0].url, 'http://local.invalid').searchParams.get('conversationId')).toBe(id);
     expect(fs.readFileSync(csv,'utf8')).toBe(csvText);
     const retryOutput=path.join(root,'csv-export-again.xlsx').replace(/\\/g,'/');
     // Keep the real read/creation receipts, but move them outside the old
