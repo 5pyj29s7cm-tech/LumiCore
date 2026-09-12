@@ -93,7 +93,7 @@ describe('desktop capability alignment', () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(result.text).toContain('\u672c\u8f6e\u771f\u5b9e\u5de5\u5177\u56de\u6267');
+    expect(result.text).toContain('本次实际检查结果');
     expect(result.text).toContain('client_health_check');
     expect(result.text).toContain('client_get_state');
     expect(result.text).not.toContain('\u540e\u7aef\u6ca1\u6709\u542f\u52a8');
