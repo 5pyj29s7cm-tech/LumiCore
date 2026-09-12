@@ -208,6 +208,10 @@ function relativeArtifactPath(text: string, includeJson = true): string {
 }
 
 function explicitArtifactPath(text: string): string {
+  // A directory followed by an explicit creation verb is not one filename.
+  // i18n-allow: directory plus newly named artifact grammar.
+  const inDirectory = text.match(/(?:^|[，,。；;\n])\s*(?:请\s*)?(?:在|in)\s+((?:[A-Za-z]:[\\/]|\/)[^\r\n"'<>|?*]+?)\s+(?:创建|新建|生成|create|write)\s+([^\s\\/:"'<>|?*]+\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s，,。；;])/iu);
+  if (inDirectory) return `${inDirectory[1].replace(/[\\/]+$/u, '')}${inDirectory[1].includes('\\') ? '\\' : '/'}${inDirectory[2]}`;
   // Most turns do not contain a supported artifact suffix. This linear gate
   // keeps them away from the more specific absolute-path matcher entirely.
   if (!ARTIFACT_FILE_EXTENSION_RE.test(text)) return '';

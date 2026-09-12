@@ -15,6 +15,11 @@ import { ToolRegistry } from '../server/tools/registry';
 beforeAll(() => initDatabase());
 
 describe('preserved input and separate output through the real executor', () => {
+  it('distinguishes an input/output request from multiple requested output files and resolves a named directory', () => {
+    expect(requestedSingleArtifact('请用 write_file 创建两个文件：C:/test/first.txt 内容为 first；C:/test/second.txt 内容为 second。')).toBeNull();
+    expect(requestedSingleArtifact('在 C:\\Users\\test-user\\Documents 创建 Lumi现场验收_晨星716.txt，写入后重读核验')?.path)
+      .toBe('C:\\Users\\test-user\\Documents\\Lumi现场验收_晨星716.txt');
+  });
   it('does not replace a requested CSV result with an unrelated PDF in a read-calculate-save task', async () => {
     const root = fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR), 'csv-output-'));
     const source = path.join(root, 'input.csv'), output = path.join(root, 'output.csv');

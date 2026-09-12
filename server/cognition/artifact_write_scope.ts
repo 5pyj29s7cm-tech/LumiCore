@@ -3,6 +3,9 @@ import { normalizeActionIntent } from './normalized_action_intent';
 import path from 'node:path';
 
 function mixedTaskOutputPath(text: string): string {
+  // A list of two requested outputs is not an input/output transformation.
+  // i18n-allow: explicit source-file read recognition.
+  if (!/(?:读取|读入|分析|\b(?:read|load|inspect)\b)[^。！？!?；;\n]{0,700}\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/iu.test(text)) return '';
   const outputs: string[] = [];
   // Only an affirmative output clause with one filename can select a result.
   // i18n-allow: multilingual file-output clause and same-directory recognition.
