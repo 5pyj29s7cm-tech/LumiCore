@@ -51,7 +51,7 @@ export function classifySkillAuthoringIntent(value: string): SkillAuthoringInten
 
 export function skillAuthoringTools(intent: SkillAuthoringIntent): string[] {
   if (intent === 'generate') return ['generate_skill', 'install_skill', 'list_skills', 'client_capability_manifest'];
-  if (intent === 'save') return ['capture_recent_workflow', 'save_workflow', 'get_workflow', 'list_workflows', 'list_skills', 'client_capability_manifest'];
+  if (intent === 'save') return ['capture_recent_workflow', 'save_workflow', 'get_workflow', 'list_workflows'];
   if (intent === 'publish') return ['get_workflow', 'publish_workflow', 'install_skill', 'list_skills', 'client_capability_manifest'];
   if (intent === 'install') return ['install_skill', 'list_skills', 'client_capability_manifest'];
   if (intent === 'use') return ['client_capability_manifest', 'list_skills', 'get_workflow', 'list_workflows', 'run_workflow', 'get_workflow_run', 'decide_workflow_confirmation'];

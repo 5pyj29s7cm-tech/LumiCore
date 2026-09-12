@@ -877,7 +877,7 @@ export function routeToolsForTurn(
         maxTools, truncated: toolNames.length < execution.toolNames.length + skillAuthoringTools(authoring).filter(name => available.has(name) && !execution.toolNames.includes(name)).length };
     }
     const toolNames = skillAuthoringTools(authoring).filter(name => available.has(name)).slice(0, maxTools);
-    return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false };
+    return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false, ...(authoring === 'save' ? { hardAllowlist: true } : {}) };
   }
   const diagnosticPlan = buildClientDiagnosticPlan(instructionText);
   if (diagnosticPlan.length) {

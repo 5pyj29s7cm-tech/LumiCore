@@ -86,6 +86,14 @@ async function run(registry: ToolRegistry, context: ToolContext, text: string) {
 }
 
 describe('normal pipeline skill authoring after real same-conversation work', () => {
+  it('keeps a save-only follow-up on workflow tools without reopening generic capability discovery', () => {
+    const registry = new ToolRegistry(); registerAllTools(registry);
+    const conversation = getOrCreateActiveConversation('save-only-tools', 'lumi', 'personal', '');
+    const { pipeline } = plan(registry, 'save-only-tools', conversation.id,
+      '继续完成刚才未完成的工作流草稿保存。只保存读取、计算、写文件这三个步骤，文件路径用参数。不要发布或安装新技能。', 'save-only-task');
+    expect(pipeline.modelToolProjection.toolNames).toEqual(['capture_recent_workflow', 'save_workflow', 'get_workflow', 'list_workflows']);
+    expect(pipeline.modelToolProjection.allowDynamicDiscovery).toBe(false);
+  });
   it('keeps a compound workflow save on execution and recipe tools, without generating a new package', () => {
     const registry = new ToolRegistry(); registerAllTools(registry);
     const userId = 'workflow-recipe-scope';
