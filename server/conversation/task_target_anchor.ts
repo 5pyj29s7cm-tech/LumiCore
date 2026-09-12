@@ -1283,6 +1283,8 @@ export function guardTaskTargetToolCall(input: {
   enforceStructuredFileRead?: boolean;
   /** Registry-owned capability metadata says this call can execute a process. */
   forbidUnstructuredExecution?: boolean;
+  /** Set only from the registry-owned, I/O-free QuickJS capability. */
+  isolatedCalculation?: boolean;
 }): TaskTargetToolCallGuardResult {
   if (!isFileTargetTask(input.taskText) && !input.acceptedTaskTarget) return { allowed: true, reason: '' };
   const toolName = compact(input.toolName, 160);
@@ -1327,7 +1329,8 @@ export function guardTaskTargetToolCall(input: {
     && concreteTargetPath(projection.target.path),
   );
 
-  if (input.forbidUnstructuredExecution || UNSTRUCTURED_FILE_ACCESS_TOOL_RE.test(toolName)) {
+  if (input.forbidUnstructuredExecution || (UNSTRUCTURED_FILE_ACCESS_TOOL_RE.test(toolName)
+    && !(toolName === 'code_execution' && input.isolatedCalculation === true))) {
     return blocked(
       'unstructured_file_access_forbidden',
       `Target anchor blocked ${toolName}: file-target work cannot use a general command, script, interpreter, or unstructured desktop executor. Use a structured file/document capability bound to the canonical target.`,

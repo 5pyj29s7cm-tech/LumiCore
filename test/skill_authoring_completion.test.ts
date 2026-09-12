@@ -19,6 +19,25 @@ const record = (result: unknown = draft): ToolExecutionRecord => ({ ...identity,
   terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'Reviewed draft artifacts exist' } });
 
 describe('skill lifecycle completion uses the same intent as routing', () => {
+  it('requires both execution and a saved draft for a compound request, including after output redaction', () => {
+    const task = '请读取 C:/Users/test/Documents/input.csv，按数量乘单价计算每行 total，生成同目录 output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。先做到草稿，不发布。';
+    const read = { ...record('product,quantity,price\nblue-cup,4,18'), name: 'read_file', arguments: { path: 'C:/Users/test/Documents/input.csv' } };
+    const failed = { ...record(''), name: 'code_execution', error: 'Target anchor blocked code_execution: unstructured file access forbidden.' };
+    const save = { ...record({ ok: true, status: 'draft', workflowId: 'workflow-1', name: 'line-totals', hash: 'a'.repeat(64), stepCount: 3 }), name: 'save_workflow' };
+    const contract = buildActionContract(task);
+    expect(contract.components).toHaveLength(2);
+    for (const records of [[read, failed], [save], [read, save]]) {
+      expect(hasCoreActionEvidence(contract, records, task, undefined, identity)).toBe(false);
+      expect(tryFinalizeVerifiedBoundedAction({ ...identity, source: 'chat', taskText: task, responseText: '', toolRecords: records })).toBeNull();
+      const responseText = sanitizeUserFacingExecutionOutput('terminalVerification: failed', { task, toolRecords: records });
+      expect(finalizeLumiResponse({ ...identity, source: 'chat', taskText: task, responseText, toolRecords: records }).blocked).toBe(true);
+    }
+  });
+  it('does not mark a missing lifecycle receipt complete just because the response avoids success words', () => {
+    for (const responseText of ['收到。', '执行中有步骤失败，目前不能确认任务完成。', '已获取执行结果。']) {
+      expect(finalizeLumiResponse({ ...identity, source: 'chat', taskText: '保存成可复用工作流草稿', responseText, toolRecords: [] }).blocked).toBe(true);
+    }
+  });
   it('does not turn workflow discovery or screen vocabulary into task completion', () => {
     const task = '运行已经发布的工作流，读取新订单并计算总额。';
     const discovery = { ...record({ ok: true, capabilities: [{ toolName: 'desktop_capture_screen', description: 'screen vision' }], terminalVerification: {} }), name: 'client_capability_manifest' };

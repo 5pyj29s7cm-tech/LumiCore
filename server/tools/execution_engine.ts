@@ -539,6 +539,11 @@ export async function executeToolCall(
         arguments: callerArguments,
         toolRecords: serverTargetPolicyEvidence(input.context, targetPolicyTaskText),
         acceptedTaskTarget: input.context?.acceptedTaskTarget,
+        isolatedCalculation: semanticToolName === 'code_execution'
+          && capability?.source === 'builtin'
+          && capability?.capabilityId === 'code.javascript.sandbox.execute'
+          && capability?.operation === 'test'
+          && capability.sideEffects.every((effect: { type?: string }) => effect.type === 'local_state_change'),
         enforceStructuredFileRead: Boolean(
           capability
           && ['files', 'office'].includes(capability.lane)

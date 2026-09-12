@@ -2967,6 +2967,13 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   }
   const workflowProgress = formatGroundedWorkflowProgress(input);
   if (workflowProgress) return workflowProgress;
+  // Lifecycle completion is a receipt verdict, independent of model wording
+  // or output redaction. A successful input read cannot complete a failed save.
+  if (composite.kind === 'skill_authoring'
+    && !hasResultCoreActionEvidence(input, composite, input.toolRecords || [], actionText)) {
+    return { text: formatCompactBlockedResponse(input, 'Missing verified skill/workflow lifecycle receipt.'),
+      blocked: true, reason: 'Missing verified skill/workflow lifecycle receipt.' };
+  }
   const operationModeFacts = buildOperationModeMetaResponse({
     text: actionText,
     operationMode: input.flow?.operationMode,

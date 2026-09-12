@@ -612,6 +612,9 @@ function humanSummary(
       : 'Running programs were checked. The raw process table and system fields were omitted; I can list only the relevant programs.';
   }
 
+  if (failed) return zh
+    ? CN_USER_OUTPUT_PROTECTION_MESSAGES.failedSummary
+    : 'An execution step failed. The available results do not confirm completion; raw system details were omitted.';
   return zh
     ? CN_USER_OUTPUT_PROTECTION_MESSAGES.genericSummary
     : 'The execution result was received. Raw system data was omitted for readability and privacy; only task-relevant conclusions and exceptions will be reported.';

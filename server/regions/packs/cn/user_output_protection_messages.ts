@@ -10,4 +10,5 @@ export const CN_USER_OUTPUT_PROTECTION_MESSAGES = {
   ),
   processesChecked: '已检查运行中的程序。原始进程表和系统字段已省略；需要时我可以只列出相关程序。',
   genericSummary: '已获取执行结果。为便于阅读并保护本机信息，原始系统数据已省略；我会只汇报与当前任务有关的结论和异常。',
+  failedSummary: '执行中有步骤失败，目前不能确认任务完成。原始系统数据已省略。',
 } as const;

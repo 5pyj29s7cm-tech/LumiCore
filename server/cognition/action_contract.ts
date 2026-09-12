@@ -1007,7 +1007,12 @@ export function buildActionContract(input: string): LumiActionContract {
   const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
   if (executionBeforeSave) {
     const execution = buildActionContract(executionBeforeSave);
+    const saveText = rawInput.slice(rawInput.indexOf(executionBeforeSave) + executionBeforeSave.length);
     return withDefaults({ kind: 'skill_authoring', label: 'Execute and save workflow',
+      components: [
+        { text: executionBeforeSave, contract: execution },
+        { text: saveText, contract: buildActionContract(saveText) },
+      ],
       coreAction: 'Execute and verify the explicit current task, then save its input-dependent workflow draft.',
       preparationIsNotCompletion: ['saving a draft without performing the requested current task', 'performing the task without saving its executable workflow'],
       requiredEvidence: [...execution.requiredEvidence, 'a verified current-turn workflow draft save receipt'],

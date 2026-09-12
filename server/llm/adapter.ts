@@ -2483,12 +2483,18 @@ async function runWithToolsInternal(
         continue;
       }
 
+      const callCapability = toolRegistry.getCapabilityManifestEntry?.(tc.name, toolExecutionContext?.toolPolicy, toolExecutionContext);
       const currentAppGuard = guardCurrentAppToolCall({
         taskText: primaryTask,
         toolName: tc.name,
         arguments: tc.arguments || {},
         toolRecords: executionLog,
         acceptedTaskTarget: toolExecutionContext?.acceptedTaskTarget,
+        isolatedCalculation: tc.name === 'code_execution'
+          && callCapability?.source === 'builtin'
+          && callCapability?.capabilityId === 'code.javascript.sandbox.execute'
+          && callCapability.operation === 'test'
+          && callCapability.sideEffects.every(effect => effect.type === 'local_state_change'),
       });
       const executionArguments = currentAppGuard.normalizedArguments
         || tc.arguments

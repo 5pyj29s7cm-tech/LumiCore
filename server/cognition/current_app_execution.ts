@@ -231,6 +231,7 @@ export function guardCurrentAppToolCall(input: {
   arguments?: Record<string, unknown>;
   toolRecords?: ToolExecutionRecord[];
   acceptedTaskTarget?: AcceptedTaskTarget;
+  isolatedCalculation?: boolean;
 }): CurrentAppToolCallGuardResult {
   const targetGuard = guardTaskTargetToolCall({
     taskText: input.taskText,
@@ -238,6 +239,7 @@ export function guardCurrentAppToolCall(input: {
     arguments: input.arguments,
     toolRecords: input.toolRecords,
     acceptedTaskTarget: input.acceptedTaskTarget,
+    isolatedCalculation: input.isolatedCalculation,
   });
   if (!targetGuard.allowed) return targetGuard;
   if (!isCurrentAppExecutionTask(input.taskText)) return targetGuard;
