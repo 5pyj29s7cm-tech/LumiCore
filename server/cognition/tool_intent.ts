@@ -300,6 +300,11 @@ export function isClientRuntimeMutationRequest(text: string): boolean {
  * Keep this narrower than the general diagnostic lane: checking a file,
  * contract, or desktop image is work on that artifact, not a client self-check.
  */
+export function isCoordinatedClientHealthRequest(text: string): boolean {
+  // i18n-allow: Coordinated client/backend health subjects, not output text.
+  return /(?:检查|排查|诊断|看看|查看).{0,8}(?:客户端|前端|后端|后台)(?:(?:和|与|及|、)(?:客户端|前端|后端|后台))*(?:的)?(?:运行)?(?:状态|健康|是否正常)/u.test(text);
+}
+
 export function isCurrentClientDiagnosticRequest(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
@@ -310,6 +315,7 @@ export function isCurrentClientDiagnosticRequest(text: string): boolean {
   if (DIRECT_CLIENT_SELF_HEALTH_RE.test(normalized)) return true;
   const namesArtifact = CLIENT_SELF_DIAGNOSTIC_ARTIFACT_RE.test(normalized);
   if (namesArtifact && !EXPLICIT_SELF_DIAGNOSTIC_RUN_RE.test(normalized)) return false;
+  if (isCoordinatedClientHealthRequest(normalized)) return true;
   if (EXPLICIT_CLIENT_SELF_DIAGNOSTIC_RE.test(normalized)) return true;
 
   return CLIENT_SELF_DIAGNOSTIC_SUBJECT_RE.test(normalized)

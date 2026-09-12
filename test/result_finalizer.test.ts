@@ -13,6 +13,13 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it('does not replace a client/backend self-check with an idle-work receipt', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const result = finalizeLumiResponse({taskText: '检查一下你当前的客户端和后台运行状态，把实际检查结果告诉我。', responseText: '', source: 'chat',
+      toolRecords: [{name: 'runtime_work_status', arguments: {}, result: JSON.stringify({ok: true, status: 'idle', activeCount: 0, items: []})}]});
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toBe('当前没有正在运行的工作。');
+  });
   it.each([
     '好，我来重新生成。上次两次都失败了。这次简化提示词。我这就调用图片生成。',
     '现在我再发一次，稍等。',
@@ -389,7 +396,7 @@ describe('Lumi result finalizer', () => {
         name: 'client_health_check',
         arguments: {},
         result: '{"report":{"level":"ready"}}',
-      }],
+      }, { name: 'client_get_state', arguments: {}, result: '{"state":{"activeTab":"home"},"health":{"level":"ready"}}' }],
       source: 'voice',
     });
 
@@ -411,7 +418,7 @@ describe('Lumi result finalizer', () => {
         name: 'client_health_check',
         arguments: {},
         result: '{"report":{"level":"ready"}}',
-      }],
+      }, { name: 'client_get_state', arguments: {}, result: '{"state":{"activeTab":"home"},"health":{"level":"ready"}}' }],
       source: 'chat',
     });
 
@@ -582,7 +589,7 @@ describe('Lumi result finalizer', () => {
   it.each([
     ['adapter_health_check', '{"checkedCount":2,"needsAttention":[]}'],
     ['model_configuration_test', '{"ok":true,"role":"reasoning"}'],
-  ])('accepts %s as a real self-check receipt', async (name, receipt) => {
+  ])('reports %s as partial evidence without completing the entire client self-check', async (name, receipt) => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({
       taskText: '请做一次客户端自检',
@@ -591,8 +598,9 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
-    expect(result.blocked).toBe(false);
-    expect(result.text).toBe(`已检查 ${name}。`);
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('自检未完成');
+    expect(result.text).toContain(`本轮有回执的检查：${name}`);
     expect(result.text).not.toContain('没有取得任何客户端自检工具回执');
   });
 
@@ -629,7 +637,7 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
-    expect(result.text).toContain(`未完成的检查：${name}: ${expectedFailure}`);
+    expect(result.text).toContain(`${name}: ${expectedFailure}`);
     expect(result.text).not.toContain(`本轮有回执的检查：${name}`);
     if (name === 'client_repair_skill') {
       expect(result.text).not.toContain('client_repair_skill: completed');

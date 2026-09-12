@@ -5,7 +5,7 @@ import {
   formatCnMissingClientDiagnosticReceipts,
   type ClientDiagnosticFacts,
 } from '../regions/packs/cn/client_diagnostic_messages';
-import { isCurrentClientDiagnosticRequest } from './tool_intent';
+import { isCurrentClientDiagnosticRequest, isCoordinatedClientHealthRequest } from './tool_intent';
 
 export interface ClientDiagnosticToolCall {
   name: 'client_health_check' | 'client_get_state' | 'adapter_registry_list' | 'adapter_health_check' | 'runtime_work_status';
@@ -30,7 +30,7 @@ export function buildClientDiagnosticPlan(text: string): ClientDiagnosticToolCal
   // inspect Lumi. The diagnostic subject must bind to the check itself.
   // i18n-allow: Bounded current-health input recognition, not output text.
   const boundedCheck = /(?:自检|健康检查|状态检查|\bself[- ]?check\b|\bhealth check\b)|(?:检查|排查|诊断|看看|查看).{0,8}(?:(?:你)?自己|你自身|你这边|客户端|运行时|Lumi)(?:[。！？!?\s]*$|(?:的)?(?:状态|健康|运行|身体|有无|有没有|是否正常))|(?:MCP|技能|插件|适配器).{0,10}(?:状态|健康|连接|异常)|(?:你自己|你自身|客户端|运行时|Lumi).{0,8}(?:有无问题|有没有问题|是否正常)|\b(?:check|inspect|diagnose)\s+(?:the\s+)?(?:lumi\s+)?(?:client|runtime|yourself)\b/iu.test(normalized);
-  if (!boundedCheck) return [];
+  if (!boundedCheck && !isCoordinatedClientHealthRequest(normalized)) return [];
 
   const plan: ClientDiagnosticToolCall[] = [
     { name: 'client_health_check', arguments: {} },
@@ -108,6 +108,16 @@ export function hasSuccessfulSubstantiveClientDiagnosticReceipt(
   ));
 }
 
+export function hasCompleteClientDiagnosticReceipts(records: ToolExecutionRecord[], taskText: string): boolean {
+  const plan = buildClientDiagnosticPlan(taskText);
+  return plan.length > 0
+    ? plan.every(step => {
+        const latest = [...records].reverse().find(record => record.name === step.name);
+        return Boolean(latest && isSuccessfulDiagnosticRecord(latest));
+      })
+    : hasSuccessfulSubstantiveClientDiagnosticReceipt(records);
+}
+
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.map(value => value.trim()).filter(Boolean)));
 }
@@ -119,7 +129,7 @@ function englishDiagnosticFacts(facts: ClientDiagnosticFacts): string {
   const lines = [
     facts.hasSuccessfulSubstantiveCheck
       ? 'Self-check completed. This summary uses only tool receipts from the current turn.'
-      : 'Self-check did not complete. No substantive client diagnostic produced a successful receipt in this turn.',
+      : 'Self-check did not complete. The current turn is missing successful receipts for part or all of the requested checks.',
     `Scope: ${scope}.`,
   ];
   if (facts.hasLiveState) {
@@ -200,7 +210,7 @@ export function formatClientDiagnosticResult(
     : [];
 
   const facts: ClientDiagnosticFacts = {
-    hasSuccessfulSubstantiveCheck: hasSuccessfulSubstantiveClientDiagnosticReceipt(diagnosticRecords),
+    hasSuccessfulSubstantiveCheck: hasCompleteClientDiagnosticReceipts(records, taskText),
     hasLiveState: Boolean(state),
     healthLevel: String(health?.level || 'unknown'),
     stateAgeSeconds: health?.stateAgeSeconds != null && Number.isFinite(Number(health.stateAgeSeconds))
@@ -219,10 +229,12 @@ export function formatClientDiagnosticResult(
     successfulChecks: unique(diagnosticRecords
       .filter(record => isSuccessfulDiagnosticRecord(record))
       .map(record => String(record.name || ''))),
-    failedChecks: unique(diagnosticRecords
+    failedChecks: unique([...buildClientDiagnosticPlan(taskText)
+      .filter(step => !records.some(record => record.name === step.name))
+      .map(step => `${step.name}: no current-turn receipt`), ...diagnosticRecords
       .map(record => ({ record, failure: diagnosticRecordFailure(record) }))
       .filter(item => Boolean(item.failure))
-      .map(item => `${item.record.name}: ${item.failure}`)),
+      .map(item => `${item.record.name}: ${item.failure}`)]),
     repairResults: unique(repairRecords.map(record => {
       const failure = diagnosticRecordFailure(record);
       if (failure) return `${record.name}: ${failure}`;

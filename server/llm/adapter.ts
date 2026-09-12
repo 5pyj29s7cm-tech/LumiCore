@@ -2672,7 +2672,7 @@ async function runWithToolsInternal(
 function recordWorkflowIfToolsUsed(
   executionLog: ToolExecutionRecord[],
   messages: NormalizedMessage[],
-  config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId'>,
+  config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId' | 'source'>,
 ): void {
   if (executionLog.length === 0) return;
   const rawContent = [...messages].reverse().find(message => {
@@ -2694,6 +2694,7 @@ function recordWorkflowIfToolsUsed(
   // next capture request is trying to save.
   if (classifySkillAuthoringIntent(safeMsg) !== 'none') return;
   recordWorkflow({
+    source: config.source,
     userId: config.userId || 'anonymous',
     conversationId: config.conversationId,
     taskId: executionLog[0]?.taskId,

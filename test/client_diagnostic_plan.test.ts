@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { buildClientDiagnosticPlan } from '../server/cognition/client_diagnostic_result';
+import { buildClientDiagnosticPlan, hasCompleteClientDiagnosticReceipts } from '../server/cognition/client_diagnostic_result';
+import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
+import { classifyRuntimeWorkIntent } from '../server/cognition/runtime_work_intent';
 
 describe('deterministic client diagnostic plan', () => {
+  it.each(['检查一下你当前的客户端和后台运行状态，把实际检查结果告诉我。', '查看客户端与后台的状态'])('does not let a ledger query consume coordinated client health inspection: %s', text => {
+    expect(classifyRuntimeWorkIntent(text)).toBe('none');
+    const plan = buildClientDiagnosticPlan(text);
+    expect(plan.map(step => step.name)).toEqual(['runtime_work_status', 'client_health_check', 'client_get_state']);
+    expect(buildActionContract(text).label).toBe('Current Lumi runtime diagnostic');
+    const records = [{ name: 'runtime_work_status', arguments: {}, result: JSON.stringify({ok: true, activeCount: 0}) }];
+    expect(hasCompleteClientDiagnosticReceipts(records, text)).toBe(false);
+    expect(hasCoreActionEvidence(buildActionContract(text), records, text)).toBe(false);
+    records.push({name: 'client_health_check', arguments: {}, result: '{"ok":true}'}, {name: 'client_get_state', arguments: {}, result: '{"ok":true}'});
+    expect(hasCompleteClientDiagnosticReceipts(records, text)).toBe(true);
+    records.push({name: 'client_get_state', arguments: {}, result: '{"ok":false,"status":"unavailable"}'});
+    expect(hasCompleteClientDiagnosticReceipts(records, text)).toBe(false);
+  });
   it.each([
     '做个自检',
     '你不能自检吗？',

@@ -861,6 +861,9 @@ export function registerChatHandler(
     const turnAuthorization = combineRequestAuthorizations(ownerAuthorization, conversationAuthorization);
     const runAuthorizedTools = (...args: Parameters<typeof runWithTools>) => {
       turnAuthorization.assertCurrent();
+      // Preserve the accepted conversation and transport provenance through
+      // every execution/recovery path, including reusable workflow traces.
+      args[2] = { ...args[2], conversationId: selectedConversationId || args[2].conversationId, source: eventSource };
       return runWithTools(...args);
     };
     const callAuthorizedModel = (...args: Parameters<typeof makeLLMCall>) => {

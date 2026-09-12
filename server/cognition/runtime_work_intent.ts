@@ -41,7 +41,11 @@ export function classifyRuntimeWorkIntent(
   if (resolvePendingRuntimeCleanupOffer(text, assistantOfferContext)) return 'cancel';
   if (STANDALONE_CANCEL_RE.test(text)) return 'cancel';
   if (REPORTED_ACTIVE_COUNT_RE.test(text)) return 'status';
-  if (!EXPLICIT_WORK_SCOPE_RE.test(text)) return 'none';
+  // Backend health is not task progress. Retain bare background execution
+  // questions, but do not consume service-status requests as ledger queries.
+  if (/\u540e\u53f0/u.test(text) && EXECUTION_QUERY_STATUS_RE.test(text)) return 'status';
+  const workScopeText = text.replace(/\u540e\u53f0(?!\u4efb\u52a1|\u5de5\u4f5c)/gu, '');
+  if (!EXPLICIT_WORK_SCOPE_RE.test(workScopeText)) return 'none';
   if (CANCEL_WORK_RE.test(text)) return 'cancel';
   if (STATUS_WORK_RE.test(text) || EXECUTION_QUERY_STATUS_RE.test(text)) return 'status';
   return 'none';

@@ -16,7 +16,7 @@ import {
 } from './desktop_observation';
 import {
   formatClientDiagnosticResult,
-  hasSuccessfulSubstantiveClientDiagnosticReceipt,
+  hasCompleteClientDiagnosticReceipts,
 } from './client_diagnostic_result';
 import {
   hasExplicitNoMutationInstruction,
@@ -767,6 +767,7 @@ function formatGroundedRuntimeWorkResult(
   input: LumiResultFinalizerInput,
   contract: ReturnType<typeof taskActionContract>,
 ): LumiResultFinalizerResult | null {
+  if (contract.label === 'Current Lumi runtime diagnostic') return null;
   const runtimeRecord = [...(input.toolRecords || [])].reverse().find(item => (
     item.name === 'runtime_work_cancel' || item.name === 'runtime_work_status'
   ));
@@ -3142,7 +3143,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     reason: 'Response promised another action after execution ended.' };
   const diagnosticResult = formatClientDiagnosticResult(input.toolRecords || [], actionText, input.responseText);
   if (diagnosticResult) {
-    const diagnosticCompleted = hasSuccessfulSubstantiveClientDiagnosticReceipt(input.toolRecords || []);
+    const diagnosticCompleted = hasCompleteClientDiagnosticReceipts(input.toolRecords || [], actionText);
     return preserveModelWordingOnGroundedSuccess(input, {
       text: diagnosticResult,
       blocked: !diagnosticCompleted,

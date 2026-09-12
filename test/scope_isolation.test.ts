@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { addMemory, queryMemories } from '../server/memory/store';
 import { getWorkflow, listWorkflows, saveWorkflow } from '../server/agents/workflows';
-import { findWorkflowClusters, recordWorkflow } from '../server/skills/worklog';
+import { findWorkflowClusters, getRecentWorkflows, recordWorkflow } from '../server/skills/worklog';
 import { listCapabilityLearningRecords, upsertCapabilityLearningRecord } from '../server/self_extension/capability_memory';
 
 describe('personal and organization scope isolation', () => {
@@ -75,6 +75,18 @@ describe('personal and organization scope isolation', () => {
     const workClusters = findWorkflowClusters(3, userB, 'work', 'org-scope-test');
     expect(personalClusters[0]?.workflows.every(item => item.userId === userA && item.domain === 'personal')).toBe(true);
     expect(workClusters[0]?.workflows.every(item => item.userId === userB && item.domain === 'work')).toBe(true);
+  });
+
+  it('keeps acceptance traces reviewable without learning them as owner routines', () => {
+    const userId = `workflow-provenance-${Date.now()}`;
+    for (let i = 0; i < 3; i++) recordWorkflow({userId, source: 'e2e-formal-client', userIntent: 'read an order file', conversationExcerpt: 'read an order file',
+      toolSequence: [{name: 'read_file', args: {}, resultSummary: 'ok'}]});
+    expect(getRecentWorkflows(userId)).toHaveLength(3);
+    expect(findWorkflowClusters(3, userId)).toEqual([]);
+    for (let i = 0; i < 3; i++) recordWorkflow({userId, source: 'chat', userIntent: 'read an order file', conversationExcerpt: 'read an order file',
+      toolSequence: [{name: 'read_file', args: {}, resultSummary: 'ok'}]});
+    expect(findWorkflowClusters(3, userId)[0]?.workflows).toHaveLength(3);
+    expect(findWorkflowClusters(3, userId)[0]?.workflows.every(record => record.source === 'chat')).toBe(true);
   });
 
   it('separates capability category from personal and organization ownership', () => {

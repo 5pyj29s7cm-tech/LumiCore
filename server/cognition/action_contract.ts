@@ -1021,6 +1021,16 @@ export function buildActionContract(input: string): LumiActionContract {
   // a verified work_takeover_task_list receipt, so do not demand the unrelated
   // runtime_work_status tool in the final completion gate.
   if (isNamedPersistentWorkTaskStatusQuery(text)) return NONE_CONTRACT;
+  const diagnosticPlan = buildClientDiagnosticPlan(primaryTaskText || rawInput);
+  if (diagnosticPlan.length) {
+    const tools = diagnosticPlan.map(step => step.name);
+    return withDefaults({ kind: 'desktop_operation', label: 'Current Lumi runtime diagnostic',
+      coreAction: 'Inspect the current Lumi runtime state and explain its actual health findings.',
+      preparationIsNotCompletion: ['listing generic capabilities or unrelated business integrations'],
+      requiredEvidence: tools.map(name => `successful current-turn ${name} receipt`), preferredTools: tools, verificationTools: tools,
+      nextStep: 'Read all required runtime receipts, identify attention items, and distinguish optional disconnected integrations from core failures.',
+      caution: 'A task ledger snapshot alone does not verify client and backend health.' });
+  }
   // Runtime status/cancellation has its own exact ledger contract. Classify it
   // before the generic normalized status guard so a phrase such as
   // "background task progress" cannot be reduced to a no-tool status turn.
@@ -1320,16 +1330,6 @@ export function buildActionContract(input: string): LumiActionContract {
       coreAction: 'Pause the requested player and verify that its current playback state is paused.',
       requiredEvidence: ['current-turn observation of the requested player with an explicit paused state'],
       nextStep: 'Observe the player first; if it is already paused, stop. Otherwise pause once, then observe the paused state without toggling again.' };
-  }
-  const diagnosticPlan = buildClientDiagnosticPlan(primaryTaskText || rawInput);
-  if (diagnosticPlan.length) {
-    const tools = diagnosticPlan.map(step => step.name);
-    return withDefaults({ kind: 'desktop_operation', label: 'Current Lumi runtime diagnostic',
-      coreAction: 'Inspect the current Lumi runtime state and explain its actual health findings.',
-      preparationIsNotCompletion: ['listing generic capabilities or unrelated business integrations'],
-      requiredEvidence: tools.map(name => `successful current-turn ${name} receipt`), preferredTools: tools, verificationTools: tools,
-      nextStep: 'Read these runtime receipts, identify any attention items, and distinguish optional disconnected integrations from core failures.',
-      caution: 'Do not substitute legal, biometric, or other unrelated capability inventories for a runtime check.' });
   }
   if (requiresMediaPlaybackAction(text)) {
     return buildMediaPlaybackContract();

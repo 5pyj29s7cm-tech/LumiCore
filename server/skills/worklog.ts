@@ -4,6 +4,8 @@
  * for repeatable patterns and triggers skill generation.
  */
 
+import { isTestLearningSource, isTestMemory } from '../memory/provenance';
+
 export interface WorkflowStep {
   name: string;
   args: Record<string, any>;
@@ -23,6 +25,7 @@ export interface WorkflowRecord {
   orgId?: string;
   conversationId?: string;
   taskId?: string;
+  source?: string;
 }
 
 const recentWorkflows: WorkflowRecord[] = [];
@@ -216,7 +219,11 @@ export function findWorkflowClusters(
   domain?: string,
   orgId?: string,
 ): WorkflowCluster[] {
-  const candidates = getRecentWorkflows(userId, domain, orgId);
+  // Keep test traces available for explicit capture/reuse acceptance, but do
+  // not infer the owner's routines from automatic acceptance conversations.
+  const candidates = getRecentWorkflows(userId, domain, orgId).filter(record =>
+    !isTestLearningSource(record.source)
+    && !isTestMemory({ sourceInteractionId: record.source || '', content: record.conversationExcerpt }));
   if (candidates.length < minSize) return [];
 
   const clusters: WorkflowCluster[] = [];
