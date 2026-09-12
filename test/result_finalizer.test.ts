@@ -13,6 +13,20 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it('delivers a readable saved-workflow draft receipt without claiming it can run', async () => {
+    const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    const { sanitizeExecutionResponseForDelivery } = await import('../server/cognition/execution_guard_recovery');
+    const input = { taskText: '把刚才的文件处理流程保存为可复用工作流。', responseText: '{"steps":[{"arguments":{"path":"C:/private/input.csv"}}]}', source: 'chat', requestId: 'save-draft-request', taskId: 'save-draft-task',
+      toolRecords: [{name: 'save_workflow', arguments: {}, requestId: 'save-draft-request', taskId: 'save-draft-task', result: JSON.stringify({ok: true, status: 'draft', workflowId: 'workflow-1', name: '更新销售单据', hash: 'a'.repeat(64), stepCount: 2}),
+        terminalVerification: {status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'draft saved'}}] };
+    const result = finalizeLumiResponse(input);
+    expect(result.text).toContain('工作流草稿已保存：更新销售单据');
+    expect(result.text).toContain('暂不能运行');
+    expect(tryFinalizeVerifiedBoundedAction(input)?.text).toBe(result.text);
+    const delivered = sanitizeExecutionResponseForDelivery(result, {task: input.taskText, toolRecords: input.toolRecords});
+    expect(delivered.text).toBe(result.text);
+    expect(delivered.blocked).toBe(false);
+  });
   it('does not replace a client/backend self-check with an idle-work receipt', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const result = finalizeLumiResponse({taskText: '检查一下你当前的客户端和后台运行状态，把实际检查结果告诉我。', responseText: '', source: 'chat',
