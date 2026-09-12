@@ -2,11 +2,11 @@ import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
-import { artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { artifactPathFromRecord, artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { hasExplicitNoToolInstruction, hasRequestedArtifactMutation, isInformationOnlyQuestion } from './tool_intent';
 import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';
-import { preservedSourceOutputScope } from './artifact_write_scope';
+import { preservedSourceOutputScope, matchesRequestedArtifactOutput } from './artifact_write_scope';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import { parsePlaybackGoal, validatePlaybackVerification } from './playback_verification';
@@ -3446,7 +3446,7 @@ export function hasCoreActionEvidence(
     }
     const current = successful.filter(record => artifactRecordMatchesTurn(record, currentTurn || {}));
     if (!hasRequestedArtifactPostWriteReadback(current, taskText)) return false;
-    return current.some(isArtifactProducerRecord);
+    return current.some(record => isArtifactProducerRecord(record) && matchesRequestedArtifactOutput(taskText, artifactPathFromRecord(record)));
   }
   if (contract.kind === 'external_ai_request') {
     const hasSubmission = successful.some(record => {

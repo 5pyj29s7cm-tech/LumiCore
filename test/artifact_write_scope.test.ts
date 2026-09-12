@@ -3,15 +3,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
-import { preservedSourceOutputScope } from '../server/cognition/artifact_write_scope';
+import { preservedSourceOutputScope, requestedSingleArtifact } from '../server/cognition/artifact_write_scope';
+import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
+import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
 import { registerDocumentTools } from '../server/tools/definitions/document_tools';
+import { registerPdfTools } from '../server/tools/definitions/pdf_tools';
 import { ToolRegistry } from '../server/tools/registry';
 
 beforeAll(() => initDatabase());
 
 describe('preserved input and separate output through the real executor', () => {
+  it('does not replace a requested CSV result with an unrelated PDF in a read-calculate-save task', async () => {
+    const root = fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR), 'csv-output-'));
+    const source = path.join(root, 'input.csv'), output = path.join(root, 'output.csv');
+    fs.writeFileSync(source, 'quantity,price\n4,18\n');
+    const task = `这是虚构验收，不要记入个人记忆。请读取 ${source}，计算 total，生成同目录 output.csv。然后保存成工作流草稿。`;
+    expect(requestedSingleArtifact(task)?.path.replace(/\\/g, '/')).toBe(output.replace(/\\/g, '/'));
+    const registry = new ToolRegistry(); registerDocumentTools(registry); registerPdfTools(registry); registerFileOpsTools(registry);
+    const context = { userId: 'csv-output-user', taskId: 'csv-output-task', requestId: 'csv-output-request',
+      authenticated: true, authRole: 'admin' as const, localExecution: true, userConfirmed: true, allowLocalFileWrites: true };
+    const wrong = await executeToolCall({ registry, name: 'create_pdf', arguments: { title: 'Wrong format', content: '72' }, context: { ...context, actionIntent: task } });
+    expect(wrong.error).toMatch(/different document format/);
+    // A legacy/unrelated verified PDF receipt must not pass the finalizer either.
+    const other = await executeToolCall({ registry, name: 'create_pdf', arguments: { title: 'Legacy unrelated PDF', content: '72' }, context });
+    expect(other.terminalVerification?.status).toBe('verified');
+    expect(hasCoreActionEvidence(buildActionContract(task), [other], task, undefined, context)).toBe(false);
+    const final = finalizeLumiResponse({ ...context, taskText: task, source: 'chat', responseText: '文件已完成。', toolRecords: [other] });
+    expect(final.blocked).toBe(true);
+    expect(final.text).not.toContain('已完成并验证本地文件');
+    const correct = await executeToolCall({ registry, name: 'write_file', arguments: { path: output, content: 'quantity,price,total\n4,18,72\n' }, context: { ...context, actionIntent: task } });
+    expect(correct.error).toBeUndefined();
+    expect(fs.readFileSync(source, 'utf8')).toBe('quantity,price\n4,18\n');
+  });
   it('keeps an exact XLSX request as XLSX and binds the requested destination before writing', async () => {
     const root = fs.mkdtempSync(path.join(String(process.env.LUMI_DATA_DIR), 'exact-format-'));
     const output = path.join(root, 'orders.xlsx');

@@ -6,6 +6,7 @@ import { executeToolCall } from '../server/tools/execution_engine';
 import { executeSandboxedJavaScript } from '../server/tools/javascript_sandbox';
 import type { ToolContext } from '../server/tools/types';
 import { guardCurrentAppToolCall } from '../server/cognition/current_app_execution';
+import { personalityRegistry } from '../server/personality/registry';
 
 const context: ToolContext = {
   userId: 'synthetic-local-code-owner', authenticated: true, source: 'chat',
@@ -17,6 +18,12 @@ function execute(code: string, overrides: Partial<ToolContext> = {}) {
 }
 
 describe('JavaScript calculation guest and host boundary', () => {
+  it('uses the same safe factory policy while preserving an explicit stricter owner policy', () => {
+    const tools = registry();
+    const factory = personalityRegistry.getDefault().toolPolicy;
+    expect(tools.resolveSecurity('code_execution', factory).level).toBe('safe');
+    expect(tools.resolveSecurity('code_execution', { ...factory, requireConfirmation: ['code_execution'] }).level).toBe('confirm');
+  });
   it('allows I/O-free calculation through both chat preflight and mandatory file-target guards', async () => {
     const taskText = '读取 C:/Users/test/Documents/input.csv，计算数量乘单价并生成 output.csv。';
     const args = { code: 'input.quantity * input.price', input: { quantity: 4, price: 18 } };

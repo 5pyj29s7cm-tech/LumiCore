@@ -9,6 +9,7 @@ import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 import { isVideoPlaybackRequest } from './media_intent';
 import type { ToolExecutionRecord } from '../tools/types';
 import { artifactPathFromRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { matchesRequestedArtifactOutput } from './artifact_write_scope';
 import type { LumiTurnFlow } from './turn_flow';
 import {
   evaluateDesktopObservationEvidence,
@@ -1786,6 +1787,7 @@ export function formatGroundedArtifactResult(
   if (!delivery) return null;
   const { producer: created, outputPath: path, readback } = delivery;
   const actionText = resultTaskText(input);
+  if (!matchesRequestedArtifactOutput(actionText, path)) return null;
   const readbackRequired = requiresArtifactPostWriteReadback(actionText);
   const asksToOpen = /(?:\u6253\u5f00|\u6253\u5f00\u770b\u770b|\u76f4\u63a5\u6253\u5f00)|\bopen\b/iu.test(actionText);
   const openRecord = [...records].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(String(record.name || '')));

@@ -89,7 +89,7 @@ class PersonalityRegistry {
       },
       toolPolicy: {
         allowedTools: ['*'],
-        requireConfirmation: ['code_execution'],
+        requireConfirmation: [],
         forbiddenTools: [],
         securityOverrides: {
           desktop_run_command: 'safe',
