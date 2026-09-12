@@ -98,7 +98,7 @@ export function workflowTransformationBlocker(intent: string, steps: Array<{
   const onlyReads = steps.length > 0 && steps.every(step => ['observe', 'test'].includes(step.operation || ''));
   const readsThenWrites = steps.some(step => isReader(step.name))
     && steps.some(step => step.operation && !['observe', 'test', 'unknown'].includes(step.operation));
-  if (onlyReads || readsThenWrites) return 'The saved steps do not contain an input-dependent calculation. Use code_execution with fresh data in input (a typed $inputRef or $stepOutputRef), or a reviewed transformation Skill, then bind the writer to its result. Saving a previous total or fixed file content does not make the calculation reusable.';
+  if (onlyReads || readsThenWrites) return 'The saved steps do not contain an input-dependent calculation. Use code_execution with args.code containing JavaScript (not Python, imports, or top-level return), and args.input containing a JSON object such as {"$stepOutputRef":"step_1"}. The script reads global input and returns its last expression or an invoked function result. Bind the writer to {"$stepOutputRef":"step_2.output"}. Never use quoted ${...} references or invent a compute tool. A reviewed transformation Skill with typed inputs is also supported. Saving a previous total or fixed file content does not make the calculation reusable.';
   return null;
 }
 

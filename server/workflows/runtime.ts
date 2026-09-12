@@ -391,7 +391,7 @@ function parseStepOutputReference(record: Record<string, unknown>): { stepId: st
 }
 
 function rejectStringEncodedReference(value: unknown): void {
-  if (typeof value === 'string' && /^\s*\{\s*["']?\$(?:inputRef|stepOutputRef|secretRef)["']?\s*:/u.test(value)) {
+  if (typeof value === 'string' && /^\s*\$?\{\s*["']?\$(?:inputRef|stepOutputRef|secretRef)["']?\s*:/u.test(value)) {
     throw new WorkflowStateError('Workflow references must be JSON objects, not strings containing reference syntax. Use {"$inputRef":"inputs.name"} or {"$stepOutputRef":"step_1"} as the argument value.');
   }
 }

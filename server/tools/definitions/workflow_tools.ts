@@ -365,14 +365,14 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
       requestedSourceTaskId: requestedTaskId || undefined,
       availableSources,
       nextAction: availableSources.length
-        ? 'Use one exact sourceTaskId listed here, or omit sourceTaskId to capture this conversation\'s latest trace. Do not substitute a different task silently. If pure computation must be authored, call generate_skill with runtime inputs and the requested transformation; keep installation separate.'
-        : 'For an explicit skill-authoring request, call generate_skill with the user-specified pure input-dependent transformation. Do not claim a past trace was captured or search another conversation.',
+        ? 'Use one exact sourceTaskId listed here, or omit sourceTaskId to capture this conversation\'s latest trace. Do not substitute a different task silently. If capture is incomplete, use save_workflow to author the requested input-dependent steps; do not generate or install a skill package unless the user asks for one.'
+        : 'Use save_workflow to author the user-requested steps with typed input/output references. Do not claim a past trace was captured or search another conversation. Creating a skill package is a separate user request.',
     }, null, 2);
   }
 
   const last = recent[recent.length - 1];
   const blocker = workflowCaptureBlocker(last);
-  if (blocker) return JSON.stringify({ ok: false, status: 'needs_authoring', name, sourceConversationId: conversationId, sourceTaskId: last.taskId, sourceIntent: last.userIntent, observedTools: last.toolSequence.map(step => step.name), reason: blocker, nextAction: 'Call generate_skill now for the missing pure input-dependent transformation and return its draft review. Do not install, publish, or run it unless separately requested and approved. A later saved workflow can bind the reader output to the reviewed skill. No draft was saved by capture.' });
+  if (blocker) return JSON.stringify({ ok: false, status: 'needs_authoring', name, sourceConversationId: conversationId, sourceTaskId: last.taskId, sourceIntent: last.userIntent, observedTools: last.toolSequence.map(step => step.name), reason: blocker, nextAction: 'Use save_workflow to author the missing executable transformation. For code_execution, args.code is JavaScript (not Python), args.input is a typed reference such as {"$stepOutputRef":"step_1"}, and the writer binds to {"$stepOutputRef":"step_2.output"}. Do not repeat completed actions or create, install, publish, or run a skill package without a separate request. No draft was saved by capture.' });
   const toolTrace = last.toolSequence.map(s => ({
     name: s.name,
     args: s.args,
@@ -1292,7 +1292,7 @@ async function handleReconcileWorkflowRun(args: Record<string, any>, context?: a
 export function registerWorkflowTools(registry: ToolRegistry): void {
   registry.register({
     name: 'save_workflow',
-    description: 'Save a reviewable named workflow draft. Steps execute real registered tools: use {"$inputRef":"inputs.name"} for fresh inputs and {"$stepOutputRef":"step_1.optional.path"} to pass a complete verified earlier result into a later tool. Include every computation as an executable tool; a read followed by model arithmetic is not a complete saved algorithm. Review get_workflow and publish the exact hash before running.',
+    description: 'Save a reviewable named workflow draft without executing its steps. Use real registered tool names, never invent compute or transform tools. References are JSON objects: {"$inputRef":"inputs.name"} and {"$stepOutputRef":"step_1.optional.path"}, never strings or ${...} interpolation. For code_execution use args.code (JavaScript script, not Python; last expression or invoked function returns the result) and args.input (typed reference exposed as global input). It returns {ok,status,output}; bind a later writer to step_2.output, not the whole result. Include every computation as an executable step. Review with get_workflow; publication and execution require separate authorization.',
     parameters: {
       type: 'object',
       properties: {
@@ -1304,13 +1304,14 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
             type: 'object',
             properties: {
               description: { type: 'string' },
-              tool: { type: 'string' },
-              args: { type: 'object', description: 'Arguments template. Example: {"path":{"$inputRef":"inputs.sourcePath"}} or {"csvText":{"$stepOutputRef":"step_1"}}. The reference is a nested JSON object, NEVER a quoted string containing braces or reference syntax.' },
+              tool: { type: 'string', description: 'Exact registered tool name. code_execution is the JavaScript calculator; compute is not a tool.' },
+              args: { type: 'object', description: 'Arguments template: read_file uses {"path":{"$inputRef":"inputs.sourcePath"}}; code_execution uses {"code":"input.trim()","input":{"$stepOutputRef":"step_1"}} (replace the JavaScript with the requested algorithm); desktop_write_text_file uses {"path":{"$inputRef":"inputs.outputPath"},"text":{"$stepOutputRef":"step_2.output"}}. write_file uses content instead of text. References are nested JSON objects, never quoted reference syntax. Keep the algorithm executable; never paste a previous answer as the writer content.' },
               reconciliationCapabilityId: {
                 type: 'string',
                 description: 'Optional read-only observe/test capability that can verify this exact target after an interrupted side effect. It is frozen into the published version.',
               },
             },
+            required: ['tool'],
           },
           description: 'Ordered list of workflow steps',
         },
@@ -1419,7 +1420,7 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'capture_recent_workflow',
-    description: 'Capture the most recent verified business trace from this exact conversation as a draft. Normally omit sourceTaskId; never guess it from a filename. Failed, discovery-only, unscoped, or model-only transformation traces require generate_skill authoring instead. If the user explicitly requests a new calculation draft, generate_skill can be called directly. No automatic publication or claim of complete algorithm capture.',
+    description: 'Capture the most recent verified business trace from this exact conversation as a draft. Normally omit sourceTaskId; never guess it from a filename. Failed, discovery-only, unscoped, or model-only transformation traces cannot be captured as a complete algorithm: use save_workflow to author the requested executable steps and typed data bindings. Creating a skill package is a separate user request. No automatic publication or execution.',
     parameters: {
       type: 'object',
       properties: {

@@ -74,9 +74,13 @@ describe('explicit skill authoring and captured workflow boundary', () => {
     expect(getRecentWorkflows('capture-user', 'personal', '', 'two')).toHaveLength(0);
     const other = await registry.execute('capture_recent_workflow', { name: 'wrong-scope' }, { userId: 'capture-user', conversationId: 'two' });
     expect(JSON.parse(other)).toMatchObject({ ok: false, status: 'failed', code: 'no_recent_activity', availableSources: [] });
+    expect(JSON.parse(other).nextAction).toContain('save_workflow');
     expect(getWorkflow('capture-user', 'wrong-scope')).toBeNull();
     const result = JSON.parse(await registry.execute('capture_recent_workflow', { name: 'not-an-algorithm' }, { userId: 'capture-user', conversationId: 'one' }));
     expect(result).toMatchObject({ ok: false, status: 'needs_authoring', sourceTaskId: 'task-one' });
+    expect(result.nextAction).toContain('save_workflow');
+    expect(result.nextAction).toContain('args.code');
+    expect(result.nextAction).not.toContain('Call generate_skill');
     expect(getWorkflow('capture-user', 'not-an-algorithm')).toBeNull();
     registry.register({ name: 'read_file', description: 'Read input', parameters: {}, permission: 'public', securityLevel: 'safe', handler: async () => 'data' });
     await expect(registry.execute('save_workflow', { name: 'bypassed-capture', description: 'Read and calculate totals', steps: [{ tool: 'read_file', args: { path: { $inputRef: 'inputs.path' } } }] }, { userId: 'capture-user', conversationId: 'one', actionIntent: '把刚才流程保存成技能' })).rejects.toThrow('input-dependent calculation');
@@ -92,6 +96,17 @@ describe('explicit skill authoring and captured workflow boundary', () => {
     }
     expect(() => resolveWorkflowValue({ $stepOutputRef: 'step_1.items' }, {})).toThrow('current workflow run');
   });
+
+  it.each(['${$inputRef:inputs.sourcePath}', '${$stepOutputRef:step_1}', '${$secretRef:inputs.key}'])(
+    'rejects model-authored interpolation %s before persisting a draft', async reference => {
+      const registry = new ToolRegistry(); registerWorkflowTools(registry);
+      const userId = 'invalid-interpolation';
+      await expect(registry.execute('save_workflow', {
+        name: reference, steps: [{ tool: 'read_file', args: { path: reference } }],
+      }, { userId })).rejects.toThrow('Workflow references must be JSON objects');
+      expect(getWorkflow(userId, reference)).toBeNull();
+    },
+  );
 
   it('offers named skill/workflow discovery in a fresh turn and retains host-normalized computation results', async () => {
     expect(classifySkillAuthoringIntent('使用技能“订单汇总”处理新的条目数组')).toBe('use');
