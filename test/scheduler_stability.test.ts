@@ -169,7 +169,9 @@ describe('scheduler stability', () => {
   });
 
   it('keeps non-cooperative handlers cancelling after stop until they truly settle', async () => {
-    const scheduler = new Scheduler();
+    // This exercises handler cancellation, not disk latency. Dedicated tests
+    // below cover admission/terminal durability failures and deadlines.
+    const scheduler = new Scheduler(async () => {});
     const taskId = `test_scheduler_stop_fence_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     let started!: () => void;
     let settle!: () => void;
