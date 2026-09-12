@@ -2513,7 +2513,7 @@ async function runWithToolsInternal(
           }
           if (
             tc.name === 'generate_skill'
-            && !['generate', 'save'].includes(classifySkillAuthoringIntent(String(toolExecutionContext?.actionIntent || primaryTask)))
+            && classifySkillAuthoringIntent(String(toolExecutionContext?.actionIntent || primaryTask)) !== 'generate'
             && !hasSameTaskSkillGenerationDiscovery(executionLog, toolExecutionContext)
           ) {
             return {

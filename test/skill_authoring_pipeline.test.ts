@@ -86,6 +86,16 @@ async function run(registry: ToolRegistry, context: ToolContext, text: string) {
 }
 
 describe('normal pipeline skill authoring after real same-conversation work', () => {
+  it('keeps a compound workflow save on execution and recipe tools, without generating a new package', () => {
+    const registry = new ToolRegistry(); registerAllTools(registry);
+    const userId = 'workflow-recipe-scope';
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const text = '请读取 C:/Users/test/Documents/input.csv，计算 total 并生成 output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。先保存草稿，不发布。';
+    const { pipeline } = plan(registry, userId, conversation.id, text, 'workflow-recipe-scope-task');
+    const names = pipeline.modelToolProjection.toolNames;
+    for (const name of ['read_file', 'code_execution', 'write_file', 'save_workflow']) expect(names).toContain(name);
+    for (const name of ['generate_skill', 'install_skill', 'publish_workflow']) expect(names).not.toContain(name);
+  });
   it.each([true, false])('creates only a reviewed draft after read/calculation (explicit draft=%s)', async explicitDraft => {
     const number = ++serial, userId = `skill-pipeline-${number}`;
     const registry = new ToolRegistry();
@@ -158,12 +168,9 @@ describe('normal pipeline skill authoring after real same-conversation work', ()
       const currentIteration = iteration++;
       if (!explicitDraft && currentIteration === 0) return { text: '', toolCalls: [{ id: 'bad-source', name: 'capture_recent_workflow', arguments: { name, sourceTaskId: 'LC-TASK-ORDERS' } }] };
       if (!explicitDraft && currentIteration === 1) {
-        expect(String(messages.at(-1)?.content)).toContain('source_task_not_found');
-        expect(String(messages.at(-1)?.content)).toContain(read.context.taskId);
-        return { text: '', toolCalls: [{ id: 'capture-source', name: 'capture_recent_workflow', arguments: { name, sourceTaskId: read.context.taskId } }] };
+        expect(String(messages.at(-1)?.content)).toContain('not exposed for the current task');
       }
-      if (!explicitDraft && currentIteration === 2) expect(String(messages.at(-1)?.content)).toContain('needs_authoring');
-      if (currentIteration === (explicitDraft ? 0 : 2)) return { text: '', toolCalls: [{ id: 'author-draft', name: 'generate_skill', arguments: { name, description: 'Accept runtime rows with quantity and price. Return each quantity*price amount and their total. Do not hardcode sample values, read host files, install, or run the generated code.' } }] };
+      if (currentIteration === (explicitDraft ? 0 : 1)) return { text: '', toolCalls: [{ id: 'author-draft', name: 'generate_skill', arguments: { name, description: 'Accept runtime rows with quantity and price. Return each quantity*price amount and their total. Do not hardcode sample values, read host files, install, or run the generated code.' } }] };
       return { text: '草稿已生成，等待审核。尚未安装或运行。', toolCalls: [] };
     });
     const result = await run(registry, author.context, authorText);
@@ -183,8 +190,7 @@ describe('normal pipeline skill authoring after real same-conversation work', ()
     expect(getWorkflow(userId, name)).toBeNull();
     if (!explicitDraft) {
       const captures = result.toolCalls.filter(record => record.name === 'capture_recent_workflow');
-      expect(captures).toHaveLength(2);
-      expect(captures.every(record => record.envelope?.status === 'failed')).toBe(true);
+      expect(captures.some(record => record.envelope?.status === 'verified_success')).toBe(false);
     }
     // The authoring turn must not overwrite the business source trace.
     expect(getRecentWorkflows(userId, 'personal', '', conversation.id)).toHaveLength(1);
@@ -195,6 +201,8 @@ describe('normal pipeline skill authoring after real same-conversation work', ()
     expect(classifySkillAuthoringIntent('创建技能草稿，不要安装或运行。')).toBe('generate');
     expect(classifySkillAuthoringIntent('不要创建技能，暂不生成草稿。')).toBe('none');
     expect(classifySkillAuthoringIntent('你已经生成技能草稿了吗？')).toBe('none');
+    expect(classifySkillAuthoringIntent('把刚才读取和计算的流程保存成可复用技能。')).toBe('generate');
+    expect(classifySkillAuthoringIntent('把刚才读取和计算保存成可复用工作流草稿。')).toBe('save');
   });
 
   it('exempts only explicit draft authoring while preserving file and arbitrary process guards', () => {

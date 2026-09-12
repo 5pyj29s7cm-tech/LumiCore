@@ -27,6 +27,10 @@ export function classifySkillAuthoringIntent(value: string): SkillAuthoringInten
     // i18n-allow: multilingual explicit authoring input recognition.
     const target = /(?:技能|工作流|流程)|\b(?:skill|workflow)\b/iu;
     if (!target.test(clause)) continue;
+    // Saving a process *as a Skill* requests a package draft. Saving a workflow
+    // requests a recipe; it must not silently enter package generation/install.
+    // i18n-allow: explicit requested artifact type recognition.
+    if (/(?:保存|沉淀).{0,25}(?:为|成).{0,12}技能|\b(?:save|capture)\b.{0,60}\bas\s+(?:a\s+)?(?:reusable\s+)?skill\b/iu.test(clause)) return 'generate';
     // i18n-allow: explicit continuation of a named workflow, not a new draft.
     if (/^\s*(?:请\s*)?继续(?:当前|这个|刚才的|已有的)?(?:工作流|流程)/u.test(clause)) return 'use';
     // The leading requested operation owns the turn: "run the published
@@ -47,7 +51,7 @@ export function classifySkillAuthoringIntent(value: string): SkillAuthoringInten
 
 export function skillAuthoringTools(intent: SkillAuthoringIntent): string[] {
   if (intent === 'generate') return ['generate_skill', 'install_skill', 'list_skills', 'client_capability_manifest'];
-  if (intent === 'save') return ['capture_recent_workflow', 'save_workflow', 'get_workflow', 'publish_workflow', 'generate_skill', 'install_skill', 'list_skills', 'client_capability_manifest'];
+  if (intent === 'save') return ['capture_recent_workflow', 'save_workflow', 'get_workflow', 'list_workflows', 'list_skills', 'client_capability_manifest'];
   if (intent === 'publish') return ['get_workflow', 'publish_workflow', 'install_skill', 'list_skills', 'client_capability_manifest'];
   if (intent === 'install') return ['install_skill', 'list_skills', 'client_capability_manifest'];
   if (intent === 'use') return ['client_capability_manifest', 'list_skills', 'get_workflow', 'list_workflows', 'run_workflow', 'get_workflow_run', 'decide_workflow_confirmation'];

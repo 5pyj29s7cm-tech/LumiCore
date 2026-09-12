@@ -1293,7 +1293,7 @@ export function guardTaskTargetToolCall(input: {
   // tools below still require the normal target, and registry privacy/approval
   // and installation checks remain authoritative.
   const authoringIntent = classifySkillAuthoringIntent(primaryTaskText(input.taskText));
-  if (toolName === 'generate_skill' && (authoringIntent === 'generate' || authoringIntent === 'save')) {
+  if (toolName === 'generate_skill' && authoringIntent === 'generate') {
     return { allowed: true, reason: '' };
   }
   const args = input.arguments || {};
