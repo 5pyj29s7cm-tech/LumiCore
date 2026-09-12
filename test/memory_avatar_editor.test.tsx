@@ -81,7 +81,11 @@ it('adds, expands and explicitly removes a source using each freshly saved revis
   fireEvent.click(button('Remove source')); expect(mocks.removeMaterial).not.toHaveBeenCalled();
   fireEvent.click(button('Click again to confirm removal')); await screen.findByText('This source was removed.');
   expect(mocks.removeMaterial).toHaveBeenCalledWith('avatar-a', 'material-0', 2);
-  change('Source title', 'Next story'); change('Source text', 'Another source.'); fireEvent.click(button('Add to memories'));
+  change('Source title', 'Next story'); change('Source text', 'Another source.');
+  // Fill the required fields, then wait for the prior mutation to release
+  // the form before submitting the next source.
+  await waitFor(() => expect(button('Add to memories').disabled).toBe(false));
+  fireEvent.click(button('Add to memories'));
   await screen.findByRole('button', { name: 'Next story' });
   expect(mocks.addMaterial.mock.calls[1][1].revision).toBe(3);
 });
