@@ -50,7 +50,7 @@ describe('explicit skill authoring and captured workflow boundary', () => {
     const execution = buildLumiExecutionDecision({ flow: dispatch.flow, text, toolDeclarations: registry.getToolDeclarations(), toolRegistry: registry });
     expect(execution.toolRoute.toolNames).toContain('run_workflow');
   });
-  it.each([[saveText, 'save', 'capture_recent_workflow'], [createText, 'generate', 'generate_skill']])('exposes the exact authoring door for %s', (text, intent, firstTool) => {
+  it.each([[saveText, 'generate', 'generate_skill'], [createText, 'generate', 'generate_skill'], ['把刚才读取和计算的流程保存成工作流草稿。', 'save', 'capture_recent_workflow']])('exposes the exact authoring door for %s', (text, intent, firstTool) => {
     expect(classifySkillAuthoringIntent(text)).toBe(intent);
     expect(isConversationExecutionFactQuestion(text)).toBe(false);
     const registry = new ToolRegistry(); registerAllTools(registry);

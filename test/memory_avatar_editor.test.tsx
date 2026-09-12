@@ -77,7 +77,9 @@ it('adds, expands and explicitly removes a source using each freshly saved revis
   profile(); await loaded(); fireEvent.click(screen.getByRole('tab', { name: 'Add memories' }));
   change('Source title', 'Trip'); change('Source text', 'The synthetic lake story.'); fireEvent.click(button('Add to memories'));
   await screen.findByText('This source was added to this person’s memories.');
-  fireEvent.click(button('Trip')); expect(screen.getByText('The synthetic lake story.')).toBeTruthy();
+  // The saved notice can render before the mutation releases its controls.
+  await waitFor(() => expect(button('Trip').disabled).toBe(false));
+  fireEvent.click(button('Trip')); await screen.findByText('The synthetic lake story.');
   fireEvent.click(button('Remove source')); expect(mocks.removeMaterial).not.toHaveBeenCalled();
   fireEvent.click(button('Click again to confirm removal')); await screen.findByText('This source was removed.');
   expect(mocks.removeMaterial).toHaveBeenCalledWith('avatar-a', 'material-0', 2);

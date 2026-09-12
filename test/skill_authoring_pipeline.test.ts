@@ -90,7 +90,7 @@ describe('normal pipeline skill authoring after real same-conversation work', ()
     const registry = new ToolRegistry(); registerAllTools(registry);
     const userId = 'workflow-recipe-scope';
     const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
-    const text = '请读取 C:/Users/test/Documents/input.csv，计算 total 并生成 output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。先保存草稿，不发布。';
+    const text = '这是虚构验收，不要记入个人记忆。请读取 C:/Users/test/Documents/input.csv，计算 total 并生成 output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。先保存草稿，不发布。';
     const { pipeline } = plan(registry, userId, conversation.id, text, 'workflow-recipe-scope-task');
     const names = pipeline.modelToolProjection.toolNames;
     for (const name of ['read_file', 'code_execution', 'write_file', 'save_workflow']) expect(names).toContain(name);

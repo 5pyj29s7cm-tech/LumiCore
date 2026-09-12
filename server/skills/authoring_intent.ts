@@ -70,7 +70,7 @@ export function executionBeforeWorkflowSave(value: string): string {
     const after = value.slice(match.index! + match[0].length);
     if (classifySkillAuthoringIntent(before) !== 'none' || classifySkillAuthoringIntent(after) !== 'save') continue;
     // i18n-allow: an explicit present action is required before authoring.
-    if (/(?:不要|别|不必|无需|不用).{0,8}(?:执行|运行|读取|计算|生成)|\b(?:do not|don't|never)\b/iu.test(before)) return '';
+    if (/(?:不要|别|不必|无需|不用)[^。！？!?；;\n，,]{0,8}(?:执行|运行|读取|计算|生成)|\b(?:do not|don't|never)\b[^.!?;\n,]{0,40}\b(?:execute|run|read|calculate|generate)\b/iu.test(before)) return ''; // i18n-allow: clause-bounded negation of execution.
     // i18n-allow: descriptions of examples and completed tasks are not commands.
     if (/(?:功能|示例|例如|刚才|上次|以后|下次)[:：]?|\b(?:example|previously|last\s+time|next\s+time)\b/iu.test(before)) continue;
     // i18n-allow: multilingual imperative operation recognition.
