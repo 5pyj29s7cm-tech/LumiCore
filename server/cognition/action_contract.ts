@@ -1,6 +1,6 @@
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
-import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
+import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
@@ -1004,6 +1004,18 @@ export function buildActionContract(input: string): LumiActionContract {
   const text = compact(withoutNegatedLookupClauses(rawInput));
   if (!text) return NONE_CONTRACT;
   const authoringIntent = classifySkillAuthoringIntent(rawInput);
+  const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
+  if (executionBeforeSave) {
+    const execution = buildActionContract(executionBeforeSave);
+    return withDefaults({ kind: 'skill_authoring', label: 'Execute and save workflow',
+      coreAction: 'Execute and verify the explicit current task, then save its input-dependent workflow draft.',
+      preparationIsNotCompletion: ['saving a draft without performing the requested current task', 'performing the task without saving its executable workflow'],
+      requiredEvidence: [...execution.requiredEvidence, 'a verified current-turn workflow draft save receipt'],
+      preferredTools: [...execution.preferredTools, 'code_execution', ...skillAuthoringTools('save')],
+      verificationTools: [...execution.verificationTools, 'get_workflow'],
+      nextStep: 'Complete and verify the current task first, then save all calculations as executable steps bound to fresh inputs.',
+      caution: 'The separately requested current action is authorized; a skill description or past example alone is not.' });
+  }
   if (['generate', 'save', 'install', 'publish'].includes(authoringIntent)
     || authoringIntent === 'use' && /工作流|流程|\bworkflow\b/iu.test(rawInput)) { // i18n-allow: workflow execution intent recognition.
     return withDefaults({

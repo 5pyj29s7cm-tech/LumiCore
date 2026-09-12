@@ -1,7 +1,7 @@
 import type { LumiExecutionDecision } from './execution_decision';
 import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
-import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
+import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   buildActionContract,
   extractExplicitArtifactTextRequirements,
@@ -647,6 +647,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     .map(call => call.name)
     .filter(isHardAuthorized);
   const basePreferredTools = unique([
+    ...(executionBeforeWorkflowSave(routeText) ? contractPreferredTools : []),
     ...skillAuthoringTools(classifySkillAuthoringIntent(routeText)).filter(isHardAuthorized),
     ...essentialToolsForLane(selected.lane).filter(isHardAuthorized),
     ...contractPreferredTools,
@@ -703,7 +704,9 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
       ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
       : '',
     laneRule(selected, routeText, preferredTools),
-    classifySkillAuthoringIntent(routeText) !== 'none'
+    executionBeforeWorkflowSave(routeText)
+      ? 'The user requested a current task AND saving its workflow. First execute and verify the current task using the selected business/calculation tools. Then save a draft with structured runtime inputs and complete verified output references. Do not capture nonexistent prior activity or replace the requested file task with generating a new Skill. Publishing remains a separate reviewed action.'
+      : classifySkillAuthoringIntent(routeText) !== 'none'
       ? 'The user explicitly requested skill/workflow authoring. Call the relevant authoring tool rather than repeatedly searching unrelated external capabilities. Generate only pure input-dependent computation as a reviewed draft; preserve the requested display name. For a saved process, every transformation must be an executable step with runtime inputs or verified prior-step output references. A read receipt alone cannot reproduce subsequent model arithmetic. Never capture a failed/discovery-only trace as a working skill. Review the exact draft hash before publish_workflow or install_skill; then verify registration and run with new inputs before claiming reuse.'
       : '',
     formatActionContractPrompt(actionContract),

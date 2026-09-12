@@ -4,7 +4,7 @@ describe('calculation workflow capture', () => {
   const reader = { name: 'read_file', operation: 'observe', args: { path: { $inputRef: 'inputs.sourcePath' } } };
   it('rejects the old read-then-write pattern with a fixed previous total', () => {
     expect(workflowTransformationBlocker('calculate order total', [reader,
-      { name: 'write_file', operation: 'mutate', args: { content: 'total,72' } },
+      { name: 'write_file', operation: 'create', args: { content: 'total,72' } },
     ], true)).toMatch(/input-dependent calculation/);
   });
   it('accepts an executable calculation bound to fresh input, while rejecting embedded previous data', () => {

@@ -49,7 +49,7 @@ function createRun(overrides: Record<string, unknown> = {}) {
 
 afterEach(() => {
   while (temporaryRoots.length > 0) {
-    fs.rmSync(temporaryRoots.pop()!, { recursive: true, force: true });
+    fs.rmSync(temporaryRoots.pop()!, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

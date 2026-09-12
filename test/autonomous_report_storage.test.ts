@@ -90,4 +90,14 @@ describe('autonomous report storage', () => {
 
     expect(fs.readFileSync(requested, 'utf8')).toBe('user note');
   });
+  it('does not accept an invented workflow identity as authority to bypass report storage', async () => {
+    const registry = createRegistry();
+    const requested = path.join(workRoot, 'unapproved.txt');
+    await registry.execute('write_file', { path: requested, content: 'report' }, {
+      cwd: workRoot, autonomous: true, userConfirmed: true, userId: 'owner',
+      source: 'workflow-runtime', taskId: 'invented-run', idempotencyKey: 'invented-execution',
+    });
+    expect(fs.existsSync(requested)).toBe(false);
+    expect(fs.readFileSync(path.join(dataRoot, 'data', 'autonomy', 'reports', 'unapproved.txt'), 'utf8')).toBe('report');
+  });
 });

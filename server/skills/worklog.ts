@@ -96,7 +96,8 @@ export function workflowTransformationBlocker(intent: string, steps: Array<{
   });
   if (hasCalculation) return null;
   const onlyReads = steps.length > 0 && steps.every(step => ['observe', 'test'].includes(step.operation || ''));
-  const readsThenWrites = steps.some(step => isReader(step.name)) && steps.some(step => step.operation === 'mutate');
+  const readsThenWrites = steps.some(step => isReader(step.name))
+    && steps.some(step => step.operation && !['observe', 'test', 'unknown'].includes(step.operation));
   if (onlyReads || readsThenWrites) return 'The saved steps do not contain an input-dependent calculation. Use code_execution with fresh data in input (a typed $inputRef or $stepOutputRef), or a reviewed transformation Skill, then bind the writer to its result. Saving a previous total or fixed file content does not make the calculation reusable.';
   return null;
 }

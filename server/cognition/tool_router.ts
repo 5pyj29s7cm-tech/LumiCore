@@ -1,5 +1,5 @@
 import { ToolPolicy } from '../personality/types';
-import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
+import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   ToolRegistry,
 } from '../tools/registry';
@@ -867,6 +867,15 @@ export function routeToolsForTurn(
   );
   const authoring = classifySkillAuthoringIntent(primaryInstructionText);
   if (authoring !== 'none') {
+    const executionText = executionBeforeWorkflowSave(primaryInstructionText);
+    if (executionText) {
+      const execution = routeToolsForTurn(executionText, declarations, options);
+      const toolNames = unique([...['code_execution'].filter(name => available.has(name)), ...execution.toolNames,
+        ...skillAuthoringTools(authoring).filter(name => available.has(name))]).slice(0, maxTools);
+      return { ...execution, toolNames, categories: unique([...execution.categories, 'skill_authoring']),
+        reasons: [...execution.reasons, 'execute the explicit current task, then save its reusable workflow'],
+        maxTools, truncated: toolNames.length < execution.toolNames.length + skillAuthoringTools(authoring).filter(name => available.has(name) && !execution.toolNames.includes(name)).length };
+    }
     const toolNames = skillAuthoringTools(authoring).filter(name => available.has(name)).slice(0, maxTools);
     return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false };
   }

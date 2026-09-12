@@ -2,7 +2,7 @@ import './helpers';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
-import { classifySkillAuthoringIntent } from '../server/skills/authoring_intent';
+import { classifySkillAuthoringIntent, executionBeforeWorkflowSave } from '../server/skills/authoring_intent';
 import { isConversationExecutionFactQuestion } from '../server/conversation/execution_facts';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
@@ -23,6 +23,15 @@ beforeAll(async () => { await initDatabase(); });
 beforeEach(() => clearWorkflows());
 
 describe('explicit skill authoring and captured workflow boundary', () => {
+  it('keeps execution tools when the user asks to perform a task and then save its workflow', () => {
+    const text = '请读取 C:/orders/input.csv，按数量乘单价计算金额，生成 C:/orders/output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。';
+    const registry = new ToolRegistry(); registerAllTools(registry);
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'compound-authoring', text, channel: 'chat', source: 'command-center-chat', domain: 'personal', operationMode: 'assistant', targetIsLumi: true }, registry, taskId: 'compound-save' });
+    expect(pipeline.modelToolProjection.toolNames).toEqual(expect.arrayContaining(['read_file', 'write_file', 'code_execution', 'save_workflow']));
+    expect(executionBeforeWorkflowSave(saveText)).toBe('');
+    expect(executionBeforeWorkflowSave('示例：读取 CSV 然后保存工作流。只生成技能草稿，不要执行。')).toBe('');
+    expect(executionBeforeWorkflowSave('不要读取文件，然后保存工作流草稿。')).toBe('');
+  });
   it.each(['继续当前工作流，不创建新运行。我已核对并确认第 1 步，然后查看同一运行。', '调用工作流的 decide_workflow_confirmation 来确认现有运行的第 1 步。只通过工作流控制继续这个运行，然后用 get_workflow_run 查询同一个 runId。不要在工作流外另行读文件或口算，不创建新的运行。'])('keeps exact workflow step approval executable: %s', text => {
     const registry = new ToolRegistry(); registerAllTools(registry);
     const dispatch = buildLumiTurnDispatch({ userId: 'authoring', text, channel: 'chat', source: 'command-center-chat', operationMode: 'assistant', targetIsLumi: true });

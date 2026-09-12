@@ -1054,7 +1054,7 @@ describe('scheduler stability', () => {
   });
 
   it('admits only one concurrent run for a task', async () => {
-    const scheduler = new Scheduler();
+    const scheduler = new Scheduler(async () => {});
     const taskId = `test_scheduler_concurrency_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     let release!: () => void;
     let started!: () => void;

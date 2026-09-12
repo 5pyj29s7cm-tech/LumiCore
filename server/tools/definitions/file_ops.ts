@@ -5,6 +5,7 @@ import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import type { ToolContext } from '../types';
 import { getDataPath } from '../../config/data_path';
+import { hasApprovedWorkflowToolCall } from '../../workflows/runtime';
 
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -30,9 +31,9 @@ function assertHostFilesystemAccess(context?: HostFilesystemContext): void {
   }
 }
 
-function resolveWritePath(inputPath: string, context?: Pick<ToolContext, 'cwd' | 'autonomous'>): string {
+function resolveWritePath(inputPath: string, context?: ToolContext, args: Record<string, unknown> = {}): string {
   const requestedPath = resolveSafePath(inputPath, context?.cwd);
-  if (!context?.autonomous) return requestedPath;
+  if (!context?.autonomous || hasApprovedWorkflowToolCall(context, 'files.text.write', args)) return requestedPath;
 
   const reportRoot = getAutonomousReportRoot();
   const requestBase = path.resolve(context.cwd || process.cwd());
@@ -149,11 +150,11 @@ async function readFileHandler(
 
 async function writeFileHandler(
   args: Record<string, any>,
-  context?: Pick<ToolContext, 'cwd' | 'autonomous' | 'localExecution' | 'source'>,
+  context?: ToolContext,
 ): Promise<string> {
   assertHostFilesystemAccess(context);
   const inputPath = requirePathArg(args, ['path', 'filePath', 'filepath', 'targetPath', 'target'], 'write_file');
-  const targetPath = resolveWritePath(inputPath, context);
+  const targetPath = resolveWritePath(inputPath, context, args);
 
   const blockedPaths = ['/etc', '/sys', '/proc', '/dev', 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)'];
   const normalizedTarget = path.normalize(targetPath);
