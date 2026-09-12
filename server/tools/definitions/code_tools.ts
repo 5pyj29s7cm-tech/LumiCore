@@ -17,21 +17,23 @@ export function registerCodeOpsTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'JavaScript code to execute' },
-        input: { description: 'Optional JSON data exposed as global input. In workflows use a typed $inputRef or $stepOutputRef here; return the transformed result as the last expression.' },
+        code: { type: 'string', description: 'A JavaScript script evaluated as-is, not a function body. Use the last expression or an invoked function for the result; no top-level return. Encode JSON escapes only once.' },
+        input: { description: 'Optional JSON value exposed as global input. Pass the actual decoded data, not a JSON.stringify copy or quoted representation of the data. In workflows use a typed $inputRef or $stepOutputRef here; return the transformed result as the last expression.' },
         timeout: { type: 'number', description: 'Timeout in milliseconds (default 10000, max 30000)' },
       },
       required: ['code'],
     },
     handler: codeExecutionHandler,
     permission: 'user',
-    securityLevel: 'confirm',
+    // This handler can only mutate its disposable guest heap. File access,
+    // host commands and external effects remain separate guarded tools.
+    securityLevel: 'safe',
     capability: capabilityContract({
       id: 'code.javascript.sandbox.execute',
       family: 'code_execution',
       lane: 'system',
       operation: 'test',
-      risk: 'medium',
+      risk: 'low',
       sideEffects: [{ type: 'local_state_change', scope: 'ephemeral QuickJS WebAssembly heap in a bounded worker', reversible: true }],
       verification: {
         strategy: 'terminal_receipt',

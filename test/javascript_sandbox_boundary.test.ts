@@ -96,8 +96,8 @@ describe('JavaScript calculation guest and host boundary', () => {
     } finally { clearTimeout(timer); }
   });
 
-  it('rejects unconfirmed, remote and anonymous callers at the existing tool boundary', async () => {
-    expect((await execute('42', { userConfirmed: false })).error).toMatch(/confirmation/i);
+  it('allows bounded local arithmetic without a separate approval while rejecting remote and anonymous callers', async () => {
+    expect((await execute('42', { userConfirmed: false })).terminalVerification?.status).toBe('verified');
     expect((await execute('42', { executionBoundary: 'remote_restricted', localExecution: false })).error).toMatch(/remote execution surfaces/i);
     expect((await execute('42', { userId: 'anonymous', authenticated: false })).error).toMatch(/authenticated user/i);
   });
