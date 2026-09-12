@@ -66,6 +66,8 @@ export interface LLMConfig {
   requestId?: string;
   interactionId?: string;
   source?: string;
+  /** Accepted transport provenance, separate from the model-routing stage. */
+  workflowSource?: string;
   responseFormat?: LLMResponseFormat;
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for each model candidate. */
@@ -2672,7 +2674,7 @@ async function runWithToolsInternal(
 function recordWorkflowIfToolsUsed(
   executionLog: ToolExecutionRecord[],
   messages: NormalizedMessage[],
-  config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId' | 'source'>,
+  config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId' | 'source' | 'workflowSource'>,
 ): void {
   if (executionLog.length === 0) return;
   const rawContent = [...messages].reverse().find(message => {
@@ -2694,7 +2696,7 @@ function recordWorkflowIfToolsUsed(
   // next capture request is trying to save.
   if (classifySkillAuthoringIntent(safeMsg) !== 'none') return;
   recordWorkflow({
-    source: config.source,
+    source: config.workflowSource || config.source,
     userId: config.userId || 'anonymous',
     conversationId: config.conversationId,
     taskId: executionLog[0]?.taskId,

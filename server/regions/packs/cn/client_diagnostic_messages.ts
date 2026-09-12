@@ -20,12 +20,12 @@ export const CN_CLIENT_DIAGNOSTIC_MESSAGES = {
 } as const;
 
 export function formatCnMissingClientDiagnosticReceipts(): string {
-  return '本轮没有取得任何客户端自检工具回执，因此不能判断桌面、技能或运行时状态。';
+  return '本轮没有取得任何客户端自检结果，因此不能判断桌面、技能或运行时状态。';
 }
 
 export function formatCnClientDiagnosticFacts(facts: ClientDiagnosticFacts): string {
   const lines = [facts.hasSuccessfulSubstantiveCheck
-    ? '自检完成。以下只采用本轮真实工具回执，不沿用此前聊天里的状态说法。'
+    ? '自检完成。以下只采用本次实际检查结果，不沿用此前聊天里的状态说法。'
     : '自检未完成。本轮尚未取得全部所需检查的成功结果。'];
   const scope = facts.scopeDomain === 'work'
     ? `组织工作域${facts.scopeOrgId ? `（${facts.scopeOrgId}）` : ''}`

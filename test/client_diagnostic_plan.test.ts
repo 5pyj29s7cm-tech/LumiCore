@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildClientDiagnosticPlan, hasCompleteClientDiagnosticReceipts } from '../server/cognition/client_diagnostic_result';
+import { buildClientDiagnosticPlan, formatClientDiagnosticResult, hasCompleteClientDiagnosticReceipts } from '../server/cognition/client_diagnostic_result';
+import { sanitizeExecutionResponseForDelivery } from '../server/cognition/execution_guard_recovery';
 import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { classifyRuntimeWorkIntent } from '../server/cognition/runtime_work_intent';
 
@@ -14,6 +15,11 @@ describe('deterministic client diagnostic plan', () => {
     expect(hasCoreActionEvidence(buildActionContract(text), records, text)).toBe(false);
     records.push({name: 'client_health_check', arguments: {}, result: '{"ok":true}'}, {name: 'client_get_state', arguments: {}, result: '{"ok":true}'});
     expect(hasCompleteClientDiagnosticReceipts(records, text)).toBe(true);
+    const summary = formatClientDiagnosticResult(records, text)!;
+    const delivered = sanitizeExecutionResponseForDelivery({text: summary, blocked: false}, {task: text, toolRecords: records});
+    expect(delivered.blocked).toBe(false);
+    expect(delivered.text).toContain('自检完成');
+    expect(delivered.text).not.toContain('还没有');
     records.push({name: 'client_get_state', arguments: {}, result: '{"ok":false,"status":"unavailable"}'});
     expect(hasCompleteClientDiagnosticReceipts(records, text)).toBe(false);
   });

@@ -863,7 +863,7 @@ export function registerChatHandler(
       turnAuthorization.assertCurrent();
       // Preserve the accepted conversation and transport provenance through
       // every execution/recovery path, including reusable workflow traces.
-      args[2] = { ...args[2], conversationId: selectedConversationId || args[2].conversationId, source: eventSource };
+      args[2] = { ...args[2], conversationId: selectedConversationId || args[2].conversationId, workflowSource: eventSource };
       return runWithTools(...args);
     };
     const callAuthorizedModel = (...args: Parameters<typeof makeLLMCall>) => {
@@ -1011,6 +1011,7 @@ export function registerChatHandler(
       const sanitizedPayload: Record<string, any> = event === 'agent:response'
         ? sanitizeExecutionResponseForDelivery(payload, {
             task: visibleUserText,
+            toolRecords: collectRequestTerminalRecords(),
             ...outputProtection,
           })
         : event === 'agent:notification'

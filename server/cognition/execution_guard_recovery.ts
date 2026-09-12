@@ -8,6 +8,7 @@ import {
   type UserFacingOutputProtectionOptions,
 } from './user_output_protection';
 import { buildActionContract } from './action_contract';
+import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import {
   hasMixedStatusExecutionIntent,
   normalizeActionIntent,
@@ -253,6 +254,7 @@ export function classifyExecutionGuardIntent(
     && normalizedIntent.operation !== 'status'
   ) return 'action_execution';
   if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';
+  if (buildClientDiagnosticPlan(clean).length) return 'action_execution';
   if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !DIRECT_STATUS_QUERY.test(clean)) return 'conversation';
   if (BARE_AMBIGUOUS_REACTION.test(clean) && records.length === 0) return 'conversation';
   if (isExecutionStatusQuery(clean)) return 'status_query';

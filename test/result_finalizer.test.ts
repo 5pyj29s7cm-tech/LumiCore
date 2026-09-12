@@ -582,7 +582,7 @@ describe('Lumi result finalizer', () => {
       source: 'wechat_bot',
     });
 
-    expect(result.text).toContain('\u672c\u8f6e\u6ca1\u6709\u53d6\u5f97\u4efb\u4f55\u5ba2\u6237\u7aef\u81ea\u68c0\u5de5\u5177\u56de\u6267');
+    expect(result.text).toContain('本轮没有取得任何客户端自检结果');
     expect(result.text).not.toContain('45/47');
   });
 
@@ -601,7 +601,7 @@ describe('Lumi result finalizer', () => {
     expect(result.blocked).toBe(true);
     expect(result.text).toContain('自检未完成');
     expect(result.text).toContain(`本轮有回执的检查：${name}`);
-    expect(result.text).not.toContain('没有取得任何客户端自检工具回执');
+    expect(result.text).not.toContain('没有取得任何客户端自检结果');
   });
 
   it.each([
@@ -617,7 +617,7 @@ describe('Lumi result finalizer', () => {
       source: 'chat',
     });
 
-    expect(result.text).toContain('没有取得任何客户端自检工具回执');
+    expect(result.text).toContain('没有取得任何客户端自检结果');
     expect(result.text).not.toContain('自检完成');
   });
 

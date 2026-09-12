@@ -25,6 +25,14 @@ const read = (target = source): ToolExecutionRecord => ({
 } as ToolExecutionRecord);
 
 describe('server-owned continuous file tasks', () => {
+  it('keeps the prior input when a value edit names a generated output', () => {
+    const text = '数量改成4，单价不变，计算新总价，用程序生成 C:/Users/Administrator/Documents/live-output.csv。';
+    const accepted = resolveAcceptedTaskTarget({text, persistedHistory: history});
+    expect(accepted?.target.path.replaceAll('\\', '/')).toBe(source);
+    expect(guardTaskTargetToolCall({taskText: text, toolName: 'read_file', arguments: {path: source}, acceptedTaskTarget: accepted, enforceStructuredFileRead: true}).allowed).toBe(true);
+    expect(guardTaskTargetToolCall({taskText: text, toolName: 'read_file', arguments: {path: other}, acceptedTaskTarget: accepted, enforceStructuredFileRead: true}).allowed).toBe(false);
+    expect(resolveAcceptedTaskTarget({text: '生成 C:/Users/Administrator/Documents/new.csv。', persistedHistory: history})?.target.path.replaceAll('\\', '/')).toBe('C:/Users/Administrator/Documents/new.csv');
+  });
   it('keeps the full input path when a quantity changes and another output is named', () => {
     const text = `修改 ${source}，水杯数量改成4，另存为 C:/Users/Administrator/Documents/updated.csv`;
     const projection = buildTaskTargetAnchorProjection({ taskText: text });

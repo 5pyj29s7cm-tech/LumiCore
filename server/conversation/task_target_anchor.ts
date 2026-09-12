@@ -315,6 +315,8 @@ function directorySearchReference(text: string): { directory: string; filename: 
 const EXCLUDED_FILE_CLAUSE_RE = /(?:不要|别|无需|不用|禁止|请勿|勿|不再)\s*(?:再|继续)?\s*(?:读取|读|打开|用|使用|处理|分析|查看|检查)|\b(?:do\s+not|don't|never)\s+(?:read|open|use|process|inspect|analy[sz]e)\b/iu;
 // i18n-allow: output destinations are separate from input-file references.
 const OUTPUT_DESTINATION_RE = /(?:并|然后|再)?(?:另存(?:为)?|保存(?:为|到)|导出(?:为|到))|\b(?:and\s+)?(?:save\s+as|save\s+to|export\s+to)\b/iu;
+// i18n-allow: Value edits retain an input while creating a distinct output.
+const VALUE_CORRECTION_RE = /(?:数量|单价|价格|金额|日期).{0,12}(?:改成|改为|调整为|换成)|\b(?:quantity|price|amount|date)\b.{0,20}\b(?:change|to|replace)\b/iu;
 
 function fileReferenceClauses(text: string): string[] {
   // Preserve punctuation boundaries so adjacent paths cannot merge.
@@ -334,7 +336,13 @@ function explicitFile(text: string, keepExcluded = false): string {
     .join('，');
   // In "edit that workbook, save as X", X is only the output. The input
   // remains referential and must be recovered from a trusted prior receipt.
-  const clean = positive.split(OUTPUT_DESTINATION_RE, 1)[0];
+  let clean = positive.split(OUTPUT_DESTINATION_RE, 1)[0];
+  // A new output filename must not replace the already selected input when
+  // the user adjusts a value and asks to generate the resulting file.
+  if (VALUE_CORRECTION_RE.test(positive)) {
+    // i18n-allow: Explicit artifact destination following a value correction.
+    clean = clean.split(/(?:生成|创建|输出|新建)|\b(?:generate|create|write|output)\b/iu, 1)[0];
+  }
   // i18n-allow: multilingual user target-correction recognition; not user-visible copy.
   const replacement = clean.match(/(?:而是|应该是|改成|换成|(?<!不)要用|请用|instead(?:\s+use)?|replace(?:\s+it)?\s+with)\s*([^\r\n，,；;。！？!?]{1,240})/iu)?.[1];
   // A value correction (quantity, price, date...) is not a target correction.
@@ -398,7 +406,7 @@ export function resolveAcceptedTaskTarget(input: {
   // i18n-allow: referential task recognition, not user-facing copy.
   const refersToPrior = /(?:刚才|刚刚|之前|上面|前面|继续|接着|原文件|这(?:个|份|张)|该(?:文件|文档|表格)|其余|其他不变)|\b(?:previous|earlier|same|that|this|continue|resume|original)\b/iu.test(current);
   // i18n-allow: value-correction and file-operation input recognition.
-  const valueCorrection = /(?:数量|单价|价格|金额|日期).{0,12}(?:改成|改为|调整为|换成)|\b(?:quantity|price|amount|date)\b.{0,20}\b(?:change|to|replace)\b/iu.test(current);
+  const valueCorrection = VALUE_CORRECTION_RE.test(current);
   // Generic "continue/this" in a different topic does not select an old file.
   // i18n-allow: semantic file-operation input recognition.
   if (!named && !valueCorrection && !/(?:读取|读一下|查看|检查|分析|计算|核算|汇总|算出|重新算|原文件|文件|文档|表格)|按.{0,15}计划.{0,8}执行|\b(?:read|inspect|analy[sz]e|calculate|compute|file|document|spreadsheet)\b|\b(?:execute|run|follow)\b.{0,25}\bplan\b/iu.test(current)) return undefined;
