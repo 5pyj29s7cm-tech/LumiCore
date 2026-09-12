@@ -39,6 +39,8 @@ import {
   type ManagedSkillIdentity,
 } from '../marketplace/official_identity';
 import { getJwtSecret } from '../config/local_identity';
+import { SKILLS_DIR, LEGACY_SKILLS_DIR } from './skill_paths';
+import { migrateProfileSkills } from './skill_profile_migration';
 
 export interface MCPToolCapabilityDeclaration {
   id?: string;
@@ -145,9 +147,6 @@ interface MCPConfigFile {
 
 // Database isolation alone is insufficient: migration/installation also touches
 // executable packages. Test workers must never scan the real user's Skills.
-const SKILLS_DIR = process.env.VITEST
-  ? path.join(process.env.LUMI_TEST_TMPDIR || os.tmpdir(), `lumi-test-skills-${process.pid}-${process.env.VITEST_POOL_ID || '0'}`)
-  : path.join(os.homedir(), 'lumi_skills');
 const PENDING_SKILL_MARKER = '.lumi-pending';
 const RESERVED_RUNTIME_NAMES = new Set(['.', '..', '__proto__', 'constructor', 'prototype']);
 const FORBIDDEN_MANAGED_ENV_KEYS = new Set([
@@ -255,7 +254,7 @@ function expandPortablePath(value: string): string {
 function toPortableSkillPath(filePath: string): string {
   const relative = path.relative(SKILLS_DIR, filePath);
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
-    return `~/lumi_skills/${relative.split(path.sep).join('/')}`;
+    return `\${LUMI_SKILLS_DIR}/${relative.split(path.sep).join('/')}`;
   }
   return filePath;
 }
@@ -663,6 +662,21 @@ export class MCPClientManager {
 
   getConfigPath(): string {
     return this.configPath;
+  }
+
+  migrateLegacySkills() {
+    if (process.env.VITEST) return { migrated: [], skipped: [] };
+    return migrateProfileSkills({
+      legacyRoot: LEGACY_SKILLS_DIR, skillsRoot: SKILLS_DIR,
+      servers: this.getConfig(), secret: getJwtSecret(),
+      bindRuntime: (directory, identity) => {
+        if (!this.ensureRuntimeNodeModulesLink(directory)) {
+          throw new Error('Approved Skill dependencies are unavailable in this LumiCore host');
+        }
+        return this.bindManagedSkillRuntime(directory, identity);
+      },
+      saveServers: servers => this.saveConfig(servers),
+    });
   }
 
   syncFactoryCapabilityMetadata(): string[] {

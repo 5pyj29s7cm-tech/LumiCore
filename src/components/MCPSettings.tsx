@@ -71,7 +71,7 @@ export function MCPSettings({ t }: { t?: any }) {
         const mapped = (data.skills || []).map((s: any) => ({
           name: s.name,
           command: s.source === 'local' ? 'managed local runtime' : '',
-          args: s.source === 'local' ? ['tsx', `~/lumi_skills/${s.name}/index.ts`] : [],
+          args: [],
           enabled: s.enabled,
           connected: s.connected,
           source: s.source,

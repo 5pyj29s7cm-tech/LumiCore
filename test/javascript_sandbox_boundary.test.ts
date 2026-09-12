@@ -16,6 +16,14 @@ function execute(code: string, overrides: Partial<ToolContext> = {}) {
 }
 
 describe('JavaScript calculation guest and host boundary', () => {
+  it('reuses the same calculation with fresh JSON input and treats code-like data literally', async () => {
+    const code = '({total: input.quantity * input.price, label: input.label})';
+    const label = '\"); throw new Error("data executed"); //';
+    expect(JSON.parse(await executeSandboxedJavaScript(code, 1500, context, { quantity: 4, price: 18, label })).output).toEqual({ total: 72, label });
+    expect(JSON.parse(await executeSandboxedJavaScript(code, 1500, context, { quantity: 5, price: 18, label })).output.total).toBe(90);
+    expect(JSON.parse(await executeSandboxedJavaScript('typeof input', 1500, context)).output).toBe('undefined');
+    expect(JSON.parse(await executeSandboxedJavaScript('input', 1500, context, 'x'.repeat(140000))).ok).toBe(false);
+  });
   it('keeps normal arithmetic and JSON while exposing no Node, filesystem or network APIs', async () => {
     const record = await execute('JSON.stringify({ result: 6 * 7, process: typeof process, require: typeof require, fetch: typeof fetch, timer: typeof setTimeout, global: typeof global })');
     expect(record.error).toBeUndefined();

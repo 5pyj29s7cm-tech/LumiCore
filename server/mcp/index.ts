@@ -138,6 +138,9 @@ export async function registerMCPTools(io?: any): Promise<string[]> {
   if (io) mcpManager.setSocketIO(io);
 
   mcpManager.syncFactoryCapabilityMetadata();
+  const migration = mcpManager.migrateLegacySkills();
+  if (migration.migrated.length) console.log(`[MCP] Isolated approved Skills for this profile: ${migration.migrated.join(', ')}`);
+  for (const skipped of migration.skipped) console.warn(`[MCP] Legacy Skill ${skipped.name}: ${skipped.reason}`);
   mcpManager.syncBundledSkillUpgrades();
   const mcpTools = await mcpManager.connectAll();
   const serverConfig = mcpManager.getConfig();

@@ -8,7 +8,6 @@
  */
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
 import { readDB, writeDB } from '../../db_layer';
 import { getTranslation, translateCategory } from '../skills/translations';
@@ -22,7 +21,8 @@ import { getJwtSecret } from '../config/local_identity';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const SKILLS_DIR = path.join(os.homedir(), 'lumi_skills');
+import { SKILLS_DIR } from '../mcp/skill_paths';
+export { SKILLS_DIR } from '../mcp/skill_paths';
 
 function resolveBundledDir(): string {
   const candidates = [

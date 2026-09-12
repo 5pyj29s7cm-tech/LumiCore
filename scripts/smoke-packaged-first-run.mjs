@@ -454,7 +454,7 @@ async function main() {
     if (!install.success) throw new Error(`Skill install failed: ${JSON.stringify(install)}`);
 
     const dirName = args.skillId.replace(/^skill-/i, '');
-    const skillDir = path.join(homeDir, 'lumi_skills', dirName);
+    const skillDir = path.join(dataRoot, 'data', 'skills', dirName);
     const skillNodeModules = path.join(skillDir, 'node_modules');
     await assertPath(path.join(skillDir, 'package.json'), 'installed skill package');
     await assertPath(path.join(skillDir, 'index.ts'), 'installed skill entry');

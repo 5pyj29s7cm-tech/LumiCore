@@ -72,11 +72,32 @@ export function workflowCaptureBlocker(record: WorkflowRecord): string | null {
   return workflowTransformationBlocker(record.userIntent, record.toolSequence);
 }
 
-export function workflowTransformationBlocker(intent: string, steps: Array<{ operation?: string }>): string | null {
+export function workflowTransformationBlocker(intent: string, steps: Array<{
+  operation?: string; name?: string; args?: Record<string, any>;
+}>, requireBindings = false): string | null {
   // i18n-allow: multilingual computation-intent recognition, not user-visible copy.
   const transformsData = /计算|汇总|总额|求和|统计|转换|整理|总结|\b(?:calculat\w*|sum|total|aggregat\w*|transform\w*|summari[sz]\w*)\b/iu.test(intent);
+  if (!transformsData) return null;
+  const hasReference = (value: unknown): boolean => {
+    if (!value || typeof value !== 'object') return false;
+    if (Array.isArray(value)) return value.some(hasReference);
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length === 1 && (typeof record.$inputRef === 'string' || typeof record.$stepOutputRef === 'string')) return true;
+    return Object.values(record).some(hasReference);
+  };
+  const isReader = (name = '') => /(?:^|[._])(?:read|list|search|extract|inspect|get)(?:[._]|$)/i.test(name);
+  const hasCalculation = steps.some(step => {
+    const sandbox = ['code_execution', 'code.javascript.sandbox.execute'].includes(step.name || '');
+    if (sandbox) return Boolean(step.args?.code) && (!requireBindings || hasReference(step.args.input));
+    // A reviewed pure Skill can be the transformation between the reader and
+    // writer. Its arguments must receive this run's input or verified output.
+    return ['observe', 'test'].includes(step.operation || '') && Boolean(step.name)
+      && !isReader(step.name) && hasReference(step.args);
+  });
+  if (hasCalculation) return null;
   const onlyReads = steps.length > 0 && steps.every(step => ['observe', 'test'].includes(step.operation || ''));
-  if (transformsData && onlyReads) return 'Only reads were executed; subsequent model computation is not an executable workflow step. Generate and review a pure input-dependent transformation skill, then save a workflow that binds its inputs to the reader output. Do not replay an old total or claim this trace is complete.';
+  const readsThenWrites = steps.some(step => isReader(step.name)) && steps.some(step => step.operation === 'mutate');
+  if (onlyReads || readsThenWrites) return 'The saved steps do not contain an input-dependent calculation. Use code_execution with fresh data in input (a typed $inputRef or $stepOutputRef), or a reviewed transformation Skill, then bind the writer to its result. Saving a previous total or fixed file content does not make the calculation reusable.';
   return null;
 }
 

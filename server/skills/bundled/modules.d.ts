@@ -18,7 +18,7 @@ declare module 'pdf-lib' {
     getAuthor(): string | undefined;
     getCreator(): string | undefined;
     copyPages(src: PDFDocument, indices: number[]): Promise<any[]>;
-    addPage(page: any): void;
+    addPage(page?: any): any;
     save(): Promise<Uint8Array>;
   }
 }

@@ -278,7 +278,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       for (const timer of startupTimers) clearTimeout(timer);
       startupTimers.clear();
       stopSystemExplorationWorker();
-      scheduler.stop();
+      scheduler.stop({ drainSettledHandlers: true });
       unifiedRuntimeSupervisor?.stop();
     },
     drain: async () => {

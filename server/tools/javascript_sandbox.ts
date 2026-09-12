@@ -26,9 +26,15 @@ function workerURL(): URL {
   throw new Error('The JavaScript calculation runtime is missing. Rebuild the backend resources.');
 }
 
-export async function executeSandboxedJavaScript(code: string, timeout: number, context?: ToolContext): Promise<string> {
+export async function executeSandboxedJavaScript(code: string, timeout: number, context?: ToolContext, input?: unknown): Promise<string> {
   if (!code.trim()) return failed('Code is required.');
   if (Buffer.byteLength(code, 'utf8') > MAX_CODE_BYTES) return failed('Code exceeds the 64 KiB limit.');
+  let inputJSON: string | undefined;
+  try {
+    inputJSON = input === undefined ? undefined : JSON.stringify(input);
+    if (input !== undefined && inputJSON === undefined) return failed('Input must be JSON data.');
+    if (inputJSON && Buffer.byteLength(inputJSON, 'utf8') > MAX_OUTPUT_BYTES) return failed('Input exceeds the 128 KiB limit.');
+  } catch { return failed('Input must be serializable JSON data.'); }
   if (cancelled(context)) return failed('Execution cancelled.', true);
   if (queued >= MAX_QUEUED) return failed('The JavaScript calculation queue is full. Try again later.');
   const deadline = Date.now() + timeout;
@@ -48,7 +54,7 @@ export async function executeSandboxedJavaScript(code: string, timeout: number, 
       let worker: Worker;
       try {
         worker = new Worker(workerURL(), {
-          workerData: { code, deadline, maxOutputBytes: MAX_OUTPUT_BYTES },
+          workerData: { code, inputJSON, deadline, maxOutputBytes: MAX_OUTPUT_BYTES },
           execArgv: [], env: {}, stdout: true, stderr: true,
           resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 },
         });

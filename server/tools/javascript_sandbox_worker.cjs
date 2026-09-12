@@ -42,6 +42,17 @@ async function execute() {
       context.setProp(context.global, 'console', consoleObject);
     } finally { consoleObject.dispose(); }
 
+    // Input is a guest JSON value, never interpolated into executable source.
+    if (workerData.inputJSON !== undefined) {
+      const json = context.getProp(context.global, 'JSON');
+      const parse = context.getProp(json, 'parse');
+      const text = context.newString(workerData.inputJSON);
+      let value;
+      try {
+        value = context.unwrapResult(context.callFunction(parse, json, text));
+        context.setProp(context.global, 'input', value);
+      } finally { value?.dispose(); text.dispose(); parse.dispose(); json.dispose(); }
+    }
     const evaluated = context.evalCode(workerData.code, 'calculation.js', { type: 'global' });
     if (evaluated.error) {
       try { throw new Error(context.dump(evaluated.error)?.message || 'JavaScript execution failed.'); }

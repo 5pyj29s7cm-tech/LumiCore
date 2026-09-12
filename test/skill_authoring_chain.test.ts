@@ -70,7 +70,7 @@ describe('explicit skill authoring and captured workflow boundary', () => {
     expect(result).toMatchObject({ ok: false, status: 'needs_authoring', sourceTaskId: 'task-one' });
     expect(getWorkflow('capture-user', 'not-an-algorithm')).toBeNull();
     registry.register({ name: 'read_file', description: 'Read input', parameters: {}, permission: 'public', securityLevel: 'safe', handler: async () => 'data' });
-    await expect(registry.execute('save_workflow', { name: 'bypassed-capture', description: 'Read and calculate totals', steps: [{ tool: 'read_file', args: { path: { $inputRef: 'inputs.path' } } }] }, { userId: 'capture-user', conversationId: 'one', actionIntent: '把刚才流程保存成技能' })).rejects.toThrow('not an executable workflow step');
+    await expect(registry.execute('save_workflow', { name: 'bypassed-capture', description: 'Read and calculate totals', steps: [{ tool: 'read_file', args: { path: { $inputRef: 'inputs.path' } } }] }, { userId: 'capture-user', conversationId: 'one', actionIntent: '把刚才流程保存成技能' })).rejects.toThrow('input-dependent calculation');
     expect(getWorkflow('capture-user', 'bypassed-capture')).toBeNull();
   });
 

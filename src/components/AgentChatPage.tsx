@@ -3794,7 +3794,7 @@ export function AgentChatPage({
         kind: 'image',
         url: uploaded.id
           ? scopedFileUrl(`/api/files/download/${encodeURIComponent(String(uploaded.id))}?inline=1`)
-          : buildGeneratedFileUrl(sourcePath),
+          : scopedFileUrl(makeChatArtifact(sourcePath).url),
         path: sourcePath,
         fileName,
       };

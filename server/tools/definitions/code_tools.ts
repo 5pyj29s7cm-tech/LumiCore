@@ -7,17 +7,18 @@ async function codeExecutionHandler(args: Record<string, any>, context?: ToolCon
   const code = String(args.code || '');
   const timeout = Math.min(Math.max(Number(args.timeout) || 10000, 1000), 30000);
 
-  return executeSandboxedJavaScript(code, timeout, context);
+  return executeSandboxedJavaScript(code, timeout, context, args.input);
 }
 
 export function registerCodeOpsTools(registry: ToolRegistry): void {
   registry.register({
     name: 'code_execution',
-    description: 'Execute JavaScript calculations in an isolated QuickJS WebAssembly heap. Returns console output or the last expression value. No filesystem, network, Node.js APIs, imports or host timers. Code limit 64 KiB; memory 16 MiB; output 128 KiB. Settled promises are supported.',
+    description: 'Execute JavaScript calculations in an isolated QuickJS WebAssembly heap. Pass fresh data in input and read it as global input inside the code. Reusable workflows must bind input to current inputs or a previous step output, never embed previous results in code. Returns console output or the last expression value. No filesystem, network, Node.js APIs, imports or host timers. Code limit 64 KiB; input/output 128 KiB; memory 16 MiB. Settled promises are supported.',
     parameters: {
       type: 'object',
       properties: {
         code: { type: 'string', description: 'JavaScript code to execute' },
+        input: { description: 'Optional JSON data exposed as global input. In workflows use a typed $inputRef or $stepOutputRef here; return the transformed result as the last expression.' },
         timeout: { type: 'number', description: 'Timeout in milliseconds (default 10000, max 30000)' },
       },
       required: ['code'],

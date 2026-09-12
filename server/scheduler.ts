@@ -6,7 +6,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { queryMemories, getDueReminders, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped, type Reminder } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
 import { runDreamCycle } from './memory/dream';
-import { buildTree, ensureBranch, moveNode } from './memory/tree';
+import { organizePersonalMemories } from './memory/auto_organize';
 import { makeLLMCall } from './llm/providers';
 import { getWeatherBrief, getTimeGreeting } from './services/weather';
 import { autoGenerateWorkflows } from './agents/workflows';
@@ -1048,6 +1048,17 @@ export class Scheduler {
       ...currentDb,
       settings: (currentDb.settings || []).map((setting: any) => ({ ...setting })),
     };
+    // Resuming future slots does not resolve the historical side effect. Keep
+    // even legacy executions without an execution ID before clearing the fence.
+    candidateDb.settings.push({
+      key: `scheduler_reconciliation_v1:${crypto.randomUUID()}`,
+      value: JSON.stringify({ taskId: task.id, executionId: task.quarantinedExecutionId || null,
+        resolution, reconciledAt, historicalStatus: task.lastStatus,
+        lastStartedAt: task.lastStartedAt, lastRun: task.lastRun,
+        quarantineReason: task.quarantineReason, lastError: task.lastError,
+        persistenceStatus: task.persistenceStatus, lastPersistenceError: task.lastPersistenceError,
+        replayed: false }),
+    });
     this.stageRuntimeState(candidateDb, reconciledTask);
     try {
       this.writeDatabase(candidateDb);
@@ -2081,7 +2092,7 @@ export class Scheduler {
     return 60 * 60 * 1000; // Fallback: 1 hour
   }
 
-  stop() {
+  stop(options: { drainSettledHandlers?: boolean } = {}) {
     this.lifecycleGeneration += 1;
     for (const timer of this.timers.values()) {
       clearInterval(timer);
@@ -2093,6 +2104,14 @@ export class Scheduler {
       this.persistRuntimeState(task);
     }
     for (const taskId of this.runningControllers.keys()) {
+      const execution = this.inFlightHandlers.get(taskId);
+      if (options.drainSettledHandlers && execution?.handlerStarted && execution.handlerSettled
+        && execution.handlerOutcome === 'fulfilled' && !execution.controller.signal.aborted) {
+        // The handler is finished. Let the existing bounded delivery/receipt
+        // commit drain instead of turning a normal restart into an unknown side
+        // effect. Its original deadline still applies; no new slot is admitted.
+        continue;
+      }
       this.abortRunningTask(taskId, 'Scheduler stopped before the handler reached a terminal outcome.');
     }
   }
@@ -2521,102 +2540,34 @@ Output ONLY the reflection — no preamble, no labels.`;
     quiet: true,
     lastRun: null,
     executionClass: 'maintenance',
-    handler: async () => {
-      const userIds = getAllUserIds();
+    handler: async context => {
+      const signal = context?.signal || new AbortController().signal;
       let totalBranches = 0;
       let totalAssigned = 0;
-
-      for (const userId of userIds) {
+      for (const userId of getAllUserIds()) {
+        signal.throwIfAborted();
         try {
-          const db = readDB();
-          const allMemories: any[] = db.memories || [];
-          const orphans = allMemories.filter(
-            (m: any) =>
-              m.userId === userId &&
-              (m.domain || 'personal') === 'personal' &&
-              (m.orgId || '') === '' &&
-              !isMemoryAvatarScoped(m) &&
-              m.nodeType !== 'branch' &&
-              !m.parentId,
-          );
-          if (orphans.length < 3) continue;
-
-          const tree = buildTree(allMemories.filter((m: any) =>
-            m.userId === userId &&
-            (m.domain || 'personal') === 'personal' &&
-            (m.orgId || '') === '' &&
-            !isMemoryAvatarScoped(m)
-          ));
-          const treeSummary = tree.map(
-            t => `- ${t.node.content} [${t.node.nodeType}] (${t.children.length} children)`,
-          ).join('\n');
-
-          const prompt = `You are organizing a memory tree. Below is the current tree structure and a list of unorganized memories.
-
-CURRENT TREE:
-${treeSummary || '(empty)'}
-
-UNORGANIZED MEMORIES:
-${orphans.map((m: any) => `- [${m.id}] ${m.content}`).join('\n')}
-
-Group these unorganized memories into 3-8 topic branches. For each memory, decide which topic it belongs to.
-Return JSON:
-{
-  "branches": [
-    { "title": "Topic name (short, 2-4 words)", "memoryIds": ["mem_xxx", "mem_yyy"] }
-  ]
-}
-
-Rules:
-- Every unorganized memory MUST be assigned to exactly one branch
-- Branch titles should be meaningful topic names
-- Create as few branches as necessary (merge similar topics)
-- Return ONLY valid JSON, no markdown`;
-
-          const llmResult = await makeLLMCall(
-            [{ role: 'user', content: prompt }],
-            [],
-            getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '', source: 'scheduler_memory_auto_organize' }),
-            getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+          const result = await organizePersonalMemories(userId, async (prompt, requestSignal) => {
+            const response = await makeLLMCall(
+              [{ role: 'user', content: prompt }], [],
+              { ...getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '', source: 'scheduler_memory_auto_organize' }),
+                signal: AbortSignal.any([requestSignal, AbortSignal.timeout(60_000)]), maxTokens: 2048 },
+              getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
               getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
             );
-
-          let plan: { branches: { title: string; memoryIds: string[] }[] };
-          try {
-            const json = (llmResult.text || '').replace(/```json|```/g, '').trim();
-            plan = JSON.parse(json);
-          } catch {
-            console.warn(`[Scheduler] Auto-organize: LLM returned invalid JSON for ${redactSchedulerDiagnostic(userId)}`);
-            continue;
-          }
-
-          for (const branch of plan.branches) {
-            if (!branch.title || !Array.isArray(branch.memoryIds)) continue;
-            const branchNode = ensureBranch(userId, branch.title, '', null, { domain: 'personal', orgId: '' });
-            totalBranches++;
-            for (const memId of branch.memoryIds) {
-              const memory = allMemories.find((candidate: any) => candidate.id === memId);
-              if (!memory || isMemoryAvatarScoped(memory)) continue;
-              const ok = moveNode(memId, branchNode.id, { userId, domain: 'personal', orgId: '' });
-              if (ok) totalAssigned++;
-            }
-          }
-
-          if (plan.branches.length > 0) {
-            console.log(
-              `[Scheduler] Auto-organized ${redactSchedulerDiagnostic(userId)}: ${plan.branches.length} branches, ` +
-              `${plan.branches.reduce((s, b) => s + b.memoryIds.length, 0)} memories`,
-            );
-          }
-        } catch (err: any) {
-          console.warn(`[Scheduler] Auto-organize failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
+            return response.text || '';
+          }, signal);
+          totalBranches += result.branches;
+          totalAssigned += result.assigned;
+        } catch (error: any) {
+          signal.throwIfAborted();
+          console.warn(`[Scheduler] Auto-organize failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(error));
         }
       }
-
-      if (totalBranches > 0) {
-        return `I've organized ${totalAssigned} memories into ${totalBranches} topic branches for easier recall.`;
-      }
-      return null;
+      signal.throwIfAborted();
+      return totalBranches > 0
+        ? `I've organized ${totalAssigned} memories into ${totalBranches} topic branches for easier recall.`
+        : null;
     },
   });
 

@@ -206,7 +206,8 @@ async function handleSaveWorkflow(args: Record<string, any>, context?: any): Pro
   const transformationIntent = [description, saveIntent, sameConversationTrace?.userIntent || ''].join(' ');
   const transformationBlocker = workflowTransformationBlocker(transformationIntent, steps.map((step: any) => ({
     operation: context?.toolRegistry?.getCapabilityManifestEntry(step.tool, context?.toolPolicy, context)?.operation,
-  })));
+    name: step.tool, args: step.args,
+  })), true);
   if (transformationBlocker) throw new Error(transformationBlocker);
 
   const wf = saveWorkflowDraftCandidate(
@@ -275,7 +276,9 @@ async function handlePublishWorkflow(args: Record<string, any>, context?: any): 
   const currentNamed = getWorkflow(userId, name, scope);
   const currentDefinition = currentNamed ? getSavedWorkflowRuntimeDefinition(currentNamed) : null;
   if (!currentNamed || !currentDefinition) throw new Error(`Workflow draft "${name}" was not found.`);
-  const transformationBlocker = workflowTransformationBlocker(currentDefinition.description, currentDefinition.steps.map(step => ({ operation: step.capabilitySnapshot?.operation })));
+  const transformationBlocker = workflowTransformationBlocker(currentDefinition.description, currentDefinition.steps.map(step => ({
+    operation: step.capabilitySnapshot?.operation, name: step.capabilityId, args: step.argumentsTemplate,
+  })), true);
   if (transformationBlocker) throw new Error(transformationBlocker);
   if (currentNamed.runtimeHash !== expectedHash) throw new Error('Workflow changed before publication. Review the latest version.');
   if (!context?.toolRegistry) throw new Error('Capability registry is unavailable; the workflow cannot be reviewed safely.');
