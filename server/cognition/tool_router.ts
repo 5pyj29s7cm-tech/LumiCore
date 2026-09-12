@@ -42,6 +42,7 @@ import {
 } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
+import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import {
   isRuntimeCleanupOfferAcceptanceText,
   type PendingAssistantOfferContext,
@@ -868,6 +869,11 @@ export function routeToolsForTurn(
   if (authoring !== 'none') {
     const toolNames = skillAuthoringTools(authoring).filter(name => available.has(name)).slice(0, maxTools);
     return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false };
+  }
+  const diagnosticPlan = buildClientDiagnosticPlan(instructionText);
+  if (diagnosticPlan.length) {
+    const toolNames = diagnosticPlan.map(step => step.name).filter(name => available.has(name));
+    if (toolNames.length) return { toolNames, categories: ['client_diagnostic'], reasons: ['A current runtime check uses its state and health receipts, not unrelated business capabilities.'], totalAvailable: declarations.length, maxTools, truncated: false, hardAllowlist: true };
   }
   const routingManifest: CapabilityRoutingProjection[] = options?.capabilityManifest?.length
     ? options.capabilityManifest

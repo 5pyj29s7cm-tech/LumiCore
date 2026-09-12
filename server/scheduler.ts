@@ -15,6 +15,7 @@ import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
 import { personalityRegistry } from './personality';
 import { evolvePersonality, generateReviewPrompt } from './personality/evolution';
 import { backfillEmbeddings } from './memory/store';
+import { isDerivedLearningMemory, isMalformedBehavioralMemory, isOwnerInteractionEvidence, isTestMemory } from './memory/provenance';
 import { loadEmotionalState } from './personality/state';
 import { getSameMonthDayPast, getMonthDayFromISO } from './time/utils';
 import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
@@ -2980,10 +2981,13 @@ Rules:
 
           // Collect yesterday's stats
           const newMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && !isMemoryAvatarScoped(m) && m.createdAt && m.createdAt >= yesterday,
+            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && !isMemoryAvatarScoped(m) && m.createdAt && m.createdAt >= yesterday
+              && !isTestMemory(m) && !isDerivedLearningMemory(m) && !isMalformedBehavioralMemory(m)
+              && !m.sourceInteractionId?.startsWith('quarantine:'),
           );
           const newInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday,
+            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday
+              && isOwnerInteractionEvidence(i) && (!i.role || i.role === 'user'),
           );
           const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const recentEvolution = evolutionHistory.filter((e: any) => e.timestamp >= yesterday);
@@ -3004,7 +3008,8 @@ Rules:
 
           // Skill changes
           const newSkills = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday && (i as any).mode === 'skill_gen',
+            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday && (i as any).mode === 'skill_gen'
+              && isOwnerInteractionEvidence({ ...i, mode: '' }),
           );
 
           // Build summary data

@@ -8,7 +8,7 @@ import {
 import { isCurrentClientDiagnosticRequest } from './tool_intent';
 
 export interface ClientDiagnosticToolCall {
-  name: 'client_health_check' | 'client_get_state' | 'adapter_registry_list' | 'adapter_health_check';
+  name: 'client_health_check' | 'client_get_state' | 'adapter_registry_list' | 'adapter_health_check' | 'runtime_work_status';
   arguments: Record<string, any>;
 }
 
@@ -26,11 +26,17 @@ export function buildClientDiagnosticPlan(text: string): ClientDiagnosticToolCal
   const normalized = String(text || '').trim();
   if (!isCurrentClientDiagnosticRequest(normalized)) return [];
   if (CLIENT_DIAGNOSTIC_MUTATION_RE.test(normalized)) return [];
+  // A mention of Lumi somewhere in a business task is not a request to
+  // inspect Lumi. The diagnostic subject must bind to the check itself.
+  // i18n-allow: Bounded current-health input recognition, not output text.
+  const boundedCheck = /(?:自检|健康检查|状态检查|\bself[- ]?check\b|\bhealth check\b)|(?:检查|排查|诊断|看看|查看).{0,8}(?:(?:你)?自己|你自身|你这边|客户端|运行时|Lumi)(?:[。！？!?\s]*$|(?:的)?(?:状态|健康|运行|身体|有无|有没有|是否正常))|(?:MCP|技能|插件|适配器).{0,10}(?:状态|健康|连接|异常)|(?:你自己|你自身|客户端|运行时|Lumi).{0,8}(?:有无问题|有没有问题|是否正常)|\b(?:check|inspect|diagnose)\s+(?:the\s+)?(?:lumi\s+)?(?:client|runtime|yourself)\b/iu.test(normalized);
+  if (!boundedCheck) return [];
 
   const plan: ClientDiagnosticToolCall[] = [
     { name: 'client_health_check', arguments: {} },
     { name: 'client_get_state', arguments: {} },
   ];
+  if (/(?:状态检查|后台|需要处理|待处理)|\b(?:background|attention|task status)\b/iu.test(normalized)) plan.unshift({ name: 'runtime_work_status', arguments: {} }); // i18n-allow: Runtime ledger inspection scope.
   if (CLIENT_INTEGRATION_TARGET_RE.test(normalized)) {
     plan.push(
       { name: 'adapter_registry_list', arguments: {} },

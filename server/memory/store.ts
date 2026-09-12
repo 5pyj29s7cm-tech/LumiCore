@@ -14,7 +14,7 @@ import { generateConfiguredEmbedding, getEmbeddingRoute, type EmbeddingResult } 
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
 import { isProviderLocalOnly, isStrictPrivacy } from '../config/privacy';
 import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding, memoryEmbeddingInputHash } from './embedding_identity';
-import { isTestMemory } from './provenance';
+import { isTestMemory, isMalformedBehavioralMemory, isDerivedLearningMemory } from './provenance';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 
 function getMemoryStore(): Memory[] {
@@ -33,6 +33,9 @@ export function isOperationalTraceMemory(
   const source = String(memory.sourceInteractionId || '').trim().toLowerCase();
   const content = String(memory.content || '').trimStart();
   return source.startsWith('orch_')
+    || source.startsWith('quarantine:')
+    || isMalformedBehavioralMemory(memory)
+    || isDerivedLearningMemory(memory)
     || /^(?:proactive_scan|growth_journal|autonomy_scan|daily_growth|self_reflection)_/i.test(source)
     || /^\[(?:Orchestrated Workflow|Proactive Scan|Growth Journal|Autonomy Scan|Daily Growth|Self Reflection)\b/i.test(content);
 }

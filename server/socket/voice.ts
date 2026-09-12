@@ -991,7 +991,7 @@ export function isVoiceCallEndCommand(text: string): boolean {
   // Ending the call is a transport command. It must not enter the LLM/tool
   // pipeline or wait for speaker verification after the user has asked out.
   // i18n-allow: Chinese voice transport-command recognition; not user-visible copy.
-  return /^(?:(?:关闭|结束|挂断|退出|停止)(?:语音)?(?:通话|电话|聊天|会话)|(?:语音)?(?:通话|电话|聊天|会话)(?:关闭|结束|挂断|退出)|endcall|hangup|closevoicecall|stopvoicecall)$/u.test(normalized);
+  return /^(?:(?:关闭|结束|挂断|退出|停止)(?:语音)?(?:通话|电话|聊天|会话|对话|通道)|(?:语音)?(?:通话|电话|聊天|会话|对话|通道)(?:关闭|结束|挂断|退出)|endcall|hangup|closevoicecall|stopvoicecall)$/u.test(normalized);
 }
 
 /**

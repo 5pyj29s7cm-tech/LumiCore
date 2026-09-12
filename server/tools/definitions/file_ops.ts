@@ -52,7 +52,9 @@ function resolveWritePath(inputPath: string, context?: Pick<ToolContext, 'cwd' |
 
 function resolveSafePath(userPath: string, cwd?: string): string {
   const base = cwd || process.cwd();
-  const resolved = path.resolve(base, userPath);
+  const expanded = userPath === '~' ? os.homedir()
+    : /^~[/\\]/.test(userPath) ? path.join(os.homedir(), userPath.slice(2)) : userPath;
+  const resolved = path.resolve(base, expanded);
   const normalized = path.normalize(resolved);
 
   const allowedRoots = [
@@ -62,10 +64,7 @@ function resolveSafePath(userPath: string, cwd?: string): string {
     os.tmpdir(),
   ];
 
-  const isAllowed = allowedRoots.some(root =>
-    normalized.startsWith(path.normalize(root) + path.sep) ||
-    normalized === path.normalize(root)
-  );
+  const isAllowed = allowedRoots.some(root => isPathInside(root, normalized));
 
   if (!isAllowed) {
     throw new Error(`Access denied: "${normalized}" is outside allowed paths.`);

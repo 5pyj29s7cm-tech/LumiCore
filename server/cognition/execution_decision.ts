@@ -1,6 +1,7 @@
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import { buildOperationModeToolPolicy } from './operation_modes';
+import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import { buildUnifiedLegalEntryPrompt } from './legal_entry';
 import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
 import {
@@ -203,7 +204,7 @@ function shouldRouteTools(flow: LumiTurnFlow, isSanctuary?: boolean): boolean {
   if (isSanctuary) return false;
   if (!flow.allowToolUseForTurn) return false;
   if (flow.clientActionOnlyTurn) return false;
-  if (flow.selfRepairTurn) return false;
+  if (flow.selfRepairTurn) return buildClientDiagnosticPlan(flow.routeText || '').length > 0;
   return true;
 }
 
@@ -537,7 +538,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     || input.flow.modelToolAccess === 'manifest'
     || runtimeWorkIntent !== 'none'
   ) && !input.isSanctuary && !statusOnlyContinuation;
-  const selfRepairToolPolicy = input.flow.selfRepairTurn && !statusOnlyContinuation && !modelOwnedMainChat
+  const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation && !modelOwnedMainChat
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry, input.visibilityContext)
     : null;
   const clientActionToolPolicy = input.flow.clientActionOnlyTurn

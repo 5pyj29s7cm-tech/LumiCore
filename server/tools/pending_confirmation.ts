@@ -671,7 +671,7 @@ export function clearPendingConfirmation(userId: string, scope?: PendingConfirma
 }
 
 export function isExplicitConfirmationReply(text: string): boolean {
-  return /^(?:\u786e\u8ba4(?:\u4e86|\u6267\u884c)?|\u7ee7\u7eed\u6267\u884c|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
+  return /^(?:\u786e\u8ba4(?:\u4e86|\u6267\u884c)?|\u7ee7\u7eed\u6267\u884c|\u5141\u8bb8|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
 }
 
 export function isConfirmationCancellation(text: string): boolean {

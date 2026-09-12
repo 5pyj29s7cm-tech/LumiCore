@@ -48,6 +48,7 @@ import {
   documentReadMatchesRequestedTarget,
   isSuccessfulExactDocumentRead,
   extractDesktopLaunchTarget,
+  extractPrimaryTaskText,
   extractExplicitArtifactTextRequirements,
   extractSimpleDesktopOpenTarget,
   requestedMediaPlayerTarget,
@@ -59,6 +60,7 @@ import {
   hasCurrentAppSaveEvidence,
   hasCurrentAppUiMutationEvidence,
   hasMediaPlaybackEvidence,
+  hasMediaPauseEvidence,
   hasRequestedDesktopOpenEvidence,
   hasVisualModelAvailabilityEvidence,
   hasVerifiedCadGeometryExtractionEvidence,
@@ -74,6 +76,7 @@ import {
   resolveVerifiedCurrentAuthoringDocumentEvidence,
   summarizeActionContractBlocker,
 } from './action_contract';
+import { isMediaPauseRequest } from './media_intent';
 import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
@@ -354,6 +357,7 @@ function hasVerifiedEvidenceForRealWorldClaim(
     ));
   }
   if (kind === 'playback') {
+    if (isMediaPauseRequest(taskText)) return hasMediaPauseEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId });
     return requiresMediaPlaybackAction(taskText)
       && hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId });
   }
@@ -452,8 +456,9 @@ function groundedVerifiedDocumentObservation(
   // intermediate step when the user asked Lumi to interpret or synthesize the
   // document and no usable analysis prose was produced.
   // i18n-allow: Chinese document-analysis intent recognition; not user-visible copy.
-  const calculationRequested = /(?:计算|重算|算出|金额|总额|合计|\b(?:calculat\w*|recalculat\w*|total|multiply)\b)/iu.test(task); // i18n-allow: document calculation intent.
-  const analysisRequested = calculationRequested || /(?:分析|审查|审阅|总结|概括|提炼|解读|\b(?:review|analy[sz]e|summari[sz]e|interpret|synthesize)\b)/iu.test(task);
+  const instruction = [extractPrimaryTaskText(task), input.flow?.rootTaskText || ''].join('\n');
+  const calculationRequested = /(?:计算|重算|算出|金额|总额|合计|\b(?:calculat\w*|recalculat\w*|total|multiply)\b)/iu.test(instruction); // i18n-allow: document calculation intent.
+  const analysisRequested = calculationRequested || /(?:分析|审查|审阅|总结|概括|提炼|解读|\b(?:review|analy[sz]e|summari[sz]e|interpret|synthesize)\b)/iu.test(instruction);
   const calculationOutput = /(?:金额|总额|合计|总计|结果|[=×]|\b(?:amount|total|result)\b)[^\r\n]{0,100}(?:\d|[零一二三四五六七八九十百千万])|^\s*[-+]?\d+(?:\.\d+)?\s*(?:元|美元|USD|CNY)?[。.!！]?\s*$/iu.test(response); // i18n-allow: returned calculation data, not tool-count or path digits.
   const onlyReadAcknowledgment = /^(?:(?:已|已经|成功|完成|文件|内容|数据|读取|阅读|查看|检查|核验|验证|完毕|任务|操作|read|file|content|verified|completed|successfully|done)|[\s。.!！,，:：;；-])+$/iu.test(response);
   const rawReadOnly = response.replace(/\s+/gu, '') === String(record.result || '').replace(/\s+/gu, '');
@@ -725,7 +730,14 @@ function unsupportedPriorDiagnosticClaim(input: LumiResultFinalizerInput): strin
 }
 
 function taskActionContract(input: LumiResultFinalizerInput) {
-  return buildActionEvidenceContract(resultTaskText(input));
+  const text = resultTaskText(input);
+  const contract = buildActionEvidenceContract(text);
+  if (!input.flow?.preparationRootText) return contract;
+  const root = input.flow.preparationRootText;
+  return { ...contract, components: [
+    { text: root, contract: buildActionEvidenceContract(root) },
+    { text: extractPrimaryTaskText(text), contract },
+  ] };
 }
 
 function parseRuntimeWorkReceipt(record: ToolExecutionRecord): Record<string, any> | null {
@@ -1385,7 +1397,6 @@ function formatGroundedClientActionResult(input: LumiResultFinalizerInput): stri
   // The client-action-only route already performed exact target selection and
   // state-diff verification. A verified native navigation receipt is stronger
   // evidence than a model sentence that happens to claim the action failed.
-  if (!input.flow?.clientActionOnlyTurn) return null;
   const expectedIntent = normalizeActionIntent(resultTaskText(input));
   if (
     expectedIntent.kind !== 'client_navigation'
@@ -1395,6 +1406,7 @@ function formatGroundedClientActionResult(input: LumiResultFinalizerInput): stri
   const expectedMode = String(expectedIntent.clientActionArguments?.mode || '').trim();
   const expectedEnabled = expectedIntent.clientActionArguments?.enabled;
   const receipts = (input.toolRecords || [])
+    .filter(record => recordMatchesCurrentTurnIdentity(input, record))
     .map(parseVerifiedClientActionReceipt)
     .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
   const receipt = [...receipts].reverse().find(item => (
@@ -2924,6 +2936,26 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     )),
   };
   const actionText = resultTaskText(input);
+  if (isMediaPauseRequest(actionText)) {
+    const verified = hasMediaPauseEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId });
+    const zh = isChineseText(actionText);
+    return { text: verified
+      ? zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPaused : 'The requested player is confirmed paused.'
+      : zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPauseUnconfirmed : 'The requested player is not yet confirmed paused.',
+      blocked: !verified, reason: verified ? 'verified_media_pause' : 'media_pause_unconfirmed' };
+  }
+  const composite = taskActionContract(input);
+  if (composite.components?.length) {
+    const outcomes = composite.components.map(component => {
+      const verified = hasResultCoreActionEvidence(input, component.contract, input.toolRecords || [], component.text);
+      const result = finalizeLumiResponse({ ...input, taskText: component.text, flow: undefined, completionGuard: undefined, responseText: '' });
+      const complete = verified && !result.blocked && Boolean(result.text);
+      return { complete, text: complete ? result.text
+        : isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.incompleteComponent(component.text) : `Not completed: ${component.text}` };
+    });
+    return { text: outcomes.map(outcome => outcome.text).join('\n'), blocked: outcomes.some(outcome => !outcome.complete),
+      reason: outcomes.every(outcome => outcome.complete) ? 'All requested operations verified.' : 'Some requested operations remain unverified.' };
+  }
   const workflowProgress = formatGroundedWorkflowProgress(input);
   if (workflowProgress) return workflowProgress;
   const operationModeFacts = buildOperationModeMetaResponse({

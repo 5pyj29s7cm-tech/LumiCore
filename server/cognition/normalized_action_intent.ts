@@ -924,11 +924,12 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   );
   const direct = text.match(
     // i18n-allow: Chinese local desktop semantic-role input recognition.
-    /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/iu,
+    /(?:^|[，。！？!?：:；;\s])(?:现在\s*)?(?:请|请你|帮我|麻烦你|给我)?\s*(?:先|首先)?\s*(打开|启动|运行|切换到|聚焦|最大化|最小化|还原|关闭|\b(?:open|launch|start|focus|maximi[sz]e|minimi[sz]e|restore|close)\b)\s*(?:程序|应用|软件|窗口|app|application)?\s*([^，。！？!?；;\n]{1,120})/iu,
   );
-  if (!instrumented && !direct) return null;
-  const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || direct?.[1] || '');
-  const target = trimSlot(instrumented?.[2] || instrumented?.[4] || direct?.[2] || '');
+  const objectFirst = text.match(/^(?:请|请你|帮我)?\s*(?:先)?(?:把|将|用)\s*([^，。！？!?；;\n]{1,80}?)\s*(?:先)?(打开|启动|运行|最大化|最小化|还原|关闭)(?:一下|吧)?[。！!]*$/u); // i18n-allow: Object-before-verb desktop instructions.
+  if (!instrumented && !direct && !objectFirst) return null;
+  const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || objectFirst?.[2] || direct?.[1] || '');
+  const target = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '');
   if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null; // i18n-allow: Chinese interrogative input recognition.
   return {
     kind: 'desktop_operation',
@@ -978,6 +979,18 @@ export function mediaGenerationIntent(value: string): NormalizedActionIntent | n
     payload: text, sideEffectClass: 'external_commit', relation: 'new', confidence: 0.98, rule: 'explicit-media-generation' };
 }
 
+/** Independent client + application navigation must retain both obligations. */
+export function compositeNavigationInstructions(value: string): Array<{ text: string; intent: NormalizedActionIntent }> {
+  const text = currentTurnText(value);
+  if (text.length > 1200 || isExplicitArtifactCreationText(text)) return [];
+  const instructions = text.split(/[，,；;。\n]/u).map(part => part.trim().replace(/^(?:然后|接着|同时|并且|再)\s*/u, '')).filter(Boolean) // i18n-allow: Independent instruction boundaries.
+    .filter(part => !/(?:不要|别|如果|假设|例如|说|为什么|怎么)|\b(?:don't|do not|if|said|why|how)\b/iu.test(part)) // i18n-allow: No authority from negative or hypothetical clauses.
+    .map(part => ({ text: part, intent: clientNavigation(part) || localDesktopOperation(part) }))
+    .filter((item): item is { text: string; intent: NormalizedActionIntent } => Boolean(item.intent));
+  return instructions.length > 1 && instructions.some(item => item.intent.kind === 'client_navigation')
+    && instructions.some(item => item.intent.kind === 'desktop_operation') ? instructions : [];
+}
+
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
@@ -1001,6 +1014,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const artifactRead = explicitLocalArtifactReadIntent(text);
   const currentAuthoringDocumentRead = currentAuthoringDocumentReadIntent(text);
   const explicitArtifactCreation = Boolean(artifactCreation);
+  const compositeNavigation = !artifactCreation && !artifactRead ? compositeNavigationInstructions(text) : [];
 
   // Order is a safety invariant. Later action-shaped words cannot override a
   // correction, status query, client-native route, external-AI read, or
@@ -1013,6 +1027,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
     artifactCreation,
     artifactRead,
     currentAuthoringDocumentRead,
+    compositeNavigation.find(item => item.intent.kind === 'desktop_operation')?.intent,
     explicitArtifactCreation ? null : clientNavigation(text),
     explicitArtifactCreation ? null : externalAiHistoryRead(text),
     explicitArtifactCreation ? null : inboundMessageRead(text),

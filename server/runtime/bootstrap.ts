@@ -1,4 +1,4 @@
-import { repairTestMemoryProvenance } from '../memory/provenance';
+import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
 import {
   readDB,
   writeDB,
@@ -132,6 +132,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     initializeDesktopBootstrapProof();
     await ensureDatabaseInitialized();
     repairTestMemoryProvenance();
+    repairRuntimeLearningEvidence();
     const initializedDb = readDB();
     const migrationCounts = {
       quickCheck: requireDatabaseStartupQuickCheck(),

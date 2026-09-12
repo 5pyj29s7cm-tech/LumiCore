@@ -278,8 +278,15 @@ export function isUnverifiedExecutionAssistantText(value: unknown): boolean {
       EXECUTION_OUTCOME_RE.test(text)
       || EXECUTION_ACTIVITY_RE.test(text)
       || isRuntimeConfigurationFact(text)
+      || isUnverifiedCapabilityBoundary(text)
     ),
   );
+}
+
+/** A channel's permanent abilities cannot be inferred from assistant excuses. */
+export function isUnverifiedCapabilityBoundary(value: unknown): boolean {
+  // i18n-allow: Recognition of unsupported runtime capability assertions.
+  return /(?:语音|文字|当前)(?:通道|模式|界面)?[^。！？!?\n]{0,28}(?:只能|仅能|无法|不能)[^。！？!?\n]{0,28}(?:对话|聊天|执行|操作|读取)|(?:助手|Lumi)[^。！？!?\n]{0,18}(?:遵从|遵照|应要求)[^。！？!?\n]{0,18}(?:关闭|结束|挂断)|\b(?:voice|text)\s+(?:channel|mode)[^.!?\n]{0,32}(?:cannot|can't|only\s+(?:chat|talk))/iu.test(String(value || ''));
 }
 
 export function isUnverifiedExecutionAssistantRecord(message: MessageRecord): boolean {
@@ -326,6 +333,7 @@ export function sanitizeSummaryForPrompt(value: unknown): string {
       EXECUTION_OUTCOME_RE.test(clause)
       || EXECUTION_ACTIVITY_RE.test(clause)
       || isRuntimeConfigurationFact(clause)
+      || isUnverifiedCapabilityBoundary(clause)
     )) return true;
     return false;
   });

@@ -1,7 +1,7 @@
 import type { ToolPolicy } from '../personality/types';
 import { normalizeStructuredMediaRequest, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
-import type { ConversationActionContinuationState } from './action_continuation';
+import { isTaskPreparationContinuation, type ConversationActionContinuationState } from './action_continuation';
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
@@ -339,6 +339,10 @@ export function buildLumiExecutionPipeline(
   };
   const decisionText = acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText;
   const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
+  if (trustedActionContinuation) turnIntent.flow.rootTaskText = input.actionTaskState?.goal;
+  if (trustedActionContinuation && isTaskPreparationContinuation(input.dispatch.text, input.actionTaskState)) {
+    turnIntent.flow.preparationRootText = input.actionTaskState?.goal;
+  }
   // A bound retry inherits its authorized goal, not the side-effect class of
   // the acknowledgement ("yes"). Keep current-turn denials authoritative below.
   const currentIntent = normalizeActionIntent(decisionText);

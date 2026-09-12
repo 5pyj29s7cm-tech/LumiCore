@@ -1,3 +1,5 @@
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+
 export interface PendingInterruptedVoiceTurn {
   text: string;
   interruptedAt: number;
@@ -66,7 +68,7 @@ export function isVoiceTaskContinuation(text: string): boolean {
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001\u2026\uFF5E~\u201C\u201D\u2018\u2019]+/gu, '')
     .toLowerCase();
   if (!compact) return false;
-  return /^(?:需要|要|同意|确认|可以|行|好|好的|继续|接着|执行|执行任务|继续执行|就这样|就这个|对|是的|yes|ok|okay|confirm|proceed|continue|doit)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+  return /^(?:需要|要|同意|允许|确认|可以|行|好|好的|继续|接着|执行|执行任务|继续执行|就这样|就这个|对|是的|yes|ok|okay|confirm|proceed|continue|doit)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:就|已经|现在|目标|联系人|文件|窗口|页面|输入框|按钮).{1,72}(?:在|就在|是|打开|选中|前台|里|上|下)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:打开|完成|做好|处理好|找到|选中|进入|登录)(?:以后|之后|后)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:然后|接着|随后|下一步)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact); // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
@@ -102,7 +104,9 @@ export function classifyVoiceWorkInterruption(
     /^(?:\u505c|\u505c\u4e0b|\u95ed\u5634|\u522b\u8bf4(?:\u4e86)?|\u4e0d\u8981\u8bf4(?:\u4e86)?|\u5148\u522b\u8bf4(?:\u4e86)?|\u7b49\u4e00\u4e0b|\u7b49\u4e0b|\u6682\u505c|\u597d\u4e86|\u884c\u4e86|\u591f\u4e86|stop|wait|pause|interrupt|holdon|shutup)$/u.test(compact)
     || /(?:\u5148)?(?:\u522b|\u4e0d\u7528)(?:\u518d)?\u8bf4(?:\u4e86)?(?:\u4f60)?(?:\u7ee7\u7eed|\u63a5\u7740)(?:\u505a|\u5904\u7406)/u.test(compact)
   ) return 'stop_speaking';
-  if (options.hasExplicitToolIntent === true) return 'new_work';
+  const intent = normalizeActionIntent(normalized);
+  if (options.hasExplicitToolIntent === true || (intent.kind !== 'none'
+    && !['status_query', 'correction_explanation'].includes(intent.kind))) return 'new_work';
   return 'side_chat';
 }
 

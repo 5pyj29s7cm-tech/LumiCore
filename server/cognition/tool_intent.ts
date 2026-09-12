@@ -304,6 +304,7 @@ export function isCurrentClientDiagnosticRequest(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
   if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return false;
+  if (/^(?:请|帮我)?(?:做一下|进行|执行|检查一下)?状态检查[。！!\s]*$/u.test(normalized)) return true; // i18n-allow: Standalone runtime status-check request.
 
   if (CLIENT_INTEGRATION_DIAGNOSTIC_RE.test(normalized)) return true;
   if (DIRECT_CLIENT_SELF_HEALTH_RE.test(normalized)) return true;

@@ -181,6 +181,9 @@ describe('voice reconnect and perception continuity', () => {
     expect(isPureInterruptCommand('先别说了')).toBe(true);
     expect(isPureInterruptCommand('闭嘴，然后继续画图')).toBe(false);
     expect(isVoiceCallEndCommand('关闭语音通话')).toBe(true);
+    expect(isVoiceCallEndCommand('关闭语音通道')).toBe(true);
+    expect(isVoiceCallEndCommand('结束语音对话')).toBe(true);
+    expect(isVoiceCallEndCommand('关闭设置对话框')).toBe(false);
     expect(isVoiceCallEndCommand('停止任务')).toBe(false);
     expect(priorityStop).toBeGreaterThan(0);
     expect(voiceprintGate).toBeGreaterThan(priorityStop);

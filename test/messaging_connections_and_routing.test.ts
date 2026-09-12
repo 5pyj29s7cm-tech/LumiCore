@@ -562,8 +562,8 @@ describe('messaging long connections and organization routing', () => {
     expect(clientModelPolicy.allowedTools).toEqual(expect.arrayContaining([
       'client_get_state',
       'client_health_check',
-      'desktop_open',
     ]));
+    expect(clientModelPolicy.allowedTools).not.toContain('desktop_open');
     expect(clientModelPolicy.forbiddenTools).not.toContain('*');
     expect(clientModelPolicy.maxIterations).toBeGreaterThan(3);
 

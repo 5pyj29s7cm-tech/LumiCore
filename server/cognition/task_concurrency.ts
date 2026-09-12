@@ -2,6 +2,7 @@ import {
   classifyConversationActionFollowupIntent,
   conversationActionRequiresFreshConfirmationReview,
   isBlockedTaskRetryAcceptance,
+  isTaskPreparationContinuation,
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
@@ -124,7 +125,7 @@ const CONTINUE_ONLY_RE =
 // pending action or root-task verification.
 // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const ACCEPT_ONLY_RE =
-  /^(?:(?:我)?(?:确认|同意|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
+  /^(?:(?:我)?(?:确认|同意|允许|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 
 // A bare acknowledgement is conversational unless the durable state proves
 // that the immediately adjacent action is actually waiting for confirmation.
@@ -173,6 +174,7 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = normalizeActionIntent(normalized);
+  if (isTaskPreparationContinuation(normalized, state)) return 'continue';
   if (isBlockedTaskRetryAcceptance(normalized, state)) return 'retry';
   // A runtime-work status query asks about Lumi's global execution ledger,
   // not the status of the adjacent conversation action. It must enter the
