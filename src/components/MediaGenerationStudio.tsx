@@ -68,6 +68,11 @@ export type MediaGenerationStudioProps = {
   status: MediaGenerationStudioStatus;
   statusDetail?: string;
   artifacts: MediaGenerationArtifact[];
+  libraryArtifacts?: MediaGenerationArtifact[];
+  libraryLoading?: boolean;
+  libraryFailed?: boolean;
+  onRefreshLibrary?: () => void;
+  onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
   sourceArtifacts?: MediaGenerationArtifact[];
   primaryImage?: string;
   referenceImages?: string[];
@@ -211,6 +216,11 @@ export function MediaGenerationStudio({
   status,
   statusDetail,
   artifacts,
+  libraryArtifacts = [],
+  libraryLoading = false,
+  libraryFailed = false,
+  onRefreshLibrary,
+  onReferenceArtifact,
   sourceArtifacts = [],
   primaryImage,
   referenceImages,
@@ -235,11 +245,16 @@ export function MediaGenerationStudio({
   onArtifactError,
 }: MediaGenerationStudioProps) {
   const copy = mediaGenerationCopy(locale);
+  const [gallery, setGallery] = useState<'current' | 'library'>(artifacts.length || busy ? 'current' : 'library');
+  const [librarySearch, setLibrarySearch] = useState('');
   const [localOperation, setLocalOperation] = useState<MediaGenerationOperation>(() => (
     operation || defaultMediaGenerationOperation(mode)
   ));
   const activeOperation = operation || localOperation;
   const activeKind = mediaGenerationKindForOperation(activeOperation);
+  const library = libraryArtifacts.filter(artifact => artifact.kind === activeKind);
+  const displayedArtifacts = gallery === 'current' ? artifacts : library.filter(artifact => (artifact.fileName || '').toLocaleLowerCase().includes(librarySearch.toLocaleLowerCase()));
+  useEffect(() => { if (status === 'submitting' || status === 'generating') setGallery('current'); }, [status]);
   const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState<string>(activeKind === 'image' ? IMAGE_SIZE_VALUES[0] : VIDEO_SIZE_VALUES[0]);
   const [count, setCount] = useState(1);
@@ -413,12 +428,14 @@ export function MediaGenerationStudio({
     const normalizedPrompt = prompt.trim();
     if (!normalizedPrompt || isWorking || (sourceRequired && !hasRequiredSource)) return;
     const request = buildRequest();
+    setGallery('current');
     setLastRequest(request);
     onGenerate(request);
   };
 
   const retry = () => {
     if (!requestToRetry || isWorking) return;
+    setGallery('current');
     setLastRequest(requestToRetry);
     if (onRetry) onRetry(requestToRetry);
     else onGenerate(requestToRetry);
@@ -684,6 +701,16 @@ export function MediaGenerationStudio({
         </form>
 
         <div className="flex min-h-[22rem] flex-col overflow-hidden rounded-[1.75rem] border border-white/[0.09] bg-black/20">
+          <div className="flex items-center gap-2 border-b border-white/[0.07] px-5 py-3" role="tablist" aria-label={activeKind === 'image' ? copy.imageLibrary : copy.videoLibrary}>
+            <button type="button" role="tab" aria-selected={gallery === 'current'} onClick={() => setGallery('current')} className={`rounded-lg px-3 py-2 text-xs ${gallery === 'current' ? 'bg-white/10 text-white' : 'text-white/45'}`}>{copy.currentResults}</button>
+            <button type="button" role="tab" aria-selected={gallery === 'library'} onClick={() => { setGallery('library'); onRefreshLibrary?.(); }} className={`rounded-lg px-3 py-2 text-xs ${gallery === 'library' ? 'bg-cyan-200/15 text-cyan-100' : 'text-white/45'}`}>{activeKind === 'image' ? copy.imageLibrary : copy.videoLibrary} ({library.length})</button>
+            {onRefreshLibrary && <button type="button" onClick={onRefreshLibrary} disabled={libraryLoading} aria-label={copy.libraryRefresh} title={copy.libraryRefresh} className="ml-auto p-2 text-white/50"><RotateCcw size={14} className={libraryLoading ? 'animate-spin' : ''} /></button>}
+          </div>
+          {gallery === 'library' && <div className="space-y-3 px-5 pt-4">
+            <p className="text-xs leading-5 text-white/50">{libraryFailed ? copy.libraryFailed : libraryLoading ? copy.libraryLoading : copy.libraryHint}</p>
+            <input value={librarySearch} onChange={event => setLibrarySearch(event.target.value)} aria-label={copy.librarySearch} placeholder={copy.librarySearch} className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-cyan-200/40" />
+          </div>}
+          {gallery === 'current' && (
           <div className="flex items-center gap-2 border-b border-white/[0.07] px-5 py-4">
             {status === 'completed' ? (
               <CheckCircle2 size={15} className="text-emerald-300" />
@@ -698,27 +725,28 @@ export function MediaGenerationStudio({
               {statusCopy}
             </span>
           </div>
+          )}
           <div data-media-generation-results className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {artifacts.length === 0 ? (
+            {displayedArtifacts.length === 0 ? (
               <div className="max-w-xs text-center">
                 <span className="mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-dashed border-white/12 bg-white/[0.025] text-white/18">
                   {activeKind === 'image' ? <ImageIcon size={32} /> : <Video size={32} />}
                 </span>
-                <p className="mt-4 text-sm font-semibold text-white/38">{copy.resultsAppear}</p>
-                <p className="mt-2 text-[11px] leading-5 text-white/24">{copy.noFakeCompletion}</p>
+                <p className="mt-4 text-sm font-semibold text-white/38">{gallery === 'library' ? copy.libraryEmpty : copy.resultsAppear}</p>
+                <p className="mt-2 text-[11px] leading-5 text-white/24">{gallery === 'library' ? copy.libraryHint : copy.noFakeCompletion}</p>
               </div>
             ) : (
               <div className="grid w-full grid-cols-1 gap-4 xl:grid-cols-2">
-                {artifacts.map(artifact => (
+                {displayedArtifacts.map(artifact => (
                   <article key={artifact.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-black/35">
                     <div className="aspect-video overflow-hidden bg-black/45">
                       {artifact.kind === 'image' ? (
                         <FileResourceImage
                           src={artifact.url}
                           alt={artifact.fileName || copy.generateImage}
-                          onLoad={() => onArtifactReady(artifact)}
-                          onError={() => onArtifactError(artifact)}
-                          onResourceError={() => onArtifactError(artifact)}
+                          onLoad={() => { if (gallery === 'current') onArtifactReady(artifact); }}
+                          onError={() => { if (gallery === 'current') onArtifactError(artifact); }}
+                          onResourceError={() => { if (gallery === 'current') onArtifactError(artifact); }}
                           className="h-full w-full object-contain"
                         />
                       ) : (
@@ -726,9 +754,9 @@ export function MediaGenerationStudio({
                           src={artifact.url}
                           controls
                           preload="metadata"
-                          onLoadedMetadata={() => onArtifactReady(artifact)}
-                          onError={() => onArtifactError(artifact)}
-                          onResourceError={() => onArtifactError(artifact)}
+                          onLoadedMetadata={() => { if (gallery === 'current') onArtifactReady(artifact); }}
+                          onError={() => { if (gallery === 'current') onArtifactError(artifact); }}
+                          onResourceError={() => { if (gallery === 'current') onArtifactError(artifact); }}
                           className="h-full w-full object-contain"
                         />
                       )}
@@ -738,6 +766,7 @@ export function MediaGenerationStudio({
                         {artifact.fileName || (artifact.kind === 'image' ? copy.viewImage : copy.viewVideo)}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
+                        {artifact.fileId && onReferenceArtifact && <button type="button" onClick={() => onReferenceArtifact(artifact)} className="rounded-lg border border-cyan-200/20 bg-cyan-200/10 px-2.5 py-1.5 text-[10px] font-bold text-cyan-100">{copy.referenceInChat}</button>}
                         <button
                           type="button"
                           onClick={() => onOpenArtifact(artifact)}

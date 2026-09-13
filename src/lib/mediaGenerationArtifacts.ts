@@ -12,6 +12,7 @@ export type MediaGenerationSourceOperation = Extract<
 >;
 
 export type MediaGenerationArtifact = {
+  fileId?: string;
   id: string;
   kind: MediaGenerationKind;
   url: string;

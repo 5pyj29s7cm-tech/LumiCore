@@ -19,6 +19,9 @@ export interface MemoryNode {
 }
 
 export interface FileEntry {
+  archiveId?: string;
+  archiveKind?: string;
+  sourceConversationId?: string;
   id: string;
   name: string;
   displayName?: string;

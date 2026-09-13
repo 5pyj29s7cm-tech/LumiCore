@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
+import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
+import { archivedMediaArtifacts } from '@/lib/generatedLibrary';
 import { ChatAttachmentUploads, type ChatUploadFailure, type ChatUploadKind, type ChatUploadSource } from '@/lib/chatAttachmentUploads';
 import { ChatAttachmentUploadStatus } from './ChatAttachmentUploadStatus';
 import { chatAttachmentCopy } from '../i18n/locales/chatAttachments';
@@ -835,8 +837,6 @@ export function AgentChatPage({
   const [attachmentContextStorageKey, setAttachmentContextStorageKey] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const nativeDropHandledAtRef = useRef(0);
-  const [knowledgeFiles, setKnowledgeFiles] = useState<FileEntry[]>([]);
-  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
@@ -1133,22 +1133,10 @@ export function AgentChatPage({
       : '';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}${orgScope}`;
   }, [activeDomain, activeOrgId]);
-  const refreshKnowledgeFiles = useCallback(async () => {
-    setKnowledgeLoading(true);
-    try {
-      const res = await fetch(scopedFileUrl('/api/files/list'), { credentials: 'include' });
-      if (!res.ok) return;
-      const data = await res.json().catch(() => ({}));
-      const list = Array.isArray(data.files) ? data.files as FileEntry[] : [];
-      setKnowledgeFiles([...list].sort((a, b) =>
-        new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime(),
-      ));
-    } catch {
-      // Knowledge status is a convenience surface; chat itself should stay usable.
-    } finally {
-      setKnowledgeLoading(false);
-    }
-  }, [scopedFileUrl]);
+  const { files: knowledgeFiles, loading: knowledgeLoading, failed: knowledgeFailed, refresh: refreshKnowledgeFiles } = useGeneratedLibrary(
+    JSON.stringify([user?.uid, activeDomain, activeOrgId]), scopedFileUrl,
+  );
+  const libraryMediaArtifacts = useMemo(() => archivedMediaArtifacts(knowledgeFiles, scopedFileUrl), [knowledgeFiles, scopedFileUrl]);
   const notifyKnowledgeUpdated = useCallback((files?: Array<{ id?: string; name?: string; displayName?: string }>) => {
     const detail: KnowledgeUpdateDetail = {
       domain: activeDomain,
@@ -1160,6 +1148,7 @@ export function AgentChatPage({
   }, [activeDomain, activeOrgId]);
 
   const isKnowledgeReady = useCallback((file: FileEntry) => {
+    if (file.archiveId) return true;
     const status = String(file.extractionStatus || file.status || '');
     if (status === 'indexed' || status === 'partial') return true;
     const targetAgentId = activeDomain === 'work' ? 'org-kb' : 'lumi';
@@ -1205,6 +1194,7 @@ export function AgentChatPage({
       ...mediaSourceArtifacts,
       ...mediaGenerationArtifacts,
       ...messages.flatMap(message => Array.isArray(message?.mediaArtifacts) ? message.mediaArtifacts : []),
+      ...libraryMediaArtifacts,
     ].filter((artifact): artifact is MediaGenerationArtifact => artifact?.kind === 'image' && Boolean(artifact.url));
     const seen = new Set<string>();
     return collected.filter(artifact => {
@@ -1213,7 +1203,7 @@ export function AgentChatPage({
       seen.add(key);
       return true;
     }).slice(-24).reverse();
-  }, [mediaGenerationArtifacts, mediaSourceArtifacts, messages]);
+  }, [libraryMediaArtifacts, mediaGenerationArtifacts, mediaSourceArtifacts, messages]);
 
   const openNativeFilePath = useCallback(async (target?: string | null): Promise<boolean> => {
     if (platform !== 'tauri' || !target) return false;
@@ -1299,16 +1289,23 @@ export function AgentChatPage({
       size: item.size,
     }));
 
-    const generated: ChatFilePanelItem[] = generatedChatFiles.map(file => ({
+    const archived: ChatFilePanelItem[] = knowledgeFiles.filter(file => file.archiveId).map(file => ({
+      id: `archived-${file.archiveId}`, fileId: file.id, fileName: file.displayName || file.name,
+      subtitle: uiMessage('agent-chat-page.generated-by-lumi.27ac470b2c'),
+      kind: chatArtifactKind(file.name), source: 'generated', path: file.path, size: file.rawSize,
+      openUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`),
+      saveUrl: scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}`),
+    }));
+    const generated: ChatFilePanelItem[] = [...archived, ...generatedChatFiles.filter(file => !archived.some(item => item.fileName === file.fileName)).map(file => ({
       id: `generated-panel-${file.id}`,
       fileName: file.fileName,
       subtitle: uiMessage('agent-chat-page.generated-by-lumi.27ac470b2c'),
       kind: file.kind,
-      source: 'generated',
+      source: 'generated' as const,
       path: file.path,
       openUrl: file.url,
       saveUrl: file.url,
-    }));
+    }))].slice(0, 12);
 
     const knowledge: ChatFilePanelItem[] = knowledgeFiles.slice(0, 12).map(file => {
       const fileName = file.displayName || file.name || file.id;
@@ -1373,7 +1370,11 @@ export function AgentChatPage({
   useEffect(() => {
     if (!socket || !isOpen || isFounder) return;
     socket.on('memories:changed', refreshKnowledgeFiles);
-    return () => { socket.off('memories:changed', refreshKnowledgeFiles); };
+    socket.on('chat:conversation_updated', refreshKnowledgeFiles);
+    return () => {
+      socket.off('memories:changed', refreshKnowledgeFiles);
+      socket.off('chat:conversation_updated', refreshKnowledgeFiles);
+    };
   }, [isFounder, isOpen, refreshKnowledgeFiles, socket]);
 
   useEffect(() => { agentNameRef.current = agentName; }, [agentName]);
@@ -3325,6 +3326,7 @@ export function AgentChatPage({
   ]);
 
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
+    void refreshKnowledgeFiles();
     const activeRequest = activeMediaGenerationRef.current;
     mediaStudioOpenRef.current = true;
     if (activeRequest) {
@@ -3342,7 +3344,7 @@ export function AgentChatPage({
       setMediaGenerationDetail('');
     }
     setMediaStudioMode(mode);
-  }, []);
+  }, [refreshKnowledgeFiles]);
 
   const handleMediaSourceChange = useCallback((change: MediaGenerationSourceChange) => {
     const artifactId = change.artifact?.id || '';
@@ -4073,6 +4075,17 @@ export function AgentChatPage({
               status={mediaGenerationStatus}
               statusDetail={mediaGenerationDetail}
               artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
+              libraryArtifacts={libraryMediaArtifacts}
+              libraryLoading={knowledgeLoading}
+              libraryFailed={knowledgeFailed}
+              onRefreshLibrary={refreshKnowledgeFiles}
+              onReferenceArtifact={artifact => {
+                const result = appendPendingAttachments([createChatAttachmentReference({
+                  fileId: artifact.fileId, fileName: artifact.fileName, path: artifact.path,
+                  kind: artifact.kind === 'image' ? 'image' : 'file', openUrl: artifact.url,
+                })]);
+                if (result.added.length) closeMediaGenerationStudio();
+              }}
               sourceArtifacts={availableMediaSourceArtifacts}
               primaryImage={mediaPrimaryImage}
               referenceImages={mediaReferenceImages}

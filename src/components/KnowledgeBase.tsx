@@ -98,6 +98,8 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
   const [obsidianVaults, setObsidianVaults] = useState<ObsidianVault[]>([]);
   const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const archiveReconciled = React.useRef(false);
+  const archivePending = React.useRef<Promise<void> | null>(null);
   const lastLoadErrorRef = React.useRef<string | null>(null);
 
   const reportLoadError = useCallback((message: string) => {
@@ -148,6 +150,12 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    if (!archiveReconciled.current) {
+      archivePending.current ||= fetch(scopedFileUrl('/api/files/archive-generated'), { method: 'POST', credentials: 'include' })
+        .then(response => { archiveReconciled.current = response.ok; }).catch(() => {});
+      await archivePending.current;
+      archivePending.current = null;
+    }
     const [filesRes, treeRes] = await Promise.allSettled([
       fetch(scopedFileUrl('/api/files/list'), { credentials: 'include' }),
       fetch(scopedMemoryUrl('/api/memory/tree')),
@@ -202,7 +210,8 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
   useEffect(() => {
     if (!socket || !isOpen) return;
     socket.on('memories:changed', fetchAll);
-    return () => { socket.off('memories:changed', fetchAll); };
+    socket.on('chat:conversation_updated', fetchAll);
+    return () => { socket.off('memories:changed', fetchAll); socket.off('chat:conversation_updated', fetchAll); };
   }, [socket, isOpen, fetchAll]);
 
   // Build tree
@@ -512,7 +521,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
       setObsidianSyncing(false);
     }
     if (connectedVaultId) void syncObsidianVault(connectedVaultId);
-  }, [fetchObsidianStatus, isZh, obsidianPath, scopedFileUrl, syncObsidianVault]);
+  }, [fetchObsidianStatus, isZh, obsidianPath, scopedFileUrl, syncObsidianVault, t.obsidianMarkdownConnected]);
 
   const handleObsidianDisconnect = useCallback(async (vault: ObsidianVault) => {
     const ok = await appConfirm({

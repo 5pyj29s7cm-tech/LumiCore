@@ -8,6 +8,7 @@ import { decodeToolResult } from './result_envelope';
 import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from './execution_envelope';
 import { inspectExternalCommitAttempt, settleExternalCommitAttempt } from './external_commit_journal';
 import { isToolLifecyclePersistenceFailure } from './lifecycle_persistence_error';
+import { archiveGeneratedOutputs } from '../files/generated_archive';
 import {
   guardTaskTargetToolCall,
   isFileTargetTask,
@@ -709,6 +710,14 @@ export async function executeToolCall(
       if (proof) record.terminalVerification = verifyCapabilityReceipt(capability, record, proof);
     } catch {
       // A changed runtime or unavailable host proof cannot promote the receipt.
+    }
+  }
+  if (!record.error && record.terminalVerification?.status === 'verified' && input.context?.userId) {
+    try { await archiveGeneratedOutputs([record], input.context); }
+    catch (error) {
+      // The generated file still succeeded. A library refresh can reconcile
+      // its preserved receipt; never replay the business action to fix indexing.
+      console.warn('[GeneratedLibrary] Output archive pending:', error instanceof Error ? error.message : String(error));
     }
   }
   return finalizeRecord();

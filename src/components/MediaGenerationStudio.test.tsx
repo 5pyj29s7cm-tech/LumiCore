@@ -37,6 +37,24 @@ function studioProps(overrides: Partial<MediaGenerationStudioProps> = {}): Media
 afterEach(cleanup);
 
 describe('MediaGenerationStudio operations', () => {
+  it('previews and references archived content while keeping current generation status separate', () => {
+    const archived = { ...sourceArtifact, id: 'archive-1', fileId: 'archived.png', url: '/api/files/download/archived.png?inline=1' };
+    const props = studioProps({ libraryArtifacts: [archived], onReferenceArtifact: vi.fn(), onRefreshLibrary: vi.fn() });
+    const { container, rerender } = render(<MediaGenerationStudio {...props} />);
+    expect(screen.getByRole('tab', { name: 'Image library (1)' }).getAttribute('aria-selected')).toBe('true');
+    const image = container.querySelector('[data-media-generation-results] img')!;
+    fireEvent.load(image); fireEvent.error(image);
+    expect(props.onArtifactReady).not.toHaveBeenCalled(); expect(props.onArtifactError).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reference in chat' }));
+    expect(props.onReferenceArtifact).toHaveBeenCalledWith(archived);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search archived files' }), { target: { value: 'unmatched' } });
+    expect(container.querySelectorAll('[data-media-generation-results] article')).toHaveLength(0);
+    rerender(<MediaGenerationStudio {...props} busy status="generating" />);
+    expect(screen.getByRole('tab', { name: 'This generation' }).getAttribute('aria-selected')).toBe('true');
+    expect(container.querySelectorAll('[data-media-generation-results] article')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('tab', { name: 'Image library (1)' }));
+    expect(props.onRefreshLibrary).toHaveBeenCalled();
+  });
   it('offers all four operations and submits an image edit with a selected source artifact', () => {
     const onGenerate = vi.fn();
     const onOperationChange = vi.fn();

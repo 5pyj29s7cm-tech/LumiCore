@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useT } from '../lib/useT';
-import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, EyeOff, FileText, FolderOpen } from 'lucide-react';
+import { useT, useLocale } from '../lib/useT';
+import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
+import { chatPreviewCopy } from '@/i18n/locales/chatPreview';
+import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, FileText, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { uiMessage } from '../i18n/uiMessages';
 
@@ -115,23 +117,10 @@ export function NodeDetailPanel({
   onReferenceInChat,
 }: NodeDetailPanelProps) {
   const t = useT();
-  const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const locale = useLocale();
+  const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
 
   const fileName = node?.type === 'file' ? node.fileData?.displayName || node.fileData?.name || node.title : '';
-  const imageExts = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
-  const audioExts = /\.(mp3|wav|ogg|flac|m4a|aac|wma)$/i;
-  const videoExts = /\.(mp4|mov|avi|webm|mkv)$/i;
-  const pdfExts = /\.pdf$/i;
-  const textFileExts = /\.(txt|md|json|csv|log|xml|yaml|yml|ts|tsx|js|jsx|py|html|css|env|toml|ini|cfg)$/i;
-
-  const isImageFile = imageExts.test(fileName);
-  const isAudioFile = audioExts.test(fileName);
-  const isVideoFile = videoExts.test(fileName);
-  const isPdfFile = pdfExts.test(fileName);
-  const isTextFile = textFileExts.test(fileName);
-  const isPreviewable = isImageFile || isAudioFile || isVideoFile || isPdfFile || isTextFile;
 
   const fileUrl = (path: string, extraQuery = '') => {
     const domain = node?.fileData?.domain || 'personal';
@@ -145,31 +134,6 @@ export function NodeDetailPanel({
     return `${path}?${params.toString()}`;
   };
 
-  const handleTogglePreview = async () => {
-    if (!node || node.type !== 'file') return;
-    if (previewContent || previewMediaUrl) {
-      if (previewMediaUrl) URL.revokeObjectURL(previewMediaUrl);
-      setPreviewContent(null); setPreviewMediaUrl(null);
-      return;
-    }
-    setPreviewLoading(true);
-    try {
-      const res = await fetch(fileUrl(`/api/files/download/${encodeURIComponent(node.id)}`), { credentials: 'include' });
-      if (!res.ok) throw new Error('');
-      if (isImageFile || isAudioFile || isVideoFile) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        setPreviewMediaUrl(url);
-      } else {
-        const text = await res.text();
-        setPreviewContent(text.slice(0, 20000));
-      }
-    } catch {
-      setPreviewContent('Failed to load preview');
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
 
   const handleOpenFile = async () => {
     if (!node || node.type !== 'file') return;
@@ -204,6 +168,7 @@ export function NodeDetailPanel({
     <AnimatePresence>
       {node && (
         <>
+          {previewFile && <ChatFilePreview file={previewFile} isZh={locale === 'zh'} onClose={() => setPreviewFile(null)} onOpenSystem={handleOpenFile} />}
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -393,69 +358,13 @@ export function NodeDetailPanel({
                     </div>
                   )}
 
-                  {isPreviewable && (
-                    <div className="space-y-2">
-                      <button
-                        onClick={handleTogglePreview}
-                        disabled={previewLoading}
-                        className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors"
-                      >
-                        {previewLoading ? <Loader2 size={12} className="animate-spin" /> : (previewContent || previewMediaUrl) ? <EyeOff size={12} /> : <Eye size={12} />}
-                        {(previewContent || previewMediaUrl) ? 'Hide Preview' : 'Preview'}
-                      </button>
+                  <button
+                    onClick={() => setPreviewFile({ fileName, path: node.fileData?.path, url: fileUrl(`/api/files/download/${encodeURIComponent(node.id)}`, 'inline=1') })}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold text-white/60 transition-colors"
+                  >
+                    <Eye size={12} />{chatPreviewCopy(locale === 'zh').preview}
+                  </button>
 
-                      {/* Image preview */}
-                      {previewMediaUrl && isImageFile && (
-                        <div className="bg-white/[0.03] rounded-xl overflow-hidden border border-white/[0.06]">
-                          <img src={previewMediaUrl} alt={fileName} className="w-full max-h-64 object-contain" />
-                        </div>
-                      )}
-
-                      {/* Audio preview */}
-                      {previewMediaUrl && isAudioFile && (
-                        <div className="bg-white/[0.04] rounded-xl p-3 border border-white/[0.06]">
-                          <audio controls className="w-full h-10" src={previewMediaUrl}>
-                            Your browser does not support the audio element.
-                          </audio>
-                        </div>
-                      )}
-
-                      {/* Video preview */}
-                      {previewMediaUrl && isVideoFile && (
-                        <div className="bg-white/[0.03] rounded-xl overflow-hidden border border-white/[0.06]">
-                          <video controls className="w-full max-h-56" src={previewMediaUrl}>
-                            Your browser does not support the video element.
-                          </video>
-                        </div>
-                      )}
-
-                      {/* PDF preview — open in new tab */}
-                      {isPdfFile && (
-                        <div className="bg-white/[0.04] rounded-xl p-3 border border-white/[0.06] flex items-center gap-3">
-                          <FileText size={28} className="text-red-400/70" />
-                          <div className="flex-1">
-                            <p className="text-sm text-white/70">{t.pdfPreviewHint || 'Open this PDF directly in the browser'}</p>
-                          </div>
-                          <button
-                            onClick={() => {
-                              const url = fileUrl(`/api/files/download/${encodeURIComponent(node.id)}`, 'inline=1');
-                              window.open(url, '_blank');
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg text-xs font-bold text-red-400 transition-colors"
-                          >
-                            <Eye size={12} /> Open
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Text file preview */}
-                      {previewContent && isTextFile && (
-                        <div className="bg-white/[0.04] rounded-xl p-3 border border-white/[0.06] max-h-48 overflow-y-auto custom-scrollbar">
-                          <pre className="text-xs text-white/65 leading-relaxed whitespace-pre-wrap font-mono">{previewContent}</pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </>
               )}
 

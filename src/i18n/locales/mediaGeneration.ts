@@ -11,6 +11,16 @@ type VideoRequestCopy = { prompt: string; size: string; duration: number; refere
 
 const COPY = {
   en: {
+    currentResults: 'This generation',
+    imageLibrary: 'Image library',
+    videoLibrary: 'Video library',
+    libraryHint: 'Saved from all conversations. Preview or reference in this conversation.',
+    libraryEmpty: 'No archived content yet',
+    librarySearch: 'Search archived files',
+    libraryRefresh: 'Refresh library',
+    libraryLoading: 'Loading library…',
+    libraryFailed: 'Library could not be loaded. Try refreshing.',
+    referenceInChat: 'Reference in chat',
     image: 'Image',
     video: 'Video',
     textToImage: 'Text to image',
@@ -116,6 +126,16 @@ const COPY = {
     ].join('\n'),
   },
   zh: {
+    currentResults: '本次生成',
+    imageLibrary: '图片库',
+    videoLibrary: '视频库',
+    libraryHint: '汇集所有对话的生成内容，可预览并引用到当前对话。',
+    libraryEmpty: '还没有归档内容',
+    librarySearch: '搜索已归档文件',
+    libraryRefresh: '刷新资料库',
+    libraryLoading: '正在读取资料库…',
+    libraryFailed: '资料库读取失败，请刷新重试。',
+    referenceInChat: '引用到对话',
     image: '图片',
     video: '视频',
     textToImage: '文生图',
