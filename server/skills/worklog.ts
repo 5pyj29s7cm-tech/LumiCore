@@ -10,6 +10,8 @@ export interface WorkflowStep {
   name: string;
   args: Record<string, any>;
   resultSummary: string;   // first 200 chars of tool result
+  /** Complete bounded result for exact dataflow matching; never infer from a preview. */
+  result?: string;
   verified?: boolean;
   operation?: string;
 }
@@ -37,13 +39,26 @@ function generateId(): string {
 
 /** Record a completed tool execution workflow */
 export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>): WorkflowRecord {
+  const previousIndex = record.taskId ? recentWorkflows.findIndex(item => item.taskId === record.taskId
+    && item.userId === record.userId && item.conversationId === record.conversationId
+    && item.domain === (record.domain === 'work' ? 'work' : 'personal')
+    && item.orgId === (record.domain === 'work' ? (record.orgId || '') : '')) : -1;
+  const previous = previousIndex >= 0 ? recentWorkflows[previousIndex] : undefined;
+  const merged = new Map<string, WorkflowStep>();
+  for (const step of [...(previous?.toolSequence || []), ...record.toolSequence]) {
+    const key = `${step.name}:${JSON.stringify(step.args)}`;
+    merged.set(key, step);
+  }
   const entry: WorkflowRecord = {
     id: generateId(),
     ...record,
+    userIntent: previous?.userIntent || record.userIntent,
+    toolSequence: [...merged.values()].slice(-40),
     domain: record.domain === 'work' ? 'work' : 'personal',
     orgId: record.domain === 'work' ? (record.orgId || '') : '',
     timestamp: new Date().toISOString(),
   };
+  if (previousIndex >= 0) recentWorkflows.splice(previousIndex, 1);
   recentWorkflows.push(entry);
   if (recentWorkflows.length > MAX_WORKFLOWS) {
     recentWorkflows.shift();
@@ -65,11 +80,44 @@ export function getRecentWorkflows(userId?: string, domain?: string, orgId?: str
 }
 
 /** Capture is a scoped proposal, never an assertion that model-only reasoning is executable. */
+export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep[] | null {
+  const steps = record.toolSequence.map(step => ({ ...step, args: structuredClone(step.args) }));
+  const outputs: Array<{ ref: string; value: unknown; reader: boolean }> = [];
+  const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  let sawReader = false;
+  let sawCalculation = false;
+  for (const [index, step] of steps.entries()) {
+    const reader = /(?:^|[._])read(?:[._]|$)/i.test(step.name);
+    if (step.name === 'code_execution') {
+      const match = [...outputs].reverse().find(output => same(output.value, step.args.input));
+      if (sawReader && !match) return null;
+      step.args.input = match ? { $stepOutputRef: match.ref } : { $inputRef: `inputs.step_${index + 1}_input` };
+      sawCalculation = true;
+    } else if (sawCalculation && ['write_file', 'desktop_write_text_file'].includes(step.name)) {
+      const key = 'content';
+      const match = [...outputs].reverse().find(output => same(output.value, step.args[key]));
+      if (!match) return null;
+      step.args[key] = { $stepOutputRef: match.ref };
+    }
+    sawReader ||= reader;
+    if (step.result === undefined || step.verified !== true) continue;
+    let value: unknown = step.result;
+    try { value = JSON.parse(step.result); } catch { /* Plain-text readers return text. */ }
+    outputs.push({ ref: `step_${index + 1}`, value, reader });
+    if (step.name === 'code_execution' && value && typeof value === 'object' && 'output' in value) {
+      outputs.push({ ref: `step_${index + 1}.output`, value: (value as { output: unknown }).output, reader: false });
+    }
+  }
+  return steps;
+}
+
 export function workflowCaptureBlocker(record: WorkflowRecord): string | null {
   if (!record.conversationId || !record.taskId) return 'The trace has no verified conversation/task identity. Perform the workflow in this conversation first.';
   if (!record.toolSequence.length || record.toolSequence.some(step => step.verified !== true)) return 'The trace contains failed or unverified actions and cannot be captured as a reusable workflow.';
   if (record.toolSequence.every(step => /^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$)/.test(step.name))) return 'Capability discovery alone is not a completed business workflow.';
-  return workflowTransformationBlocker(record.userIntent, record.toolSequence);
+  const bound = boundCapturedWorkflowSteps(record);
+  if (!bound) return 'The trace has a dataflow gap: calculation input or written content does not match a complete earlier tool result. Include parsing and transformation in executable code; do not replace a reader result with model-retyped rows. Author the missing step with save_workflow.';
+  return workflowTransformationBlocker(record.userIntent, bound);
 }
 
 export function workflowTransformationBlocker(intent: string, steps: Array<{

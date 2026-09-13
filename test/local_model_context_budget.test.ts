@@ -20,6 +20,18 @@ const tools = [{
 }];
 
 describe('local model context budget', () => {
+  it('reserves room for nested workflow arguments while respecting the context and explicit limits', () => {
+    const toolDeclarations = [{ type: 'function' as const, function: { name: 'save_workflow', description: 'Save draft',
+      parameters: { type: 'object', properties: { steps: { type: 'array', items: { type: 'object', properties: {
+        tool: { type: 'string' }, args: { type: 'object' },
+      } } } } } } }];
+    const input = { messages: [{ role: 'user' as const, content: 'Save the previous workflow with fresh input bindings.' }], toolDeclarations, contextTokens: 4096 };
+    const prepared = prepareLocalModelRequest(input);
+    expect(prepared.maxTokens).toBe(1536);
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(prepared.inputBudgetTokens);
+    expect(prepared.inputBudgetTokens + prepared.maxTokens).toBeLessThan(4096);
+    expect(prepareLocalModelRequest({ ...input, maxTokens: 256 }).maxTokens).toBe(256);
+  });
   it('compacts a production-sized history below a 4096-token local context', () => {
     const newest = '\u73b0\u5728\u5c31\u7528\u5de5\u5177\u6253\u5f00\u684c\u9762\u4e0a\u7684\u5ba2\u6237\u65b9\u6848\u3002';
     const messages: any[] = [

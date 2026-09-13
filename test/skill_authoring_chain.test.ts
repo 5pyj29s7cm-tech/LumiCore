@@ -10,7 +10,7 @@ import { buildLumiCapabilitySelection, buildModelToolProjection } from '../serve
 import { registerAllTools } from '../server/tools/definitions';
 import { registerWorkflowTools } from '../server/tools/definitions/workflow_tools';
 import { ToolRegistry } from '../server/tools/registry';
-import { clearWorkflows, getRecentWorkflows, recordWorkflow } from '../server/skills/worklog';
+import { clearWorkflows, getRecentWorkflows, recordWorkflow, workflowCaptureBlocker, boundCapturedWorkflowSteps } from '../server/skills/worklog';
 import { getWorkflow } from '../server/agents/workflows';
 import { resolveWorkflowValue, validateWorkflowSteps } from '../server/workflows/runtime';
 import { buildHandlerFunction } from '../server/skills/generator';
@@ -23,6 +23,33 @@ beforeAll(async () => { await initDatabase(); });
 beforeEach(() => clearWorkflows());
 
 describe('explicit skill authoring and captured workflow boundary', () => {
+  it.each(['write_file', 'desktop_write_text_file'])('binds the actual content parameter of %s to calculated output', name => {
+    const record = recordWorkflow({ userId: 'binding-user', conversationId: 'binding-conv', taskId: 'binding-task',
+      userIntent: 'Read and calculate', conversationExcerpt: '', toolSequence: [
+        { name: 'read_file', args: { path: 'source.csv' }, result: '4,18', resultSummary: '', verified: true },
+        { name: 'code_execution', args: { code: 'input', input: '4,18' }, result: '{"ok":true,"output":"72"}', resultSummary: '', verified: true },
+        { name, args: { path: 'output.csv', content: '72' }, result: 'saved', resultSummary: '', verified: true },
+      ] });
+    expect(boundCapturedWorkflowSteps(record)?.[2].args.content).toEqual({ $stepOutputRef: 'step_2.output' });
+    record.toolSequence[2].args = { path: 'output.csv', text: '72' };
+    expect(boundCapturedWorkflowSteps(record)).toBeNull();
+  });
+  it('retains the same task across confirmation while rejecting model-only parsing gaps', () => {
+    const identity = { userId: 'trace-owner', conversationId: 'trace-conversation', taskId: 'trace-task', userIntent: 'Read CSV, calculate totals and save workflow', conversationExcerpt: '' };
+    const read = { name: 'read_file', args: { path: 'sample.csv' }, result: 'quantity,price\n4,18', resultSummary: '', verified: true, operation: 'observe' };
+    recordWorkflow({ ...identity, toolSequence: [read] });
+    const merged = recordWorkflow({ ...identity, userIntent: 'Confirmed', toolSequence: [{ name: 'code_execution',
+      args: { code: 'input.quantity * input.price', input: { quantity: 4, price: 18 } },
+      result: '{"ok":true,"status":"completed","output":"72"}', resultSummary: '', verified: true, operation: 'test' }] });
+    expect(getRecentWorkflows('trace-owner')).toHaveLength(1);
+    expect(merged.userIntent).toBe(identity.userIntent);
+    expect(merged.toolSequence).toHaveLength(2);
+    expect(workflowCaptureBlocker(merged)).toContain('dataflow gap');
+    recordWorkflow({ ...identity, conversationId: 'other', toolSequence: [read] });
+    expect(getRecentWorkflows('trace-owner', 'personal', '', 'other')).toHaveLength(1);
+    const failed = recordWorkflow({ ...identity, toolSequence: [{ ...read, verified: false, result: undefined }] });
+    expect(workflowCaptureBlocker(failed)).toContain('failed or unverified');
+  });
   it('keeps execution tools when the user asks to perform a task and then save its workflow', () => {
     const text = '请读取 C:/orders/input.csv，按数量乘单价计算金额，生成 C:/orders/output.csv。然后把读取、计算、写文件保存成可复用工作流草稿。';
     const registry = new ToolRegistry(); registerAllTools(registry);

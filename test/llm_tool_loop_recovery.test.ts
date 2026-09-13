@@ -113,7 +113,7 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       toolRecords: [prior], completionGuard: result.completionGuard, taskId: 'media-task', requestId: 'current-turn', source: 'chat' });
     expect(final).toMatchObject({ text: result.text, blocked: true, reason: 'model_failed_before_tool_execution' });
   });
-  it('records the original user request instead of a server recovery prompt', async () => {
+  it.each(['Check the current task state.', 'Read the current task state, then save the workflow.'])('records business work for %s instead of a server recovery prompt', async originalRequest => {
     const registry = new ToolRegistry();
     registerReadOnlyProbe(registry, 'workflow_recovery_probe', async () => encodeToolResult(
       'the requested state was verified',
@@ -126,7 +126,6 @@ describe('LLM tool-loop recovery and terminal truth', () => {
       })
       .mockResolvedValueOnce({ text: 'The requested state is verified.' });
 
-    const originalRequest = 'Check the current application state.';
     await runWithTools(
       [
         { role: 'user', content: originalRequest },

@@ -962,6 +962,19 @@ export function pendingRuntimeCancellationRecheck(
   };
 }
 
+/** Explicitly referential resumption precedes the self-contained action gate. */
+export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
+  if (!state?.unfinished || !state.taskId || !state.goal) return false;
+  const value = compact(text, 700);
+  // i18n-allow: referential task resumption, not arbitrary continuation verbs.
+  if (!/^(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次)(?:的)?(?:未完成的|没完成的|剩余的)?|^(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value)) return false;
+  const current = buildActionContract(value);
+  const root = buildActionContract(state.goal);
+  if (!current.applies) return true;
+  const kinds = new Set([root.kind, ...(root.components || []).map(part => part.contract.kind)]);
+  return kinds.has(current.kind);
+}
+
 /** An explicitly ordered preparation step retains the matching unfinished goal. */
 export function isTaskPreparationContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
   if (!state?.unfinished || !state.goal) return false;
@@ -998,6 +1011,7 @@ export function classifyConversationActionFollowupIntent(
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
   if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
   if (isTaskPreparationContinuation(compactText, durableState)) return 'execute';
+  if (isExplicitUnfinishedTaskContinuation(compactText, durableState)) return 'execute';
   const normalizedIntent = normalizeActionIntent(text);
   if (
     durableState?.unfinished

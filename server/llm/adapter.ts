@@ -3,7 +3,7 @@ import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } fro
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage, type NormalizedLLMResponse } from '../tools/types';
-import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
+import { classifySkillAuthoringIntent, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   NormalizedMessage,
   makeLLMCall,
@@ -2501,6 +2501,7 @@ async function runWithToolsInternal(
         || {};
       invocationBudget.started += 1;
       invocationBudget.lastTouchedAt = Date.now();
+      if (tc.name === 'capture_recent_workflow') recordWorkflowIfToolsUsed(executionLog, messages, config);
       const record = await executeToolCall({
         registry: toolRegistry,
         id: tc.id,
@@ -2682,7 +2683,8 @@ function recordWorkflowIfToolsUsed(
   messages: NormalizedMessage[],
   config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId' | 'source' | 'workflowSource'>,
 ): void {
-  if (executionLog.length === 0) return;
+  const businessRecords = executionLog.filter(record => !/^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$|list_directory$|(?:capture_recent|save|list|get|publish|delete|run)_workflow(?:s)?$)/u.test(record.name));
+  if (businessRecords.length === 0) return;
   const rawContent = [...messages].reverse().find(message => {
     if (message.role !== 'user') return false;
     const content = typeof message.content === 'string'
@@ -2700,19 +2702,20 @@ function recordWorkflowIfToolsUsed(
   if (!safeMsg.trim()) return;
   // Authoring/discovery turns must not replace the business trace that the
   // next capture request is trying to save.
-  if (classifySkillAuthoringIntent(safeMsg) !== 'none') return;
+  if (classifySkillAuthoringIntent(safeMsg) !== 'none' && !executionBeforeWorkflowSave(safeMsg)) return;
   recordWorkflow({
     source: config.workflowSource || config.source,
     userId: config.userId || 'anonymous',
     conversationId: config.conversationId,
-    taskId: executionLog[0]?.taskId,
+    taskId: businessRecords[0]?.taskId,
     domain: config.domain === 'work' ? 'work' : 'personal',
     orgId: config.domain === 'work' ? (config.orgId || '') : '',
     userIntent: safeMsg.slice(0, 200),
-    toolSequence: executionLog.map(e => ({
+    toolSequence: businessRecords.map(e => ({
       name: e.name,
       args: e.arguments,
       resultSummary: (e.result || e.error || '').slice(0, 200),
+      ...(e.result && e.result.length <= 32_768 ? { result: e.result } : {}),
       verified: !e.error && e.terminalVerification?.status === 'verified' && e.envelope?.status === 'verified_success',
       operation: e.capability?.operation || e.evidence?.operation,
     })),

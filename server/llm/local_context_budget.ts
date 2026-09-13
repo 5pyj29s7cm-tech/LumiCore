@@ -262,10 +262,16 @@ export function prepareLocalModelRequest(input: {
   requiredToolNames?: string[];
 }): PreparedLocalModelRequest {
   const contextTokens = Math.max(2_048, input.contextTokens || configuredContextTokens());
+  // Authoring nested plans or executable code needs more than the short-reply
+  // reserve. Still fit output, input and safety margin inside the same context.
+  const structuredOutput = input.toolDeclarations.some(tool => Object.entries(
+    tool.function.parameters?.properties || {},
+  ).some(([key, schema]: [string, any]) => (key === 'code' && schema?.type === 'string')
+    || (schema?.type === 'array' && schema.items?.type === 'object')));
   const maxTokens = Math.max(128, Math.min(
-    Number(input.maxTokens) || 768,
-    1_024,
-    Math.floor(contextTokens * 0.25),
+    Number(input.maxTokens) || (structuredOutput ? 1_536 : 768),
+    structuredOutput ? 4_096 : 1_024,
+    Math.floor(contextTokens * (structuredOutput ? 0.4 : 0.25)),
   ));
   const safetyTokens = Math.max(384, Math.floor(contextTokens * 0.1));
   const inputBudgetTokens = contextTokens - maxTokens - safetyTokens;

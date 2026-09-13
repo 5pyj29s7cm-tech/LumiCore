@@ -75,8 +75,11 @@ function parameterizeInferredDraftValue(value: unknown, stepIndex: number, path:
     }
     return value;
   }
+  if (Object.keys(value).length === 1 && ['$inputRef', '$stepOutputRef', '$secretRef'].some(key => key in value)) return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => {
     if (INFERRED_DRAFT_SECRET_KEY_RE.test(key)) return [key, item];
+    if (item && typeof item === 'object' && Object.keys(item).length === 1
+      && ['$inputRef', '$stepOutputRef', '$secretRef'].some(ref => ref in item)) return [key, item];
     if (INFERRED_DRAFT_DYNAMIC_KEY_RE.test(key)) {
       return [key, inferredDraftInputRef(stepIndex, [...path, key])];
     }
@@ -494,7 +497,7 @@ function generateWorkflowName(intent: string): string {
 export function captureRecentAsWorkflow(
   userId: string,
   name: string,
-  toolTrace: Array<{ name: string; args: Record<string, any>; resultSummary: string }>,
+  toolTrace: Array<{ name: string; args: Record<string, any>; resultSummary: string } & Pick<WorkflowDefinition['steps'][number], 'capabilityContractId' | 'capabilitySnapshot' | 'attachedReconciliation'>>,
   scope: WorkflowScope = {},
 ): WorkflowDefinition | null {
   if (toolTrace.length === 0) return null;
@@ -503,6 +506,9 @@ export function captureRecentAsWorkflow(
     description: t.name,
     tool: t.name,
     args: t.args,
+    capabilityContractId: t.capabilityContractId,
+    capabilitySnapshot: t.capabilitySnapshot,
+    attachedReconciliation: t.attachedReconciliation,
   }));
 
   const description = `Captured workflow: ${name} (${steps.length} steps). Created from recent tool execution.`;

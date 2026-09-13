@@ -3,6 +3,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   isBlockedTaskRetryAcceptance,
   isTaskPreparationContinuation,
+  isExplicitUnfinishedTaskContinuation,
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
@@ -175,6 +176,7 @@ function feedbackKind(
   }
   const normalizedIntent = normalizeActionIntent(normalized);
   if (isTaskPreparationContinuation(normalized, state)) return 'continue';
+  if (isExplicitUnfinishedTaskContinuation(normalized, state)) return 'continue';
   if (isBlockedTaskRetryAcceptance(normalized, state)) return 'retry';
   // A runtime-work status query asks about Lumi's global execution ledger,
   // not the status of the adjacent conversation action. It must enter the

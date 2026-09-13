@@ -3,7 +3,7 @@ import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../../runtim
 import { createHash } from 'crypto';
 import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent } from '../../org/membership_authorization';
 import type { CapabilityManifestEntry } from '../types';
-import { workflowCaptureBlocker, workflowTransformationBlocker } from '../../skills/worklog';
+import { boundCapturedWorkflowSteps, workflowCaptureBlocker, workflowTransformationBlocker } from '../../skills/worklog';
 import { classifySkillAuthoringIntent } from '../../skills/authoring_intent';
 import {
   attachedExternalCommitReconciliationFingerprint,
@@ -373,11 +373,16 @@ async function handleCaptureRecentWorkflow(args: Record<string, any>, context?: 
   const last = recent[recent.length - 1];
   const blocker = workflowCaptureBlocker(last);
   if (blocker) return JSON.stringify({ ok: false, status: 'needs_authoring', name, sourceConversationId: conversationId, sourceTaskId: last.taskId, sourceIntent: last.userIntent, observedTools: last.toolSequence.map(step => step.name), reason: blocker, nextAction: 'Use save_workflow to author the missing executable transformation. For code_execution, args.code is JavaScript (not Python), args.input is a typed reference such as {"$stepOutputRef":"step_1"}, and the writer binds to {"$stepOutputRef":"step_2.output"}. Do not repeat completed actions or create, install, publish, or run a skill package without a separate request. No draft was saved by capture.' });
-  const toolTrace = last.toolSequence.map(s => ({
-    name: s.name,
-    args: s.args,
-    resultSummary: s.resultSummary,
-  }));
+  const toolTrace = (boundCapturedWorkflowSteps(last) || last.toolSequence).map(s => {
+    const manifest = context?.toolRegistry?.getCapabilityManifestEntry(s.name, context?.toolPolicy, context);
+    const definition = context?.toolRegistry?.get(s.name);
+    const snapshot = manifest ? frozenCapabilitySnapshot(manifest, definition?.parameters || {}) : undefined;
+    return {
+      name: s.name, args: s.args, resultSummary: s.resultSummary,
+      ...(manifest && snapshot ? { capabilityContractId: manifest.capabilityId, capabilitySnapshot: snapshot,
+        attachedReconciliation: attachedReconciliationContract(definition, manifest, snapshot) } : {}),
+    };
+  });
 
   const wf = captureRecentAsWorkflow(userId, name, toolTrace, scope);
   if (!wf) return JSON.stringify({ ok: false, status: 'failed', name, code: 'empty_trace', error: 'No tool calls found in recent activity. No draft was saved.' });
@@ -1305,7 +1310,7 @@ export function registerWorkflowTools(registry: ToolRegistry): void {
             properties: {
               description: { type: 'string' },
               tool: { type: 'string', description: 'Exact registered tool name. code_execution is the JavaScript calculator; compute is not a tool.' },
-              args: { type: 'object', description: 'Arguments template: read_file uses {"path":{"$inputRef":"inputs.sourcePath"}}; code_execution uses {"code":"input.trim()","input":{"$stepOutputRef":"step_1"}} (replace the JavaScript with the requested algorithm); desktop_write_text_file uses {"path":{"$inputRef":"inputs.outputPath"},"text":{"$stepOutputRef":"step_2.output"}}. write_file uses content instead of text. References are nested JSON objects, never quoted reference syntax. Keep the algorithm executable; never paste a previous answer as the writer content.' },
+              args: { type: 'object', description: 'Arguments template: read_file uses {"path":{"$inputRef":"inputs.sourcePath"}}; code_execution uses {"code":"input.trim()","input":{"$stepOutputRef":"step_1"}} (replace the JavaScript with the requested algorithm); both desktop_write_text_file and write_file use {"path":{"$inputRef":"inputs.outputPath"},"content":{"$stepOutputRef":"step_2.output"}}. References are nested JSON objects, never quoted reference syntax. Keep the algorithm executable; never paste a previous answer as the writer content.' },
               reconciliationCapabilityId: {
                 type: 'string',
                 description: 'Optional read-only observe/test capability that can verify this exact target after an interrupted side effect. It is frozen into the published version.',
