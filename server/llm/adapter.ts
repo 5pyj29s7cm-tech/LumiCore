@@ -3,7 +3,7 @@ import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } fro
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, LLMUsage, type NormalizedLLMResponse } from '../tools/types';
-import { classifySkillAuthoringIntent, executionBeforeWorkflowSave } from '../skills/authoring_intent';
+import { classifySkillAuthoringIntent, executionBeforeWorkflowSave, skillAuthoringTools } from '../skills/authoring_intent';
 import {
   NormalizedMessage,
   makeLLMCall,
@@ -650,6 +650,7 @@ export function resolveRequiredToolNamesForModel(
   for (const name of buildActionContract(primaryTask).verificationTools || []) {
     if (declared.has(name)) required.add(name);
   }
+  if (executionBeforeWorkflowSave(primaryTask) && declared.has('code_execution')) required.add('code_execution');
   const discovery = String(
     projection?.discoveryToolName || 'client_capability_manifest',
   ).trim();
@@ -1997,7 +1998,7 @@ async function runWithToolsInternal(
       };
     }
     refreshRuntimeActivatedToolAuthorization(toolExecutionContext, executionLog, toolRegistry);
-    const toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
+    let toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
       toolExecutionContext?.toolPolicy,
       {
         failClosedWithoutPolicy: context?.autonomous === true,
@@ -2005,6 +2006,16 @@ async function runWithToolsInternal(
         visibleToolNames: resolveModelVisibleToolNames(toolExecutionContext, executionLog, toolRegistry),
       },
     );
+    const compoundExecutionTask = executionBeforeWorkflowSave(primaryTask);
+    const workflowSavePhase = Boolean(compoundExecutionTask
+      && hasCompletedCoreAction(compoundExecutionTask, executionLog, toolExecutionContext));
+    if (compoundExecutionTask) {
+      const authoringNames = new Set(skillAuthoringTools('save'));
+      const businessNames = new Set(buildActionContract(compoundExecutionTask).preferredTools);
+      toolDeclarations = toolDeclarations.filter(tool => workflowSavePhase
+        ? authoringNames.has(tool.function.name)
+        : !authoringNames.has(tool.function.name) || businessNames.has(tool.function.name));
+    }
     const exposedToolNames = new Set(toolDeclarations.map(declaration => declaration.function.name));
     const noNewExecutionRecord = executionLog.length === priorExecutionRecords.length;
     const runtimeRecovery = noNewExecutionRecord
@@ -2026,6 +2037,9 @@ async function runWithToolsInternal(
       && !runtimeRecoveryAlreadyRecorded;
     const llmStart = Date.now();
     const modelMessages = compactMessagesForModel(conversationHistory);
+    if (compoundExecutionTask) modelMessages.push({ role: 'system', content: workflowSavePhase
+      ? 'The execution part of this same root task is verified complete. Only saving its workflow remains. Prefer capture_recent_workflow to reuse the verified trace and its calculation code. Do not repeat completed file actions. Return the saved draft receipt; publication remains separate.'
+      : 'Complete the current execution part of this same root task first. Calculation must consume the complete reader result and include executable parsing. Workflow authoring tools become available after the requested output is verified; do not search for them now.' });
     const invokeModel = async (attempt: ModelBudgetAttempt) => {
       const attemptConfig: LLMConfig = {
         ...config,
