@@ -49,6 +49,28 @@ it('does not attach a planned, failed, unverified or read-only file as generated
   expect(collectChatArtifacts('Saved to: C:/fake.txt')).toEqual([]);
 });
 
+it('delivers and previews only verified producer outputs from a completed workflow', async () => {
+  const workflowOutput = path.join(root, 'Documents', 'workflow-result.csv');
+  fs.writeFileSync(workflowOutput, 'quantity,total\n5,90');
+  const payload = { ok: true, status: 'completed', runId: 'preview-run', workflowId: 'preview-definition', completedSteps: 3, totalSteps: 3,
+    outputs: [
+      { status: 'verified', capabilityId: 'read_file', result: 'File read: C:/private-input.csv' },
+      { status: 'unverified', capabilityId: 'write_file', result: 'File written: C:/unverified.csv (3 bytes)' },
+      { status: 'verified', capabilityId: 'write_file', result: `File written: ${workflowOutput} (19 bytes)` },
+    ] };
+  const record: ToolExecutionRecord = { ...verified(workflowOutput), name: 'get_workflow_run', arguments: { runId: 'preview-run' }, result: JSON.stringify(payload) };
+  const artifacts = collectChatArtifacts([record], conversationId);
+  expect(artifacts.map(item => item.path)).toEqual([workflowOutput]);
+  addMessage({ userId, agentId: 'lumi', conversationId, role: 'assistant', content: 'Workflow completed.', toolCalls: [record] });
+  const response = await fetch(`${app.url}${artifacts[0].url}&preview=1`, { headers: auth });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ kind: 'table', sections: [{ rows: [['quantity', 'total'], ['5', '90']] }] });
+  for (const failed of [ { ...record, terminalVerification: undefined }, { ...record, name: 'read_file' },
+    { ...record, outcome: 'failure' }, { ...record, result: JSON.stringify({ ...payload, success: false }) },
+    { ...record, result: JSON.stringify({ ...payload, status: 'running' }) },
+    { ...record, result: JSON.stringify({ ...payload, completedSteps: 2 }) } ]) expect(collectChatArtifacts([failed], conversationId)).toEqual([]);
+});
+
 it('previews a real output outside the generated directory using its owned receipt', async () => {
   const artifact = collectChatArtifacts([verified(output)], conversationId)[0];
   const response = await fetch(`${app.url}${artifact.url}&preview=1`, { headers: auth });

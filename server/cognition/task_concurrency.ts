@@ -100,6 +100,22 @@ export interface ActiveTaskRelationOptions {
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
+/** Preparation owns the accepted task binding; an earlier queue classification
+ * may have used a stale live pointer before restart hydration completed. */
+export function bindPreparedTaskMessageRelation(
+  resolution: ActiveTaskMessageResolution,
+  prepared: { kind: string; state: ConversationActionContinuationState | null },
+): ActiveTaskMessageResolution {
+  const state = prepared.state;
+  if (!state?.taskId) return resolution;
+  const recoveredContinuation = prepared.kind === 'resume' && resolution.taskRelation === 'new';
+  return { ...resolution,
+    ...(recoveredContinuation ? { relation: 'continue' as const, taskRelation: 'continue' as const,
+      feedback: 'continue' as const, operation: 'resume' as const, preservesRootGoal: true,
+      requiresRootVerification: false, reason: 'durable_task_resumed' } : {}),
+    binding: 'active_task', taskId: state.taskId, revision: state.revision, targetRequestId: state.activeRequestId };
+}
+
 // These are task-control utterances, not domain intents. Keeping them here
 // prevents every socket surface from inventing a different cancellation rule.
 // i18n-allow: multilingual task-control recognition; not user-visible copy.

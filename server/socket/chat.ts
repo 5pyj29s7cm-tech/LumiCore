@@ -230,6 +230,7 @@ import {
 import {
   formatActiveTaskRelationContext,
   resolveActiveTaskMessageRelation,
+  bindPreparedTaskMessageRelation,
   type ActiveTaskMessageResolution,
 } from "../cognition/task_concurrency";
 import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
@@ -3510,13 +3511,7 @@ export function registerChatHandler(
         },
       });
       if (durableTaskId) {
-        resolvedTaskRelation = {
-          ...resolvedTaskRelation,
-          binding: 'active_task',
-          taskId: durableTaskId,
-          revision: actionTaskExecution.state.revision,
-          targetRequestId: actionTaskExecution.state.activeRequestId || requestId,
-        };
+        resolvedTaskRelation = bindPreparedTaskMessageRelation(resolvedTaskRelation, actionTaskExecution);
         emitAgent('agent:task_relation', { relation: resolvedTaskRelation, phase: 'prepared' });
       }
       // ── Desktop relay: route tools to the user's registered desktop client, not only this chat socket ──

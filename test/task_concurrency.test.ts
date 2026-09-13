@@ -3,6 +3,7 @@ import {
   classifyActiveTaskMessage,
   formatActiveTaskRelationContext,
   resolveActiveTaskMessageRelation,
+  bindPreparedTaskMessageRelation,
 } from '../server/cognition/task_concurrency';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
@@ -26,6 +27,17 @@ const activeState: ConversationActionContinuationState = {
 };
 
 describe('active task message relation', () => {
+  it('reconciles stale new-task display metadata with the prepared durable continuation', () => {
+    const early = resolveActiveTaskMessageRelation('Continue the unfinished task.', null);
+    expect(early.taskRelation).toBe('new');
+    expect(bindPreparedTaskMessageRelation(early, { kind: 'resume', state: activeState })).toMatchObject({
+      relation: 'continue', taskRelation: 'continue', operation: 'resume', taskId: 'task-1', preservesRootGoal: true,
+    });
+    expect(bindPreparedTaskMessageRelation(early, { kind: 'new', state: { ...activeState, taskId: 'task-2' } }))
+      .toMatchObject({ taskRelation: 'new', taskId: 'task-2' });
+    const correction = resolveActiveTaskMessageRelation('不对，刚才的目标弄错了', activeState);
+    expect(bindPreparedTaskMessageRelation(correction, { kind: 'resume', state: activeState }).taskRelation).toBe(correction.taskRelation);
+  });
   it('keeps a workflow output step bound to the named output of the original run', () => {
     const goal = '运行已经发布的工作流 CSV验收，输入文件用 C:/test/input.csv，输出另存为 C:/test/output.csv。';
     const state = { ...activeState, status: 'blocked' as const, goal, latestInstruction: goal };
