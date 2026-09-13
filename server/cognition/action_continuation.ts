@@ -962,12 +962,16 @@ export function pendingRuntimeCancellationRecheck(
   };
 }
 
-/** Explicitly referential resumption precedes the self-contained action gate. */
-export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
-  if (!state?.unfinished || !state.taskId || !state.goal) return false;
+function explicitlyReferencesUnfinishedTask(text: string): boolean {
   const value = compact(text, 700);
   // i18n-allow: referential task resumption, not arbitrary continuation verbs.
-  if (!/^(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次)(?:的)?(?:未完成的|没完成的|剩余的)?|^(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value)) return false;
+  return /^(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次)(?:的)?(?:未完成的|没完成的|剩余的)?|^(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value);
+}
+
+/** Explicitly referential resumption precedes the self-contained action gate. */
+export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
+  if (!state?.unfinished || !state.taskId || !state.goal || !explicitlyReferencesUnfinishedTask(text)) return false;
+  const value = compact(text, 700);
   const current = buildActionContract(value);
   const root = buildActionContract(state.goal);
   if (!current.applies) return true;
@@ -1359,6 +1363,7 @@ export function isUserObservedTaskCompletion(
 
 export function needsRecentActionContinuationContext(userText: string): boolean {
   const clean = compact(userText, 500);
+  if (explicitlyReferencesUnfinishedTask(clean)) return true;
   if (!clean || (clean.length > 180 && !isCurrentAppEditingRequest(clean))) return false;
   const normalizedIntent = normalizeActionIntent(clean);
   if (normalizedIntent.kind === 'work_task') return false;

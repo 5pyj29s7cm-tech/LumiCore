@@ -1,6 +1,6 @@
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initDatabase, readDB } from '../db_layer';
+import { initDatabase, readDB, writeDB } from '../db_layer';
 import {
   addMessage,
   addMessageIdempotent,
@@ -39,6 +39,27 @@ function persistActionTurn(input: {
 describe('conversation action continuation state', () => {
   beforeAll(async () => {
     await initDatabase();
+  });
+  it('hydrates a detailed workflow resumption from the ledger when the live pointer is absent', () => {
+    const userId = `workflow-hydration-${Date.now()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const goal = '读取 C:/test/input.csv，计算金额并写入 C:/test/output.csv，然后保存成可复用工作流草稿。';
+    addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'user', content: goal, domain: 'personal' });
+    addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'assistant', content: '还没有完成。', domain: 'personal',
+      toolCalls: [{ name: 'read_file', arguments: { path: 'C:/test/input.csv' }, result: '', error: 'timeout',
+        terminalVerification: { status: 'failed', strategy: 'terminal_receipt', reason: 'timeout' } }] });
+    const original = durableActionState(conversation.id, userId);
+    expect(original?.unfinished).toBe(true);
+    const db = readDB();
+    delete db.conversations.find((row: any) => row.id === conversation.id)!.actionContinuationState;
+    writeDB(db);
+    const text = '继续完成刚才未完成的任务。先完成 input.csv 的金额计算和 output.csv 的输出，再保存刚才要求的工作流草稿。' + '不要改动源文件。'.repeat(20);
+    const requestId = 'hydrate-workflow-resume';
+    const prepared = prepareConversationActionExecution({ conversationId: conversation.id, userId, userText: text, requestId,
+      userMessageId: persistActionTurn({ conversationId: conversation.id, userId, userText: text, requestId }), forceTask: true,
+      toolPolicy: { allowedTools: ['read_file', 'code_execution', 'write_file', 'save_workflow'], requireConfirmation: [], forbiddenTools: [], maxIterations: 6 } });
+    expect(prepared.kind).toBe('resume');
+    expect(prepared.state).toMatchObject({ taskId: original?.taskId, goal, unfinished: true });
   });
   it('keeps a failed image task attached through retry acceptance and status complaints', () => {
     const userId = `failed-media-${Date.now()}`;
