@@ -35,6 +35,21 @@ beforeAll(async () => {
 });
 
 describe('Generated libraries across conversations', () => {
+  it('recovers old data paths only after a verified product-root migration', async () => {
+    const { migrateLegacyProductDataRoot, markLegacyProductDataMigrationVerified, resolveMigratedDataFile } = await import('../server/config/data_path');
+    const home = path.join(output, 'migration-home'), oldData = path.join(home, 'LumiOS', 'data');
+    fs.mkdirSync(oldData, { recursive: true });
+    const original = path.join(oldData, 'old-result.txt'); fs.writeFileSync(original, 'historical output');
+    fs.writeFileSync(path.join(oldData, 'lumi.db'), 'isolated fixture');
+    const migrated = migrateLegacyProductDataRoot(() => ({ releaseAt: () => true }), home);
+    expect(resolveMigratedDataFile(original, migrated)).toBe(original);
+    markLegacyProductDataMigrationVerified({ quickCheck: 'ok', userCount: 1, conversationCount: 1, interactionCount: 1 }, migrated);
+    const resolved = resolveMigratedDataFile(original, migrated);
+    expect(resolved).toBe(path.join(migrated, 'data', 'old-result.txt'));
+    expect(fs.readFileSync(resolved, 'utf8')).toBe('historical output');
+    const unrelated = path.join(home, 'OtherAccount', 'data', 'old-result.txt');
+    expect(resolveMigratedDataFile(unrelated, migrated)).toBe(unrelated);
+  });
   it('archives canonical tool outputs without a separate conversation-specific execution path', async () => {
     const { ToolRegistry } = await import('../server/tools/registry');
     const { executeToolCall } = await import('../server/tools/execution_engine');

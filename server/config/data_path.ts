@@ -263,6 +263,20 @@ export function preflightProductDataMigrationReceipts(dataRoot = getDataRoot()):
   return true;
 }
 
+/** Follow historical file references only across the verified product-root rename. */
+export function resolveMigratedDataFile(filePath: string, dataRoot = getDataRoot()): string {
+  const source = path.resolve(filePath);
+  if (pathExistsOrThrow(source)) return source;
+  const currentRoot = path.resolve(dataRoot);
+  const legacyData = path.join(path.dirname(currentRoot), LEGACY_PRODUCT_DATA_DIRECTORY, 'data');
+  const relative = path.relative(legacyData, source);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return source;
+  if (!pathExistsOrThrow(path.join(currentRoot, 'runtime', 'product-data-migration-verified.json'))
+    || !preflightProductDataMigrationReceipts(currentRoot)) return source;
+  const target = path.join(currentRoot, 'data', relative);
+  return pathExistsOrThrow(target) ? target : source;
+}
+
 function ensurePreparedMigrationReceipt(legacyRoot: string, currentRoot: string): ProductDataMigrationReceipt {
   const receiptPath = path.join(legacyRoot, 'runtime', 'product-data-migration.json');
   try {

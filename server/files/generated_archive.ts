@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readDB } from '../../db_layer';
-import { getDataPath } from '../config/data_path';
+import { getDataPath, resolveMigratedDataFile } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { generatedKnowledgeDirectory } from './knowledge_directory';
 import { collectChatArtifacts } from '../conversation/chat_artifacts';
@@ -102,7 +102,7 @@ export async function archiveGeneratedOutputs(records: ToolExecutionRecord[], co
     const dir = generatedKnowledgeDirectory(scope); noLinks(dir);
     const entries = readIndex(scope), saved: GeneratedArchiveEntry[] = [];
     for (const { artifact, record } of artifacts) {
-      const source = path.resolve(artifact.path); noLinks(source);
+      const source = resolveMigratedDataFile(artifact.path); noLinks(source);
       // A library item reused as an input/output is already a persistent copy.
       if (entries.some(entry => !entry.deletedAt && path.join(dir, entry.filename) === source)) continue;
       const stat = await fsp.stat(source);
