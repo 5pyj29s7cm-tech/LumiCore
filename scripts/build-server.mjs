@@ -45,6 +45,9 @@ await build({
     'playwright-core',
     '@larksuiteoapi/node-sdk',
     'typescript',
+    // PDF.js resolves its worker relative to its package. Bundling it into
+    // server.mjs breaks that path; the desktop packager ships this full tree.
+    'pdf-parse',
   ],
   banner: {
     js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
@@ -66,6 +69,7 @@ await build({
     'playwright-core',
     '@larksuiteoapi/node-sdk',
     'typescript',
+    'pdf-parse',
   ],
   banner: {
     js: "import { createRequire as __lumiCreateRequire } from 'module'; const require = __lumiCreateRequire(import.meta.url);",
