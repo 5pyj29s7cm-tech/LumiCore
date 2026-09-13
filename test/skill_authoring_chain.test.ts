@@ -23,6 +23,20 @@ beforeAll(async () => { await initDatabase(); });
 beforeEach(() => clearWorkflows());
 
 describe('explicit skill authoring and captured workflow boundary', () => {
+  it('coalesces confirmation retries despite argument key ordering, without hiding a different failed action', () => {
+    const identity = { userId: 'confirmation-order', conversationId: 'confirmation-order', taskId: 'confirmation-order',
+      userIntent: 'Save the file', conversationExcerpt: '' };
+    recordWorkflow({ ...identity, toolSequence: [{ name: 'desktop_write_text_file', args: { path: 'output.csv', content: 'result',
+      overwritePolicy: 'replace' }, resultSummary: 'Waiting for confirmation', verified: false }] });
+    const confirmed = recordWorkflow({ ...identity, toolSequence: [{ name: 'desktop_write_text_file', args: { content: 'result',
+      overwritePolicy: 'replace', path: 'output.csv' }, result: 'saved', resultSummary: 'saved', verified: true }] });
+    expect(confirmed.toolSequence).toHaveLength(1);
+    expect(workflowCaptureBlocker(confirmed)).toBeNull();
+    const other = recordWorkflow({ ...identity, toolSequence: [{ name: 'desktop_write_text_file', args: { path: 'other.csv',
+      content: 'result', overwritePolicy: 'replace' }, resultSummary: 'failed', verified: false }] });
+    expect(other.toolSequence).toHaveLength(2);
+    expect(workflowCaptureBlocker(other)).toContain('failed or unverified');
+  });
   it.each(['write_file', 'desktop_write_text_file'])('binds the actual content parameter of %s to calculated output', name => {
     const record = recordWorkflow({ userId: 'binding-user', conversationId: 'binding-conv', taskId: 'binding-task',
       userIntent: 'Read and calculate', conversationExcerpt: '', toolSequence: [

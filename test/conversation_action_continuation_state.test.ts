@@ -13,6 +13,7 @@ import {
   setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
 import { getConversationActionStateFromLedger } from '../server/conversation/action_ledger';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 
 function durableActionState(conversationId: string, userId: string) {
   return getConversationActionStateFromLedger(readDB(), { conversationId, userId });
@@ -39,6 +40,24 @@ function persistActionTurn(input: {
 describe('conversation action continuation state', () => {
   beforeAll(async () => {
     await initDatabase();
+  });
+  it.each(['运行已经发布的工作流 CSV验收，输入文件用 C:/test/input.csv，输出另存为 C:/test/output.csv。',
+    '请发布这个已审核的本地工作流草稿 CSV验收。本轮只发布，暂不运行。',
+    'Run the published workflow CSV-check with input.csv and output.csv.',
+    'Publish the reviewed local workflow CSV-check.'])('persists a local workflow goal without public-post redaction: %s', goal => {
+    const userId = `workflow-local-${Math.random()}`;
+    const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const requestId = `local-workflow-${Math.random()}`;
+    const userMessageId = persistActionTurn({ userId, conversationId: conversation.id, userText: goal, requestId });
+    prepareConversationActionExecution({ userId, conversationId: conversation.id, userText: goal, requestId, userMessageId, forceTask: true,
+      toolPolicy: { allowedTools: ['get_workflow', 'publish_workflow', 'run_workflow'], requireConfirmation: [], forbiddenTools: [], maxIterations: 5 } });
+    expect(normalizeActionIntent(goal)).toMatchObject({ kind: 'workflow', sideEffectClass: 'local_write' });
+    expect(durableActionState(conversation.id, userId)?.goal).toBe(goal);
+  });
+  it('retains external-commit treatment for publishing a workflow to a public destination', () => {
+    for (const text of ['发布工作流到 GitHub', '把工作流发布到官网', 'Publish workflow to GitHub']) {
+      expect(normalizeActionIntent(text)).toMatchObject({ kind: 'public_publish', sideEffectClass: 'external_commit' });
+    }
   });
   it('hydrates a detailed workflow resumption from the ledger when the live pointer is absent', () => {
     const userId = `workflow-hydration-${Date.now()}`;

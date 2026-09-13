@@ -91,5 +91,25 @@ it.each(['en', 'zh', 'zh_resume'])('executes and captures through the authorized
       source: 'chat', requestId: 'capture-request', taskId: 'capture-task', flow: pipeline.turnIntent.flow });
     expect(final.blocked).toBe(false);
     expect(final.text).toContain(name);
+    const publishText = language === 'en'
+      ? `Publish the reviewed workflow ${name} with hash ${saved!.runtimeHash}. Do not run it yet.`
+      : `请发布已审核的本地工作流草稿 ${name}，审核哈希是 ${saved!.runtimeHash}。本轮只发布，暂不运行。`;
+    const publication = buildLumiExecutionPipeline({ registry, dispatch: { userId, channel: 'chat', source: 'e2e-formal-client',
+      operationMode: 'assistant', text: publishText, targetIsLumi: true },
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 4 } });
+    mocks.call.mockResolvedValue({ text: null, toolCalls: [{ id: 'publish-reviewed', name: 'publish_workflow',
+      arguments: { name, expectedHash: saved!.runtimeHash } }] });
+    const published = await runWithTools([{ role: 'user', content: publishText }], registry,
+      { provider: 'deepseek', model: 'fixture', userId, conversationId: userId }, undefined, 4,
+      () => null, () => null, () => null, () => null, () => null, undefined,
+      { userId, conversationId: userId, taskId: 'publish-task', requestId: 'publish-request', source: 'e2e-formal-client',
+        executionBoundary: 'trusted_local', localExecution: true, authenticated: true, cwd: root,
+        actionIntent: publishText, routedTaskText: publishText, toolPolicy: publication.authorizationPolicy,
+        modelToolProjection: publication.modelToolProjection, requestConfirmation: async () => true });
+    expect(published.toolCalls).toHaveLength(1);
+    const publishFinal = finalizeLumiResponse({ taskText: publishText, responseText: published.text, toolRecords: published.toolCalls,
+      source: 'chat', requestId: 'publish-request', taskId: 'publish-task', flow: publication.turnIntent.flow });
+    expect(publishFinal.blocked).toBe(false);
+    expect(publishFinal.reason).toBe('workflow_published');
   } finally { fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

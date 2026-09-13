@@ -5,6 +5,8 @@
  */
 
 import { isTestLearningSource, isTestMemory } from '../memory/provenance';
+import { isDeepStrictEqual } from 'node:util';
+import { toolRecordIdempotencyKey } from '../tools/execution_envelope';
 
 export interface WorkflowStep {
   name: string;
@@ -46,7 +48,7 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
   const previous = previousIndex >= 0 ? recentWorkflows[previousIndex] : undefined;
   const merged = new Map<string, WorkflowStep>();
   for (const step of [...(previous?.toolSequence || []), ...record.toolSequence]) {
-    const key = `${step.name}:${JSON.stringify(step.args)}`;
+    const key = toolRecordIdempotencyKey({ name: step.name, arguments: step.args, result: '' });
     merged.set(key, step);
   }
   const entry: WorkflowRecord = {
@@ -83,7 +85,7 @@ export function getRecentWorkflows(userId?: string, domain?: string, orgId?: str
 export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep[] | null {
   const steps = record.toolSequence.map(step => ({ ...step, args: structuredClone(step.args) }));
   const outputs: Array<{ ref: string; value: unknown; reader: boolean }> = [];
-  const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && isDeepStrictEqual(a, b);
   let sawReader = false;
   let sawCalculation = false;
   const bindInput = (value: unknown): { value: unknown; matched: boolean } => {

@@ -1757,6 +1757,14 @@ function formatGroundedWorkflowProgress(input: LumiResultFinalizerInput): LumiRe
 function formatGroundedSkillDraft(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const actionText = resultTaskText(input);
   const authoring = verifiedSkillAuthoringReceipt(actionText, input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId });
+  if (authoring?.intent === 'publish') {
+    const published = authoring.result;
+    // i18n-allow: Verified local workflow publication, distinct from execution.
+    return { text: isChineseText(actionText)
+      ? `工作流已审核发布：${published.name}，版本 ${published.version}。\n本轮尚未运行。`
+      : `Workflow published: ${published.name}, version ${published.version}.\nIt has not been run in this turn.`,
+    blocked: false, reason: 'workflow_published' };
+  }
   if (authoring?.intent === 'save') {
     const draft = authoring.result;
     // i18n-allow: Verified draft state; never imply publication or execution.

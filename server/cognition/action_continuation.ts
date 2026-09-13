@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import {
   hasMixedStatusExecutionIntent,
   isImmediateAssistantRestatementRequest,
@@ -976,7 +977,18 @@ export function isExplicitUnfinishedTaskContinuation(text: string, state?: Conve
   const root = buildActionContract(state.goal);
   if (!current.applies) return true;
   const kinds = new Set([root.kind, ...(root.components || []).map(part => part.contract.kind)]);
-  return kinds.has(current.kind);
+  if (kinds.has(current.kind)) return true;
+  // A workflow's named output step is still part of that workflow even though
+  // the latest sentence describes a file write rather than the whole recipe.
+  if (normalizeActionIntent(state.goal).kind === 'workflow' && current.kind === 'artifact_work') {
+    const target = buildTaskTargetAnchorProjection({ taskText: value }).target.path;
+    if (target) {
+      const normalized = (text: string) => text.replace(/\\/g, '/').toLowerCase();
+      const escaped = normalized(target).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(escaped + '(?:$|[\\s,，。;；"\u201d])', 'u').test(normalized(state.goal)); // i18n-allow: file-reference boundary punctuation.
+    }
+  }
+  return false;
 }
 
 /** An explicitly ordered preparation step retains the matching unfinished goal. */

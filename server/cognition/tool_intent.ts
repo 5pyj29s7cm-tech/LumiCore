@@ -126,6 +126,7 @@ function canonicalIntentOwnsNonClientAction(
     'media_generation',
     'scheduled_task',
     'work_task',
+    'workflow',
   ].includes(kind);
 }
 const SKILL_TERMS = /(?:\u6280\u80fd|\u6280\u80fd\u5927\u5385|\b(?:skill|skills|plugin|mcp)\b)/iu;

@@ -1,4 +1,5 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
+import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 
 /** Read/search verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
@@ -45,6 +46,7 @@ export type NormalizedActionIntentKind =
   | 'cad_drafting'
   | 'scheduled_task'
   | 'work_task'
+  | 'workflow'
   | 'status_query'
   | 'correction_explanation';
 
@@ -864,6 +866,15 @@ function outgoingMessageSend(text: string): NormalizedActionIntent | null {
   return null;
 }
 
+function localWorkflowIntent(text: string): NormalizedActionIntent | null {
+  const intent = classifySkillAuthoringIntent(text);
+  // i18n-allow: local named workflow lifecycle recognition.
+  if (!['save', 'publish', 'use'].includes(intent) || !/工作流|\bworkflow\b/iu.test(text)) return null;
+  return { kind: 'workflow', operation: intent === 'save' ? 'create' : 'mutate', subject: 'user',
+    target: 'local_workflow', payload: text, sideEffectClass: 'local_write', relation: 'new',
+    confidence: 0.95, rule: `local-workflow-${intent}` };
+}
+
 function genericExternalCommit(text: string): NormalizedActionIntent | null {
   // Explicit negation and retrospective/explanatory language must never be
   // promoted into an external mutation merely because it contains an action
@@ -895,7 +906,15 @@ function genericExternalCommit(text: string): NormalizedActionIntent | null {
 
   // i18n-allow: Chinese publication semantic-role input recognition.
   const publish = text.match(/(?:发布|发帖|公开发表|上线|publish|post)\s*(?:到|至|on|to)?\s*([^，。！？!?\n]{1,160})/iu);
-  if (publish) {
+  // "Publish the local workflow" and "run the published workflow" refer to
+  // a version in the local registry, not a public post. Real destinations
+  // still belong to the external-commit boundary and keep payload redaction.
+  const localPublication = publish && localWorkflowIntent(text)
+    // i18n-allow: local workflow target qualifiers, including published adjective.
+    && /^(?:(?:的|这个|已审核的|本地的?|已有的|已经|已|the\b|a\b|reviewed\b|local\b|ed\b)\s*)*(?:工作流|\bworkflow\b)/iu.test(publish[1])
+    // i18n-allow: a publication destination remains an external request.
+    && !/(?:到|至|\b(?:to|on|onto)\b)/iu.test(publish[1]);
+  if (publish && !localPublication) {
     return {
       kind: 'public_publish', operation: 'mutate', subject: 'user',
       target: trimSlot(publish[1]), payload: text,
@@ -1037,6 +1056,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
     explicitArtifactCreation ? null : inboundMessageRead(text),
     explicitArtifactCreation ? null : outgoingMessageSend(text),
     explicitArtifactCreation ? null : genericExternalCommit(text),
+    explicitArtifactCreation ? null : localWorkflowIntent(text),
     explicitArtifactCreation ? null : localDesktopOperation(text),
   ].find(Boolean);
   if (priority) return priority;
