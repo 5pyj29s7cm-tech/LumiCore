@@ -2890,6 +2890,8 @@ export function tryFinalizeVerifiedBoundedAction(
   // publication/delivery tasks and missing artifacts still fail this check.
   const media = groundedMediaGeneration(scopedInput);
   if (media) return media;
+  const workflow = formatGroundedWorkflowProgress(scopedInput);
+  if (workflow && ['workflow_completed', 'workflow_incomplete'].includes(workflow.reason || '')) return workflow;
   const contract = taskActionContract(scopedInput);
   if (!hasCoreActionEvidence(contract, records, task, undefined, {
     requestId: input.requestId, taskId: input.taskId,

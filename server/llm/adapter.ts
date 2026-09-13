@@ -51,6 +51,7 @@ import { formatDesktopControlPausePresentation } from '../regions/packs/cn/deskt
 import { buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import { artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
 import { getExactRegisteredExtensionToolNames } from '../extensions/registry';
+import { resolveConversationWorkflowRun } from '../workflows/conversation_binding';
 
 export { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 
@@ -2035,6 +2036,9 @@ async function runWithToolsInternal(
       : false;
     const directStructuredMediaRecovery = runtimeRecovery?.reason === 'structured_media_request'
       && !runtimeRecoveryAlreadyRecorded;
+    const workflowObservation = iteration === 0 && noNewExecutionRecord && !runtimeRecovery
+      && context?.trustedActionContinuation && exposedToolNames.has('get_workflow_run')
+      ? resolveConversationWorkflowRun(context) : null;
     const llmStart = Date.now();
     const modelMessages = compactMessagesForModel(conversationHistory);
     if (compoundExecutionTask) modelMessages.push({ role: 'system', content: workflowSavePhase
@@ -2097,7 +2101,13 @@ async function runWithToolsInternal(
           );
     };
     let response: NormalizedLLMResponse;
-    if (directStructuredMediaRecovery) {
+    if (workflowObservation) {
+      const id = `workflow_observation_${Date.now().toString(36)}`;
+      deterministicRecoveryToolCallIds.add(id);
+      response = { text: null, toolCalls: [{ id, name: 'get_workflow_run', arguments: { runId: workflowObservation.runId } }] };
+      conversationHistory.push({ role: 'system', content:
+        'This continuation belongs to the existing workflow run observed below. Its runId, revision and pending confirmation come from the durable task ledger. Continue that run; a workflowId identifies its definition and cannot be used as a runId. Approve only the steps authorized by the current user instruction through the ordinary confirmation tool; never invent confirmation ids or start a replacement run.' });
+    } else if (directStructuredMediaRecovery) {
       const id = `deterministic_media_${iteration}_${Date.now().toString(36)}`;
       deterministicRecoveryToolCallIds.add(id);
       response = {
