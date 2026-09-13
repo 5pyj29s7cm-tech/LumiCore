@@ -16,9 +16,10 @@ import { registerFileOpsTools } from '../server/tools/definitions/file_ops';
 import { registerCodeOpsTools } from '../server/tools/definitions/code_tools';
 import { getWorkflow } from '../server/agents/workflows';
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
+import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 beforeAll(async () => { await initDatabase(); });
 
-it.each(['en', 'zh'])('executes and captures through the authorized pipeline (%s)', async language => {
+it.each(['en', 'zh', 'zh_resume'])('executes and captures through the authorized pipeline (%s)', async language => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-capture-turn-'));
   const sourcePath = path.join(root, 'input.csv'), outputPath = path.join(root, 'output.csv');
   const input = 'quantity,price\n4,18\n', output = 'quantity,price,total\n4,18,72\n';
@@ -33,14 +34,32 @@ it.each(['en', 'zh'])('executes and captures through the authorized pipeline (%s
     personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 6 } });
   const calls = [
     { name: 'read_file', arguments: { path: sourcePath } },
-    { name: 'code_execution', arguments: { input, code: "(() => { const rows = input.trim().split('\\n').map(row => row.split(',')); return rows.map((r,i) => r.join(',') + ',' + (i ? Number(r[0])*Number(r[1]) : 'total')).join('\\n') + '\\n'; })()" } },
+    { name: 'code_execution', arguments: { input: { result: input }, code: "(() => { const rows = input.result.trim().split('\\n').map(row => row.split(',')); return { csv: rows.map((r,i) => r.join(',') + ',' + (i ? Number(r[0])*Number(r[1]) : 'total')).join('\\n') + '\\n' }; })()" } },
     { name: 'write_file', arguments: { path: outputPath, content: output } },
     { name: 'capture_recent_workflow', arguments: { name } },
   ];
+  let priorToolRecords: any[] = [];
+  if (language === 'zh_resume') {
+    let first = true;
+    mocks.call.mockImplementation(async () => first
+      ? (first = false, { text: null, toolCalls: [{ id: 'prior-read', ...calls[0] }] })
+      : { text: 'Reading finished; the calculation remains incomplete.' });
+    const partial = await runWithTools([{ role: 'user', content: task }], registry,
+      { provider: 'deepseek', model: 'fixture', userId, conversationId: userId }, undefined, 2,
+      () => null, () => null, () => null, () => null, () => null, undefined,
+      { userId, conversationId: userId, taskId: 'capture-task', requestId: 'prior-request', source: 'e2e-formal-client',
+        executionBoundary: 'trusted_local', localExecution: true, authenticated: true, cwd: root,
+        actionIntent: task, routedTaskText: task, toolPolicy: pipeline.authorizationPolicy,
+        modelToolProjection: pipeline.modelToolProjection, requestConfirmation: async () => true });
+    expect(partial.toolCalls).toHaveLength(1);
+    priorToolRecords = partial.toolCalls.map(record => ({ ...record, envelope: undefined,
+      result: record.result?.replace(/\s+/g, ' ') }));
+    calls.shift();
+  }
   let iteration = 0;
   mocks.call.mockImplementation(async (_messages, declarations, config) => {
     const names = declarations.map((tool: any) => tool.function.name);
-    if (iteration < 3) {
+    if (iteration < (language === 'zh_resume' ? 2 : 3)) {
       expect(names).not.toContain('save_workflow');
       expect(names).not.toContain('capture_recent_workflow');
       expect(config.localRequiredToolNames).toContain('code_execution');
@@ -52,19 +71,25 @@ it.each(['en', 'zh'])('executes and captures through the authorized pipeline (%s
     return call ? { text: null, toolCalls: [{ id: `call-${iteration}`, ...call }] } : { text: 'The file and workflow draft were saved.' };
   });
   try {
-    const result = await runWithTools([{ role: 'user', content: task }], registry,
+    const result = await runWithTools([{ role: 'user', content: language === 'zh_resume'
+      ? '继续完成刚才未完成的任务，再保存刚才要求的工作流。' : task }], registry,
       { provider: 'deepseek', model: 'fixture', userId, conversationId: userId }, undefined, 6,
       () => null, () => null, () => null, () => null, () => null, undefined,
       { userId, conversationId: userId, taskId: 'capture-task', requestId: 'capture-request',
         source: 'e2e-formal-client', executionBoundary: 'trusted_local', localExecution: true, authenticated: true,
         toolPolicy: pipeline.authorizationPolicy, modelToolProjection: pipeline.modelToolProjection,
+        priorToolRecords,
         cwd: root, actionIntent: task, routedTaskText: task, requestConfirmation: async () => true });
     expect(result.toolCalls.find(record => record.name === 'capture_recent_workflow')?.error).toBeUndefined();
     const saved = getWorkflow(userId, name);
     expect(saved?.steps).toHaveLength(3);
-    expect(saved?.steps[1].args.input).toEqual({ $stepOutputRef: 'step_1' });
-    expect(saved?.steps[2].args.content).toEqual({ $stepOutputRef: 'step_2.output' });
+    expect(saved?.steps[1].args.input).toEqual({ result: { $stepOutputRef: 'step_1' } });
+    expect(saved?.steps[2].args.content).toEqual({ $stepOutputRef: 'step_2.output.csv' });
     expect(fs.readFileSync(outputPath, 'utf8')).toBe(output);
     expect(fs.readFileSync(sourcePath, 'utf8')).toBe(input);
+    const final = finalizeLumiResponse({ taskText: task, responseText: result.text, toolRecords: result.toolCalls,
+      source: 'chat', requestId: 'capture-request', taskId: 'capture-task', flow: pipeline.turnIntent.flow });
+    expect(final.blocked).toBe(false);
+    expect(final.text).toContain(name);
   } finally { fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

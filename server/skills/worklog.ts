@@ -86,12 +86,30 @@ export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep
   const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b);
   let sawReader = false;
   let sawCalculation = false;
+  const bindInput = (value: unknown): { value: unknown; matched: boolean } => {
+    const match = [...outputs].reverse().find(output => same(output.value, value));
+    if (match) return { value: { $stepOutputRef: match.ref }, matched: true };
+    if (!value || typeof value !== 'object') return { value, matched: false };
+    const entries = Object.entries(value).map(([key, child]) => [key, bindInput(child)] as const);
+    return { value: Array.isArray(value) ? entries.map(([, child]) => child.value)
+      : Object.fromEntries(entries.map(([key, child]) => [key, child.value])),
+    matched: entries.some(([, child]) => child.matched) };
+  };
+  const addOutput = (ref: string, value: unknown, depth = 0): void => {
+    outputs.push({ ref, value, reader: false });
+    if (depth >= 6 || !value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      // Typed workflow paths use dot-separated safe property names only.
+      if (/^(?:[A-Za-z_][A-Za-z0-9_]*|\d+)$/.test(key)
+        && !['__proto__', 'constructor', 'prototype'].includes(key)) addOutput(`${ref}.${key}`, child, depth + 1);
+    }
+  };
   for (const [index, step] of steps.entries()) {
     const reader = /(?:^|[._])read(?:[._]|$)/i.test(step.name);
     if (step.name === 'code_execution') {
-      const match = [...outputs].reverse().find(output => same(output.value, step.args.input));
-      if (sawReader && !match) return null;
-      step.args.input = match ? { $stepOutputRef: match.ref } : { $inputRef: `inputs.step_${index + 1}_input` };
+      const bound = bindInput(step.args.input);
+      if (sawReader && !bound.matched) return null;
+      step.args.input = bound.matched ? bound.value : { $inputRef: `inputs.step_${index + 1}_input` };
       sawCalculation = true;
     } else if (sawCalculation && ['write_file', 'desktop_write_text_file'].includes(step.name)) {
       const key = 'content';
@@ -105,7 +123,7 @@ export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep
     try { value = JSON.parse(step.result); } catch { /* Plain-text readers return text. */ }
     outputs.push({ ref: `step_${index + 1}`, value, reader });
     if (step.name === 'code_execution' && value && typeof value === 'object' && 'output' in value) {
-      outputs.push({ ref: `step_${index + 1}.output`, value: (value as { output: unknown }).output, reader: false });
+      addOutput(`step_${index + 1}.output`, (value as { output: unknown }).output);
     }
   }
   return steps;

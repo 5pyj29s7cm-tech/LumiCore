@@ -2515,7 +2515,7 @@ async function runWithToolsInternal(
         || {};
       invocationBudget.started += 1;
       invocationBudget.lastTouchedAt = Date.now();
-      if (tc.name === 'capture_recent_workflow') recordWorkflowIfToolsUsed(executionLog, messages, config);
+      if (tc.name === 'capture_recent_workflow') recordWorkflowIfToolsUsed(executionLog, messages, config, primaryTask);
       const record = await executeToolCall({
         registry: toolRegistry,
         id: tc.id,
@@ -2696,8 +2696,13 @@ function recordWorkflowIfToolsUsed(
   executionLog: ToolExecutionRecord[],
   messages: NormalizedMessage[],
   config: Pick<LLMConfig, 'userId' | 'domain' | 'orgId' | 'conversationId' | 'source' | 'workflowSource'>,
+  routedTaskText?: string,
 ): void {
-  const businessRecords = executionLog.filter(record => !/^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$|list_directory$|(?:capture_recent|save|list|get|publish|delete|run)_workflow(?:s)?$)/u.test(record.name));
+  // Rehydrated ledger summaries are not complete replay data. Keep the
+  // original trace already observed in this process instead of replacing its
+  // code/results with lossy summaries on the next conversation turn.
+  const businessRecords = executionLog.filter(record => record.envelope
+    && !/^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$|list_directory$|(?:capture_recent|save|list|get|publish|delete|run)_workflow(?:s)?$)/u.test(record.name));
   if (businessRecords.length === 0) return;
   const rawContent = [...messages].reverse().find(message => {
     if (message.role !== 'user') return false;
@@ -2712,7 +2717,7 @@ function recordWorkflowIfToolsUsed(
     return !/^\s*Internal execution recovery\./i.test(content);
   })?.content || '';
   const userMsg = typeof rawContent === 'string' ? rawContent : Array.isArray(rawContent) ? rawContent.filter(c => c.type === 'text').map(c => (c as any).text).join(' ') : '';
-  const safeMsg = userMsg || '';
+  const safeMsg = routedTaskText || userMsg || '';
   if (!safeMsg.trim()) return;
   // Authoring/discovery turns must not replace the business trace that the
   // next capture request is trying to save.

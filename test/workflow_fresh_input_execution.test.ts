@@ -12,7 +12,8 @@ import { recordWorkflow } from '../server/skills/worklog';
 
 describe('one reviewed workflow with fresh input files', () => {
   beforeAll(async () => { await initDatabase(); });
-  it.each(['authored', 'captured'])('%s draft recomputes and writes through the real workflow executor on both runs', async mode => {
+  it.each(['authored', 'captured', 'captured_nested'])('%s draft recomputes and writes through the real workflow executor on both runs', async mode => {
+    const captured = mode.startsWith('captured'), nested = mode === 'captured_nested';
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-dynamic-workflow-'));
     const registry = new ToolRegistry();
     registerFileOpsTools(registry); registerCodeOpsTools(registry); registerWorkflowTools(registry);
@@ -29,14 +30,16 @@ describe('one reviewed workflow with fresh input files', () => {
           { tool: 'write_file', args: { path: { $inputRef: 'inputs.outputPath' }, content: { $stepOutputRef: 'step_2.output' } } },
         ],
       };
-      if (mode === 'captured') {
+      if (captured) {
         const seedPath = path.join(root, 'seed.csv'), seedOutput = path.join(root, 'seed-output.csv');
         fs.writeFileSync(seedPath, 'product,quantity,price\nblue-cup,3,18\n');
         const readArgs = { path: seedPath };
         const read = await registry.execute('read_file', readArgs, context);
-        const calcArgs = { code: definition.steps[1].args.code, input: read };
+        const calcArgs = { code: nested ? `(input => ({ csv: (${definition.steps[1].args.code}) }))(input.result)` : definition.steps[1].args.code,
+          input: nested ? { result: read } : read };
         const calculated = await registry.execute('code_execution', calcArgs, context);
-        const writeArgs = { path: seedOutput, content: JSON.parse(calculated).output };
+        const calculatedOutput = JSON.parse(calculated).output;
+        const writeArgs = { path: seedOutput, content: nested ? calculatedOutput.csv : calculatedOutput };
         const written = await registry.execute('write_file', writeArgs, context);
         recordWorkflow({ userId, conversationId: userId, taskId: userId, userIntent: definition.description,
           conversationExcerpt: '', toolSequence: [
@@ -45,8 +48,8 @@ describe('one reviewed workflow with fresh input files', () => {
             { name: 'write_file', args: writeArgs, result: written, resultSummary: '', verified: true, operation: 'mutate' },
           ] });
       }
-      const saved = JSON.parse(await registry.execute(mode === 'captured' ? 'capture_recent_workflow' : 'save_workflow',
-        mode === 'captured' ? { name } : definition, context));
+      const saved = JSON.parse(await registry.execute(captured ? 'capture_recent_workflow' : 'save_workflow',
+        captured ? { name } : definition, context));
       expect(saved.status).toBe('draft');
       const published = JSON.parse(await registry.execute('publish_workflow', { name, expectedHash: saved.hash }, context));
       expect(published.status).toBe('published');
@@ -54,7 +57,7 @@ describe('one reviewed workflow with fresh input files', () => {
         const sourcePath = path.join(root, `input-${quantity}.csv`), outputPath = path.join(root, `output-${quantity}.csv`);
         const original = `product,quantity,price\nblue-cup,${quantity},18\n`;
         fs.writeFileSync(sourcePath, original);
-        const inputs = mode === 'captured' ? { step_1_path: sourcePath, step_3_path: outputPath } : { sourcePath, outputPath };
+        const inputs = captured ? { step_1_path: sourcePath, step_3_path: outputPath } : { sourcePath, outputPath };
         const started = JSON.parse(await registry.execute('run_workflow', { name, inputs }, context));
         expect(started.status).toBe('started');
         let finished = false;

@@ -2976,6 +2976,13 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     return { text: formatCompactBlockedResponse(input, 'Missing verified skill/workflow lifecycle receipt.'),
       blocked: true, reason: 'Missing verified skill/workflow lifecycle receipt.' };
   }
+  if (composite.kind === 'skill_authoring') {
+    // The earlier business read is not the target of a draft-save component.
+    // A verified save owns this phase even if capture failed before authoring
+    // succeeded. Keep those failures in the audit trail, not in its verdict.
+    const draft = formatGroundedSkillDraft(input);
+    if (draft) return draft;
+  }
   const operationModeFacts = buildOperationModeMetaResponse({
     text: actionText,
     operationMode: input.flow?.operationMode,
