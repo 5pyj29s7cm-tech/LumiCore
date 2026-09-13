@@ -73,12 +73,12 @@ export function requestedArtifactFormatBlockReason(text: string, toolName: strin
 /** A local output is allowed while the explicitly preserved input stays read-only. */
 export function preservedSourceOutputScope(text: string): { sourceText: string; outputText: string } | null {
   // i18n-allow: input recognition for a preserved source and separately requested output.
-  const preserve = /(?:不修改|不要修改|不改动|不要改动|不覆盖|不要覆盖)(?:原|源)文件|(?:原|源)文件(?:不动|不变)|(?:保持|保留)(?:原|源)文件(?:原样|不变)|\b(?:do not|don't|without)\s+(?:modify|modifying|edit|editing|change|changing|overwrite|overwriting)\s+(?:the\s+)?(?:original|source)\s+file\b/iu;
+  const preserve = /(?:不修改|不要修改|不改动|不要改动|不覆盖|不要覆盖)(?:原|源)文件|(?:原|源)文件(?:不动|不变|不要(?:修改|改动|覆盖))|(?:保持|保留)(?:原|源)文件(?:原样|不变)|\b(?:do not|don't|without)\s+(?:modify|modifying|edit|editing|change|changing|overwrite|overwriting)\s+(?:the\s+)?(?:original|source)\s+file\b/iu;
   if (!preserve.test(text)) return null;
   // i18n-allow: an unscoped prohibition still forbids all file mutations.
   if (/(?:不修改|不要修改|禁止修改|不要创建|不要保存)(?:任何|所有|新)?文件|\b(?:do not|don't)\s+(?:create|save|modify)\s+(?:any|all)\s+files?\b/iu.test(text)) return null;
   // i18n-allow: only an affirmative output clause grants this narrow exception.
-  const output = /(?:另存(?:为)?|导出(?:为|到)?|保存(?:为|成)(?:一份)?(?:新|副本)|\b(?:save\s+(?:a\s+copy\s+)?as|export\s+(?:to|as))\b)/iu.exec(text);
+  const output = /(?:另存(?:为)?|导出(?:为|到)?|保存(?:为|成)(?=\s*(?:(?:一份)?(?:新|副本)|[A-Za-z]:[\\/]|\/))|\b(?:save\s+(?:a\s+copy\s+)?as|export\s+(?:to|as))\b)/iu.exec(text);
   if (!output) return null;
   // i18n-allow: a negated export does not authorize a local write.
   if (/(?:不要|别|不|禁止|无需)\s*$|\b(?:do not|don't|without)\s*$/iu.test(text.slice(Math.max(0, output.index - 24), output.index))) return null;

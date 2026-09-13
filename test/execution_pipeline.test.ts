@@ -6,6 +6,7 @@ import { ToolRegistry } from '../server/tools/registry';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { hasExplicitNoToolInstruction } from '../server/cognition/tool_intent';
+import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
 
 beforeAll(async () => {
   const { initDatabase } = await import('../db_layer');
@@ -19,6 +20,32 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it.each(['chat', 'voice'] as const)('keeps the unfinished execute-and-capture plan through detailed %s resumption', channel => {
+    const goal = '请读取 C:/Users/Administrator/Documents/input-4.csv，按数量乘单价增加 total 列，保存为 C:/Users/Administrator/Documents/output-4.csv。然后把完整的读取、计算、写文件流程保存为可复用工作流草稿。源文件不要改动。';
+    const policy = { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: ['send_email'], maxIterations: 10 };
+    const state = { version: 2, taskId: 'task-compound-resume', goal, status: 'blocked', unfinished: true,
+      sourcePaths: [], toolSummaries: [], evidenceTools: [], policySnapshot: policy, updatedAt: new Date().toISOString() } as any;
+    for (const text of [goal, '继续完成刚才未完成的任务。先完成 input-4.csv 的金额计算和 output-4.csv 的输出，再保存刚才要求的工作流草稿。不要改动源文件。']) {
+      const continuationContext = text === goal ? '' : buildRecentActionContinuationBridge(text, [], state);
+      const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'compound-resume', channel, source: channel,
+        operationMode: 'assistant', text, continuationContext, targetIsLumi: true }, registry: createRegistry(),
+        actionTaskState: text === goal ? undefined : state, personalityToolPolicy: policy });
+      expect(pipeline.executionRequested).toBe(true);
+      expect(pipeline.turnIntent.flow.routeText).toContain(goal);
+      for (const name of ['read_file', 'code_execution', 'write_file', 'capture_recent_workflow']) {
+        expect(pipeline.authorizationPolicy.forbiddenTools, name).not.toContain(name);
+        expect(pipeline.modelToolProjection.toolNames, name).toContain(name);
+      }
+      expect(pipeline.authorizationPolicy.forbiddenTools).toContain('send_email');
+      expect(pipeline.authorizationPolicy.forbiddenTools).toContain('publish_workflow');
+    }
+    const denial = '继续完成刚才未完成的任务。现在不要创建任何文件，不要保存工作流。只解释剩余步骤。';
+    const blocked = buildLumiExecutionPipeline({ dispatch: { userId: 'compound-resume', channel, source: channel,
+      operationMode: 'assistant', text: denial, continuationContext: buildRecentActionContinuationBridge(denial, [], state), targetIsLumi: true },
+      registry: createRegistry(), actionTaskState: state, personalityToolPolicy: policy });
+    expect(blocked.authorizationPolicy.forbiddenTools).toContain('write_file');
+    expect(blocked.authorizationPolicy.forbiddenTools).toContain('capture_recent_workflow');
+  });
   it.each(['chat', 'voice'] as const)('does not open %s execution for a memory question with forbidden search', channel => {
     const text = '你还记得岚桥记忆复核项目的专用标记和资料盒位置吗？如果没有已保存的记忆，请直接说不知道，不要猜测或搜索聊天记录。';
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'memory-lookup-only', channel,

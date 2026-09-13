@@ -69,6 +69,7 @@ function compact(value: unknown, limit = 200): string {
 
 export function modelRoutingErrorReason(error: unknown): string {
   if ((error as any)?.code === 'MODEL_TOOL_ARGUMENTS_INVALID') return 'invalid_tool_arguments';
+  if ((error as any)?.name === 'LocalModelContextBudgetError') return 'local_context_budget_exceeded';
   const message = compact((error as any)?.message || error, 500).toLowerCase();
   if (!message) return 'unknown_error';
   if (/abort|cancel/.test(message)) return 'cancelled';

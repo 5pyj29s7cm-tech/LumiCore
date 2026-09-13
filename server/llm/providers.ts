@@ -11,6 +11,7 @@ import { getUserPreferredVision } from './vision_preferences';
 import { getUserPreferredWorldModel } from './world_preferences';
 import { ensureLocalModelReady, getLocalModelConfig, runLocalModelInference, type LocalModelProvider } from './local_models';
 import { prepareLocalModelRequest } from './local_context_budget';
+import { loadedLocalContextTokens } from './local_model_capacity';
 import {
   modelRoutingErrorDigest,
   modelRoutingErrorReason,
@@ -1378,6 +1379,7 @@ export async function makeLLMCallDirect(
           maxTokens,
           compactToolDeclarations: true,
           requiredToolNames: config.localRequiredToolNames,
+          contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
         })
       : null;
     const params: any = fmt({
@@ -1955,6 +1957,7 @@ export async function makeLLMCallStreamingDirect(
           maxTokens,
           compactToolDeclarations: true,
           requiredToolNames: config.localRequiredToolNames,
+          contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
         })
       : null;
     const params: any = fmt({
