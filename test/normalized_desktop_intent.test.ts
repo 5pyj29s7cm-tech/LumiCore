@@ -26,7 +26,7 @@ describe('normalized desktop intent priority', () => {
       });
     },
   );
-  it.each(['https://example.com/orders.xlsx', 'relative/reports/orders.xlsx'])(
+  it.each(['https://example.com/orders.xlsx', 'relative/reports/orders.xlsx', '~/Desktop/orders.xlsx'])(
     'does not promote a URL or relative path into an absolute output: %s', output => {
       expect(normalizeActionIntent(`Create ${output}.`).target).not.toMatch(/^\//);
     },
