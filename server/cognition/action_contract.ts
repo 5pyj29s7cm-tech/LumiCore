@@ -1,5 +1,6 @@
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
-import { isExternalCliRequest } from './external_cli_intent';
+import { classifyExternalCliIntent, isExternalCliDelegation, requestedCliProviders } from './external_cli_intent';
+import { verifiedExternalCliStatus } from './external_cli_status';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
@@ -55,6 +56,7 @@ export type LumiActionContractKind =
   | 'work_task'
   | 'external_ai_history'
   | 'external_ai_request'
+  | 'external_cli_status'
   | 'extension_registry'
   | 'legal_document'
   | 'desktop_operation'
@@ -97,6 +99,7 @@ const ACTION_CAPABILITY_REQUIREMENTS: Partial<Record<LumiActionContractKind, Act
   work_task: [{ lanes: ['agents'], operations: ['create', 'observe', 'mutate'], terms: ['persistent', 'task', 'takeover', 'ledger', 'workflow'] }],
   external_ai_history: [{ lanes: ['agents'], operations: ['observe', 'create', 'mutate'], terms: ['external', 'ai', 'history', 'conversation', 'sync', 'authorization'] }],
   external_ai_request: [{ lanes: ['web', 'desktop'], operations: ['communicate', 'observe'], terms: ['external', 'ai', 'tool', 'answer', 'target'] }],
+  external_cli_status: [{ lanes: ['agents'], operations: ['observe'], terms: ['external', 'cli', 'status'] }],
   extension_registry: [{ lanes: ['system'], operations: ['observe', 'test', 'mutate'], terms: ['extension', 'registry', 'provider', 'plugin', 'compatibility', 'rollback'] }],
   legal_document: [{ lanes: ['industry', 'web', 'office'], terms: ['legal', 'law', 'case', 'citation', 'court', 'document'] }],
   desktop_operation: [{ lanes: ['desktop'], operations: ['observe', 'mutate', 'test'], terms: ['desktop', 'window', 'application', 'native', 'screen', 'open'] }],
@@ -1004,7 +1007,16 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(withoutNegatedLookupClauses(rawInput));
   if (!text) return NONE_CONTRACT;
-  if (isExternalCliRequest(text)) {
+  if (classifyExternalCliIntent(text) === 'inspect') {
+    return withDefaults({ kind: 'external_cli_status', label: 'External CLI availability check',
+      coreAction: 'Inspect the named local CLI installation and login/configuration; answer the capability question from that receipt.',
+      preparationIsNotCompletion: ['An unverified claim about the local installation'],
+      requiredEvidence: ['Verified current-turn external_cli_status receipt containing every requested provider'],
+      preferredTools: ['external_cli_status'], verificationTools: ['external_cli_status'],
+      nextStep: 'Report installed/readiness facts directly. No project directory or CLI task is required for this question.',
+      caution: 'A successful status check can report an unavailable CLI. It does not verify model quota or task execution.' });
+  }
+  if (isExternalCliDelegation(text)) {
     return withDefaults({ kind: 'external_ai_request', label: 'External CLI task',
       coreAction: 'Delegate the bounded task to the named CLI within the existing Lumi task and verify its returned result.',
       preparationIsNotCompletion: ['CLI installed', 'CLI authenticated', 'process started', 'provider text without terminal success'],
@@ -3458,15 +3470,20 @@ export function hasCoreActionEvidence(
     if (!hasRequestedArtifactPostWriteReadback(current, taskText)) return false;
     return current.some(record => isArtifactProducerRecord(record) && matchesRequestedArtifactOutput(taskText, artifactPathFromRecord(record)));
   }
+  if (contract.kind === 'external_cli_status') return verifiedExternalCliStatus(taskText, records, currentTurn) !== null;
   if (contract.kind === 'external_ai_request') {
-    if (isExternalCliRequest(taskText)) {
-      return successful.some(record => {
-        const payload = parseRecordJson(record);
-        return record.name === 'external_cli_run' && record.terminalVerification?.status === 'verified'
-          && artifactRecordMatchesTurn(record, currentTurn || {}) && payload?.ok === true
-          && payload.status === 'completed' && payload.exitCode === 0 && Boolean(compact(payload.response))
-          && Boolean(payload.runId) && ['codex', 'claude'].includes(payload.provider);
-      });
+    if (isExternalCliDelegation(taskText)) {
+      const requested = requestedCliProviders(taskText);
+      const providers = requested.length ? requested : ['codex', 'claude'];
+      const completed = (provider: string) =>
+        successful.some(record => {
+          const payload = parseRecordJson(record);
+          return record.name === 'external_cli_run' && record.terminalVerification?.status === 'verified'
+            && artifactRecordMatchesTurn(record, currentTurn || {}) && payload?.ok === true
+            && payload.status === 'completed' && payload.exitCode === 0 && Boolean(compact(payload.response))
+            && Boolean(payload.runId) && payload.provider === provider;
+        });
+      return requested.length ? providers.every(completed) : providers.some(completed);
     }
     const hasSubmission = successful.some(record => {
       const payload = parseRecordJson(record);

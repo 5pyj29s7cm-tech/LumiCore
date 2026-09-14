@@ -9,7 +9,7 @@ import { buildToolExecutionEnvelope, toolRecordIdempotencyKey } from './executio
 import { inspectExternalCommitAttempt, settleExternalCommitAttempt } from './external_commit_journal';
 import { isToolLifecyclePersistenceFailure } from './lifecycle_persistence_error';
 import { archiveGeneratedOutputs } from '../files/generated_archive';
-import { isExternalCliRequest } from '../cognition/external_cli_intent';
+import { isExternalCliDelegation } from '../cognition/external_cli_intent';
 import {
   guardTaskTargetToolCall,
   isFileTargetTask,
@@ -556,7 +556,7 @@ export async function executeToolCall(
         ),
         externalCliDelegation: semanticToolName === 'external_cli_run'
           && capability?.source === 'builtin' && capability.capabilityId === 'external-agent.cli.run'
-          && isExternalCliRequest(targetPolicyTaskText),
+          && isExternalCliDelegation(targetPolicyTaskText),
       })
     : { allowed: true, reason: '' };
   const targetPreflight: ToolExecutionPreflightResult = !callerPreflight.allowed

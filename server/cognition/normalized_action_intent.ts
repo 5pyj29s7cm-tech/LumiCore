@@ -1,5 +1,6 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
+import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 
 /** Read/search verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
@@ -1017,6 +1018,11 @@ export function compositeNavigationInstructions(value: string): Array<{ text: st
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
+  if (classifyExternalCliIntent(text) === 'inspect') return {
+    ...EMPTY_INTENT, kind: 'status_query', operation: 'status', subject: 'external_cli',
+    target: requestedCliProviders(text).join(','), relation: 'new', confidence: 0.96,
+    rule: 'external-cli-availability',
+  };
   const correctedInstruction = extractActionableCorrectionInstruction(text);
   if (correctedInstruction) {
     const corrected = normalizeActionIntent(correctedInstruction);

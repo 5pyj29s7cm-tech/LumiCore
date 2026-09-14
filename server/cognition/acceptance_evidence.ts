@@ -13,6 +13,7 @@ import {
   toolRecordTerminalPayload,
 } from '../tools/receipt_payload';
 import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
+import { isExternalCliRequest } from './external_cli_intent';
 import { normalizeActionIntent } from './normalized_action_intent';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 
@@ -440,7 +441,7 @@ export function buildForegroundTaskCompletionFeedback(input: {
     };
   }
   if (records.length === 0 && !input.blocked && !input.status) return undefined;
-  const contract = buildActionEvidenceContract(label);
+  const contract = buildActionEvidenceContract(input.taskLabel);
   // Runtime task control has a single exact ledger contract. Do not allow a
   // successful file/process observation to promote a failed cancellation or
   // status probe into completed foreground feedback. Broader action kinds are
@@ -452,8 +453,8 @@ export function buildForegroundTaskCompletionFeedback(input: {
     && record.terminalVerification?.status === 'verified'
     && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error)
   ));
-  const missingRequestedActionEvidence = missingMediaEvidence || (contract.kind === 'task_control'
-    && !hasCoreActionEvidence(contract, records, label));
+  const missingRequestedActionEvidence = missingMediaEvidence || ((contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
+    && !hasCoreActionEvidence(contract, records, input.taskLabel, undefined, { taskId: input.taskId }));
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
     : input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence

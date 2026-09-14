@@ -14,7 +14,7 @@ import {
   type ModelAttemptTimeouts,
 } from './providers';
 import { recordTokenUsage } from './token_tracker';
-import { recordWorkflow, WorkflowStep } from '../skills/worklog';
+import { recordWorkflow, WorkflowStep, isWorkflowBusinessTool } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence, type CompletionGuardResult } from '../work_product/completion_guard';
 import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from '../cognition/desktop_completion_review';
@@ -2711,8 +2711,7 @@ function recordWorkflowIfToolsUsed(
   // Rehydrated ledger summaries are not complete replay data. Keep the
   // original trace already observed in this process instead of replacing its
   // code/results with lossy summaries on the next conversation turn.
-  const businessRecords = executionLog.filter(record => record.envelope
-    && !/^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$|list_directory$|(?:capture_recent|save|list|get|publish|delete|run)_workflow(?:s)?$)/u.test(record.name));
+  const businessRecords = executionLog.filter(record => record.envelope && isWorkflowBusinessTool(record.name));
   if (businessRecords.length === 0) return;
   const rawContent = [...messages].reverse().find(message => {
     if (message.role !== 'user') return false;

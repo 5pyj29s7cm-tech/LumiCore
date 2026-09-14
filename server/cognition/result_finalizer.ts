@@ -1,3 +1,4 @@
+import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
 import fs from 'node:fs';
 import { hasImmediateExecutionPromise } from './execution_claims';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
@@ -2885,6 +2886,8 @@ export function tryFinalizeVerifiedBoundedAction(
   const records = coalesceToolExecutionRecords(input.toolRecords || [])
     .filter(record => recordMatchesCurrentTurnIdentity(input, record));
   const scopedInput = { ...input, toolRecords: records, responseText: '' };
+  const cliStatus = verifiedExternalCliStatus(task, records, input);
+  if (cliStatus) return { text: formatExternalCliStatus(task, cliStatus), blocked: false, reason: 'verified_external_cli_status' };
   // The same verified-media projection owns both loop termination and channel
   // delivery. A complete generation needs no second model call; compound
   // publication/delivery tasks and missing artifacts still fail this check.
@@ -2966,6 +2969,12 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       blocked: !verified, reason: verified ? 'verified_media_pause' : 'media_pause_unconfirmed' };
   }
   const composite = taskActionContract(input);
+  if (composite.kind === 'external_cli_status') {
+    const status = verifiedExternalCliStatus(actionText, input.toolRecords || [], input);
+    return status ? { text: formatExternalCliStatus(actionText, status), blocked: false, reason: 'verified_external_cli_status' }
+      : { text: isChineseText(actionText) ? '这次没能确认本机 CLI 的状态，暂时不能判断它是否可用。' : 'The local CLI status could not be verified.',
+        blocked: true, reason: 'Missing verified current-turn external CLI status.' };
+  }
   if (composite.components?.length) {
     const outcomes = composite.components.map(component => {
       const verified = hasResultCoreActionEvidence(input, component.contract, input.toolRecords || [], component.text);

@@ -35,6 +35,11 @@ export interface WorkflowRecord {
 const recentWorkflows: WorkflowRecord[] = [];
 const MAX_WORKFLOWS = 50;
 
+/** Metadata probes are useful evidence, but do not constitute a reusable job. */
+export function isWorkflowBusinessTool(name: string): boolean {
+  return !/^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|external_cli_(?:status|get_run)$|extension_registry_list$|list_directory$|(?:capture_recent|save|list|get|publish|delete|run)_workflow(?:s)?$)/u.test(name);
+}
+
 function generateId(): string {
   return `wf_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 }
@@ -47,7 +52,7 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
     && item.orgId === (record.domain === 'work' ? (record.orgId || '') : '')) : -1;
   const previous = previousIndex >= 0 ? recentWorkflows[previousIndex] : undefined;
   const merged = new Map<string, WorkflowStep>();
-  for (const step of [...(previous?.toolSequence || []), ...record.toolSequence]) {
+  for (const step of [...(previous?.toolSequence || []), ...record.toolSequence].filter(step => isWorkflowBusinessTool(step.name))) {
     const key = toolRecordIdempotencyKey({ name: step.name, arguments: step.args, result: '' });
     merged.set(key, step);
   }
@@ -60,6 +65,7 @@ export function recordWorkflow(record: Omit<WorkflowRecord, 'id' | 'timestamp'>)
     orgId: record.domain === 'work' ? (record.orgId || '') : '',
     timestamp: new Date().toISOString(),
   };
+  if (!entry.toolSequence.length) return entry;
   if (previousIndex >= 0) recentWorkflows.splice(previousIndex, 1);
   recentWorkflows.push(entry);
   if (recentWorkflows.length > MAX_WORKFLOWS) {
@@ -134,7 +140,7 @@ export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep
 export function workflowCaptureBlocker(record: WorkflowRecord): string | null {
   if (!record.conversationId || !record.taskId) return 'The trace has no verified conversation/task identity. Perform the workflow in this conversation first.';
   if (!record.toolSequence.length || record.toolSequence.some(step => step.verified !== true)) return 'The trace contains failed or unverified actions and cannot be captured as a reusable workflow.';
-  if (record.toolSequence.every(step => /^(?:client_|list_skills$|skill_marketplace_|self_extension_plan$|capability_|external_control_candidates$|extension_registry_list$)/.test(step.name))) return 'Capability discovery alone is not a completed business workflow.';
+  if (record.toolSequence.every(step => !isWorkflowBusinessTool(step.name))) return 'Capability discovery alone is not a completed business workflow.';
   const bound = boundCapturedWorkflowSteps(record);
   if (!bound) return 'The trace has a dataflow gap: calculation input or written content does not match a complete earlier tool result. Include parsing and transformation in executable code; do not replace a reader result with model-retyped rows. Author the missing step with save_workflow.';
   return workflowTransformationBlocker(record.userIntent, bound);

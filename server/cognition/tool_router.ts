@@ -1,5 +1,5 @@
 import { ToolPolicy } from '../personality/types';
-import { isExternalCliRequest } from './external_cli_intent';
+import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   ToolRegistry,
@@ -476,7 +476,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     priorities.push('mcp_cad-drafting_autocad_playback_file');
   }
   if (isExternalCliRequest(instructionText)) {
-    priorities.push('external_cli_run', 'external_cli_status', 'external_cli_get_run');
+    priorities.push(...externalCliToolsForIntent(instructionText));
   } else if (isDesktopAiRequest(instructionText)) {
     priorities.push(
       'desktop_ai_ask',
@@ -1207,7 +1207,10 @@ export function routeToolsForTurn(
   }
 
   if (isExternalCliRequest(instructionText)) {
-    for (const name of ['external_cli_run', 'external_cli_status', 'external_cli_get_run']) addIfAvailable(selected, available, name);
+    for (const name of externalCliToolsForIntent(instructionText)) addIfAvailable(selected, available, name);
+    if (classifyExternalCliIntent(instructionText) === 'inspect') {
+      for (const name of ['external_cli_run', 'external_cli_get_run']) { selected.delete(name); forbiddenToolNames.add(name); }
+    }
     for (const name of ['desktop_ai_ask', 'desktop_ai_collect_answer', 'computer_use']) {
       selected.delete(name); forbiddenToolNames.add(name);
     }

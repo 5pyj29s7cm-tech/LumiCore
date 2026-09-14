@@ -6,7 +6,7 @@ import type { ToolContext } from '../tools/types';
 import { getDataPath, getGeneratedOutputDir } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { requireNotStrict } from '../config/privacy';
-import { isExternalCliRequest } from '../cognition/external_cli_intent';
+import { classifyExternalCliIntent, isExternalCliDelegation } from '../cognition/external_cli_intent';
 import { runCliProcess, type CliProcessInput, type CliProcessResult } from './cli_process';
 
 export type ExternalCliProvider = 'codex' | 'claude';
@@ -192,7 +192,10 @@ export async function executeExternalCli(args: Record<string, any>, context?: To
   if (!prompt || prompt.length > 48000) throw new Error('Provide a non-empty, bounded task prompt (maximum 48000 characters).');
   const prior = args.resumeRunId ? loadRun(String(args.resumeRunId), context) : undefined;
   const intent = context.routedTaskText || context.actionIntent || '';
-  if (!isExternalCliRequest(intent) && !(prior && context.trustedActionContinuation)) throw new Error('The user has not requested external CLI delegation for this task.');
+  if (!isExternalCliDelegation(intent)
+    && !(prior && context.trustedActionContinuation && classifyExternalCliIntent(intent) === 'none')) {
+    throw new Error('The user has not requested external CLI delegation for this task.');
+  }
   const namedProviders = ['codex', 'claude'].filter(name => new RegExp(name, 'i').test(intent));
   if (namedProviders.length === 1 && namedProviders[0] !== provider) throw new Error('The CLI provider must match the provider requested by the user.');
   if (prior && (prior.provider !== provider || !prior.sessionId || ['running', 'interrupted'].includes(prior.status))) throw new Error('This run cannot be resumed: provider/session mismatch or prior execution has not settled.');

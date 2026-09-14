@@ -1,5 +1,5 @@
 import type { LumiExecutionDecision } from './execution_decision';
-import { isExternalCliRequest } from './external_cli_intent';
+import { isExternalCliRequest, classifyExternalCliIntent } from './external_cli_intent';
 import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
@@ -622,6 +622,7 @@ function laneRule(
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
       if (isExternalCliRequest(text)) {
+        if (classifyExternalCliIntent(text) === 'inspect') return 'Use only external_cli_status to check the named local CLI. This is an availability question, not permission to delegate a task. Report the returned installation/login/configuration facts; do not request a project directory or claim model quota was checked.';
         return 'Use external_cli_status and external_cli_run for the named Codex/Claude CLI. Keep the existing Lumi task as owner. Pass necessary task context and an explicit project directory; resume only the Lumi runId in its receipt. Use the same CLI for follow-ups, preserve progress and cancellation, and verify its output before claiming success. Do not open a desktop AI chat window or create another task pipeline.';
       }
       if (buildActionContract(text).kind === 'external_ai_history') {

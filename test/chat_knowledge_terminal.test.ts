@@ -36,6 +36,7 @@ import { guardCompletionClaims } from '../server/work_product/completion_guard';
 import { buildForegroundTaskCompletionFeedback } from '../server/cognition/acceptance_evidence';
 import { recoverBlockedExecutionOnce } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
+import { getRecentWorkflows } from '../server/skills/worklog';
 
 const task = '查看一下知识库的文件';
 function statsRecord(overrides: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
@@ -175,6 +176,32 @@ describe('real Socket + adapter + knowledge handler + durable task', () => {
     await flushDBOrThrow();
     return { requestId, response };
   }
+
+  it('answers a CLI capability question once and persists the same completed inspection without learning a skill', async () => {
+    requestedTool = 'external_cli_status';
+    modelCalls.length = 0;
+    const tool = toolRegistry.get(requestedTool)!;
+    const handler = vi.spyOn(tool, 'handler').mockResolvedValue(JSON.stringify({ ok: true, status: 'completed', targets: [
+      { provider: 'codex', installed: true, ready: true, status: 'ready', version: 'codex-cli 0.154.0' },
+      { provider: 'claude', installed: true, ready: true, status: 'ready', version: '2.1.234' },
+    ] }));
+    try {
+      const text = '你能控制codexcli吗';
+      const { requestId, response } = await query(text);
+      expect(response).toMatchObject({ finalized: true, blocked: false, completionFeedback: { status: 'completed' } });
+      expect(response.text).toContain('0.154.0');
+      expect(response.text).not.toContain('没有完成');
+      expect(modelCalls).toHaveLength(1);
+      expect(modelCalls[0]).toContain('external_cli_status');
+      expect(modelCalls[0]).not.toContain('external_cli_run');
+      const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === requestId);
+      const task = readDB().conversationActionTasks.find((row: any) => row.id === turn?.taskId);
+      expect(task).toMatchObject({ goal: text, operation: 'status', status: 'completed' });
+      const assistant = readDB().interactions.find((row: any) => row.requestId === requestId && row.role === 'assistant');
+      expect(assistant?.message).toBe(response.text);
+      expect(getRecentWorkflows(userId).some(workflow => workflow.taskId === turn?.taskId)).toBe(false);
+    } finally { handler.mockRestore(); }
+  });
 
   it('keeps the user CAD instruction executable when reference data contains non-execution wording', async () => {
     requestedTool = 'floorplan_extract_geometry';
