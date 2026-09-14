@@ -33,6 +33,7 @@ export function isStoredMemoryRecallQuestion(value: string): boolean {
 
 export type NormalizedActionIntentKind =
   | 'none'
+  | 'external_cli_status'
   | 'external_ai_history'
   | 'messaging_read'
   | 'messaging_send'
@@ -1018,8 +1019,10 @@ export function compositeNavigationInstructions(value: string): Array<{ text: st
 export function normalizeActionIntent(value: string): NormalizedActionIntent {
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
+  // A fresh local observation is work. `status_query` means explaining saved
+  // task evidence and intentionally disables new tools on follow-up turns.
   if (classifyExternalCliIntent(text) === 'inspect') return {
-    ...EMPTY_INTENT, kind: 'status_query', operation: 'status', subject: 'external_cli',
+    ...EMPTY_INTENT, kind: 'external_cli_status', operation: 'read', subject: 'external_cli',
     target: requestedCliProviders(text).join(','), relation: 'new', confidence: 0.96,
     rule: 'external-cli-availability',
   };

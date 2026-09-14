@@ -4,6 +4,8 @@ import { classifyExternalCliIntent } from '../server/cognition/external_cli_inte
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
+import { hasExplicitToolIntent } from '../server/cognition/tool_intent';
+import { classifyRecentActionFollowupIntent } from '../server/cognition/action_continuation';
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from '../server/cognition/result_finalizer';
 import { recordsToTaskReceipts, taskCompletionFromReceipts } from '../server/cognition/task_execution_ledger';
 import { buildForegroundTaskCompletionFeedback } from '../server/cognition/acceptance_evidence';
@@ -25,7 +27,9 @@ const tools = ['external_cli_run', 'external_cli_status', 'external_cli_get_run'
 describe('CLI inquiry versus delegation', () => {
   it.each([task, '你能运行 Codex CLI 吗？', 'Can you run Codex CLI?', '检查 Codex CLI 是否安装', '查看 Claude Code 的运行状态', 'Codex CLI 和 Claude Code CLI 能用吗'])('checks local status without exposing submission: %s', text => {
     expect(classifyExternalCliIntent(text)).toBe('inspect');
-    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'status_query', operation: 'status', sideEffectClass: 'none' });
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'external_cli_status', operation: 'read', sideEffectClass: 'none' });
+    expect(hasExplicitToolIntent(text)).toBe(true);
+    expect(classifyRecentActionFollowupIntent(text)).toBe('none');
     const route = routeToolsForTurn(text, tools);
     expect(route.toolNames).toContain('external_cli_status');
     expect(route.toolNames).not.toContain('external_cli_run');

@@ -177,7 +177,7 @@ describe('real Socket + adapter + knowledge handler + durable task', () => {
     return { requestId, response };
   }
 
-  it('answers a CLI capability question once and persists the same completed inspection without learning a skill', async () => {
+  it.each(['你能控制codexcli吗', '检查一下 Claude Code CLI 的安装和登录状态'])('performs a fresh CLI inspection after prior conversation: %s', async text => {
     requestedTool = 'external_cli_status';
     modelCalls.length = 0;
     const tool = toolRegistry.get(requestedTool)!;
@@ -186,17 +186,16 @@ describe('real Socket + adapter + knowledge handler + durable task', () => {
       { provider: 'claude', installed: true, ready: true, status: 'ready', version: '2.1.234' },
     ] }));
     try {
-      const text = '你能控制codexcli吗';
       const { requestId, response } = await query(text);
       expect(response).toMatchObject({ finalized: true, blocked: false, completionFeedback: { status: 'completed' } });
-      expect(response.text).toContain('0.154.0');
+      expect(response.text).toContain(text.includes('Claude') ? '2.1.234' : '0.154.0');
       expect(response.text).not.toContain('没有完成');
       expect(modelCalls).toHaveLength(1);
       expect(modelCalls[0]).toContain('external_cli_status');
       expect(modelCalls[0]).not.toContain('external_cli_run');
       const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === requestId);
       const task = readDB().conversationActionTasks.find((row: any) => row.id === turn?.taskId);
-      expect(task).toMatchObject({ goal: text, operation: 'status', status: 'completed' });
+      expect(task).toMatchObject({ goal: text, operation: 'read', status: 'completed' });
       const assistant = readDB().interactions.find((row: any) => row.requestId === requestId && row.role === 'assistant');
       expect(assistant?.message).toBe(response.text);
       expect(getRecentWorkflows(userId).some(workflow => workflow.taskId === turn?.taskId)).toBe(false);

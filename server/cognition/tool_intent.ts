@@ -117,6 +117,7 @@ function canonicalIntentOwnsNonClientAction(
   if (kind === 'desktop_operation') return EXTERNAL_APP_CONTEXT.test(text);
   return [
     'external_ai_history',
+    'external_cli_status',
     'messaging_read',
     'messaging_send',
     'public_publish',
@@ -470,6 +471,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
+  if (isExternalCliRequest(normalized)) return true;
   if (isVideoPlaybackRequest(normalized)) return true;
   if (isExternalAiHistoryActionRequest(normalized)) return true;
   const canonical = normalizeActionIntent(normalized);
@@ -479,7 +481,6 @@ export function hasExplicitToolIntent(text: string): boolean {
   if (canonical.kind === 'media_generation') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
-  if (isExternalCliRequest(normalized)) return true;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
