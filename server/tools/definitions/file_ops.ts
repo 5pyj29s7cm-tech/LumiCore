@@ -54,7 +54,7 @@ function resolveWritePath(inputPath: string, context?: ToolContext, args: Record
 function resolveSafePath(userPath: string, cwd?: string): string {
   const base = cwd || process.cwd();
   const expanded = userPath === '~' ? os.homedir()
-    : /^~[/\\]/.test(userPath) ? path.join(os.homedir(), userPath.slice(2)) : userPath;
+    : /^~[/\\]/.test(userPath) ? path.join(os.homedir(), ...userPath.slice(2).split(/[/\\]/)) : userPath;
   const resolved = path.resolve(base, expanded);
   const normalized = path.normalize(resolved);
 

@@ -111,6 +111,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
       'C:\\Windows\\Fonts\\simhei.ttf',
       'C:\\Windows\\Fonts\\simsunb.ttf',
       '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf',
+      '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
       '/Library/Fonts/Arial Unicode.ttf',
     ];
     let fontLoaded = false;

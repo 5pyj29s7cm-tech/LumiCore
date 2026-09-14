@@ -25,6 +25,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install media and CJK PDF test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-droid-fallback
       - name: Lint and type-check
         run: npm run lint
       - name: Run complete Vitest suite

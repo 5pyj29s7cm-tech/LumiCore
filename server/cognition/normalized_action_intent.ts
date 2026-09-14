@@ -223,6 +223,12 @@ function explicitArtifactPath(text: string): string {
     /([A-Za-z]:[\\/][^\r\n"'<>|?*]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"])/iu,
   )?.[1];
   if (absolute) return trimSlot(absolute);
+  // POSIX paths use the same filename boundary as Windows paths. A slash in
+  // a URL or a relative path must not become a local output authorization.
+  const posix = text.match(
+    /(?<![\p{L}\p{N}_.:/\\-])(\/[^\r\n"'<>|?*，,。；;！？]+?\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf))(?=$|[\s.,，。;；:：!！?？)）\]}'"])/iu,
+  )?.[1]; // i18n-allow: multilingual punctuation at a concrete filesystem path boundary.
+  if (posix) return trimSlot(posix);
   return relativeArtifactPath(text);
 }
 

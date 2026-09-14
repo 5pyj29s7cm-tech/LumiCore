@@ -108,7 +108,9 @@ export async function makeApp(): Promise<{
     url: `http://127.0.0.1:${port}`,
     cleanup: () => {
       server.close();
-      cleanupTempRoot();
+      // The shared afterAll hook closes and flushes SQLite before deleting the
+      // directory. POSIX permits unlinking an open database, which would make
+      // the later flush fail with SQLITE_READONLY (Windows just keeps it locked).
     },
   };
 }

@@ -19,6 +19,18 @@ import {
 } from '../server/cognition/quick_commands';
 
 describe('normalized desktop intent priority', () => {
+  it.each(['/tmp/lumi-output/orders.xlsx', '/Users/test-user/My Documents/orders.xlsx'])(
+    'retains the complete POSIX path in a concrete creation request: %s', output => {
+      expect(normalizeActionIntent(`新建 ${output}，只有一个工作表。`)).toMatchObject({
+        operation: 'create', sideEffectClass: 'local_write', target: output,
+      });
+    },
+  );
+  it.each(['https://example.com/orders.xlsx', 'relative/reports/orders.xlsx'])(
+    'does not promote a URL or relative path into an absolute output: %s', output => {
+      expect(normalizeActionIntent(`Create ${output}.`).target).not.toMatch(/^\//);
+    },
+  );
   it.each([
     '重新说',
     '再说一遍',
