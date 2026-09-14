@@ -1,4 +1,5 @@
 import type { LumiExecutionDecision } from './execution_decision';
+import { isExternalCliRequest } from './external_cli_intent';
 import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
@@ -380,6 +381,9 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
   ];
   const actionContract = buildActionContract(text);
 
+  if (input.execution.allowToolUse && isExternalCliRequest(text) && routeHasTool(input, /^external_cli_/)) {
+    return { lane: 'external_tool', primary: 'external CLI task delegation', reasons: [...reasons, 'the named CLI returns structured progress and receipts to the existing Lumi task'] };
+  }
   if (input.dispatch.boundary === 'client_action' && actionContract.kind !== 'external_ai_history') {
     return {
       lane: 'client_surface',
@@ -617,6 +621,9 @@ function laneRule(
     case 'web_or_account':
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
+      if (isExternalCliRequest(text)) {
+        return 'Use external_cli_status and external_cli_run for the named Codex/Claude CLI. Keep the existing Lumi task as owner. Pass necessary task context and an explicit project directory; resume only the Lumi runId in its receipt. Use the same CLI for follow-ups, preserve progress and cancellation, and verify its output before claiming success. Do not open a desktop AI chat window or create another task pipeline.';
+      }
       if (buildActionContract(text).kind === 'external_ai_history') {
         return 'Use only external_ai_history_* tools. Reuse an exact confirmed source, enforce its conversation/content/attachment scopes, persist every page cursor and source receipt, and query the local synchronized archive. Never submit a new prompt. If only desktop-visible access exists, prefer a healthy local vision model, capture the current viewport without scrolling, and report partial_visible completeness.';
       }

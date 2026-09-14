@@ -389,6 +389,8 @@ export function isToolNameAllowedByPolicy(toolName: string, policy?: ToolPolicy)
 }
 
 export function getToolExecutionTimeoutMs(name: string): number {
+  if (name === 'external_cli_run') return 16 * 60_000;
+  if (name === 'external_cli_status') return 60_000;
   if (name === 'computer_use') return 10 * 60_000;
   if (name === 'generate_video') return 15 * 60_000;
   if (name === 'generate_image' || name === 'generate_image_dalle' || name === 'ai_edit_image') return 3 * 60_000;

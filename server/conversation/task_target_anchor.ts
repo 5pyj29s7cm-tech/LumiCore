@@ -1285,6 +1285,8 @@ export function guardTaskTargetToolCall(input: {
   forbidUnstructuredExecution?: boolean;
   /** Set only from the registry-owned, I/O-free QuickJS capability. */
   isolatedCalculation?: boolean;
+  /** Exact registered CLI capability plus an explicit user delegation, set by execution_engine only. */
+  externalCliDelegation?: boolean;
 }): TaskTargetToolCallGuardResult {
   if (!isFileTargetTask(input.taskText) && !input.acceptedTaskTarget) return { allowed: true, reason: '' };
   const toolName = compact(input.toolName, 160);
@@ -1329,6 +1331,12 @@ export function guardTaskTargetToolCall(input: {
     && concreteTargetPath(projection.target.path),
   );
 
+  // This reviewed adapter owns workspace/anchor binding, provider identity,
+  // process lifecycle and output verification. It is not arbitrary shell text.
+  // Registry authorization, privacy and confirmation remain mandatory.
+  if (input.externalCliDelegation === true && toolName === 'external_cli_run') {
+    return { allowed: true, reason: '', anchor: projection };
+  }
   if (input.forbidUnstructuredExecution || (UNSTRUCTURED_FILE_ACCESS_TOOL_RE.test(toolName)
     && !(toolName === 'code_execution' && input.isolatedCalculation === true))) {
     return blocked(

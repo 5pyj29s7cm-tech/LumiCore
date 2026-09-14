@@ -38,6 +38,7 @@ import { registerWorkProductTools } from './work_product_tools';
 import { registerAuthorityResearchTools } from './authority_research_tools';
 import { registerWorkTakeoverTools } from './work_takeover_tools';
 import { registerDesktopAiTools } from './desktop_ai_tools';
+import { registerExternalCliTools } from './external_cli_tools';
 import { registerExternalAiHistoryTools } from './external_ai_history_tools';
 import { registerMessagingTools } from './messaging_tools';
 import { registerModelConfigurationTools } from './model_configuration_tools';
@@ -92,6 +93,7 @@ export function registerAllTools(
   registerAuthorityResearchTools(registry);
   registerWorkTakeoverTools(registry);
   registerDesktopAiTools(registry);
+  registerExternalCliTools(registry);
   registerExternalAiHistoryTools(registry);
   registerMessagingTools(registry);
   registerDesktopWechatWatchTools(registry);

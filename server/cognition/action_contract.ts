@@ -1,4 +1,5 @@
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
+import { isExternalCliRequest } from './external_cli_intent';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
@@ -1003,6 +1004,15 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(withoutNegatedLookupClauses(rawInput));
   if (!text) return NONE_CONTRACT;
+  if (isExternalCliRequest(text)) {
+    return withDefaults({ kind: 'external_ai_request', label: 'External CLI task',
+      coreAction: 'Delegate the bounded task to the named CLI within the existing Lumi task and verify its returned result.',
+      preparationIsNotCompletion: ['CLI installed', 'CLI authenticated', 'process started', 'provider text without terminal success'],
+      requiredEvidence: ['external_cli_run successful terminal receipt, matching provider and current task', 'validate returned deliverables and source changes against the user request'],
+      preferredTools: ['external_cli_run', 'external_cli_status', 'external_cli_get_run'], verificationTools: ['external_cli_get_run'],
+      nextStep: 'Resume the exact Lumi runId for follow-ups; use existing task cancellation. Verify business correctness separately.',
+      caution: 'CLI settings and account are independent from Lumi model routing. Never claim completion for a timed-out, cancelled, or unverified run.' });
+  }
   const authoringIntent = classifySkillAuthoringIntent(rawInput);
   const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
   if (executionBeforeSave) {
@@ -3449,6 +3459,15 @@ export function hasCoreActionEvidence(
     return current.some(record => isArtifactProducerRecord(record) && matchesRequestedArtifactOutput(taskText, artifactPathFromRecord(record)));
   }
   if (contract.kind === 'external_ai_request') {
+    if (isExternalCliRequest(taskText)) {
+      return successful.some(record => {
+        const payload = parseRecordJson(record);
+        return record.name === 'external_cli_run' && record.terminalVerification?.status === 'verified'
+          && artifactRecordMatchesTurn(record, currentTurn || {}) && payload?.ok === true
+          && payload.status === 'completed' && payload.exitCode === 0 && Boolean(compact(payload.response))
+          && Boolean(payload.runId) && ['codex', 'claude'].includes(payload.provider);
+      });
+    }
     const hasSubmission = successful.some(record => {
       const payload = parseRecordJson(record);
       return record.name === 'desktop_ai_ask'

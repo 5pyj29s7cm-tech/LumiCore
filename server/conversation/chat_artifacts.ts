@@ -38,6 +38,11 @@ export function collectChatArtifacts(value: unknown, conversationId?: string): C
     const media = buildMediaArtifactReceipt(record.name, record.arguments, result);
     if (media) {
       for (const artifact of media.artifacts) if (artifact.path) paths.add(artifact.path);
+    } else if (record.name === 'external_cli_run' && record.terminalVerification?.status === 'verified'
+      && payload?.ok === true && payload.status === 'completed' && payload.exitCode === 0 && payload.runId && Array.isArray(payload.artifacts)) {
+      for (const artifact of payload.artifacts.slice(0, 24)) {
+        if (typeof artifact?.path === 'string' && artifact.size > 0 && /^[a-f0-9]{64}$/.test(artifact.sha256 || '')) paths.add(artifact.path);
+      }
     } else if (record.terminalVerification?.status === 'verified' && isArtifactProducerRecord(record)) {
       const output = artifactPathFromRecord(record);
       if (output && (/^[a-z]:[\\/]/i.test(output) || output.startsWith('/'))) paths.add(output);

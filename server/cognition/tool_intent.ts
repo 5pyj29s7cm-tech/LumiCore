@@ -9,6 +9,7 @@ import { hasVisionIntent } from './vision_routing';
 import { normalizeActionIntent } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import { isVideoPlaybackRequest } from './media_intent';
+import { isExternalCliRequest } from './external_cli_intent';
 
 interface IntentGrammarRule {
   name: string;
@@ -478,6 +479,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   if (canonical.kind === 'media_generation') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
   if (isInformationOnlyQuestion(normalized)) return false;
+  if (isExternalCliRequest(normalized)) return true;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
