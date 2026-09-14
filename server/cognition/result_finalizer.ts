@@ -1,4 +1,5 @@
 import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
+import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
 import fs from 'node:fs';
 import { hasImmediateExecutionPromise } from './execution_claims';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
@@ -2972,7 +2973,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (composite.kind === 'external_cli_status') {
     const status = verifiedExternalCliStatus(actionText, input.toolRecords || [], input);
     return status ? { text: formatExternalCliStatus(actionText, status), blocked: false, reason: 'verified_external_cli_status' }
-      : { text: isChineseText(actionText) ? '这次没能确认本机 CLI 的状态，暂时不能判断它是否可用。' : 'The local CLI status could not be verified.',
+      : { text: isChineseText(actionText) ? CN_EXTERNAL_CLI_MESSAGES.unverified : 'The local CLI status could not be verified.',
         blocked: true, reason: 'Missing verified current-turn external CLI status.' };
   }
   if (composite.components?.length) {

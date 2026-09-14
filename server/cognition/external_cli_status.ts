@@ -2,6 +2,7 @@ import type { ToolExecutionRecord } from '../tools/types';
 import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
+import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
 
 interface CliStatusTarget {
   provider: 'codex' | 'claude';
@@ -41,14 +42,14 @@ export function formatExternalCliStatus(task: string, targets: CliStatusTarget[]
   const lines = targets.map(target => {
     const name = target.provider === 'codex' ? 'Codex CLI' : 'Claude Code CLI';
     const version = String(target.version || '').replace(/[\r\n]/gu, ' ').slice(0, 100);
-    if (target.ready) return zh ? `${name} 已安装，登录和配置检查通过${version ? `（${version}）` : ''}。`
+    if (target.ready) return zh ? CN_EXTERNAL_CLI_MESSAGES.ready(name, version)
       : `${name} is installed and its login/configuration check passed${version ? ` (${version})` : ''}.`;
-    if (!target.installed) return zh ? `本机尚未检测到 ${name}。` : `${name} was not found on this machine.`;
-    return zh ? `${name} 已安装，但登录或配置检查未通过，目前还不能确认可用。`
+    if (!target.installed) return zh ? CN_EXTERNAL_CLI_MESSAGES.notInstalled(name) : `${name} was not found on this machine.`;
+    return zh ? CN_EXTERNAL_CLI_MESSAGES.unavailable(name)
       : `${name} is installed, but its login/configuration check did not pass.`;
   });
-  if (targets.every(target => target.ready)) lines.unshift(zh ? '可以通过本机的 CLI 接口委派任务。' : 'I can delegate tasks through the local CLI interface.');
-  lines.push(zh ? '这次只检查了本机状态，没有执行任务，也没有验证模型额度。具体任务需要项目目录和要做的事。'
+  if (targets.every(target => target.ready)) lines.unshift(zh ? CN_EXTERNAL_CLI_MESSAGES.canDelegate : 'I can delegate tasks through the local CLI interface.');
+  lines.push(zh ? CN_EXTERNAL_CLI_MESSAGES.statusScope
     : 'This checked local status only; no task was run and model quota was not verified. A task needs a project directory and instructions.');
   return lines.join('\n');
 }

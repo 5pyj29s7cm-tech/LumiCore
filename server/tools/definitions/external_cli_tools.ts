@@ -1,3 +1,4 @@
+import { CN_EXTERNAL_CLI_MESSAGES } from '../../regions/packs/cn/external_cli_messages';
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { executeExternalCli, getExternalCliRun, inspectExternalClis } from '../../external_agents/cli_runtime';
@@ -22,7 +23,7 @@ export function registerExternalCliTools(registry: ToolRegistry): void {
     capability: { ...capabilityContract({ id: 'external-agent.cli.run', family: 'external-ai-cli', lane: 'agents', operation: 'mutate', risk: 'high',
       sideEffects: [{ type: 'process_execution', scope: 'one named CLI and its task-owned subprocesses', reversible: false }, { type: 'external_communication', scope: 'necessary task context submitted through the selected CLI account', reversible: false }, { type: 'local_write', scope: 'authorized project edits and Lumi output deliverables', reversible: true }],
       verification: { strategy: 'terminal_receipt', required: true, requiredFields: ['ok', 'runId', 'exitCode', 'response', 'verificationScope', 'artifacts'], requiredValues: { ok: true, exitCode: 0 }, successStatuses: ['completed'], failureStatuses: ['failed', 'blocked', 'cancelled', 'timed_out', 'interrupted'], successSignals: ['CLI emitted a successful terminal response; attached output bytes were verified on disk'], limitations: ['Lumi must separately validate source changes and user-requested behavior. Claude tool permissions are not an OS filesystem sandbox.'] } }),
-      intents: ['Codex CLI', 'Claude Code CLI', '外部编程助手', '委派任务', '继续外部任务'], tags: ['codex', 'claude code', 'cli', 'external ai', 'delegation'] },
+      intents: ['Codex CLI', 'Claude Code CLI', ...CN_EXTERNAL_CLI_MESSAGES.delegationIntents], tags: ['codex', 'claude code', 'cli', 'external ai', 'delegation'] },
     evidence: capabilityEvidence({ id: 'external-agent.cli.run', operation: 'mutate', subjectArgument: 'cwd', limitations: ['Provider-reported success alone does not verify business correctness.'] }),
   });
   registry.register({

@@ -7,6 +7,7 @@ import { getDataPath, getGeneratedOutputDir } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { requireNotStrict } from '../config/privacy';
 import { classifyExternalCliIntent, isExternalCliDelegation } from '../cognition/external_cli_intent';
+import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
 import { runCliProcess, type CliProcessInput, type CliProcessResult } from './cli_process';
 
 export type ExternalCliProvider = 'codex' | 'claude';
@@ -109,7 +110,7 @@ export function consumeCliEvent(provider: ExternalCliProvider, line: string, sta
     if (event.type === 'thread.started' && isId(String(event.thread_id || ''))) state.sessionId = event.thread_id;
     if (event.type === 'item.completed' && event.item?.type === 'agent_message') state.response = String(event.item.text || '');
     if (/^item\./.test(event.type || '') && ['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(event.item?.type)) {
-      state.progress.push(`${event.type === 'item.completed' ? '完成' : '正在执行'}：${event.item.type}`);
+      state.progress.push(CN_EXTERNAL_CLI_MESSAGES.progress(event.item.type, event.type === 'item.completed'));
     }
     if (event.type === 'turn.completed') state.terminal = true;
     if (event.type === 'turn.failed') { state.failed = true; state.error = String(event.error?.message || 'Codex failed'); }
@@ -121,7 +122,7 @@ export function consumeCliEvent(provider: ExternalCliProvider, line: string, sta
     if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
       for (const block of event.message.content) {
         if (block.type === 'text') state.response += String(block.text || '') + '\n';
-        if (block.type === 'tool_use') state.progress.push(`正在执行：${String(block.name || 'tool').slice(0, 80)}`);
+        if (block.type === 'tool_use') state.progress.push(CN_EXTERNAL_CLI_MESSAGES.progress(String(block.name || 'tool').slice(0, 80)));
       }
     }
     if (event.type === 'result') {
@@ -226,7 +227,7 @@ export async function executeExternalCli(args: Record<string, any>, context?: To
   activeWorkspaces.add(key); activeRuns.add(runId);
   try {
     saveRun(run, context);
-    context.onProgress?.(`${provider === 'codex' ? 'Codex CLI' : 'Claude Code'} 已开始${prior ? '继续' : '处理'}任务。`);
+    context.onProgress?.(CN_EXTERNAL_CLI_MESSAGES.started(provider === 'codex' ? 'Codex CLI' : 'Claude Code', Boolean(prior)));
     const runner = deps.runProcess || runCliProcess;
     let progressCount = 0;
     const result = await runner({ executable: launch.executable,
