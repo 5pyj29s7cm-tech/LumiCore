@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChatSongWorkbenchHandle } from './ChatSongWorkbench';
 const ChatSongWorkbench = React.lazy(() => import('./ChatSongWorkbench'));
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
 import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
@@ -861,6 +862,7 @@ export function AgentChatPage({
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationHistoryContextMenu | null>(null);
   const [mediaStudioMode, setMediaStudioMode] = useState<MediaGenerationKind | null>(null);
   const [chatSongOpen, setChatSongOpen] = useState(false);
+  const chatSongWorkbenchRef = useRef<ChatSongWorkbenchHandle>(null);
   const [mediaGenerationStatus, setMediaGenerationStatus] = useState<MediaGenerationStudioStatus>('idle');
   const [mediaGenerationDetail, setMediaGenerationDetail] = useState('');
   const [mediaGenerationArtifacts, setMediaGenerationArtifacts] = useState<MediaGenerationArtifact[]>([]);
@@ -3332,9 +3334,8 @@ export function AgentChatPage({
     const activeRequest = activeMediaGenerationRef.current;
     mediaStudioOpenRef.current = true;
     if (activeRequest) {
-      // A long-running generation may be hidden, but reopening either media
-      // entry always returns to that same request. This prevents the other
-      // studio from inheriting an unrelated request status or artifact.
+      // Reopening AI Creation returns to the active request, keeping its
+      // status and artifacts attached to the matching media type.
       setMediaStudioMode(activeRequest.mode);
       return;
     }
@@ -3444,8 +3445,18 @@ export function AgentChatPage({
     mediaStudioOpenRef.current = false;
     mediaSourceUploadTargetRef.current = null;
     setMediaSourceUploading(false);
+    setChatSongOpen(false);
     setMediaStudioMode(null);
   }, []);
+
+  const requestCloseCreativeStudio = useCallback(async () => {
+    const workbench = chatSongWorkbenchRef.current;
+    if (workbench && !await workbench.prepareToLeave()) {
+      setChatSongOpen(true);
+      return;
+    }
+    closeMediaGenerationStudio();
+  }, [closeMediaGenerationStudio]);
 
   const markMediaGenerationArtifactReady = useCallback((artifact: MediaGenerationArtifact) => {
     const validation = mediaGenerationArtifactValidationRef.current;
@@ -4086,7 +4097,7 @@ export function AgentChatPage({
                   fileId: artifact.fileId, fileName: artifact.fileName, path: artifact.path,
                   kind: artifact.kind === 'image' ? 'image' : 'file', openUrl: artifact.url,
                 })]);
-                if (result.added.length) closeMediaGenerationStudio();
+                if (result.added.length) void requestCloseCreativeStudio();
               }}
               sourceArtifacts={availableMediaSourceArtifacts}
               primaryImage={mediaPrimaryImage}
@@ -4099,8 +4110,33 @@ export function AgentChatPage({
               onModeChange={openMediaGenerationStudio}
               onSourceChange={handleMediaSourceChange}
               onRequestSourceImage={requestMediaSourceImage}
-              onClose={closeMediaGenerationStudio}
+              onClose={() => { void requestCloseCreativeStudio(); }}
               onOpenChatSong={!isWorkChat ? () => { void refreshKnowledgeFiles(); setChatSongOpen(true); } : undefined}
+              chatSongActive={chatSongOpen && !isWorkChat}
+              onSelectMedia={mode => { setChatSongOpen(false); openMediaGenerationStudio(mode); }}
+              chatSongContent={!isWorkChat && <React.Suspense fallback={<div role="status" className="m-auto text-white/50"><Loader2 className="animate-spin" /></div>}>
+                <ChatSongWorkbench
+                  key={user?.uid}
+                  ref={chatSongWorkbenchRef}
+                  embedded
+                  locale={isZh ? 'zh' : 'en'}
+                  files={knowledgeFiles}
+                  libraryFailed={knowledgeFailed}
+                  busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+                  onRefreshLibrary={refreshKnowledgeFiles}
+                  onClose={() => setChatSongOpen(false)}
+                  onGenerate={request => {
+                    setChatSongOpen(false);
+                    openMediaGenerationStudio(request.mode);
+                    generateMediaFromStudio(request);
+                  }}
+                  onTask={async prompt => {
+                    const requestId = await sendText(prompt, [], { includeConversationAttachments: false });
+                    if (requestId) closeMediaGenerationStudio();
+                    return requestId;
+                  }}
+                />
+              </React.Suspense>}
               onGenerate={generateMediaFromStudio}
               onCancel={() => {
                 setMediaGenerationStatus('cancelling');
@@ -4120,27 +4156,6 @@ export function AgentChatPage({
               onArtifactReady={markMediaGenerationArtifactReady}
               onArtifactError={markMediaGenerationArtifactFailed}
             />
-            {chatSongOpen && !isWorkChat && <React.Suspense fallback={null}>
-              <ChatSongWorkbench
-                key={user?.uid}
-                locale={isZh ? 'zh' : 'en'}
-                files={knowledgeFiles}
-                libraryFailed={knowledgeFailed}
-                busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
-                onRefreshLibrary={refreshKnowledgeFiles}
-                onClose={() => setChatSongOpen(false)}
-                onGenerate={request => {
-                  setChatSongOpen(false);
-                  openMediaGenerationStudio(request.mode);
-                  generateMediaFromStudio(request);
-                }}
-                onTask={async prompt => {
-                  const requestId = await sendText(prompt, [], { includeConversationAttachments: false });
-                  if (requestId) closeMediaGenerationStudio();
-                  return requestId;
-                }}
-              />
-            </React.Suspense>}
           </motion.div>
         )}
       </AnimatePresence>
@@ -5156,34 +5171,18 @@ export function AgentChatPage({
             )}
             <button
               type="button"
-              data-image-generation-switch
+              data-ai-creation-switch
               onClick={() => openMediaGenerationStudio('image')}
-              className="lumi-command-center-switcher-button lumi-command-center-image-generation-switch group flex items-center gap-3 rounded-2xl border border-rose-300/20 bg-rose-300/[0.08] px-3 py-3 text-left text-rose-50/80 transition-all hover:-translate-x-1 hover:border-rose-200/45 hover:bg-rose-300/[0.16] hover:text-white"
-              title={mediaGenerationText.imageGeneration}
-              aria-label={mediaGenerationText.openImageStudio}
-            >
-              <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200/20 bg-rose-200/10 text-rose-100 transition-transform group-hover:scale-105">
-                <ImageIcon className="h-5 w-5" />
-              </span>
-              <span className="lumi-command-center-switcher-copy min-w-0">
-                <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.imageGeneration}</span>
-                <span className="mt-1 block truncate text-[10px] text-rose-100/45">{mediaGenerationText.imageHint}</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              data-video-generation-switch
-              onClick={() => openMediaGenerationStudio('video')}
-              className="lumi-command-center-switcher-button lumi-command-center-video-generation-switch group flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-left text-amber-50/80 transition-all hover:-translate-x-1 hover:border-amber-200/45 hover:bg-amber-300/[0.16] hover:text-white"
-              title={mediaGenerationText.videoGeneration}
-              aria-label={mediaGenerationText.openVideoStudio}
+              className="lumi-command-center-switcher-button lumi-command-center-ai-creation-switch group flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-left text-amber-50/80 transition-all hover:-translate-x-1 hover:border-amber-200/45 hover:bg-amber-300/[0.16] hover:text-white"
+              title={mediaGenerationText.aiCreation}
+              aria-label={mediaGenerationText.openAiCreation}
             >
               <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200/20 bg-amber-200/10 text-amber-100 transition-transform group-hover:scale-105">
-                <Video className="h-5 w-5" />
+                <Sparkles className="h-5 w-5" />
               </span>
               <span className="lumi-command-center-switcher-copy min-w-0">
-                <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.videoGeneration}</span>
-                <span className="mt-1 block truncate text-[10px] text-amber-100/45">{mediaGenerationText.videoHint}</span>
+                <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.aiCreation}</span>
+                <span className="mt-1 block truncate text-[10px] text-amber-100/45">{mediaGenerationText.aiCreationHint}</span>
               </span>
             </button>
           </aside>

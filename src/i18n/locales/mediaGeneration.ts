@@ -11,6 +11,11 @@ type VideoRequestCopy = { prompt: string; size: string; duration: number; refere
 
 const COPY = {
   en: {
+    aiCreation: 'AI Creation',
+    openAiCreation: 'Open AI Creation',
+    aiCreationHint: 'Images, videos and creative workflows',
+    creationTypes: 'Creation type',
+    chatSong: 'Chat-song',
     currentResults: 'This generation',
     imageLibrary: 'Image library',
     videoLibrary: 'Video library',
@@ -126,6 +131,11 @@ const COPY = {
     ].join('\n'),
   },
   zh: {
+    aiCreation: 'AI 创作',
+    openAiCreation: '打开 AI 创作',
+    aiCreationHint: '图片、视频与创作流程',
+    creationTypes: '创作类型',
+    chatSong: '聊天唱歌',
     currentResults: '本次生成',
     imageLibrary: '图片库',
     videoLibrary: '视频库',

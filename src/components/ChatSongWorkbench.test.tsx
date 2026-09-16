@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import ChatSongWorkbench from './ChatSongWorkbench';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import ChatSongWorkbench, { type ChatSongWorkbenchHandle } from './ChatSongWorkbench';
 import { CHAT_SONG_DEFAULT_BRIEF, type ChatSongProject } from '../../shared/chat_song';
 const mock = vi.hoisted(() => ({ api: vi.fn(), save: vi.fn() }));
 vi.mock('@/services/apiClient', () => ({ apiJson: (...args: any[]) => mock.api(...args), apiFetch: vi.fn() }));
@@ -29,7 +29,7 @@ it('preserves unsaved text and keeps the workbench open after a failed save', as
   await screen.findByDisplayValue('Episode');
   fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'My new episode' } });
   mock.api.mockImplementation(async (_path: string, init?: RequestInit) => { if (init?.method === 'PATCH') throw new Error('Disk unavailable'); return {}; });
-  fireEvent.click(screen.getByRole('button', { name: 'Back to video studio' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to AI Creation' }));
   expect((await screen.findByRole('alert')).textContent).toContain('Disk unavailable');
   expect(screen.getByDisplayValue('My new episode')).toBeTruthy(); expect(p.onClose).not.toHaveBeenCalled();
 });
@@ -72,8 +72,27 @@ it('keeps timing inputs editable while dirty and saves them before closing', asy
   fireEvent.click(screen.getByRole('tab', { name: 'Song & timing' }));
   const start = screen.getAllByRole('spinbutton')[0]; fireEvent.change(start, { target: { value: '1.5' } });
   expect((start as HTMLInputElement).disabled).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Back to video studio' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to AI Creation' }));
   await waitFor(() => expect(p.onClose).toHaveBeenCalled());
   const action = mock.api.mock.calls.find(([path]) => path.endsWith('/action'))!;
   expect(JSON.parse(String(action[1].body))).toMatchObject({ action: 'set-timings', value: [{ lineId: '01', start: 1.5, end: 3 }, { lineId: '02', start: 4, end: 6 }] });
+});
+it('protects unsaved work when the shared AI Creation shell is closed', async () => {
+  const ref = React.createRef<ChatSongWorkbenchHandle>();
+  render(<ChatSongWorkbench {...props()} embedded ref={ref} />);
+  await screen.findByDisplayValue('Episode');
+  expect(screen.queryByRole('button', { name: 'Back to AI Creation' })).toBeNull();
+  fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Keep my changes' } });
+  const implementation = mock.api.getMockImplementation()!;
+  mock.api.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (init?.method === 'PATCH') throw new Error('Disk unavailable');
+    return implementation(path, init);
+  });
+  await act(async () => { expect(await ref.current!.prepareToLeave()).toBe(false); });
+  expect(screen.getByRole('alert').textContent).toContain('Disk unavailable');
+  expect(screen.getByDisplayValue('Keep my changes')).toBeTruthy();
+  mock.api.mockImplementation(implementation);
+  await act(async () => { expect(await ref.current!.prepareToLeave()).toBe(true); });
+  expect(screen.queryByText('Unsaved changes')).toBeNull();
+  expect(mock.api.mock.calls.some(([, init]) => init?.method === 'PATCH' && JSON.parse(String(init.body)).project.title === 'Keep my changes')).toBe(true);
 });

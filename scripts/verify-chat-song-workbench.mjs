@@ -49,8 +49,14 @@ const css = fs.readdirSync(path.join(root, 'dist/desktop/assets')).find(name => 
 assert.ok(css, 'Build the desktop frontend first.');
 await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client';
 import Workbench from './src/components/ChatSongWorkbench'; import {apiJson} from './src/services/apiClient';
+import {MediaGenerationStudio} from './src/components/MediaGenerationStudio';
 function App(){ const [files,setFiles]=React.useState([]); const refresh=()=>{void apiJson('/api/files/list?domain=personal').then(r=>setFiles(r.files||[]))};React.useEffect(refresh,[]);
-return <Workbench locale="zh" files={files} busy={false} onRefreshLibrary={refresh} onClose={()=>{window.__closed=true}} onGenerate={r=>{window.__generation=r}} onTask={async p=>{window.__task=p;return undefined}}/>;}
+const [mode,setMode]=React.useState('image'),[song,setSong]=React.useState(false),workbench=React.useRef(null);
+return <MediaGenerationStudio locale="zh" mode={mode} busy={false} status="idle" artifacts={[]} onModeChange={setMode}
+onClose={async()=>{if(!workbench.current||await workbench.current.prepareToLeave())window.__closed=true;else setSong(true)}}
+onGenerate={r=>{window.__generation=r}} onOpenArtifact={()=>{}} onArtifactReady={()=>{}} onArtifactError={()=>{}}
+chatSongActive={song} onOpenChatSong={()=>setSong(true)} onSelectMedia={kind=>{setMode(kind);setSong(false)}}
+chatSongContent={<Workbench ref={workbench} embedded locale="zh" files={files} busy={false} onRefreshLibrary={refresh} onClose={()=>setSong(false)} onGenerate={r=>{window.__generation=r;setMode(r.mode);setSong(false)}} onTask={async p=>{window.__task=p;return undefined}}/>}/>;}
 createRoot(document.getElementById('root')).render(<App/>);`, loader: 'tsx', resolveDir: root }, outfile: path.join(output, 'preview.js'), bundle: true, platform: 'browser', format: 'esm', define: { 'process.env.NODE_ENV': '"production"' }, minify: true });
 const app = express(), router = express.Router(); app.use(express.json()); app.use('/api', router);
 mountChatSongRoutes(router, { getDeepSeek: () => null, getGemini: () => null });
@@ -64,7 +70,22 @@ const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 980 }, acceptDownloads: true });
 const errors = []; page.on('pageerror', e => errors.push(e.message));
 try {
-  await page.goto(url); await page.getByLabel('项目名称').waitFor();
+  await page.goto(url);
+  const types = page.getByRole('navigation', { name: '创作类型' });
+  await page.getByRole('heading', { name: 'AI 创作', exact: true }).waitFor();
+  assert.equal(await types.getByRole('button').count(), 3);
+  await page.getByLabel('描述你想生成的内容').fill('切换创作类型后保留这段输入');
+  await page.screenshot({ path: path.join(output, '00-ai-creation.png') });
+  await types.getByRole('button', { name: '视频', exact: true }).click();
+  await page.locator('[data-media-generation-tab="image_to_video"]').waitFor();
+  await types.getByRole('button', { name: '聊天唱歌', exact: true }).click();
+  await page.getByLabel('项目名称').waitFor();
+  await page.getByLabel('项目名称').fill('切换后仍然保留的创作');
+  await types.getByRole('button', { name: '图片', exact: true }).click();
+  assert.equal(await page.getByLabel('描述你想生成的内容').inputValue(), '切换创作类型后保留这段输入');
+  await types.getByRole('button', { name: '聊天唱歌', exact: true }).click();
+  assert.equal(await page.getByLabel('项目名称').inputValue(), '切换后仍然保留的创作');
+  await page.getByLabel('项目名称').fill('帮朋友问的 · 界面验收');
   await page.screenshot({ path: path.join(output, '01-dialogue.png') });
   await page.getByRole('tab', { name: '画面素材' }).click();
   for (const [name, file] of [['背景', 'background.png'], ['角色 A 头像', 'avatar.png'], ['角色 B 头像', 'avatar.png']]) {
@@ -72,6 +93,11 @@ try {
     await slot.getByRole('combobox').selectOption(file); await slot.getByRole('button', { name: '采用素材' }).click();
     await slot.getByText(`已采用 · ${file}`).waitFor();
   }
+  // Authenticated previews acquire their Blob URLs asynchronously after asset adoption.
+  await page.waitForFunction(() => {
+    const images = [...document.querySelectorAll('article img')];
+    return images.length === 3 && images.every(image => image.complete && image.naturalWidth > 0);
+  });
   await page.locator('article img').evaluateAll(async images => { await Promise.all(images.map(image => image.decode())); });
   await page.screenshot({ path: path.join(output, '02-visuals.png') });
   await page.getByRole('tab', { name: '歌曲与卡点' }).click();
@@ -93,7 +119,7 @@ try {
   await page.getByText('素材包已入库', { exact: true }).waitFor(); await page.screenshot({ path: path.join(output, '04-handoff.png') });
   const reloaded = getChatSongProject(owner, project.id);
   assert.equal(reloaded.timings.length, 4); assert.equal(reloaded.song.duration, 12); assert.equal(reloaded.assets.length, 3);
-  await page.reload(); await page.getByLabel('项目名称').waitFor();
+  await page.reload(); await types.getByRole('button', { name: '聊天唱歌', exact: true }).click(); await page.getByLabel('项目名称').waitFor();
   await page.getByRole('tab', { name: '歌曲与卡点' }).click(); await page.getByRole('button', { name: '歌曲已确认' }).waitFor();
   await page.setViewportSize({ width: 820, height: 760 }); await page.screenshot({ path: path.join(output, '05-compact.png') });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);

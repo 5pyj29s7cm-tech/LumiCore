@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   ExternalLink,
+  Film,
   Image as ImageIcon,
   Loader2,
   Pencil,
@@ -25,7 +26,6 @@ import {
   type MediaGenerationSourceOperation,
 } from '@/lib/mediaGenerationArtifacts';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
-import { chatSongCopy } from '@/i18n/locales/chatSong';
 
 export type MediaGenerationStudioStatus =
   | 'idle'
@@ -92,6 +92,9 @@ export type MediaGenerationStudioProps = {
   ) => void;
   onClose: () => void;
   onOpenChatSong?: () => void;
+  chatSongActive?: boolean;
+  chatSongContent?: React.ReactNode;
+  onSelectMedia?: (mode: MediaGenerationKind) => void;
   onGenerate: (request: MediaGenerationRequest) => void;
   onCancel?: () => void;
   onRetry?: (request: MediaGenerationRequest) => void;
@@ -238,6 +241,9 @@ export function MediaGenerationStudio({
   onRequestSourceImage,
   onClose,
   onOpenChatSong,
+  chatSongActive = false,
+  chatSongContent,
+  onSelectMedia,
   onGenerate,
   onCancel,
   onRetry,
@@ -249,6 +255,8 @@ export function MediaGenerationStudio({
   onArtifactError,
 }: MediaGenerationStudioProps) {
   const copy = mediaGenerationCopy(locale);
+  const [chatSongVisited, setChatSongVisited] = useState(chatSongActive);
+  useEffect(() => { if (chatSongActive) setChatSongVisited(true); }, [chatSongActive]);
   const [gallery, setGallery] = useState<'current' | 'library'>(artifacts.length || busy ? 'current' : 'library');
   const [librarySearch, setLibrarySearch] = useState('');
   const [localOperation, setLocalOperation] = useState<MediaGenerationOperation>(() => (
@@ -314,6 +322,7 @@ export function MediaGenerationStudio({
   }, [activeKind]);
 
   useEffect(() => {
+    if (chatSongActive) return;
     const focusPrompt = () => promptRef.current?.focus({ preventScroll: true });
     const restoreVisiblePrompt = () => {
       if (document.visibilityState === 'visible') focusPrompt();
@@ -324,7 +333,7 @@ export function MediaGenerationStudio({
       window.removeEventListener('focus', focusPrompt);
       document.removeEventListener('visibilitychange', restoreVisiblePrompt);
     };
-  }, []);
+  }, [chatSongActive]);
 
   const switchOperation = (nextOperation: MediaGenerationOperation) => {
     if (isWorking || nextOperation === activeOperation) return;
@@ -495,29 +504,22 @@ export function MediaGenerationStudio({
       data-media-generation-mode={activeKind}
       data-media-generation-operation={activeOperation}
       className="absolute inset-0 z-[215] flex min-h-0 flex-col overflow-hidden bg-[#03070d]/96 backdrop-blur-2xl"
-      aria-label={activeKind === 'image' ? copy.imageStudio : copy.videoStudio}
+      aria-label={copy.aiCreation}
     >
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 md:px-8">
         <div className="flex min-w-0 items-center gap-3">
-          <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${
-            activeKind === 'image'
-              ? 'border-rose-200/20 bg-rose-300/10 text-rose-100'
-              : 'border-amber-200/20 bg-amber-300/10 text-amber-100'
-          }`}>
-            {activeKind === 'image' ? <ImageIcon size={21} /> : <Video size={21} />}
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/20 bg-amber-300/10 text-amber-100">
+            <Sparkles size={21} />
           </span>
           <div className="min-w-0">
             <h2 className="truncate text-base font-black tracking-wide text-white/90">
-              {activeOperation === 'image_edit'
-                ? copy.imageEdit
-                : activeKind === 'image' ? copy.imageGeneration : copy.videoGeneration}
+              {copy.aiCreation}
             </h2>
             <p className="mt-0.5 truncate text-[11px] text-white/38">
-              {copy.configuredModelReceipt}
+              {copy.aiCreationHint}
             </p>
           </div>
         </div>
-        {activeKind === 'video' && onOpenChatSong && <button type="button" onClick={onOpenChatSong} className="ml-auto rounded-xl border border-amber-200/20 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-100">{chatSongCopy[locale].entry}</button>}
         <button
           type="button"
           onClick={onClose}
@@ -529,10 +531,31 @@ export function MediaGenerationStudio({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 [scrollbar-width:none] md:grid md:grid-cols-[minmax(300px,0.8fr)_minmax(360px,1.2fr)] md:px-8 md:py-7 [&::-webkit-scrollbar]:hidden">
+      <nav aria-label={copy.creationTypes} className="flex shrink-0 gap-2 border-b border-white/[0.08] px-5 py-3 md:px-8">
+        {([
+          { kind: 'image', label: copy.image, icon: <ImageIcon size={16} /> },
+          { kind: 'video', label: copy.video, icon: <Video size={16} /> },
+          ...(onOpenChatSong ? [{ kind: 'chat_song', label: copy.chatSong, icon: <Film size={16} /> }] : []),
+        ] as const).map(item => {
+          const selected = item.kind === 'chat_song' ? chatSongActive : !chatSongActive && activeKind === item.kind;
+          return <button key={item.kind} type="button" aria-pressed={selected} disabled={isWorking}
+            data-ai-creation-type={item.kind}
+            onClick={() => {
+              if (item.kind === 'chat_song') { onOpenChatSong?.(); return; }
+              const kind = item.kind as MediaGenerationKind;
+              if (activeKind !== kind) switchOperation(defaultMediaGenerationOperation(kind));
+              if (chatSongActive) onSelectMedia?.(kind);
+            }}
+            className={`flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors sm:flex-none sm:px-6 ${selected ? 'border-amber-200/25 bg-amber-200/10 text-amber-100' : 'border-transparent text-white/45 hover:bg-white/5 hover:text-white/80'} disabled:cursor-not-allowed disabled:opacity-45`}>
+            {item.icon}{item.label}
+          </button>;
+        })}
+      </nav>
+      {(chatSongActive || chatSongVisited) && <div hidden={!chatSongActive} className={chatSongActive ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}>{chatSongContent}</div>}
+      <div hidden={chatSongActive} className={chatSongActive ? 'hidden' : 'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 [scrollbar-width:none] md:grid md:grid-cols-[minmax(300px,0.8fr)_minmax(360px,1.2fr)] md:px-8 md:py-7 [&::-webkit-scrollbar]:hidden'}>
         <form onSubmit={submit} className="flex min-h-0 flex-col rounded-[1.75rem] border border-white/[0.09] bg-white/[0.035] p-5 shadow-2xl shadow-black/20">
-          <div className="mb-5 grid grid-cols-2 gap-2 rounded-2xl bg-black/25 p-1.5 sm:grid-cols-4">
-            {operationOptions.map(item => (
+          <div className="mb-5 grid grid-cols-2 gap-2 rounded-2xl bg-black/25 p-1.5">
+            {operationOptions.filter(item => mediaGenerationKindForOperation(item.value) === activeKind).map(item => (
               <button
                 key={item.value}
                 type="button"

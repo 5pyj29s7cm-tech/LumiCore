@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Plus, ArrowLeft, Check, Film, Image as ImageIcon, Loader2, Save, X } from 'lucide-react';
 import { chatSongCopy } from '@/i18n/locales/chatSong';
 import { apiFetch, apiJson } from '@/services/apiClient';
@@ -19,13 +19,16 @@ const primary = `${button} !border-amber-200/30 !bg-amber-200 !text-slate-950 ho
 type Handoff = { lyrics: string; singing: string; prompts: { kind: ChatSongAssetKind; lineId: string; prompt: string }[] };
 type Bundle = { fileId: string; url: string; timed: boolean; warnings: string[]; handoffs: { music: string; edit: string } };
 export type ChatSongWorkbenchProps = {
+  embedded?: boolean;
   locale: 'zh' | 'en'; files: FileEntry[]; libraryFailed?: boolean; busy: boolean;
   onRefreshLibrary: () => void; onClose: () => void;
   onGenerate: (request: MediaGenerationRequest) => void;
   onTask: (prompt: string) => Promise<string | undefined>;
 };
 
-export default function ChatSongWorkbench({ locale, files, libraryFailed, busy, onRefreshLibrary, onClose, onGenerate, onTask }: ChatSongWorkbenchProps) {
+export type ChatSongWorkbenchHandle = { prepareToLeave: () => Promise<boolean> };
+
+const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWorkbenchProps>(function ChatSongWorkbench({ embedded = false, locale, files, libraryFailed, busy, onRefreshLibrary, onClose, onGenerate, onTask }, ref) {
   const c = chatSongCopy[locale];
   const [projects, setProjects] = useState<ChatSongProject[]>([]);
   const [project, setProject] = useState<ChatSongProject | null>(null);
@@ -98,6 +101,13 @@ export default function ChatSongWorkbench({ locale, files, libraryFailed, busy, 
     }
     return current;
   }
+  useImperativeHandle(ref, () => ({
+    async prepareToLeave() {
+      let ready = false;
+      await run(async () => { if (dirty) await saveAll(); ready = true; });
+      return ready;
+    },
+  }));
   async function act(action: string, value?: unknown) {
     const current = action === 'set-timings' ? await persist() : await saveAll();
     accept(await apiJson<ChatSongProject>(`${base}/${current.id}/action`, json('POST', { revision: current.revision, action, value })));
@@ -138,11 +148,11 @@ export default function ChatSongWorkbench({ locale, files, libraryFailed, busy, 
   const bg = project?.assets.find(asset => asset.kind === 'background');
   const visibleReaction = [...previewLines].reverse().map(line => project?.assets.find(asset => asset.kind === 'reaction' && asset.lineId === line.id)).find(Boolean);
 
-  return <section aria-label={c.title} className="absolute inset-0 z-[216] flex flex-col overflow-hidden bg-[#0b1017] text-white">
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+  return <section aria-label={c.title} className={`${embedded ? 'relative min-h-0 flex-1' : 'absolute inset-0 z-[216]'} flex flex-col overflow-hidden bg-[#0b1017] text-white`}>
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
       <div><h2 className="flex items-center gap-2 text-lg font-bold"><Film size={20} className="text-amber-200" />{c.title}<span className="rounded-md bg-amber-200/10 px-2 py-1 text-[10px] text-amber-200">{c.trial}</span></h2><p className="mt-1 max-w-2xl text-xs leading-5 text-white/50">{c.subtitle}</p></div>
       <div className="flex items-center gap-2">{project && <><span className="text-xs text-white/45">{dirty ? c.dirty : c.saved}</span><button className={primary} disabled={disabled || !dirty} onClick={() => void run(async () => { await saveAll(); })}><Save size={14} />{c.save}</button></>}
-        <button className={button} disabled={working} onClick={() => void run(async () => { if (dirty) await saveAll(); onClose(); })}><ArrowLeft size={14} />{c.close}</button></div>
+        {!embedded && <button className={button} disabled={working} onClick={() => void run(async () => { if (dirty) await saveAll(); onClose(); })}><ArrowLeft size={14} />{c.close}</button>}</div>
     </header>
     {(error || notice || working) && <div className={`flex shrink-0 items-center gap-2 border-b border-white/10 px-5 py-2 text-xs ${error ? 'bg-red-400/10 text-red-200' : 'text-amber-100'}`} role={error ? 'alert' : 'status'}>{working && <Loader2 size={14} className="animate-spin" />}{error || notice || c.loading}{error && project && <button className={button} disabled={working} onClick={() => void run(async () => { accept(await apiJson<ChatSongProject>(`${base}/${project.id}`)); setDraft(null); })}>{c.reload}</button>}</div>}
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -217,7 +227,9 @@ export default function ChatSongWorkbench({ locale, files, libraryFailed, busy, 
       </div>}
     </div>
   </section>;
-}
+});
+
+export default ChatSongWorkbench;
 
 function AssetSlot({ name, locale, files, asset, disabled, onAttach, onGenerate, onRemove }: {
   name: string; locale: 'zh' | 'en'; files: FileEntry[]; asset?: ChatSongProject['assets'][number]; disabled: boolean;

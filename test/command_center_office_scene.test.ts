@@ -177,15 +177,15 @@ describe('single-core command center', () => {
     expect(surfaces).toContain("'open_command_center'");
   });
 
-  it('places image and video generation below Knowledge Base and renders a real media workspace', () => {
+  it('places one AI Creation entry below Knowledge Base and renders a real media workspace', () => {
     const chatPage = source('src/components/AgentChatPage.tsx');
     const knowledgeIndex = chatPage.indexOf('data-knowledge-base-switch');
-    const imageGenerationIndex = chatPage.indexOf('data-image-generation-switch');
-    const videoGenerationIndex = chatPage.indexOf('data-video-generation-switch');
+    const aiCreationIndex = chatPage.indexOf('data-ai-creation-switch');
 
     expect(knowledgeIndex).toBeGreaterThan(-1);
-    expect(imageGenerationIndex).toBeGreaterThan(knowledgeIndex);
-    expect(videoGenerationIndex).toBeGreaterThan(imageGenerationIndex);
+    expect(aiCreationIndex).toBeGreaterThan(knowledgeIndex);
+    expect(chatPage).not.toContain('data-image-generation-switch');
+    expect(chatPage).not.toContain('data-video-generation-switch');
     expect(chatPage).toContain('data-media-generation-studio');
     expect(chatPage).toContain("kind === 'video'");
     expect(chatPage).toContain('<FileResourceVideo');

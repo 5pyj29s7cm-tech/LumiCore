@@ -55,7 +55,7 @@ describe('MediaGenerationStudio operations', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Image library (1)' }));
     expect(props.onRefreshLibrary).toHaveBeenCalled();
   });
-  it('offers all four operations and submits an image edit with a selected source artifact', () => {
+  it('offers image operations and submits an image edit with a selected source artifact', () => {
     const onGenerate = vi.fn();
     const onOperationChange = vi.fn();
     const onSourceChange = vi.fn();
@@ -70,7 +70,7 @@ describe('MediaGenerationStudio operations', () => {
       onSourceChange,
     })} />);
 
-    expect(container.querySelectorAll('[data-media-generation-tab]')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-media-generation-tab]')).toHaveLength(2);
     fireEvent.click(container.querySelector('[data-media-generation-tab="image_edit"]')!);
     fireEvent.click(screen.getAllByRole('button', { name: 'source.png' })[0]);
     fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), {
@@ -94,6 +94,32 @@ describe('MediaGenerationStudio operations', () => {
       referenceImages: [],
       primaryArtifactId: 'image-1',
     });
+  });
+
+  it('groups creation types under one header and preserves work when switching to the song workflow', () => {
+    function Studio() {
+      const [mode, setMode] = React.useState<'image' | 'video'>('image');
+      const [song, setSong] = React.useState(false);
+      return <MediaGenerationStudio {...studioProps()} mode={mode} onModeChange={setMode}
+        chatSongActive={song} onOpenChatSong={() => setSong(true)}
+        onSelectMedia={kind => { setMode(kind); setSong(false); }}
+        chatSongContent={<input aria-label="Episode draft" defaultValue="" />} />;
+    }
+    const { container } = render(<Studio />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Keep this prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Video' }));
+    expect(screen.getByRole('button', { name: 'Text to video' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Image to video' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Edit image' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Chat-song' }));
+    expect(screen.getByRole('heading', { name: 'AI Creation' })).toBeTruthy();
+    expect(container.querySelector('header')?.textContent).not.toContain('Chat-song');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Episode draft' }), { target: { value: 'Keep this dialogue' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Image' }));
+    expect(screen.queryByRole('textbox', { name: 'Episode draft' })).toBeNull();
+    expect((screen.getByRole('textbox', { name: 'Describe what to generate' }) as HTMLTextAreaElement).value).toBe('Keep this prompt');
+    fireEvent.click(screen.getByRole('button', { name: 'Chat-song' }));
+    expect((screen.getByRole('textbox', { name: 'Episode draft' }) as HTMLInputElement).value).toBe('Keep this dialogue');
   });
 
   it('uses a result as the first frame and exposes open, save, and continuation actions', () => {
