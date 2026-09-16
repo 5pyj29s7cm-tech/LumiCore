@@ -684,6 +684,7 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   const generationMode = hasFirstFrame ? 'image_to_video' : 'text_to_video';
   const preferences = getUserPreferredGenerationModels(context?.userId || 'anonymous');
   const preference = generationMode === 'image_to_video' ? preferences.imageToVideo : preferences.video;
+  if (args.officialOnly === true && preference.provider !== 'relay') throw new Error('This project requires Lumi Official API. Select it for video generation in model settings.');
   const provider = preference.provider;
   const model = String(
     preference.model
@@ -735,6 +736,7 @@ export function registerVideoTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        officialOnly: { type: 'boolean', description: 'Require the selected provider to be Lumi Official API; reject other providers.' },
         prompt: { type: 'string', description: 'Describe the scene, motion, lighting, camera angle, and style.' },
         size: { type: 'string', description: 'Requested output size, such as 1280x720, 720x1280, or 960x960.' },
         duration: { type: 'number', description: 'Requested duration in seconds. The selected provider may normalize it to a supported duration.' },

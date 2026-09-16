@@ -10,6 +10,14 @@ import {
 } from '../server/cognition/deterministic_tool_recovery';
 
 describe('structured media workbench requests', () => {
+  it('preserves the official-only restriction in exact runtime-owned arguments', () => {
+    for (const operation of ['text_to_image', 'text_to_video']) {
+      const request = normalizeStructuredMediaRequest({ operation, prompt: 'scene', size: '1024x1024', officialOnly: true, provider: 'untrusted' })!;
+      expect(request.officialOnly).toBe(true);
+      expect(structuredMediaToolCall(request).arguments.officialOnly).toBe(true);
+      expect(structuredMediaToolCall(request).arguments).not.toHaveProperty('provider');
+    }
+  });
   it('normalizes bounded text-to-image requests and owns the exact tool arguments', () => {
     const request = normalizeStructuredMediaRequest({
       operation: 'text_to_image',

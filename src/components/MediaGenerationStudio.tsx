@@ -25,6 +25,7 @@ import {
   type MediaGenerationSourceOperation,
 } from '@/lib/mediaGenerationArtifacts';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
+import { chatSongCopy } from '@/i18n/locales/chatSong';
 
 export type MediaGenerationStudioStatus =
   | 'idle'
@@ -36,6 +37,7 @@ export type MediaGenerationStudioStatus =
   | 'error';
 
 export type MediaGenerationRequest = {
+  officialOnly?: true;
   mode: MediaGenerationKind;
   operation: MediaGenerationOperation;
   prompt: string;
@@ -89,6 +91,7 @@ export type MediaGenerationStudioProps = {
     slot: MediaGenerationSourceSlot,
   ) => void;
   onClose: () => void;
+  onOpenChatSong?: () => void;
   onGenerate: (request: MediaGenerationRequest) => void;
   onCancel?: () => void;
   onRetry?: (request: MediaGenerationRequest) => void;
@@ -234,6 +237,7 @@ export function MediaGenerationStudio({
   onSourceChange,
   onRequestSourceImage,
   onClose,
+  onOpenChatSong,
   onGenerate,
   onCancel,
   onRetry,
@@ -513,6 +517,7 @@ export function MediaGenerationStudio({
             </p>
           </div>
         </div>
+        {activeKind === 'video' && onOpenChatSong && <button type="button" onClick={onOpenChatSong} className="ml-auto rounded-xl border border-amber-200/20 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-100">{chatSongCopy[locale].entry}</button>}
         <button
           type="button"
           onClick={onClose}

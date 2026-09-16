@@ -8,6 +8,7 @@ export const MEDIA_GENERATION_OPERATIONS = [
 export type MediaGenerationOperation = typeof MEDIA_GENERATION_OPERATIONS[number];
 
 export type StructuredMediaRequest = {
+  officialOnly?: true;
   operation: MediaGenerationOperation;
   prompt: string;
   size: string;
@@ -58,6 +59,8 @@ function normalizeReference(value: unknown): string {
  * Fail-closed parser for the media workbench envelope. The client can choose
  * among four product operations, but it can never choose an arbitrary tool,
  * provider, model, endpoint, or unbounded argument through this payload.
+ * An optional official-only restriction narrows allowed routing; it never
+ * changes model preferences or grants another provider permission to run.
  */
 export function normalizeStructuredMediaRequest(value: unknown): StructuredMediaRequest | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -67,11 +70,12 @@ export function normalizeStructuredMediaRequest(value: unknown): StructuredMedia
     : null;
   const prompt = compact(candidate.prompt, MAX_PROMPT_LENGTH);
   const size = normalizeSize(candidate.size);
+  const restriction = candidate.officialOnly === true ? { officialOnly: true as const } : {};
   if (!operation || !prompt || !size) return null;
 
   if (operation === 'text_to_image') {
     const count = Math.max(1, Math.min(4, Math.trunc(Number(candidate.count) || 1)));
-    return { operation, prompt, size, count };
+    return { operation, prompt, size, count, ...restriction };
   }
 
   if (operation === 'image_edit') {
@@ -85,23 +89,25 @@ export function normalizeStructuredMediaRequest(value: unknown): StructuredMedia
       prompt,
       size,
       primaryImage,
+      ...restriction,
       ...(referenceImages.length > 0 ? { referenceImages } : {}),
     };
   }
 
   const duration = Math.max(1, Math.min(120, Math.trunc(Number(candidate.duration) || 6)));
-  if (operation === 'text_to_video') return { operation, prompt, size, duration };
+  if (operation === 'text_to_video') return { operation, prompt, size, duration, ...restriction };
 
   const referenceImage = normalizeReference(candidate.referenceImage);
   if (!referenceImage) return null;
-  return { operation, prompt, size, duration, referenceImage };
+  return { operation, prompt, size, duration, referenceImage, ...restriction };
 }
 
 export function structuredMediaToolCall(request: StructuredMediaRequest): StructuredMediaToolCall {
+  const restriction = request.officialOnly ? { officialOnly: true } : {};
   if (request.operation === 'text_to_image') {
     return {
       name: 'generate_image',
-      arguments: { prompt: request.prompt, size: request.size, n: request.count || 1 },
+      arguments: { prompt: request.prompt, size: request.size, n: request.count || 1, ...restriction },
     };
   }
   if (request.operation === 'image_edit') {
@@ -111,6 +117,7 @@ export function structuredMediaToolCall(request: StructuredMediaRequest): Struct
         prompt: request.prompt,
         size: request.size,
         filePath: request.primaryImage,
+        ...restriction,
         ...(request.referenceImages?.length ? { referencePaths: request.referenceImages } : {}),
       },
     };
@@ -121,6 +128,7 @@ export function structuredMediaToolCall(request: StructuredMediaRequest): Struct
       prompt: request.prompt,
       size: request.size,
       duration: request.duration || 6,
+      ...restriction,
       ...(request.operation === 'image_to_video'
         ? { first_frame_image: request.referenceImage }
         : {}),

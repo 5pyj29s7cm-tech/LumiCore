@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+const ChatSongWorkbench = React.lazy(() => import('./ChatSongWorkbench'));
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
 import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
 import { archivedMediaArtifacts } from '@/lib/generatedLibrary';
@@ -859,6 +860,7 @@ export function AgentChatPage({
   const [deletingConversationId, setDeletingConversationId] = useState('');
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationHistoryContextMenu | null>(null);
   const [mediaStudioMode, setMediaStudioMode] = useState<MediaGenerationKind | null>(null);
+  const [chatSongOpen, setChatSongOpen] = useState(false);
   const [mediaGenerationStatus, setMediaGenerationStatus] = useState<MediaGenerationStudioStatus>('idle');
   const [mediaGenerationDetail, setMediaGenerationDetail] = useState('');
   const [mediaGenerationArtifacts, setMediaGenerationArtifacts] = useState<MediaGenerationArtifact[]>([]);
@@ -4098,6 +4100,7 @@ export function AgentChatPage({
               onSourceChange={handleMediaSourceChange}
               onRequestSourceImage={requestMediaSourceImage}
               onClose={closeMediaGenerationStudio}
+              onOpenChatSong={!isWorkChat ? () => { void refreshKnowledgeFiles(); setChatSongOpen(true); } : undefined}
               onGenerate={generateMediaFromStudio}
               onCancel={() => {
                 setMediaGenerationStatus('cancelling');
@@ -4117,6 +4120,27 @@ export function AgentChatPage({
               onArtifactReady={markMediaGenerationArtifactReady}
               onArtifactError={markMediaGenerationArtifactFailed}
             />
+            {chatSongOpen && !isWorkChat && <React.Suspense fallback={null}>
+              <ChatSongWorkbench
+                key={user?.uid}
+                locale={isZh ? 'zh' : 'en'}
+                files={knowledgeFiles}
+                libraryFailed={knowledgeFailed}
+                busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+                onRefreshLibrary={refreshKnowledgeFiles}
+                onClose={() => setChatSongOpen(false)}
+                onGenerate={request => {
+                  setChatSongOpen(false);
+                  openMediaGenerationStudio(request.mode);
+                  generateMediaFromStudio(request);
+                }}
+                onTask={async prompt => {
+                  const requestId = await sendText(prompt, [], { includeConversationAttachments: false });
+                  if (requestId) closeMediaGenerationStudio();
+                  return requestId;
+                }}
+              />
+            </React.Suspense>}
           </motion.div>
         )}
       </AnimatePresence>

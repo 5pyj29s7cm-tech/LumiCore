@@ -681,6 +681,7 @@ async function generateImage(args: Record<string, any>, context?: ToolContext): 
   const signal = context?.executionSignal;
   const onProgress = context?.onProgress;
   const prefs = getUserPreferredGenerationModels(context?.userId || 'anonymous').image;
+  if (args.officialOnly === true && prefs.provider !== 'relay') throw new Error('This project requires Lumi Official API. Select it for image generation in model settings.');
   if (prefs.provider === 'openai') {
     return generateImageOpenAI(args, prefs.model || prefs.models.openai, signal, onProgress);
   }
@@ -995,6 +996,7 @@ export function registerImageTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
+        officialOnly: { type: 'boolean', description: 'Require the selected provider to be Lumi Official API; reject other providers.' },
         prompt: { type: 'string', description: 'Detailed image description. Be specific about subject, style, lighting, colors, composition.' },
         size: { type: 'string', description: 'DALL-E: "1024x1024", "1792x1024", "1024x1792". DashScope: "1024*1024", "720*1280", "1280*720"' },
         quality: { type: 'string', description: 'DALL-E only: "standard" or "hd"' },

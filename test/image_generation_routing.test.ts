@@ -18,6 +18,13 @@ function allowPublicTestDns(): void {
 }
 
 describe('image generation model routing', () => {
+  it('rejects an official-only request after a preference change without calling another service', async () => {
+    upsertUserPreferredGenerationModels('official-only-image', { image: { provider: 'openai' } });
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const registry = new ToolRegistry(); registerImageTools(registry);
+    await expect(registry.execute('generate_image', { prompt: 'A room', officialOnly: true }, { userId: 'official-only-image' })).rejects.toThrow(/requires Lumi Official API/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   beforeAll(async () => {
     await initDatabase();
   });

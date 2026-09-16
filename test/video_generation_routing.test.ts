@@ -85,6 +85,12 @@ async function runVideo(
 }
 
 describe('video generation model routing', () => {
+  it('rejects an official-only request after a preference change without calling another service', async () => {
+    upsertUserPreferredGenerationModels('official-only-video', { video: { provider: 'qwen' } });
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await expect(runVideo('official-only-video', { officialOnly: true })).rejects.toThrow(/requires Lumi Official API/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   beforeAll(async () => {
     await initDatabase();
   });
