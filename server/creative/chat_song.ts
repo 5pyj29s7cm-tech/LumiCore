@@ -10,7 +10,7 @@ import { generatedKnowledgeDirectory } from '../files/knowledge_directory';
 import { registerGeneratedKnowledgeFile } from '../files/generated_archive';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 import { runMediaProcess } from '../media/process';
-import { CHAT_SONG_DEFAULT_BRIEF, chatSongLyrics, chatSongSongCurrent, type ChatSongProject, type ChatSongBrief, type ChatSongLine, type ChatSongTiming } from '../../shared/chat_song';
+import { CHAT_SONG_DEFAULT_BRIEF, chatSongLyrics, chatSongSongCurrent, type ChatSongProject, type ChatSongBrief, type ChatSongLine, type ChatSongTiming, type ChatSongRender } from '../../shared/chat_song';
 import { CHAT_SONG_EXPORT_NAMES as names, chatSongEditingNotes, chatSongSingingPrompt, chatSongTaskPrompt } from '../regions/packs/cn/chat_song';
 
 export class ChatSongError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -52,6 +52,27 @@ export function getChatSongProject(userId: string, id: string): ChatSongProject 
 export function listChatSongProjects(userId: string): ChatSongProject[] {
   return fs.readdirSync(folder(userId)).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))
     .map(name => getChatSongProject(userId, name.slice(0, -5))).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+export function createChatSongRenderWorkspace(userId: string, id: string): string {
+  getChatSongProject(userId, id);
+  return ensurePrivateRuntimeDirectory(fs.mkdtempSync(path.join(folder(userId), '.render-')));
+}
+export function removeChatSongRenderWorkspace(userId: string, directory: string): void {
+  const resolved = path.resolve(directory);
+  if (path.dirname(resolved) !== path.resolve(folder(userId)) || !/^\.render-[\w-]+$/.test(path.basename(resolved))) throw new ChatSongError(500, 'Unexpected render workspace.');
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
+export function getChatSongRender(userId: string, id: string): ChatSongRender | null {
+  getChatSongProject(userId, id);
+  const file = path.join(folder(userId), `${id}.render.json`);
+  if (!fs.existsSync(file)) return null;
+  noLink(file);
+  const result = JSON.parse(fs.readFileSync(file, 'utf8')) as ChatSongRender;
+  if (result.fileId !== path.basename(result.fileId)) throw new ChatSongError(400, 'Invalid render receipt.');
+  return fs.existsSync(path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), result.fileId)) ? result : null;
+}
+export function saveChatSongRender(userId: string, id: string, result: ChatSongRender): void {
+  atomicWrite(path.join(folder(userId), `${parse(idSchema, id)}.render.json`), JSON.stringify(result));
 }
 export async function createChatSongProject(userId: string, input: unknown): Promise<ChatSongProject> {
   const value = parse(z.object({ id: idSchema, title: text(100).min(1), templateId: idSchema.optional() }).strict(), input);

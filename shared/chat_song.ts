@@ -3,6 +3,10 @@ export type ChatSongBrief = { theme: string; relationship: string; twist: string
 export type ChatSongAssetKind = 'background' | 'avatarA' | 'avatarB' | 'reaction' | 'clip';
 export type ChatSongAsset = { id: string; kind: ChatSongAssetKind; lineId: string; fileId: string; name: string; sha256: string };
 export type ChatSongTiming = { lineId: string; start: number; end: number };
+export type ChatSongRender = {
+  fileId: string; sha256: string; sourceRevision: number; duration: number;
+  width: number; height: number; createdAt: string; warnings: string[];
+};
 export type ChatSongProject = {
   id: string; revision: number; scriptRevision: number; title: string; brief: ChatSongBrief;
   lines: ChatSongLine[]; scriptLocked: boolean; assets: ChatSongAsset[];

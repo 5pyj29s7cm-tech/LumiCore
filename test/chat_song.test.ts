@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import JSZip from 'jszip';
 import sharp from 'sharp';
 import { generatedKnowledgeDirectory } from '../server/files/knowledge_directory';
-import { getChatSongProject, renderChatSongStrip } from '../server/creative/chat_song';
+import { changeChatSongProject, getChatSongProject, renderChatSongStrip } from '../server/creative/chat_song';
+import { chatSongRenderTimeline, renderChatSongVideo } from '../server/creative/chat_song_render';
 import { mountChatSongRoutes } from '../server/routes/chat_song_routes';
 import { chatSongSongCurrent, visibleChatSongLines, type ChatSongProject } from '../shared/chat_song';
 import { upsertUserPreferredLLM } from '../server/llm/user_preferences';
@@ -153,7 +154,57 @@ it('preflights official media selections without rewriting user settings', async
   upsertUserPreferredGenerationModels(owner, { image: { provider: 'auto' }, video: { provider: 'qwen' } });
   expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'video' })).status).toBe(409);
   upsertUserPreferredGenerationModels(owner, { image: { provider: 'relay' }, video: { provider: 'relay' } });
-  expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'video' })).status).toBe(200);
+  expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'image' })).status).toBe(200);
+  expect((await request(`/${p.id}/media-preflight`, 'POST', { mode: 'video' })).status).toBe(409);
+  const confirmed = await withSong();
+  expect((await request(`/${confirmed.id}/media-preflight`, 'POST', { mode: 'video', revision: confirmed.revision })).status).toBe(200);
+  expect((await request(`/${confirmed.id}/media-preflight`, 'POST', { mode: 'video', revision: confirmed.revision - 1 })).status).toBe(409);
+  const handoff = await request(`/${confirmed.id}/handoff`);
+  expect(handoff.body.prompts.filter((p: any) => p.kind === 'clip')).toHaveLength(confirmed.lines.length);
+});
+it('requires confirmed music, complete timing and a current revision before composition', async () => {
+  const p = await locked();
+  expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).status).toBe(409);
+  const confirmed = await withSong();
+  expect((await request(`/${confirmed.id}/render`, 'POST', { revision: confirmed.revision })).status).toBe(400);
+  expect((await request(`/${confirmed.id}/render`, 'POST', { revision: confirmed.revision - 1 })).status).toBe(409);
+  expect((await request(`/${confirmed.id}/render`, 'GET', undefined, 'other-owner')).status).toBe(404);
+  expect((await request(`/${confirmed.id}/render`)).body.render).toBeNull();
+});
+it('publishes only a verified render, reuses its receipt and rejects changed source files', async () => {
+  const p = (await action(await withSong(), 'set-timings', timeRows)).body;
+  mock.media.mockImplementation(async (binary, args) => {
+    if (binary === 'ffmpeg') { fs.writeFileSync(args.at(-1), 'mock encoder output; real encoding covered by UI smoke'); return ''; }
+    return JSON.stringify({ streams: [{ codec_type: 'video', width: 1080, height: 1440 }, { codec_type: 'audio' }], format: { duration: 12.5 } });
+  });
+  const result = await request(`/${p.id}/render`, 'POST', { revision: p.revision });
+  expect(result.status).toBe(200); expect(fs.existsSync(path.join(dir, result.body.render.fileId))).toBe(true);
+  expect((await request(`/${p.id}/render`)).body).toEqual(result.body);
+  expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).body).toEqual(result.body);
+  expect(mock.media.mock.calls.filter(([binary]) => binary === 'ffmpeg')).toHaveLength(1);
+  const source = fs.readFileSync(path.join(dir, 'song.wav'));
+  try { fs.writeFileSync(path.join(dir, 'song.wav'), 'replaced'); expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).status).toBe(409); }
+  finally { fs.writeFileSync(path.join(dir, 'song.wav'), source); }
+});
+it('does not publish cancelled renders or an output made while the project changed', async () => {
+  let p = (await action(await withSong(), 'set-timings', timeRows)).body;
+  const controller = new AbortController();
+  mock.media.mockImplementation(async (_binary, _args, signal) => { controller.abort(); signal.throwIfAborted(); });
+  await expect(renderChatSongVideo(owner, p.id, p.revision, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  expect((await request(`/${p.id}/render`)).body.render).toBeNull();
+  mock.media.mockImplementation(async (binary, args) => {
+    if (binary === 'ffmpeg') {
+      fs.writeFileSync(args.at(-1), 'mock encoder output');
+      await changeChatSongProject(owner, p.id, p.revision, draft => { draft.title = 'Changed during render'; }); return '';
+    }
+    return JSON.stringify({ streams: [{ codec_type: 'video', width: 1080, height: 1440 }, { codec_type: 'audio' }], format: { duration: 12.5 } });
+  });
+  expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).status).toBe(409);
+  expect((await request(`/${p.id}/render`)).body.render).toBeNull();
+});
+it('rounds lyric reveals forward to frame boundaries', async () => {
+  const p = (await action(await withSong(), 'set-timings', [{ ...timeRows[0], start: 1.01 }, ...timeRows.slice(1)])).body;
+  expect(chatSongRenderTimeline(p)[1].seconds).toBe(1.04);
 });
 it('renders long Chinese and escaped markup without cropping or parsing it as instructions', async () => {
   const bytes = await renderChatSongStrip({ id: '01', role: 'B', group: 1, reaction: '', text: '这是一句中文对白。<b>原样排版 & 不执行标记</b>。'.repeat(3) });

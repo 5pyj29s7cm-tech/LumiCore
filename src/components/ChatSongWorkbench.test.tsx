@@ -47,8 +47,8 @@ it('reviews a draft before replacing dialogue, and saves only through the authen
 });
 it('sends image creation into the existing pipeline with the official-only restriction', async () => {
   const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
-  fireEvent.click(screen.getByRole('tab', { name: 'Visual assets' }));
-  fireEvent.click(await screen.findByRole('button', { name: 'Generate with Official API' }));
+  fireEvent.click(screen.getByRole('tab', { name: '3 · Video & images' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Generate image (Lumi Official API)' }));
   await waitFor(() => expect(p.onGenerate).toHaveBeenCalledWith(expect.objectContaining({ mode: 'image', officialOnly: true, prompt: 'A quiet room' })));
   expect(mock.api.mock.calls.some(([path]) => path.endsWith('/media-preflight'))).toBe(true);
 });
@@ -56,8 +56,9 @@ it('keeps a failed task handoff open and never implies the film has been exporte
   const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
   const implementation = mock.api.getMockImplementation()!;
   mock.api.mockImplementation(async (path: string, init?: RequestInit) => path.endsWith('/export') ? { fileId: 'pack.zip', url: '/api/files/download/pack.zip', timed: false, warnings: [], handoffs: { music: 'Real task', edit: '' } } : implementation(path, init));
-  fireEvent.click(screen.getByRole('tab', { name: 'Editing handoff' }));
-  expect((screen.getByRole('button', { name: 'Ask Lumi to edit in Jianying (trial)' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('tab', { name: '4 · Compose & export' }));
+  expect((screen.getByRole('button', { name: 'Compose & export with Lumi' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('tab', { name: '2 · Generate song' }));
   fireEvent.click(screen.getByRole('button', { name: 'Ask Lumi to make the song (trial)' }));
   expect((await screen.findByRole('alert')).textContent).toContain('No task created'); expect(p.onClose).not.toHaveBeenCalled(); expect(p.onTask).toHaveBeenCalledWith('Real task');
 });
@@ -69,13 +70,51 @@ it('keeps timing inputs editable while dirty and saves them before closing', asy
     return { projects: [timedProject] };
   });
   const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
-  fireEvent.click(screen.getByRole('tab', { name: 'Song & timing' }));
+  fireEvent.click(screen.getByRole('tab', { name: '4 · Compose & export' }));
   const start = screen.getAllByRole('spinbutton')[0]; fireEvent.change(start, { target: { value: '1.5' } });
   expect((start as HTMLInputElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Back to AI Creation' }));
   await waitFor(() => expect(p.onClose).toHaveBeenCalled());
   const action = mock.api.mock.calls.find(([path]) => path.endsWith('/action'))!;
   expect(JSON.parse(String(action[1].body))).toMatchObject({ action: 'set-timings', value: [{ lineId: '01', start: 1.5, end: 3 }, { lineId: '02', start: 4, end: 6 }] });
+});
+it('keeps image preparation available but requires a confirmed song before video generation', async () => {
+  const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
+  expect(screen.queryByLabelText('Music style')).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: '3 · Video & images' }));
+  const video = screen.getByRole('button', { name: 'Generate video (Lumi Official API)' });
+  expect((video as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(video); expect(p.onGenerate).not.toHaveBeenCalled();
+  expect((screen.getByRole('button', { name: 'Generate image (Lumi Official API)' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm the song first' }));
+  expect(screen.getByRole('tab', { name: '2 · Generate song' }).getAttribute('aria-selected')).toBe('true');
+});
+it('generates video after song confirmation even without a reaction note', async () => {
+  const confirmed = { ...project, song: { fileId: 'song.wav', name: 'song.wav', sha256: 'hash', duration: 10, scriptRevision: 1, confirmed: true } };
+  mock.api.mockImplementation(async (path: string) => {
+    if (path.endsWith('/handoff')) return { lyrics: '', singing: '', prompts: [{ kind: 'clip', lineId: '01', prompt: 'Video for the first line' }] };
+    return { projects: [confirmed] };
+  });
+  const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
+  fireEvent.click(screen.getByRole('tab', { name: '3 · Video & images' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Generate video (Lumi Official API)' }));
+  await waitFor(() => expect(p.onGenerate).toHaveBeenCalledWith(expect.objectContaining({ mode: 'video', operation: 'text_to_video', officialOnly: true, prompt: 'Video for the first line' })));
+  expect(JSON.parse(mock.api.mock.calls.find(([p]) => p.endsWith('/media-preflight'))![1].body)).toEqual({ mode: 'video', revision: 2 });
+});
+it('composes locally, previews the verified result and refreshes the shared library without a Jianying task', async () => {
+  const ready = { ...project, song: { fileId: 'song.wav', name: 'song.wav', sha256: 'hash', duration: 10, scriptRevision: 1, confirmed: true }, timings: [{ lineId: '01', start: 1, end: 3 }, { lineId: '02', start: 4, end: 6 }] };
+  mock.api.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/handoff')) return { lyrics: '', singing: '', prompts: [] };
+    if (path.endsWith('/render')) return { render: init?.method === 'POST' ? { fileId: 'finished.mp4', sha256: 'output-hash', sourceRevision: 2, warnings: [] } : null };
+    return { projects: [ready] };
+  });
+  const p = props(); render(<ChatSongWorkbench {...p} />); await screen.findByDisplayValue('Episode');
+  fireEvent.click(screen.getByRole('tab', { name: '4 · Compose & export' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Compose & export with Lumi' }));
+  await screen.findByRole('heading', { name: 'Finished video' });
+  expect(p.onTask).not.toHaveBeenCalled(); expect(p.onRefreshLibrary).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Download MP4' }));
+  await waitFor(() => expect(mock.save).toHaveBeenCalledWith(expect.stringContaining('finished.mp4'), 'finished.mp4'));
 });
 it('protects unsaved work when the shared AI Creation shell is closed', async () => {
   const ref = React.createRef<ChatSongWorkbenchHandle>();

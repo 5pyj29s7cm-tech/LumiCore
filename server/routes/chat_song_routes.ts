@@ -7,12 +7,13 @@ import { getUserPreferredGenerationModels } from '../llm/generation_preferences'
 import { isStrictPrivacy } from '../config/privacy';
 import type { mountCreativeRoutes } from './creative_routes';
 import { chatSongDraftPrompt, chatSongImagePrompt, chatSongSingingPrompt } from '../regions/packs/cn/chat_song';
-import { chatSongLyrics } from '../../shared/chat_song';
+import { chatSongLyrics, chatSongSongCurrent } from '../../shared/chat_song';
 import {
   ChatSongError, listChatSongProjects, getChatSongProject, createChatSongProject, changeChatSongProject,
   editChatSongProject, lockChatSongScript, attachChatSongAsset, selectChatSongAudio, confirmChatSongAudio,
-  setChatSongTimings, normalizeChatSongLines, exportChatSongPackage,
+  setChatSongTimings, normalizeChatSongLines, exportChatSongPackage, getChatSongRender,
 } from '../creative/chat_song';
+import { renderChatSongVideo } from '../creative/chat_song_render';
 
 const handle = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(fn(req, res)).catch(error => {
@@ -69,12 +70,14 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
     const project = getChatSongProject(req.user!.uid, String(req.params.id));
     const prompts = ['background', 'avatarA', 'avatarB'].map(kind => ({ kind, lineId: '', prompt: chatSongImagePrompt(project, kind) }));
     for (const line of project.lines.filter(line => line.reaction)) prompts.push({ kind: 'reaction', lineId: line.id, prompt: chatSongImagePrompt(project, 'reaction', line.id) });
-    for (const line of project.lines.filter(line => line.reaction)) prompts.push({ kind: 'clip', lineId: line.id, prompt: chatSongImagePrompt(project, 'clip', line.id) });
+    for (const line of project.lines) prompts.push({ kind: 'clip', lineId: line.id, prompt: chatSongImagePrompt(project, 'clip', line.id) });
     res.json({ lyrics: chatSongLyrics(project.lines), singing: chatSongSingingPrompt(project), prompts });
   }));
   router.post(`${base}/:id/media-preflight`, handle(async (req, res) => {
-    getChatSongProject(req.user!.uid, String(req.params.id));
+    const project = getChatSongProject(req.user!.uid, String(req.params.id));
     const lane = req.body?.mode === 'video' ? 'video' : 'image';
+    if (req.body?.revision !== undefined && req.body.revision !== project.revision) throw new ChatSongError(409, 'Reload the current project before generating media.');
+    if (lane === 'video' && !chatSongSongCurrent(project)) throw new ChatSongError(409, 'Select and confirm the song before generating video.');
     if (isStrictPrivacy() || getUserPreferredGenerationModels(req.user!.uid)[lane].provider !== 'relay') throw new ChatSongError(409, 'Choose Lumi Official API for this generation role in model settings. Local-only privacy mode must be off.');
     res.json({ ok: true });
   }));
@@ -82,5 +85,11 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
     const project = getChatSongProject(req.user!.uid, String(req.params.id));
     if (req.body?.revision !== project.revision) throw new ChatSongError(409, 'Reload the current project before exporting.');
     res.json(await exportChatSongPackage(req.user!.uid, project));
+  }));
+  router.get(`${base}/:id/render`, handle(async (req, res) => res.json({ render: getChatSongRender(req.user!.uid, String(req.params.id)) })));
+  router.post(`${base}/:id/render`, handle(async (req, res) => {
+    const request = createRequestAbortController(req, res);
+    try { res.json({ render: await renderChatSongVideo(req.user!.uid, String(req.params.id), req.body?.revision, request.signal) }); }
+    finally { request.dispose(); }
   }));
 }
