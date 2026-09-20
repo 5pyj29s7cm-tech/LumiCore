@@ -7,6 +7,7 @@ import {
   endDesktopAutomationActivity,
 } from '@/services/desktopAutomationActivity';
 import { desktopCommandRelayOutput } from '@/lib/desktopCommandReceipt';
+import { nativeInvocationFailure } from '@/lib/nativeInvocationFailure';
 import { getNativeClientIdentity } from '@/services/nativeClientIdentity';
 import { toast } from 'sonner';
 import { appConfirm } from '@/lib/appConfirm';
@@ -405,7 +406,7 @@ async function handleDesktopExec(socket: Socket, data: DesktopExecPayload) {
     const invoke = <T>(command: string, arguments_?: Parameters<typeof nativeInvoke>[1], options?: Parameters<typeof nativeInvoke>[2]): Promise<T> => {
       if (!mayDispatch()) return Promise.reject(new Error('Desktop action cancelled before native dispatch; no new native action was started.'));
       return nativeInvoke<T>(command, arguments_, options).catch(error => {
-        throw new Error('[outcome_unknown] Native invocation did not return a terminal result: ' + String(error));
+        throw nativeInvocationFailure(command, error);
       });
     };
     let output: string;

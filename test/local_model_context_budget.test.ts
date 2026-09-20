@@ -20,6 +20,24 @@ const tools = [{
 }];
 
 describe('local model context budget', () => {
+  it('reserves one consistent message budget before selecting optional schemas on continuation', () => {
+    const task = 'Create the requested report, then open that exact output in WPS and check its contents.';
+    const call: any = { role: 'assistant', content: null,
+      toolCalls: [{ id: 'saved-1', name: 'create_docx', arguments: { outputPath: 'D:/work/meeting.docx' } }] };
+    const receipt: any = { role: 'tool', name: 'create_docx', toolCallId: 'saved-1',
+      content: JSON.stringify({ ok: true, path: 'D:/work/meeting.docx', details: 'verified details '.repeat(220) }) };
+    const prepared = prepareLocalModelRequest({ contextTokens: 32768, compactToolDeclarations: true,
+      messages: [{ role: 'system', content: 'execution rules '.repeat(2000) },
+        { role: 'user', content: task }, call, receipt],
+      toolDeclarations: [...tools, ...Array.from({ length: 20 }, (_, i) => ({ ...tools[0], function: {
+        ...tools[0].function, name: `optional_${i}`, description: 'Optional capability description. '.repeat(45),
+      } }))], requiredToolNames: ['desktop_open'],
+    });
+    expect(prepared.messages).toContainEqual(receipt);
+    expect(prepared.messages).toContainEqual(call);
+    expect(prepared.messages.find(m => m.role === 'user')?.content).toBe(task);
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(6144);
+  });
   it('reserves room for nested workflow arguments while respecting the context and explicit limits', () => {
     const toolDeclarations = [{ type: 'function' as const, function: { name: 'save_workflow', description: 'Save draft',
       parameters: { type: 'object', properties: { steps: { type: 'array', items: { type: 'object', properties: {

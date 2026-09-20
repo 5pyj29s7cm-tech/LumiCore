@@ -24,6 +24,7 @@ import { downloadPublicMedia, readResponseBytes } from '../media_artifact';
 import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
 import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
 import { validateVideoContainer } from '../video_container';
+import { measureGeneratedVideo, type VideoSettings } from '../video_measurements';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
@@ -244,19 +245,22 @@ async function persistRemoteVideo(
   }
 }
 
-function completedResult(input: {
+async function completedResult(input: {
   provider: VideoGenerationProvider;
   model: string;
   prompt: string;
   taskId: string;
   videoUrl?: string;
   outputPath: string;
+  requestedSettings: VideoSettings;
   generationMode?: 'text_to_video' | 'image_to_video';
   inputReferenceAccepted?: boolean;
   selectionReason?: 'explicit_model' | 'configured_text_to_video_role' | 'configured_image_to_video_role';
   signal?: AbortSignal;
   onProgress?: VideoProgressReporter;
-}): string {
+}): Promise<string> {
+  throwIfAborted(input.signal);
+  const measurements = await measureGeneratedVideo(input.outputPath, input.requestedSettings, input.signal);
   throwIfAborted(input.signal);
   const artifacts = [{ type: 'video', path: input.outputPath }];
   const result = JSON.stringify({
@@ -266,6 +270,8 @@ function completedResult(input: {
     verified: true,
     verificationStatus: 'verified',
     verification: { strategy: 'container_and_video_samples', decoded: false },
+    ...measurements,
+    requestedSettings: input.requestedSettings,
     provider: input.provider,
     model: input.model,
     prompt: input.prompt,
@@ -276,11 +282,12 @@ function completedResult(input: {
     artifactDurability: 'local_file',
     outputPath: input.outputPath,
     artifacts,
-    tip: 'Video generation completed and a verified MP4 or WebM artifact was saved locally.',
+    tip: measurements.settingsMatch ? 'Video saved; measured output settings match the request.'
+      : 'Video saved, but its output settings do not match the request or could not be measured. Preserve this file and report its actual settings; do not claim the requested settings or automatically regenerate.',
   });
   reportVideoProgress(
     input.onProgress,
-    CN_MEDIA_PROGRESS.videoCompleteSaved,
+    measurements.settingsMatch ? CN_MEDIA_PROGRESS.videoCompleteSaved : CN_MEDIA_PROGRESS.videoSettingsReview,
   );
   return result;
 }
@@ -288,6 +295,10 @@ function completedResult(input: {
 function completionMetadata(args: Record<string, any>) {
   const imageToVideo = Boolean(args.first_frame_image);
   return {
+    requestedSettings: {
+      ...(String(args.size || '').trim() ? { size: String(args.size).trim().replace('*', 'x') } : {}),
+      ...(Number(args.duration) > 0 ? { duration: Number(args.duration) } : {}),
+    },
     generationMode: imageToVideo ? 'image_to_video' as const : 'text_to_video' as const,
     inputReferenceAccepted: imageToVideo,
     selectionReason: (args.__selectionReason || (imageToVideo

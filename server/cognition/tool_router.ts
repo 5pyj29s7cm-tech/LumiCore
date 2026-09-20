@@ -1,5 +1,6 @@
 import { ToolPolicy } from '../personality/types';
 import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
+import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   ToolRegistry,
@@ -25,6 +26,10 @@ import {
   requiresCurrentAppUiMutation,
   requiresCadGeometryExtractionOnly,
   requiresVisibleAutoCadExecution,
+  requiresArtifactOpen,
+  requiresMediaPlaybackAction,
+  isBrowserSessionInspection,
+  isDocumentOpenAndReviewRequest,
 } from './action_contract';
 import {
   isRecoveredCurrentAppEditingContinuation,
@@ -49,6 +54,9 @@ import {
   type PendingAssistantOfferContext,
 } from './pending_assistant_offer';
 import { toolRecordTerminalPayload } from '../tools/receipt_payload';
+import { hasRequestedArtifactMutation, hasExplicitNoMutationInstruction } from './tool_intent';
+import { hasVisionIntent } from './vision_routing';
+import { withoutLocationLiterals } from './location_literals';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
@@ -402,28 +410,6 @@ function strictDesktopObservationToolNames(
   return unique(plan.map(call => call.name));
 }
 
-function isDocumentOpenAndReviewRequest(text: string): boolean {
-  // i18n-allow: Reviewed multilingual negative open/launch input recognition; not user-visible copy.
-  if (/(?:不要|别|禁止|无需).{0,18}(?:打开|启动)|\b(?:do\s+not|don't|never|without)\b.{0,28}\b(?:open|launch)\b/iu.test(text)) return false;
-  // Ignore exact-target exclusion clauses such as "do not substitute a
-  // same-named file". Their incidental "file"/"read" words describe what
-  // must not be used, not a document the user wants reviewed.
-  const candidate = text
-    // i18n-allow: Reviewed Chinese exact-target exclusion recognition; not user-visible copy.
-    .replace(/(?:不能|不要|别|禁止|不可).{0,64}(?:替代|冒充|代替)/gu, ' ')
-    .replace(/\b(?:do\s+not|don't|never)\b.{0,80}\b(?:substitute|replace|use\s+instead)\b/giu, ' ');
-  // i18n-allow: Reviewed multilingual open/launch input recognition; not user-visible copy.
-  const wantsOpen = /(?:打开|启动)|\b(?:open|launch)\b/iu.test(candidate);
-  // i18n-allow: Reviewed multilingual document-type input recognition; not user-visible copy.
-  const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b/iu.test(candidate)
-    // i18n-allow: Reviewed Chinese report/document input recognition; not user-visible copy.
-    || /(?:打开|启动|阅读|读取).{0,24}(?:报告|介绍)|(?:报告|介绍)(?:文件|文档)/u.test(candidate)
-    || /\b(?:open|launch|read|review).{0,32}\breport\b/iu.test(candidate);
-  // i18n-allow: Reviewed multilingual review/read input recognition; not user-visible copy.
-  const wantsReview = /(?:分析|总结|介绍|讲解|读取|阅读|逐页|一页一页|看一下|看看)|\b(?:analy[sz]e|summari[sz]e|review|read|present|walk\s+through)\b/iu.test(candidate);
-  return wantsOpen && hasDocument && wantsReview;
-}
-
 function isDirectAutocadOperationsPlayback(text: string): boolean {
   const raw = String(text || '');
   const hasOperations = /(?:_operations\.json\b|operationsPath|AutoCAD\s+operations)/i.test(raw);
@@ -585,6 +571,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   }
   if (categories.includes('authenticated_web')) {
     priorities.push(
+      ...(isBrowserSessionInspection(text) ? ['desktop_ui_snapshot', 'ocr_screen'] : []),
       'web_login_profile_list',
       'web_login_profile_save_from_preset',
       'web_login_run',
@@ -617,6 +604,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   }
   if (categories.includes('music')) {
     priorities.push(
+      'computer_use',
       'desktop_list_apps',
       'desktop_open',
       'desktop_active_window',
@@ -948,6 +936,7 @@ export function routeToolsForTurn(
   const trustedCurrentDocumentReadAnchor = currentAuthoringDocumentInspection
     && hasTrustedCurrentDocumentReadAnchor(options?.actionTaskState);
   const documentOpenAndReview = !currentAuthoringDocumentInspection
+    && !hasRequestedArtifactMutation(withoutLocationLiterals(instructionText))
     && !localCadSourceRequest
     && actionContract.kind !== 'design_delivery'
     && isDocumentOpenAndReviewRequest(instructionText);
@@ -978,9 +967,9 @@ export function routeToolsForTurn(
     /^(?:请)?(?:帮我)?(?:编辑|修改|重做|重绘|替换|变更).{0,48}(?:图片|图像|照片|海报|主图)/u.test(instructionText)
     || /^(?:please\s+)?(?:edit|modify|rework|redraw|replace|change)\b.{0,64}\b(?:image|picture|photo|poster|artwork)\b/iu.test(instructionText)
   );
-  const mediaGenerationExplicitlyNegated = !structuredMediaCategory && (
+  const mediaGenerationExplicitlyNegated = !structuredMediaCategory && !mediaCreationInstruction(instructionText) && (
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /(?:不要|别|无需|不用|不需要|禁止)[\s\S]{0,18}(?:实际)?(?:生成|创建|制作|产出|做)[\s\S]{0,28}(?:图片|图像|插画|海报|视频|短视频|短片|动画|成片)/u.test(instructionText)
+    /不再生图|(?:不要|别|无需|不用|不需要|禁止)[\s\S]{0,18}(?:实际)?(?:生成|创建|制作|产出|做)[\s\S]{0,28}(?:图片|图像|插画|海报|视频|短视频|短片|动画|成片)/u.test(instructionText)
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
     || /(?:不要|别|无需|不用|不需要)[\s\S]{0,8}(?:实际)?(?:生成|创建|制作|产出)/u.test(instructionText)
     // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -1036,7 +1025,9 @@ export function routeToolsForTurn(
     if (structuredMediaCategory && route.category !== structuredMediaCategory) continue;
     const matchesTrustedCadContinuation = route.category === 'cad_design'
       && trustedCadContinuation;
-    if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation) continue;
+    if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation
+      && !(route.category === 'image_generation' && mediaCreationInstruction(instructionText)
+        && routeMatches(route, mediaCreationInstruction(instructionText)!))) continue;
     if (
       explicitArtifactCreation
       && ['messaging', 'client_surface', 'desktop_launch'].includes(route.category)
@@ -1259,6 +1250,8 @@ export function routeToolsForTurn(
       'read_docx',
       'read_xlsx',
       'extract_document_text',
+      'ocr_screen',
+      'ocr_region',
     ]) addIfAvailable(selected, available, name);
     categories.splice(0, categories.length, 'document_open_and_review');
     reasons.splice(0, reasons.length, 'document presentation requires exact file discovery, opening, content extraction, and visible-target verification');
@@ -1440,9 +1433,30 @@ export function routeToolsForTurn(
     reasons.push('referential cleanup has no valid adjacent assistant offer; runtime cancellation remains fail-closed');
   }
 
+  // A file task may still require a visible handoff. Expose that continuation
+  // in the same turn instead of relying on the model to invent undeclared tools.
+  const artifactHandoffTools = actionContract.kind === 'artifact_work' && !currentAppEdit
+    && (hasRequestedArtifactMutation(instructionText) || isExplicitArtifactCreationText(instructionText) || requiresArtifactOpen(instructionText))
+    ? ['modify_xlsx', 'modify_docx', 'read_xlsx', 'read_docx', ...(requiresArtifactOpen(instructionText) ? ['desktop_open', 'desktop_active_window'] : [])]
+    : [];
+  for (const name of artifactHandoffTools) if (!forbiddenToolNames.has(name)) addIfAvailable(selected, available, name);
+  if (requiresMediaPlaybackAction(instructionText) && categories.includes('music')
+    && available.has('computer_use') && !forbiddenToolNames.has('computer_use')) {
+    addIfAvailable(selected, available, 'computer_use');
+    selected.delete('desktop_capture_screen');
+    reasons.push('playback uses the vision actuator and its built-in verification; raw screenshots do not expose readable playback facts to the text planner');
+  }
+  // Read-only window inspection needs interpreted pixels even when a domain
+  // route (for example music) selected mostly application-control tools.
+  const visualObservationTools = hasExplicitNoMutationInstruction(instructionText) && hasVisionIntent(instructionText)
+    ? ['ocr_screen', 'ocr_region'].filter(name => !forbiddenToolNames.has(name)) : [];
+  for (const name of visualObservationTools) addIfAvailable(selected, available, name);
+
   const orderedBeforeHealthGate = applyRoutePriority(
     availableNames.filter(name => selected.has(name)),
     unique([
+      ...visualObservationTools,
+      ...artifactHandoffTools,
       ...continuationEvidenceTools,
       ...(currentAuthoringDocumentInspection
         ? ['desktop_running_processes', 'desktop_active_window']

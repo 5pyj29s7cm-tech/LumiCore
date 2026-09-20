@@ -5,6 +5,7 @@ import {
   buildActionContract,
   claimsCurrentAppSaveCompletion,
   hasCoreActionEvidence,
+  hasRequestedDesktopOpenEvidence,
   hasCurrentAppSaveEvidence,
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
@@ -600,7 +601,11 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
       /File written:|Text file:|Output file:|Saved to:|written:|created:|saved:|exported:|\.dxf|\.pptx|\.docx|\.pdf|\.md|\.txt/i.test(call.result || '')
     )
   );
-  const hasOpenTool = successful.some(call => OPEN_TOOL_RE.test(call.name));
+  const hasOpenTool = successful.some(call => OPEN_TOOL_RE.test(call.name))
+    || hasRequestedDesktopOpenEvidence(successful, task, task.match(/https?:\/\/[^\s，。；;！？!?<>"]+/iu)?.[0] || '')
+    || successful.some(call => call.name === 'browser_open_task'
+      && call.terminalVerification?.status === 'verified'
+      && hasRequestedDesktopOpenEvidence([call], task, String(call.arguments?.url || call.arguments?.query || '')));
   const hasPassingVerification = successful.some(call => /work_product_verify/i.test(call.name) && VERIFY_PASS_RE.test(call.result || ''));
   const pathsExist = extractLocalPaths(response)
     .some(filePath => {

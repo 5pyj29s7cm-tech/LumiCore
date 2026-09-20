@@ -1,4 +1,5 @@
 import path from 'node:path';
+import crypto from 'node:crypto';
 import type { ToolExecutionRecord } from './types';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from './receipt_payload';
 
@@ -15,6 +16,22 @@ export function isArtifactProducerRecord(record: Pick<ToolExecutionRecord, 'name
 
 export function isArtifactReaderRecord(record: ToolExecutionRecord): boolean {
   return READERS.test(record.name);
+}
+
+/** Readback metadata proves a read occurred; it is not the document text. */
+export function artifactReadbackText(record: ToolExecutionRecord): string | undefined {
+  const payload = toolRecordTerminalPayload(record);
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const data = payload as Record<string, unknown>;
+    if (data.kind === 'text_readback_metadata') {
+      // Bounded or legacy compacted results are usable only when their digest
+      // still matches the original read. Never treat a summary as exact content.
+      const result = String(record.result || '');
+      return crypto.createHash('sha256').update(result, 'utf8').digest('hex') === data.contentDigest ? result : undefined;
+    }
+    for (const field of ['text', 'content', 'rawText']) if (typeof data[field] === 'string') return data[field] as string;
+  }
+  return typeof payload === 'string' ? payload : toolRecordTerminalText(record);
 }
 
 export function sameArtifactPath(left: string, right: string): boolean {

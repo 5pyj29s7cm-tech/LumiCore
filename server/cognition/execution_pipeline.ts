@@ -1,5 +1,5 @@
 import type { ToolPolicy } from '../personality/types';
-import { normalizeStructuredMediaRequest, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
+import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
 import { isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState } from './action_continuation';
 import {
@@ -40,6 +40,7 @@ import {
 } from './capability_execution_plan';
 import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
+import { avatarAuthoringMutationInstruction } from './media_creation_intent';
 import { classifySkillAuthoringIntent, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
 import { buildActionContract } from './action_contract';
@@ -75,7 +76,7 @@ export interface LumiExecutionPipeline {
 }
 
 export interface BuildLumiExecutionPipelineInput {
-  /** Validated workbench operation; a projection hint, never an authorization grant. */
+  /** Explicit creation operation; still subject to ordinary authorization and current-turn vetoes. */
   structuredMediaRequest?: StructuredMediaRequest | null;
   dispatch: LumiTurnDispatchInput;
   /**
@@ -206,8 +207,11 @@ function applyCurrentTurnNoMutationConstraint(
     && normalizedIntent.sideEffectClass === 'local_write'
   ) return execution;
   if (!hasExplicitNoMutationInstruction(text)) return execution;
+  const avatarInstruction = avatarAuthoringMutationInstruction(text);
+  const scopedAvatarAuthoring = avatarInstruction !== null && !hasExplicitNoMutationInstruction(avatarInstruction);
   const requestedWorkflowCapture = preservedOutput && executionBeforeWorkflowSave(text);
   const scopedTools = new Set([
+    ...(scopedAvatarAuthoring ? ['memory_avatar_create', 'memory_avatar_import_image', 'memory_avatar_configure_animation', 'generate_image', 'ai_edit_image', 'get_image_generation_status'] : []),
     ...(preservedOutput ? ['code_execution'] : []),
     ...(requestedWorkflowCapture ? ['capture_recent_workflow', 'save_workflow'] : []),
   ]);
@@ -223,7 +227,9 @@ function applyCurrentTurnNoMutationConstraint(
     ...restricted,
     promptOverlay: [
       execution.promptOverlay,
-      preservedOutput
+      scopedAvatarAuthoring
+        ? 'Only the requested memory-person authoring and image operations may mutate state. Preserve existing people and all implementation files. Do not edit code/databases, send messages, or start a livestream.'
+        : preservedOutput
         ? 'Preserve the original input file. Read and calculate, then save only the separately requested local output. Do not modify the source or send, submit, launch, or mutate unrelated state.'
         : 'Current-turn read-only boundary: the user explicitly prohibited modification. Read/inspect/answer only; do not create, edit, save, send, submit, control, or mutate any state.',
     ].join('\n'),
@@ -324,9 +330,18 @@ function applySelectedWorkflowAdapterPolicy(
 export function buildLumiExecutionPipeline(
   input: BuildLumiExecutionPipelineInput,
 ): LumiExecutionPipeline {
-  const acceptedPlan = resolveAcceptedFilePlan({ text: input.dispatch.text, history: input.persistedConversationHistory });
-  const effectiveText = acceptedPlan?.text || input.dispatch.text;
-  const dispatched = acceptedPlan
+  const mediaRequest = normalizeStructuredMediaRequest(input.structuredMediaRequest);
+  // The operation is an explicit workbench instruction; its prompt is media
+  // content, not a second instruction about Lumi's tools/UI. Keep any separate
+  // user veto in the routing text and retain the normal policy/visibility gates.
+  // Exact tool arguments still come from the validated, task-bound envelope.
+  const mediaDecisionText = mediaRequest ? [
+    structuredMediaRoutingEnvelope(mediaRequest),
+    input.dispatch.text.split(mediaRequest.prompt).join('[media brief]'),
+  ].join('\n\n') : null;
+  const acceptedPlan = mediaRequest ? null : resolveAcceptedFilePlan({ text: input.dispatch.text, history: input.persistedConversationHistory });
+  const effectiveText = mediaDecisionText || acceptedPlan?.text || input.dispatch.text;
+  const dispatched = mediaDecisionText || acceptedPlan
     ? buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText })
     : input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
   const acceptedTaskTarget = resolveAcceptedTaskTarget({
@@ -342,15 +357,20 @@ export function buildLumiExecutionPipeline(
         + '. Execute this goal using current file evidence. Do not merge older task revisions or ask the user to choose an older version. Normal tool authorization and confirmation boundaries still apply.'
       : ''].filter(Boolean).join('\n'),
   };
-  let decisionText = acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText;
+  let decisionText = mediaDecisionText || (acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText);
   const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
   if (trustedActionContinuation) turnIntent.flow.rootTaskText = input.actionTaskState?.goal;
   // Bind the planning input as well as the ledger id. Detailed "continue the
   // unfinished task" messages can themselves resemble authoring requests;
   // routing that fragment alone discards the still-pending business actions.
   // Only an exact server-bound resumption may use the durable user's goal.
+  // A short confirmation has no standalone capability semantics. Route the
+  // exact bound root goal while the tool executor still consumes only the
+  // approved call; further side effects retain their ordinary confirmation gate.
+  const confirmsBoundGoal = trustedActionContinuation
+    && /^(?:确认|确定|同意|好的?|可以|继续|yes|ok(?:ay)?|confirm)[。.!！\s]*$/iu.test(input.dispatch.text.trim()); // i18n-allow: confirmation-only continuation.
   const resumesExplicitGoal = trustedActionContinuation
-    && isExplicitUnfinishedTaskContinuation(input.dispatch.text, input.actionTaskState);
+    && (confirmsBoundGoal || isExplicitUnfinishedTaskContinuation(input.dispatch.text, input.actionTaskState));
   const actionText = resumesExplicitGoal
     ? [input.actionTaskState!.goal, effectiveText].join('\n\n')
     : effectiveText;
@@ -438,7 +458,6 @@ export function buildLumiExecutionPipeline(
   )?.requiredTools || [];
   const actionVerificationTools = buildActionContract(decisionText).verificationTools || [];
   const requestedArtifact = requestedSingleArtifact(actionText);
-  const mediaRequest = normalizeStructuredMediaRequest(input.structuredMediaRequest);
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,

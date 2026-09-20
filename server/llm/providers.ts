@@ -705,15 +705,26 @@ function assertToolResponseComplete(reason: unknown): void {
   }
 }
 
+function completionMetadata(reason: unknown): Pick<NormalizedLLMResponse, 'finishReason'> {
+  if (reason == null || reason === '') return {};
+  const value = String(reason).toLowerCase();
+  if (['stop', 'end_turn', 'stop_sequence'].includes(value)) return { finishReason: 'stop' };
+  if (['length', 'max_tokens'].includes(value)) return { finishReason: 'length' };
+  if (['tool_calls', 'function_call', 'tool_use'].includes(value)) return { finishReason: 'tool_calls' };
+  if (['content_filter', 'safety', 'recitation', 'blocklist', 'prohibited_content', 'spii', 'refusal'].includes(value)) return { finishReason: 'content_filter' };
+  return { finishReason: 'unknown' };
+}
+
 export function parseDeepSeekResponse(rawResponse: any): NormalizedLLMResponse {
   const message = rawResponse.choices?.[0]?.message;
-  if (!message) return { text: null, toolCalls: null };
+  if (!message) return { text: null, toolCalls: null, ...completionMetadata(rawResponse.choices?.[0]?.finish_reason) };
 
   // Keep hidden reasoning hidden. `reasoning_content` is useful for diagnostics
   // and follow-up model calls, but it must never become user-visible text/TTS.
   const text = message.content || null;
   const reasoningContent = message.reasoning_content || null;
   const usage = extractUsage(rawResponse);
+  const completion = completionMetadata(rawResponse.choices?.[0]?.finish_reason);
 
   if (message.tool_calls && message.tool_calls.length > 0) {
     assertToolResponseComplete(rawResponse.choices?.[0]?.finish_reason);
@@ -722,10 +733,10 @@ export function parseDeepSeekResponse(rawResponse: any): NormalizedLLMResponse {
       name: tc.function?.name || '',
       arguments: parseToolArguments(tc.function?.arguments),
     }));
-    return { text, toolCalls, reasoningContent, usage };
+    return { text, toolCalls, reasoningContent, usage, ...completion };
   }
 
-  return { text, toolCalls: null, reasoningContent, usage };
+  return { text, toolCalls: null, reasoningContent, usage, ...completion };
 }
 
 /**
@@ -914,6 +925,7 @@ export function parseGeminiResponse(rawResponse: any): NormalizedLLMResponse {
   return {
     text: textParts.length > 0 ? textParts.join('\n') : null,
     toolCalls: toolCalls.length > 0 ? toolCalls : null,
+    ...completionMetadata(candidate.finishReason),
     usage: extractUsage(rawResponse),
   };
 }
@@ -1039,6 +1051,7 @@ export function parseAnthropicResponse(rawResponse: any): NormalizedLLMResponse 
   return {
     text: textParts.length > 0 ? textParts.join('\n') : null,
     toolCalls: toolCalls.length > 0 ? toolCalls : null,
+    ...completionMetadata(rawResponse.stop_reason),
     usage: extractUsage(rawResponse),
   };
 }
@@ -2086,13 +2099,13 @@ export async function makeLLMCallStreamingDirect(
             name: acc.name,
             arguments: parseToolArguments(acc.args),
           }));
-          return { text, toolCalls, reasoningContent, usage };
+          return { text, toolCalls, reasoningContent, usage, ...completionMetadata(finishReason) };
         }
         const legacyToolCalls = parseLegacyXmlToolCalls(text, toolDeclarations);
         if (legacyToolCalls) {
-          return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage };
+          return { text: null, toolCalls: legacyToolCalls, reasoningContent, usage, ...completionMetadata(finishReason) };
         }
-        return { text, toolCalls: null, reasoningContent, usage };
+        return { text, toolCalls: null, reasoningContent, usage, ...completionMetadata(finishReason) };
       } catch (error) {
         supervisor.abort(error instanceof Error ? error : new Error(String(error)));
         stopIterator(iterator);

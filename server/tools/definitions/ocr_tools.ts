@@ -235,6 +235,10 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
     throw new Error('OCR tools require the Tauri desktop app');
   }
   const query = args.query || args.prompt || 'Describe what is visible on the screen in detail. Include all text, UI elements, error messages, and anything the user might need to know.';
+  // i18n-allow: Coordinate-query grammar; actual control uses the grounded desktop loop.
+  if (/(?:坐标|像素位置|coordinates?|bounding\s*box)/iu.test(query)) {
+    return JSON.stringify({ status: 'requires_grounded_desktop_control', nextTool: 'computer_use', note: 'ocr_screen reads visible text and state; its prose cannot ground click coordinates. Use desktop_ui_snapshot selectors if available, otherwise computer_use with the original task and target_application. That tool maps screenshot coordinates across monitors and verifies each action. Do not repeat coordinate OCR requests.' });
+  }
   const base64 = await context.desktopRelay('desktop_capture_screen', { quality: 70 });
 
   // Resolve vision-capable provider
@@ -246,8 +250,10 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
   try {
-    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
-    return description;
+    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
+    // Reading an error message is a successful observation. Keep the tool's
+    // outcome separate from arbitrary words in the observed page content.
+    return JSON.stringify({ status: 'observed', description, provider, model });
   } catch (err: any) {
     return JSON.stringify({ format: 'screenshot_base64', data: base64, error: err.message });
   }
@@ -270,7 +276,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
   try {
     const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
-    return description;
+    return JSON.stringify({ status: 'observed', description, provider, model });
   } catch (err: any) {
     return JSON.stringify({ format: 'screenshot_base64', data: base64, error: err.message });
   }
@@ -1106,7 +1112,7 @@ export function registerOCRTools(registry: ToolRegistry): void {
   registry.register({
     name: 'ocr_screen',
     description:
-      'Capture a screenshot of the user\'s screen and analyze it with a vision AI model. Returns a text description of what is visible — including text, UI elements, error messages, and code. Use this when the user asks "what\'s on my screen?", "read this error", "look at this", or when you need to see what the user is working on.',
+      'Read visible text and state from a fresh screenshot using the vision model. Use for reading errors, page content, or login state. This does not provide grounded click coordinates. If a native accessibility tree lacks the controls needed for an action, call computer_use with the full original task and target_application; do not repeatedly ask OCR for button positions.',
     parameters: {
       type: 'object',
       properties: {

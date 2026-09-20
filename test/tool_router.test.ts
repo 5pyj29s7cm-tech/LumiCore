@@ -13,6 +13,22 @@ function declaration(name: string, description = name) {
   };
 }
 
+it('keeps the grounded playback owner ahead of raw observations', () => {
+  const route = routeToolsForTurn('在电脑上的网易云音乐里播放陈奕迅的十年。', [
+    'desktop_capture_screen', 'desktop_active_window', 'desktop_list_apps', 'desktop_open', 'computer_use',
+  ].map(name => declaration(name)));
+  expect(route.toolNames[0]).toBe('computer_use');
+  expect(route.toolNames).not.toContain('desktop_capture_screen');
+});
+
+it('keeps file creation, safe copy edits, and the requested WPS opening available together', () => {
+  const tools = ['create_docx', 'create_xlsx', 'modify_xlsx', 'modify_docx', 'desktop_open', 'desktop_active_window', 'read_docx', 'read_xlsx'];
+  const route = routeToolsForTurn('生成 D:/reports/meeting.docx，并在 WPS 打开文件检查内容。', tools.map(name => declaration(name)));
+  expect(route.toolNames).toEqual(expect.arrayContaining(['create_docx', 'desktop_open', 'desktop_active_window', 'read_docx']));
+  const edit = routeToolsForTurn('把 D:/reports/source.xlsx 数量改成6，另存 D:/reports/updated.xlsx。', tools.map(name => declaration(name)));
+  expect(edit.toolNames).toContain('modify_xlsx');
+});
+
 function mcpManifest(toolNames: string[], provider: string) {
   return toolNames.map(toolName => ({
     toolName,

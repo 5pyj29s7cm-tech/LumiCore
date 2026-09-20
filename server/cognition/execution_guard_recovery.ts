@@ -243,14 +243,15 @@ export function classifyExecutionGuardIntent(
 ): ExecutionGuardIntent {
   const clean = String(task || '').replace(/\s+/g, ' ').trim();
   const normalizedIntent = normalizeActionIntent(clean);
-  // An explicit new mutation owns the turn even when a scope fence contains a
+  // An explicit new operation owns the turn even when a scope fence contains a
   // status word (for example, "write <path>; do not report task status"). The
   // old ordering checked the noun first and converted a missing-tool recovery
-  // into a read-only status response, permanently preventing the requested
-  // write from reaching its confirmation boundary.
+  // into a saved-status response. Navigation and fresh reads also execute
+  // work, even though their side-effect class is none.
   if (
     normalizedIntent.relation === 'new'
-    && normalizedIntent.sideEffectClass !== 'none'
+    && normalizedIntent.kind !== 'none'
+    && normalizedIntent.kind !== 'correction_explanation'
     && normalizedIntent.operation !== 'status'
   ) return 'action_execution';
   if (hasMixedStatusExecutionIntent(clean)) return 'action_execution';

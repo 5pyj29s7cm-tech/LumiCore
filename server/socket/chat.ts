@@ -3,7 +3,7 @@ import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import { TASK_TARGET_HISTORY_LIMIT } from '../conversation/task_target_anchor';
+import { TASK_TARGET_HISTORY_LIMIT, buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, makeLLMCall, StreamCallback } from "../llm/providers";
@@ -351,6 +351,7 @@ export function normalizeChatHistoryRecord(
     response,
     toolCalls: options.serverOwned ? m?.toolCalls : undefined,
     toolReceiptLedger: options.serverOwned ? m?.toolReceiptLedger : undefined,
+    toolFileObservations: options.serverOwned ? m?.toolFileObservations : undefined,
   };
   return normalizeVoiceHistoryRecord(trustedRecord).filter(entry => !(
     entry.role === 'assistant'
@@ -2925,6 +2926,12 @@ export function registerChatHandler(
       });
       const turnDispatch = executionPipeline.turnIntent;
       const turnFlow = turnDispatch.flow;
+      turnFlow.currentAttachmentPaths = attachments.map(item => item.path).filter((value): value is string => Boolean(value));
+      // i18n-allow: Explicit reference to current uploaded material.
+      if (!turnFlow.acceptedTaskTarget && turnFlow.currentAttachmentPaths.length === 1 && /附件|\battachment\b/iu.test(visibleUserText)) {
+        const projection = buildTaskTargetAnchorProjection({ taskText: visibleUserText, sourcePaths: turnFlow.currentAttachmentPaths });
+        if (projection.pathResolved) turnFlow.acceptedTaskTarget = { target: projection.target, source: 'current_turn', sourceId: requestId };
+      }
       const completionTaskText = executionPipeline.trustedActionContinuation
         ? conversation?.actionContinuationState?.goal || executionTaskText
         : executionTaskText;
@@ -3811,6 +3818,9 @@ export function registerChatHandler(
       let activeProvider = userLLMPrefs.provider || 'deepseek';
       let activeModel = userLLMPrefs.model;
       const reasoningRoutePolicy = {
+        // Image/person setup already has bounded schemas and receipts. Avoid spending
+        // the semantic-output deadline on hidden reasoning before the first tool call.
+        ...(toolRoute?.categories.includes('memory_avatar') ? { thinkingMode: 'disabled' as const } : {}),
         selectionMode: userLLMPrefs.selectionMode,
         fallbackCandidates: userLLMPrefs.fallbackCandidates,
         allowCloudFallback: userLLMPrefs.allowCloudFallback,

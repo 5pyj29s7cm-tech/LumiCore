@@ -3,6 +3,9 @@ import { getUserPreferredGenerationModels } from '../llm/generation_preferences'
 import { getUserPreferredWorldModel } from '../llm/world_preferences';
 
 const VISUAL_INTENT_PATTERNS: RegExp[] = [
+  // i18n-allow: Explicit inspection of a named application's visible window.
+  /(?:查看|观察|读取|检查|看看|看一下)[^。！？!?；;\n]{0,48}(?:窗口|播放器)(?:[^。！？!?；;\n]{0,24}(?:显示|底部|状态|内容|时间))?/u,
+  /\b(?:inspect|observe|read|look\s+at)\b[^.!?;\n]{0,64}\b(?:window|player|playback\s+controls)\b/iu,
   /\b(?:look\s+at|see|read|ocr|identify|recognize|describe|analy[sz]e|inspect|scan)\b.*\b(?:screen|screenshot|image|photo|picture|diagram|drawing|ui|interface|error|qr|barcode|table|receipt|chart)\b/i,
   /\b(?:what(?:'s| is)|who(?:'s| is)|tell me what)\b.*\b(?:on|in)\b.*\b(?:screen|screenshot|image|photo|picture|diagram|drawing)\b/i,
   /\b(?:screen|screenshot|image|photo|picture|diagram|drawing|ui|interface|qr|barcode|chart)\b.*\b(?:look|read|ocr|identify|recognize|describe|analy[sz]e|inspect)\b/i,

@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { resolveExactConversationCorrection } from '../server/conversation/exact_correction';
 
 describe('exact conversation correction', () => {
+  it('never rewrites a prior command instead of executing a file edit', () => {
+    const task = '把刚才报表的 B类数量改成6，其余不变，另存到 D:/LumiCore-Audit-Reports/采购报表_更新.xlsx，检查公式和图表，并告诉我新总金额。';
+    expect(resolveExactConversationCorrection(task, [{ role: 'user', message: task }])).toBeNull();
+    expect(resolveExactConversationCorrection('将周三改为周四，其余内容不变', [
+      { role: 'assistant', message: '会议时间是周三。' },
+      { role: 'user', message: '将周三改为周四，其余内容不变' },
+    ])).toBe('会议时间是周四。');
+  });
   it('repeats only the immediately preceding assistant reply after a delivery stall', () => {
     expect(resolveExactConversationCorrection(
       'sorry, 你刚刚又卡住了，重新说。',

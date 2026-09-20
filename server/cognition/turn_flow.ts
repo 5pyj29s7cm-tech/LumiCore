@@ -1,4 +1,6 @@
 import { isStoredMemoryRecallQuestion } from './normalized_action_intent';
+import { withoutLocationLiterals } from './location_literals';
+import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
 import type { OperationMode } from './operation_modes';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import {
@@ -62,6 +64,8 @@ export interface LumiTurnFlow {
   preparationRootText?: string;
   /** Exact server-resolved target shared across all execution consumers. */
   acceptedTaskTarget?: import('../conversation/task_target_anchor').AcceptedTaskTarget;
+  /** Current upload metadata, separate from untrusted extracted file contents. */
+  currentAttachmentPaths?: string[];
   channel: LumiTurnChannel;
   source?: string;
   surface: WorkTakeoverTurnSurface;
@@ -193,6 +197,10 @@ function classifyCapabilityLearningIntent(
   text: string,
   input: Pick<LumiTurnFlowInput, 'targetIsLumi'>,
 ): Pick<LumiExecutionGovernance, 'capabilityLearningIntent' | 'capabilityLearningReason' | 'shouldInspectCapabilitiesFirst'> {
+  text = withoutLocationLiterals(text);
+  if (mediaCreationInstruction(text) || isAvatarAuthoringRequest(text)) {
+    return { capabilityLearningIntent: 'none', capabilityLearningReason: 'Execute the requested media/person authoring action; descriptive constraints are not a capability audit.', shouldInspectCapabilitiesFirst: false };
+  }
   if (classifySkillAuthoringIntent(text) !== 'none') {
     return {
       capabilityLearningIntent: 'stabilize_existing',
@@ -379,6 +387,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     || (
       explicitNoMutationInstruction
       && currentActionContract.kind === 'none'
+      && !hasVisionIntent(input.text)
       && /[？?]|(?:先聊|只回答|告诉我|你认为|解释|reply|answer|explain)/iu.test(input.text)
     );
   const actionContract = currentActionContract.applies || !continuationMayDriveAction

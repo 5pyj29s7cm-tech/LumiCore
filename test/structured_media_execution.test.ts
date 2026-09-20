@@ -18,6 +18,8 @@ beforeAll(async () => {
 });
 
 const cases: { text: string; media: StructuredMediaRequest; tool: string }[] = [
+  { text: '生成视频：6秒无声视频，写实温暖的公寓走廊，夜色微蓝，两位原创成年邻居在门口相视微笑，镜头固定，轻微自然动作，不要文字、聊天气泡和手机外框，不要背景音乐。',
+    media: { operation: 'text_to_video', prompt: '6秒无声视频，写实温暖的公寓走廊，夜色微蓝，两位原创成年邻居在门口相视微笑，镜头固定，轻微自然动作，不要文字、聊天气泡和手机外框，不要背景音乐。', size: '720x1280', duration: 6, officialOnly: true }, tool: 'generate_video' },
   { text: '请生成一张图片：明亮的木桌上放着一个蓝色陶瓷杯，简洁写实风格，没有文字和人物。只生成一张，1024×1024，完成后直接在对话里给我图片。',
     media: { operation: 'text_to_image', prompt: '明亮的木桌上放着一个蓝色陶瓷杯，简洁写实风格，没有文字和人物。', size: '1024x1024', count: 1 }, tool: 'generate_image' },
   { text: '请生成一段5秒的视频：清晨森林里树叶随微风轻轻摇动，镜头固定，没有人物、文字或声音。1280×720，完成后直接在对话里给我视频。',
@@ -115,5 +117,21 @@ describe('media requests through the complete shared planning pipeline', () => {
       personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [tool], maxIterations: 10 },
     });
     expect(pipeline.modelToolProjection.toolNames).not.toContain(tool);
+  });
+  it.each(['image', 'video'] as const)('executes a validated %s creation despite surrounding acceptance narration', mode => {
+    const media: StructuredMediaRequest = { operation: mode === 'image' ? 'text_to_image' : 'text_to_video',
+      prompt: '不要生成汉字、聊天气泡或手机外框。两人相视而笑。', size: '720x1280', officialOnly: true };
+    const text = `本轮为创作功能验收，请按已给定的 mediaRequest 实际生成${mode === 'image' ? '一张图片' : '一个6秒视频'}，使用 Lumi 官方 API，生成文件保存入库即可。不调用汽水或剪映，不打开网页，不发布作品。本轮是虚构验收素材，不作为我的个人经历或偏好保存。`;
+    const run = (text: string, forbiddenTools: string[] = []) => buildLumiExecutionPipeline({ structuredMediaRequest: media,
+      dispatch: { userId: 'media-acceptance', channel: 'chat', text, targetIsLumi: true }, registry,
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools, maxIterations: 10 },
+    });
+    const tool = mode === 'image' ? 'generate_image' : 'generate_video';
+    expect(run(text).executionRequested).toBe(true);
+    expect(run(text).modelToolProjection.toolNames).toContain(tool);
+    expect(run(`生成${mode === 'image' ? '图片' : '视频'}：${media.prompt}`).modelToolProjection.toolNames).toContain(tool);
+    expect(run(text, [tool]).modelToolProjection.toolNames).not.toContain(tool);
+    expect(run(text + '现在不要使用工具。').executionRequested).toBe(false);
+    expect(run(text + '现在不要生成任何内容。').modelToolProjection.toolNames).not.toContain(tool);
   });
 });

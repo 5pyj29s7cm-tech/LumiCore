@@ -4,6 +4,7 @@ export const CN_CONVERSATION_EXECUTION_FACT_MESSAGES = {
   fileMutationRecorded: '文件写入或修改有调用记录，具体结果以各次操作记录为准。',
   noFileMutation: '本会话记录中没有文件写入或修改操作。',
   latestDeliveredResult: '最近已经发送给你的结果是：',
+  latestProgress: '最近保存的任务进度是：',
   noDeliveredResult: '没有找到已完成且已保存的结果回复。',
   unnamedOpenTarget: '请求的目标',
   noVerifiedOpen: '我查了这段会话的执行记录，没有找到已验证成功的打开回执。',

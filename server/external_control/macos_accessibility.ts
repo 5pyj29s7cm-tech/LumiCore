@@ -350,7 +350,7 @@ export async function captureMacosAccessibilitySnapshot(
     ...options,
     kind: 'snapshot',
     root: options.root === 'desktop' || options.root === 'focused' ? options.root : 'active',
-    maxDepth: clampInt(options.maxDepth, 3, 0, 6),
+    maxDepth: clampInt(options.maxDepth, 3, 0, 8),
     maxNodes: clampInt(options.maxNodes, 80, 1, 300),
   }, timeoutMs, options.signal);
 }

@@ -16,8 +16,14 @@ function stableValue(value: unknown): unknown {
 
 export function toolRecordIdempotencyKey(record: ToolExecutionRecord): string {
   if (record.idempotencyKey) return record.idempotencyKey;
+  // Two reads of the same path may observe different saved versions. The
+  // archive must retain both observations while duplicate delivery of the
+  // same invocation remains idempotent. Mutation/external commit keys keep
+  // their existing semantics, and legacy records without metadata keep theirs.
+  const observation = record.id && ['observe', 'test'].includes(record.capability?.operation || '')
+    ? { observationId: record.id, requestId: record.requestId || '' } : {};
   return crypto.createHash('sha256')
-    .update(JSON.stringify(stableValue({ name: record.name, arguments: record.arguments || {} })))
+    .update(JSON.stringify(stableValue({ name: record.name, arguments: record.arguments || {}, ...observation })))
     .digest('hex');
 }
 

@@ -5,7 +5,7 @@ import {
   RECONFIRMATION_REQUIRED_BLOCKER,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
-import { normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
+import { hasMixedStatusExecutionIntent, normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
 import { buildActionEvidenceContract } from '../cognition/action_contract';
 import {
   mergeTaskReceipts,
@@ -1718,6 +1718,15 @@ export function findConversationActionTask(
   if (exactTaskId) {
     return scopedTasks.find(task => task.id === exactTaskId) || null;
   }
+  // Older clients sometimes persisted a read-only progress question as a new
+  // blocked task. It must not displace the actual action during implicit
+  // history lookup. Keep these rows (and exact-ID access) for audit purposes;
+  // genuine failed actions, even before their first receipt, remain eligible.
+  const actionTasks = scopedTasks.filter(task => (
+    scopedReceipts.some(receipt => receipt.taskId === task.id)
+    || normalizeActionIntent(task.goal).kind !== 'status_query'
+    || hasMixedStatusExecutionIntent(task.goal)
+  ));
   if (input.latest || (intent.kind === 'status_query' && intent.target === 'previous_action')) {
     const latestTaskEventAt = (task: ConversationActionTaskRow): string => (
       scopedReceipts
@@ -1726,7 +1735,7 @@ export function findConversationActionTask(
           receipt.createdAt.localeCompare(latest) > 0 ? receipt.createdAt : latest
         ), task.createdAt || task.updatedAt)
     );
-    return scopedTasks
+    return actionTasks
       .map((task, insertionOrder) => ({ task, insertionOrder, eventAt: latestTaskEventAt(task) }))
       .sort((left, right) => (
         right.eventAt.localeCompare(left.eventAt)
@@ -1734,7 +1743,7 @@ export function findConversationActionTask(
         || right.insertionOrder - left.insertionOrder
       ))[0]?.task || null;
   }
-  return scopedTasks
+  return actionTasks
     .map(task => {
       const context = parseObject(task.context);
       const actionState = normalizeConversationActionState(context.actionState);

@@ -3297,6 +3297,24 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
     }
 }
 
+fn is_web_url_target(target: &str) -> bool {
+    let normalized = target.trim().to_ascii_lowercase();
+    normalized.starts_with("https://") || normalized.starts_with("http://")
+}
+
+#[cfg(test)]
+mod web_target_identity_tests {
+    #[test]
+    fn website_targets_never_enter_application_or_desktop_file_search() {
+        for value in ["https://chat.deepseek.com/", "HTTP://www.douyin.com/", " https://example.com/a.txt "] {
+            assert!(super::is_web_url_target(value));
+        }
+        for value in ["deepseek.txt", "Google Chrome", r"C:\test\deepseek.txt", "https-not-a-url"] {
+            assert!(!super::is_web_url_target(value));
+        }
+    }
+}
+
 #[tauri::command]
 fn open_item(
     target: String,
@@ -3329,17 +3347,17 @@ fn open_item(
     let _ = application;
 
     #[cfg(target_os = "windows")]
-    if let Some(result) = try_launch_windows_app_alias(&target) {
+    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_windows_app_alias(&target)).flatten() {
         return result;
     }
 
     #[cfg(target_os = "windows")]
-    if let Some(result) = try_launch_generic_windows_app(&target) {
+    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_generic_windows_app(&target)).flatten() {
         return result;
     }
 
     #[cfg(target_os = "macos")]
-    if let Some(result) = try_launch_macos_app(&target) {
+    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_macos_app(&target)).flatten() {
         if result.success {
             return result;
         }
@@ -3350,7 +3368,7 @@ fn open_item(
     }
 
     #[cfg(target_os = "macos")]
-    if should_try_macos_app_index(&target) {
+    if !is_web_url_target(&target) && should_try_macos_app_index(&target) {
         // Ask LaunchServices by registered application name before retaining the
         // legacy direct `open <target>` behavior below. This also covers apps
         // installed outside the directories indexed by Lumi.
@@ -3365,7 +3383,7 @@ fn open_item(
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    if !Path::new(&target).exists() {
+    if !is_web_url_target(&target) && !Path::new(&target).exists() {
         if let Some(resolved) = resolve_desktop_item_fuzzy(&target) {
             target = resolved.to_string_lossy().to_string();
         }
@@ -5702,7 +5720,8 @@ fn capture_screen() -> CaptureResult {
     #[cfg(target_os = "windows")]
     {
         // Write PNG to temp file (avoids stdout truncation for ~8 MB screenshots)
-        let temp_path = std::env::temp_dir().join(format!("lumi_scr_{}.png", std::process::id()));
+        static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let temp_path = std::env::temp_dir().join(format!("lumi_scr_{}_{}.png", std::process::id(), CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
         let temp_file = temp_path.to_string_lossy().replace('\\', "\\\\");
 
         let mut cmd = Command::new("powershell");
@@ -5985,6 +6004,10 @@ fn keyboard_key_from_name(value: &str) -> Result<Key, String> {
     let main_key = value.trim();
     let normalized = main_key.to_ascii_lowercase();
     let key = match normalized.as_str() {
+        "meta" | "win" | "cmd" | "super" => Key::Meta,
+        "ctrl" | "control" => Key::Control,
+        "shift" => Key::Shift,
+        "alt" => Key::Alt,
         "enter" | "return" => Key::Return,
         "escape" | "esc" => Key::Escape,
         "tab" => Key::Tab,
@@ -6059,9 +6082,16 @@ fn keyboard_key_from_name(value: &str) -> Result<Key, String> {
 
 #[tauri::command]
 fn keyboard_press(key: String) -> Result<String, String> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo init: {}", e))?;
-
     let parts: Vec<&str> = key.split('+').map(|s| s.trim()).collect();
+    // Validate every part before pressing any key or modifier.
+    let main_key = *parts.last().unwrap_or(&"");
+    let key_enum = keyboard_key_from_name(main_key).map_err(|e| format!("[not_started] {}", e))?;
+    for &part in &parts[..parts.len().saturating_sub(1)] {
+        if !matches!(part.to_ascii_lowercase().as_str(), "ctrl" | "control" | "shift" | "alt" | "meta" | "win" | "cmd" | "super") {
+            return Err(format!("[not_started] Unknown modifier: {}", part));
+        }
+    }
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("[not_started] enigo init: {}", e))?;
     // Parse modifiers first, then the main key
     for &part in &parts[..parts.len().saturating_sub(1)] {
         match part.to_ascii_lowercase().as_str() {
@@ -6086,12 +6116,9 @@ fn keyboard_press(key: String) -> Result<String, String> {
         }
     }
 
-    let main_key = *parts.last().unwrap_or(&"");
-    let key_enum = keyboard_key_from_name(main_key)?;
-
-    enigo
+    let result = enigo
         .key(key_enum, Direction::Click)
-        .map_err(|e| format!("key press '{}': {}", main_key, e))?;
+        .map_err(|e| format!("key press '{}': {}", main_key, e));
 
     // Release modifiers in reverse order
     for &part in parts.iter().rev().skip(1) {
@@ -6112,6 +6139,7 @@ fn keyboard_press(key: String) -> Result<String, String> {
         }
     }
 
+    result?;
     Ok(format!("Pressed key: {}", key))
 }
 
@@ -6119,6 +6147,15 @@ fn keyboard_press(key: String) -> Result<String, String> {
 mod keyboard_key_mapping_tests {
     use super::keyboard_key_from_name;
     use enigo::Key;
+
+    #[test]
+    fn validates_system_keys_before_dispatch() {
+        for alias in ["win", "meta", "cmd", "super"] {
+            assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::Meta);
+        }
+        assert!(super::keyboard_press("ctrl+unsupported-key".to_string()).unwrap_err().starts_with("[not_started]"));
+        assert!(super::keyboard_press("unsupported-modifier+a".to_string()).unwrap_err().starts_with("[not_started]"));
+    }
 
     #[test]
     fn maps_cross_platform_media_key_aliases() {
@@ -6278,6 +6315,7 @@ pub fn run() {
         .manage(Mutex::new(WindowActivationDiagnosticsState::default()))
         .on_page_load(move |webview, payload| {
             if !started_in_background
+                && webview.label() == "main"
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
             {
                 show_main_window_impl(webview.app_handle(), "page_load");

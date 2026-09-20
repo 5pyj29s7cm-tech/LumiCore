@@ -49,7 +49,7 @@ function isExpectedExternalTool(
   entry: CapabilityManifestEntry,
 ): boolean {
   if (!isExternal(entry)) return false;
-  if (intent.kind === 'media_generation') return entry.toolName === intent.target;
+  if (intent.kind === 'media_generation') return (intent.mediaTools || [intent.target]).includes(entry.toolName as any);
   if (intent.kind === 'messaging_send') {
     return entry.family === 'messaging'
       || entry.lane === 'messaging'
@@ -99,7 +99,7 @@ export function compareLumiRoutingShadow(input: {
     legacyExternalTools: legacyExternalEntries.map(entry => entry.toolName),
     blockedExternalTools: externalCommitBlocked ? allExternalTools
       : input.normalizedIntent.kind === 'media_generation'
-        ? allExternalTools.filter(name => name !== input.normalizedIntent.target) : [],
+        ? allExternalTools.filter(name => !(input.normalizedIntent.mediaTools || [input.normalizedIntent.target]).includes(name as any)) : [],
     aligned,
     externalCommitBlocked,
     reason,

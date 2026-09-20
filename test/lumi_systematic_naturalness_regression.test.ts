@@ -183,7 +183,7 @@ describe('systematic naturalness regressions', () => {
     }, {
       desktopRelay: async (name, args) => {
         calls.push({ name, args });
-        return 'opened';
+        return `Opened: ${args.target}`;
       },
     }));
     expect(calls).toEqual([{
@@ -239,8 +239,8 @@ describe('systematic naturalness regressions', () => {
       source: 'voice',
     });
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('文件已创建并验证');
-    expect(result.text).toContain('自动打开没有完成');
+    expect(result.text).toContain('文件已保存');
+    expect(result.text).toContain('尚未确认在指定软件中打开');
   });
 
   it('keeps compact tool evidence without replaying old assistant claims into ordinary voice chat', () => {

@@ -135,7 +135,7 @@ describe('verified bounded actions in the real shared tool loop', () => {
     const result = await run(`在 ${value.target} 新建文本文件，只写入“${content}”，写完回读并告诉我全文。`, value);
     expect(result.toolCalls?.map(record => record.name)).toEqual(['write_file', 'read_file']);
     expect(result.text).toContain(content);
-    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(2);
+    expect(mocks.makeLLMCall).toHaveBeenCalledTimes(1); // The requested saved-output read is bound by the runtime.
   });
 
   it('does not confuse reading the source with delivering the requested calculation', async () => {

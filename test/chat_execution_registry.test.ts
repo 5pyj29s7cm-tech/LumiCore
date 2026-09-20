@@ -351,7 +351,7 @@ describe('chat execution registry', () => {
 
     expect(persistence.rows[0].payload.completionFeedback).toEqual({
       status: 'completed',
-      completed: ['The task is complete.'],
+      completed: ['Foreground task completed.'],
       evidence: ['The current execution result was recorded.'],
       incomplete: [],
       blockers: [],

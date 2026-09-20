@@ -15,6 +15,8 @@ vi.mock('../server/llm/providers', async () => {
 import { runWithTools } from '../server/llm/adapter';
 import { encodeToolResult } from '../server/tools/result_envelope';
 import { ToolRegistry } from '../server/tools/registry';
+import { withCloudResilience } from '../server/cloud/resilience';
+import { getCircuitStatus, resetCircuit } from '../server/cloud/circuit_breaker';
 
 const getters = [
   () => null,
@@ -69,6 +71,7 @@ function deadlineRegistry(verifiedDelayMs = 0) {
 }
 
 beforeEach(() => {
+  resetCircuit();
   // Reset queued one-shot implementations as well as call history. If a
   // cancellation/deadline test exits before consuming its last mocked model
   // response, clearAllMocks would leak that response into the next case.
@@ -81,6 +84,22 @@ afterEach(() => {
 });
 
 describe('bounded cumulative model-wait lifecycle', () => {
+  it('does not disable local inference when only the parent turn budget expires', async () => {
+    vi.useFakeTimers();
+    const { registry } = deadlineRegistry();
+    mocks.makeLLMCallStreaming.mockImplementation((_messages, _tools, config) => withCloudResilience(
+      () => new Promise(() => {}),
+      { provider: 'lmstudio', model: 'test-local', maxRetries: 0,
+        signal: config.signal, timeoutMs: config.attemptTimeouts.absoluteMs },
+    ));
+    const pending = runWithTools([{ role: 'user', content: 'Read current context.' }], registry,
+      { provider: 'lmstudio', model: 'test-local', modelWaitBudgetMs: 797,
+        attemptTimeouts: { absoluteMs: 60000 } }, undefined, 2, ...getters, () => {});
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'ToolLoopModelBudgetError' });
+    await vi.advanceTimersByTimeAsync(800);
+    await assertion;
+    expect(getCircuitStatus().filter(row => row.key.startsWith('lmstudio'))).toEqual([]);
+  });
   it('returns a verified checkpoint when the model never settles after a completed tool', async () => {
     vi.useFakeTimers();
     let modelStalled!: () => void;
@@ -171,7 +190,7 @@ describe('bounded cumulative model-wait lifecycle', () => {
     expect(late).not.toHaveBeenCalled();
   });
 
-  it('clips every model attempt to the remaining policy-configured model budget', async () => {
+  it('keeps provider health deadlines separate from the remaining turn budget', async () => {
     const { registry } = deadlineRegistry();
     let now = 10_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -185,7 +204,7 @@ describe('bounded cumulative model-wait lifecycle', () => {
         };
       })
       .mockImplementationOnce(async (_messages, _tools, config) => {
-        expect(config.attemptTimeouts.absoluteMs).toBe(50);
+        expect(config.attemptTimeouts.absoluteMs).toBe(90);
         return { text: '已根据核验结果整理完成。', toolCalls: null };
       });
 

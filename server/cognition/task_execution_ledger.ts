@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionRecord } from '../tools/types';
+import { isArtifactReaderRecord } from '../tools/artifact_evidence';
 import {
   buildActionEvidenceContract,
   hasCoreActionEvidence,
@@ -151,6 +152,14 @@ function compact(value: unknown, limit: number): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
+function persistableToolResult(name: string, value: unknown): string {
+  // Exact text and section boundaries are evidence. Store one bounded copy;
+  // readback metadata holds its digest so a truncated/legacy summary cannot
+  // be mistaken for the original document during task hydration.
+  return isArtifactReaderRecord({ name } as ToolExecutionRecord)
+    ? String(value ?? '').slice(0, 65_536) : compact(value, 3000);
+}
+
 function stableValue(value: unknown, depth = 0): unknown {
   if (depth > 5) return '[nested]';
   if (Array.isArray(value)) return value.slice(0, 40).map(item => stableValue(item, depth + 1));
@@ -284,7 +293,7 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
     arguments: candidate.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments)
       ? stableValue(candidate.arguments) as Record<string, unknown>
       : {},
-    result: compact(candidate.result, 3000),
+    result: persistableToolResult(name, candidate.result),
     ...(candidate.receipt !== undefined ? { receipt: stableValue(candidate.receipt) } : {}),
     ...(compact(candidate.modelRoutingReceiptId, 180)
       ? { modelRoutingReceiptId: compact(candidate.modelRoutingReceiptId, 180) }
@@ -535,7 +544,7 @@ export function recordsToTaskReceipts(
 ): ConversationTaskReceipt[] {
   return coalesceToolExecutionRecords(records).map((record, index) => {
     const rawResult = String(record.result || '');
-    const textReadbackMetadata = record.name === 'read_file' && toolRecordSucceeded(record) && rawResult
+    const textReadbackMetadata = isArtifactReaderRecord(record) && toolRecordSucceeded(record) && rawResult
       ? {
           kind: 'text_readback_metadata',
           encoding: 'UTF-8',
@@ -552,7 +561,7 @@ export function recordsToTaskReceipts(
     key: toolRecordKey(record),
     name: compact(record.name, 160),
     arguments: stableValue(record.arguments || {}) as Record<string, unknown>,
-    result: compact(record.result, 3000),
+    result: persistableToolResult(record.name, record.result),
     ...(record.receipt !== undefined
       ? { receipt: stableValue(record.receipt) }
       : structuredRecordPayload(record) !== null
@@ -587,14 +596,16 @@ export function mergeTaskReceipts(
   const order: string[] = [];
   for (const receipt of [...previous, ...recordsToTaskReceipts(records, recordedAt)]) {
     if (!receipt?.key || !receipt.name) continue;
-    const playback = hasPlaybackObservation(receipt);
-    const mergeKey = playback
-      ? JSON.stringify(['playback', receipt.requestId || '', receipt.taskId || '', receipt.id || receipt.key])
+    const observation = hasPlaybackObservation(receipt)
+      || ['observe', 'test'].includes(receipt.capability?.operation || '')
+      || isArtifactReaderRecord({ name: receipt.name } as ToolExecutionRecord);
+    const mergeKey = observation
+      ? JSON.stringify(['observation', receipt.requestId || '', receipt.taskId || '', receipt.id || receipt.key])
       : receipt.key;
     if (!merged.has(mergeKey)) order.push(mergeKey);
     const prior = merged.get(mergeKey);
     const rank = { failure: 0, partial: 1, success: 2 } as const;
-    if (playback || !prior || rank[receipt.outcome] >= rank[prior.outcome]) merged.set(mergeKey, receipt);
+    if (observation || !prior || rank[receipt.outcome] >= rank[prior.outcome]) merged.set(mergeKey, receipt);
   }
   return order
     .map(key => merged.get(key))

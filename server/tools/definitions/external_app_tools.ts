@@ -1306,7 +1306,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       const desktopRelay = requireDesktopRelay(context);
       const browser = String(args.browser || '').trim();
       const result = await desktopRelay('desktop_open', { target, ...(browser ? { application: browser } : {}) });
-      return JSON.stringify({ target, opened: true, ...(browser ? { browser } : {}), result }, null, 2);
+      // The native launch receipt must identify this URL. A same-named app or
+      // file is not a browser-open success, and a launch alone proves no login.
+      const opened = String(result).includes(target) && !/"(?:ok|success)"\s*:\s*false/.test(String(result));
+      return JSON.stringify({ target, opened, ...(opened ? { status: 'launched' } : {}), navigationVerified: false, loginVerified: false,
+        ...(opened ? {} : { ok: false, status: 'target_unverified' }),
+        ...(browser ? { browser } : {}), result }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
@@ -1318,11 +1323,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       risk: 'low',
       sideEffects: [{ type: 'desktop_control', scope: 'requested browser target', reversible: true }],
       verification: {
-        strategy: 'state_diff',
+        strategy: 'provider_ack',
         required: true,
-        requiredFields: ['opened'],
-        successSignals: ['requested browser and target are visibly active'],
-        limitations: ['Preparing a URL or issuing an open request does not prove the target page is active.'],
+        requiredFields: ['target', 'opened'],
+        successStatuses: ['launched'],
+        successSignals: ['native launcher acknowledged the exact URL and browser'],
+        limitations: ['This receipt verifies URL launch only. Page navigation, login and subsequent work require fresh page evidence.'],
       },
       intents: ['prepare or visibly open a browser task'],
     },

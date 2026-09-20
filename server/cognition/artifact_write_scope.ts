@@ -1,4 +1,4 @@
-import { buildTaskTargetAnchorProjection, canonicalPathIdentity, type AcceptedTaskTarget } from '../conversation/task_target_anchor';
+import { buildTaskTargetAnchorProjection, canonicalPathIdentity, outputDocumentInstruction, type AcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { normalizeActionIntent } from './normalized_action_intent';
 import path from 'node:path';
 
@@ -49,8 +49,15 @@ export function requestedSingleArtifact(text: string): { path: string; producer:
 }
 
 export function matchesRequestedArtifactOutput(text: string, outputPath: string): boolean {
-  const requested = requestedSingleArtifact(text);
-  return !requested || canonicalPathIdentity(outputPath) === canonicalPathIdentity(requested.path);
+  const requested = requestedSingleArtifact(text)?.path || requestedArtifactSaveAsPath(text);
+  return !requested || canonicalPathIdentity(outputPath) === canonicalPathIdentity(requested);
+}
+
+export function requestedArtifactSaveAsPath(text: string): string {
+  const destination = outputDocumentInstruction(text);
+  if (!destination) return '';
+  const target = buildTaskTargetAnchorProjection({ taskText: destination }).target.path;
+  return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target) ? target : '';
 }
 
 export function requestedArtifactFormatBlockReason(text: string, toolName: string, args: Record<string, unknown>): string | null {
@@ -58,10 +65,10 @@ export function requestedArtifactFormatBlockReason(text: string, toolName: strin
   const producers = new Set(['write_file', 'desktop_write_text_file', 'create_xlsx', 'create_docx', 'create_ppt', 'create_pdf']);
   if (!artifact || !producers.has(toolName)) return null;
   if (toolName === artifact.producer || (artifact.producer === 'write_file' && toolName === 'desktop_write_text_file')) {
-    const actualOutput = toolName === 'create_xlsx' ? args.outputPath
+    const actualOutput = ['create_xlsx', 'create_docx'].includes(toolName) ? args.outputPath
       : toolName === 'write_file' ? args.path || args.filePath
         : toolName === 'desktop_write_text_file' ? args.path : undefined;
-    if (['create_xlsx', 'write_file', 'desktop_write_text_file'].includes(toolName)
+    if (['create_xlsx', 'create_docx', 'write_file', 'desktop_write_text_file'].includes(toolName)
       && (!actualOutput || canonicalPathIdentity(String(actualOutput)) !== canonicalPathIdentity(artifact.path))) {
       return `The output must use the exact file path requested in this turn: ${artifact.path}.`;
     }
@@ -121,7 +128,7 @@ export function preservedSourceWriteBlockReason(input: {
       ? input.arguments.path
       : input.toolName === 'create_ppt'
         ? input.arguments.filename
-        : ['create_xlsx', 'modify_xlsx'].includes(input.toolName)
+        : ['create_xlsx', 'modify_xlsx', 'create_docx'].includes(input.toolName)
           ? input.arguments.outputPath
           : undefined;
   const target = String(targetValue || '');

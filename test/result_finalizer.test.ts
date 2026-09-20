@@ -13,6 +13,18 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it('preserves a generated video but does not claim mismatched output settings completed the request', async () => {
+    const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    const input = { taskText: '生成6秒视频：公寓走廊。', responseText: '视频已生成。', source: 'chat', requestId: 'media-measured', taskId: 'media-task',
+      toolRecords: [{ name: 'generate_video', arguments: { size: '720x1280', duration: 6 }, requestId: 'media-measured', taskId: 'media-task',
+        result: JSON.stringify({ ok: true, success: true, status: 'generated', verified: true, verificationStatus: 'verified',
+          actualSettings: { size: '1080x1920', duration: 5 }, settingsMatch: false, outputPath: 'D:/generated/video.mp4' }),
+        terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'saved container' } }] };
+    const result = finalizeLumiResponse(input);
+    expect(result).toMatchObject({ blocked: true, reason: 'media_settings_mismatch' });
+    expect(result.text).toContain('5.00'); expect(result.text).toContain('1080x1920');
+    expect(tryFinalizeVerifiedBoundedAction(input)?.reason).toBe('media_settings_mismatch');
+  });
   it('delivers a readable saved-workflow draft receipt without claiming it can run', async () => {
     const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
     const { sanitizeExecutionResponseForDelivery } = await import('../server/cognition/execution_guard_recovery');
@@ -840,13 +852,14 @@ describe('Lumi result finalizer', () => {
         source: 'chat',
       });
       expect(missing.blocked).toBe(true);
-      expect(missing.text).toContain('缺少精确文本“负责人：刘工”');
+      expect(missing.text).toContain('缺少要求的内容：负责人：刘工');
 
       writeFileSync(artifactPath, '## 已知风险\n负责人：刘工\n', 'utf8');
       const satisfied = finalizeLumiResponse({
         taskText,
         responseText: '已经修改并验证完成。',
-        toolRecords: [record],
+        toolRecords: [record, { name: 'read_file', arguments: { path: artifactPath },
+          result: '## 已知风险\n负责人：刘工\n', terminalVerification: { status: 'verified' } } as any],
         source: 'chat',
       });
       expect(satisfied.blocked).toBe(false);
@@ -950,6 +963,26 @@ describe('Lumi result finalizer', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('delivers a requested computed amount instead of only acknowledging the saved file', async () => {
+    const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'lumi-computed-readback-'));
+    const artifactPath = path.join(root, 'report.csv');
+    const content = 'category,amount\nA,360\nB,510\nC,300\ntotal,1170\n';
+    try {
+      writeFileSync(artifactPath, content, 'utf8');
+      const writer = { name: 'write_file', arguments: { path: artifactPath, content }, result: JSON.stringify({ path: artifactPath }), ...verifiedDesktopReceipt };
+      const result = finalizeLumiResponse({
+        taskText: `生成报表并另存到 ${artifactPath}，告诉我新总金额。`, responseText: '已保存文件。', source: 'chat',
+        toolRecords: [writer, { name: 'read_file', arguments: { path: artifactPath }, result: content, ...verifiedDesktopReceipt }],
+      });
+      expect(result.blocked).toBe(false);
+      expect(result.text).toContain('1170');
+      const missingReadback = finalizeLumiResponse({ taskText: `生成报表并另存到 ${artifactPath}，告诉我新总金额。`, responseText: '已保存文件，总额999。', source: 'chat', toolRecords: [writer] });
+      expect(missingReadback.blocked).toBe(true);
+      expect(missingReadback.text).not.toContain('999');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('grounds native semantic text writes from the same shared artifact receipts', async () => {
@@ -1541,7 +1574,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('never reached a successful execution');
+    expect(result.text).toContain('could not start that action');
   });
 
   it('blocks a runtime-repair plan when no tool actually started', async () => {
@@ -1589,7 +1622,7 @@ describe('Lumi result finalizer', () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('available result does not confirm it');
+    expect(result.text).toContain('could not start that action');
     expect(result.reason).toContain('content-read/open/review');
   });
 

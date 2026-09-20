@@ -13,7 +13,8 @@ vi.mock('../server/memory', async original => ({ ...await original<typeof import
 vi.mock('../server/agents/rag', async original => ({ ...await original<typeof import('../server/agents/rag')>(), retrieveChunks:vi.fn(async()=>[]) }));
 vi.mock('../server/conversation/summary_scheduler', async original => ({ ...await original<typeof import('../server/conversation/summary_scheduler')>(), scheduleConversationSummary:vi.fn() }));
 
-import { initDatabase, querySQL } from '../db_layer';
+import { initDatabase, querySQL, readDB } from '../db_layer';
+import { findConversationActionTask, getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
 import { startIsolatedConversation, getMessages, addMessage } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { registerAllTools } from '../server/tools/definitions';
@@ -74,10 +75,43 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
     const terminal=await response;
     const persisted=(await querySQL<any>("SELECT id,message,completionFeedback,toolCalls FROM interactions WHERE conversationId=? AND requestId=? AND role='assistant'",[conversationId,requestId]));
     expect(persisted).toHaveLength(1);expect(persisted[0].message).toBe(terminal.text);
-    const receipts=await querySQL<any>('SELECT toolName,outcome,envelope FROM conversation_action_receipts WHERE conversationId=? AND requestId=?',[conversationId,requestId]);
+    const receipts=await querySQL<any>('SELECT taskId,toolName,outcome,envelope FROM conversation_action_receipts WHERE conversationId=? AND requestId=?',[conversationId,requestId]);
     return {terminal,persisted:persisted[0],receipts,requestId,calls:invocation};
   }
   const read=(file=csv)=>({text:'',toolCalls:[{id:`read-${serial}`,name:'read_file',arguments:{path:file}}]});
+  it('repairs missing document content in the same task and verifies the repaired version before completion',async()=>{
+    const id=conversation(),output=path.join(root,'checkpoint-repair.docx').replace(/\\/g,'/');
+    const blocks:any[]=[{type:'heading',text:'会议安排'},{type:'paragraph',text:'6人参加，预算1200元。'},
+      {type:'heading',text:'会议议题'},{type:'paragraph',text:'交付时间与数据归属'}];
+    const create=(fixed:boolean)=>({text:'',toolCalls:[{id:`docx-${fixed}`,name:'create_docx',arguments:{outputPath:output,title:'项目会议',blocks:[...blocks,...(fixed?[{type:'heading',text:'会议结论'},{type:'paragraph',text:''}]:[])]}}]});
+    const result=await turn(id,`新建 ${output}。资料：6人参加，预算1200元，讨论交付时间和数据归属。整理为安排、议题、留空的会议结论。回读检查，不要打开软件窗口。`,[create(false),create(true),{text:'所有内容都完成了。'}]);
+    expect(result.terminal,JSON.stringify(result.terminal)).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
+    expect(result.calls).toBe(2);
+    expect(result.receipts.filter(row=>row.outcome==='verified_success').map(row=>row.toolName)).toEqual(['create_docx','read_docx','create_docx','read_docx']);
+    expect(result.terminal.text).toContain('会议结论');
+    expect(result.terminal.completionFeedback.completed).toContain('已核实：会议结论');
+    expect(JSON.parse(result.persisted.completionFeedback).status).toBe('completed');
+    expect(result.receipts.every(row=>row.taskId===result.receipts[0].taskId)).toBe(true);
+    expect(result.receipts[0].taskId).toBeTruthy();
+    const stored = getConversationActionStateByTaskId(readDB(), { conversationId: id, userId, taskId: result.receipts[0].taskId });
+    expect(stored, JSON.stringify(stored)).toMatchObject({ status: 'completed', unfinished: false });
+  });
+  it('recalls saved partial progress and its next step instead of saying no result exists', async () => {
+    const id = conversation(), output = path.join(root, 'partial-document.docx').replace(/\\/g, '/');
+    const incomplete = { text: '', toolCalls: [{ id: 'partial-create', name: 'create_docx', arguments: {
+      outputPath: output, title: '会议安排', blocks: [{ type: 'heading', text: '安排' }, { type: 'paragraph', text: '6人，1200元' },
+        { type: 'heading', text: '议题' }, { type: 'paragraph', text: '交付时间' }],
+    } }] };
+    const result = await turn(id, `生成 ${output}，整理为安排、议题、留空的会议结论。请回读，不要打开窗口。`, [incomplete]);
+    expect(result.terminal.blocked).toBe(true);
+    expect(result.terminal.completionFeedback.incomplete.join('\n')).toContain('会议结论');
+    const status = await turn(id, '刚才那份会议安排实际做到了哪一步？请根据已有记录告诉我，不要重新生成或操作文件。', [{ text: '没有结果。' }]);
+    expect(status.calls).toBe(0); expect(status.receipts).toHaveLength(0);
+    expect(status.terminal.text).toContain('文件已保存');
+    expect(status.terminal.text).toContain('缺少要求的内容：会议结论');
+    expect(status.terminal.text).toContain('下一步');
+    expect(status.terminal.text).not.toContain('没有找到已完成');
+  });
   it('preserves the exact plan target, delivers 60 then 84, and recalls the already-delivered answer without a model call',async()=>{
     const id=conversation();
     const original=await turn(id,`LC-UI-任务连续性复测：我要处理 ${csv}，按数量乘单价计算每项金额和总额。现在只简单说明准备怎么做，不要读取文件，也不要执行操作。`,[{text:'准备先读取订单，再按数量乘单价计算各项金额和总额；本轮没有执行。'}]);
@@ -95,6 +129,21 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
     expect(status.terminal.text).toContain('84');expect(status.terminal.text).toContain('没有文件写入或修改操作');
     expect(status.terminal.text).toContain('文件读取 2 次');expect(status.terminal.text).not.toContain('read_file');
     expect(status.terminal.text).not.toContain('没有输出');expect(fs.readFileSync(csv,'utf8')).toBe(csvText);
+    // Reproduce legacy persisted status-only tasks after a successful action.
+    // The next read-only follow-up must still reach the actual delivery.
+    const db = readDB();
+    const completedTask = db.conversationActionTasks.find(row => row.id === correction.receipts[0].taskId)!;
+    const legacyStatusTask = { ...completedTask, id: 'legacy-empty-status-task',
+      goal: '刚才报表实际改好了吗？新总额多少？只根据已经保存的结果回答，不要重新操作文件。',
+      status: 'blocked', context: '{}', createdAt: new Date(Date.now() + 1000).toISOString() };
+    db.conversationActionTasks.push(legacyStatusTask);
+    expect(findConversationActionTask(db, { conversationId: id, userId, taskId: legacyStatusTask.id })?.id).toBe(legacyStatusTask.id);
+    const resultStatus = await turn(id,'刚才报表实际改好了吗？新总额多少？只根据已经保存的结果回答，不要重新操作文件。',[{text:'这次还没完成，没有可验证的执行结果。'}]);
+    expect(resultStatus.calls).toBe(0);expect(resultStatus.receipts).toHaveLength(0);
+    expect(resultStatus.terminal.text).toContain('84');expect(resultStatus.terminal.text).not.toContain('这次还没完成');
+    const failedAction = { ...legacyStatusTask, id: 'real-blocked-action', goal: '创建下一份采购报表', createdAt: new Date(Date.now() + 2000).toISOString() };
+    db.conversationActionTasks.push(failedAction);
+    expect(findConversationActionTask(db, { conversationId: id, userId, latest: true })?.id).toBe(failedAction.id);
   });
   it.each(['已读取文件，任务已完成。','这项操作还没完成。已经完成的部分会保留，可以从这里重试。'])('retains a successful read but never marks an undelivered calculation completed: %s',async text=>{
     const result=await turn(conversation(),`读取 ${csv}，按数量乘单价计算每项金额和总额，保留原文件。`,[read(),{text}]);
@@ -122,7 +171,7 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
     ]);
     expect(result.terminal,JSON.stringify({terminal:result.terminal,tools:JSON.parse(result.persisted.toolCalls)})).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
     expect(result.terminal.text).toContain('48');expect(result.terminal.text).toContain('水杯');expect(result.terminal.text).toContain('回读结果');
-    expect(result.calls).toBe(3); // Read, modify, read back: no fourth model call to decide whether to stop.
+    expect(result.calls).toBe(2); // Read and modify selected by the model; exact saved-output readback is bound by the runtime.
     const targetPrompt = providerTrace.find(row=>row.requestId===result.requestId)?.targetPrompt || '';
     expect(JSON.parse(targetPrompt.split('\n')[1]).path.replace(/\\/g,'/')).toBe(first);
     const records = JSON.parse(result.persisted.toolCalls);
@@ -144,7 +193,7 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
       {text:'',toolCalls:[{id:'csv-export-readback',name:'read_xlsx',arguments:{filePath:output,sheetName:'订单'}}]},
       {text:'文件已保存。'},
     ]);
-    expect(result.terminal,JSON.stringify(result.terminal)).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
+    expect(result.terminal,JSON.stringify({ terminal: result.terminal, records: JSON.parse(result.persisted.toolCalls), trace: providerTrace.filter(row=>row.requestId===result.requestId) })).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
     expect(result.terminal.text).toContain('60');
     expect(result.receipts.filter(row=>row.outcome==='verified_success').map(row=>row.toolName)).toEqual(['read_file','create_xlsx','read_xlsx']);
     expect((await loadXlsxWorkbook(output)).getWorksheet('订单')?.getCell('D5').value).toBe(60);

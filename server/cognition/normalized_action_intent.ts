@@ -1,6 +1,7 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
+import { withoutLocationLiterals } from './location_literals';
 
 /** Read/search verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
@@ -30,6 +31,8 @@ export function isStoredMemoryRecallQuestion(value: string): boolean {
   if (laterClauses.some(clause => /^\s*(?:(?:请|再|然后|帮我|但|但是|直接|现在)\s*)*(?:搜索|查找|找一下|读取|查看|检查|打开|创建|生成|保存|写入|修改|删除|运行|执行|发送|安装|播放)|^\s*(?:(?:please|then|but|also|now)\s+)*(?:search|find|read|check|inspect|open|create|generate|save|write|modify|delete|run|execute|send|install|play)\b/iu.test(clause))) return false; // i18n-allow: explicit positive action in a separate clause.
   return normalizeActionIntent(text).kind === 'none';
 }
+
+import { isAvatarAuthoringRequest, mediaCreationInstruction } from './media_creation_intent';
 
 export type NormalizedActionIntentKind =
   | 'none'
@@ -77,6 +80,8 @@ export interface NormalizedActionIntent {
   clientAction?: string;
   /** Exact structured arguments needed by a deterministic native client action. */
   clientActionArguments?: Record<string, unknown>;
+  /** Explicit media operations belonging to one requested creative workflow. */
+  mediaTools?: Array<'generate_image' | 'ai_edit_image' | 'generate_video'>;
 }
 
 const EMPTY_INTENT: NormalizedActionIntent = {
@@ -488,9 +493,25 @@ export function isTerseExecutionStatusQuestion(text: string): boolean {
     || /^(?:你发了吗[，,]\s*)?(?:为什么|你为什么|没发为什么|你发了吗).{0,60}(?:没去|没有|没发|没调用|没执行|没发起|说.*再发|说.*发起)/u.test(text);
 }
 
+export function isPriorArtifactDeliveryQuestion(text: string): boolean {
+  const value = withoutLocationLiterals(currentTurnText(text));
+  // i18n-allow: A question about an already requested change, not a fresh edit.
+  return /(?:刚才|刚刚|之前|上次|上一轮)[^。！？!?\n]{0,50}(?:改好|改完|做好|做完|完成|处理好|生成好|保存好)(?:了)?(?:吗|没有|没|了没)/u.test(value);
+}
+
+export function isPriorWorkDeliveryFactQuestion(text: string): boolean {
+  const value = withoutLocationLiterals(currentTurnText(text));
+  // i18n-allow: Detailed proof questions use the exact action-status projection.
+  if (/(?:什么|哪些|哪项|何种).{0,8}(?:证据|凭证)|(?:证据|凭证).{0,16}(?:证明|验证|成功)|\bwhat\s+(?:evidence|proof)\b|\b(?:evidence|proof)\b.{0,24}\b(?:prov\w*|succeed\w*|verif\w*)\b/iu.test(value)) return false;
+  // i18n-allow: Read-only questions about previous work and file changes.
+  return /(?:刚才|刚刚|之前|这次|本次|上一轮)[^。！？!?\n]{0,20}(?:实际|已经|已|都)?(?:完成|做|处理)[^。！？!?\n]{0,14}(?:什么|哪些|哪一步)|(?:原|源)文件[^。！？!?\n]{0,12}(?:改过|修改过|写过|变过)(?:吗|没有|没)|\bwhat\s+(?:did|have)\s+you\s+(?:actually\s+)?(?:complete|finish|do|done)|\b(?:was|did)\b[^.!?\n]{0,30}\b(?:original|source)\s+file\b[^.!?\n]{0,20}\b(?:change|modif)/iu.test(value);
+}
+
 export function isRecentActionReceiptQuery(text: string): boolean {
-  const value = currentTurnText(String(text || '')).replace(/\s+/gu, ' ').trim();
+  const value = withoutLocationLiterals(currentTurnText(String(text || ''))).replace(/\s+/gu, ' ').trim();
   return isTerseExecutionStatusQuestion(value)
+    || isPriorArtifactDeliveryQuestion(value)
+    || isPriorWorkDeliveryFactQuestion(value)
     || isPriorTurnToolReceiptQuestion(value)
     || RECENT_ACTION_RECEIPT_QUERY_RE.test(value)
     || RECORDED_RECEIPT_STATUS_QUERY_RE.test(value);
@@ -534,6 +555,7 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
 }
 
 function statusQuery(text: string): NormalizedActionIntent | null {
+  const namedArtifact = relativeArtifactPath(text, false);
   // A concrete new write owns the turn even when a separate scope fence uses
   // a status noun. Retrospective/status-only forms are excluded by the strict
   // affirmative artifact-action recognizer.
@@ -543,6 +565,9 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // Reporting the id/status after creating a specifically described new task
   // is part of that creation contract, not a query about an older task.
   if (persistentWorkTaskCreation(text)) return null;
+  // File/folder names such as chat/repair/progress are data. Keep the original
+  // artifact target above, then classify only the surrounding instruction.
+  text = withoutLocationLiterals(text);
   // Explicit current-runtime questions must be read-only status intents even
   // when they do not contain the narrow "task status/progress" wording. This
   // covers the production utterance "你现在有在执行的任务吗" and keeps it out
@@ -590,7 +615,6 @@ function statusQuery(text: string): NormalizedActionIntent | null {
       rule: 'active-task-status-control',
     };
   }
-  const namedArtifact = relativeArtifactPath(text, false);
   const asksNamedArtifactStatus = Boolean(
     namedArtifact
     && /(?:\u6587\u4ef6|\u4ea7\u7269|\u4efb\u52a1).{0,24}(?:\u73b0\u5728)?(?:\u662f\u4ec0\u4e48|\u4ec0\u4e48|\u5565)\u72b6\u6001|\u662f\u5426(?:\u5df2\u7ecf)?(?:\u5199\u5165|\u56de\u8bfb).{0,12}[\uff1f?]|\u6700\u7ec8\u72b6\u6001|\b(?:what\s+is|final)\b.{0,24}\bstatus\b|\bwas\b.{0,32}\b(?:written|read\s*back)\b/iu.test(text)
@@ -628,9 +652,9 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // Preserve that target so the persistent ledger does not fall back to the
   // most recently updated (and possibly unrelated) task.
   const namedDesktopStatus = text.match(
-    /(?:\u6253\u5f00|\u542f\u52a8)\s*([^\u3002\uff01\uff1f?\n]{1,80}?)(?:\u7684)?(?:\u4efb\u52a1)?(?:\u6700\u7ec8)?(?:\u72b6\u6001|\u7ed3\u679c)(?:\u662f\u4ec0\u4e48|\u5982\u4f55|\u600e\u4e48\u6837|\u4e3a)?/iu,
+    /(?:\u6253\u5f00|\u542f\u52a8)\s*([^\u3002\uff01\uff1f\uff0c\uff1b,;?\n]{1,80}?)(?:\u7684)?(?:\u4efb\u52a1)?(?:\u6700\u7ec8)?(?:\u72b6\u6001|\u7ed3\u679c)(?:\u662f\u4ec0\u4e48|\u5982\u4f55|\u600e\u4e48\u6837|\u4e3a)?/iu,
   )?.[1]?.trim();
-  if (namedDesktopStatus) {
+  if (namedDesktopStatus && !/(?:\u68c0\u67e5|\u67e5\u770b|\u767b\u5f55)/u.test(namedDesktopStatus)) {
     return {
       kind: 'status_query',
       operation: 'status',
@@ -683,9 +707,13 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // the turn a status follow-up; the explicit create/write action wins.
   if (isExplicitArtifactCreationText(text)) return null;
 
+  // A URL may contain an internal surface name (chat, files, etc.). Opening
+  // that URL and inspecting login state is new work, not prior-task status.
+  if (/(?:\u6253\u5f00|\bopen\b)\s+https?:\/\//iu.test(text)) return null;
+
   const registeredSurfaceStatus =
     /(?:进度|状态|结果呢|做到哪|到哪了|怎么样|做完了吗|完成了吗|好了吗)/u.test(text) // i18n-allow: Reviewed Chinese status-follow-up input recognition.
-      ? CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text))
+      ? CLIENT_SURFACE_RULES.find(candidate => candidate.pattern.test(text.replace(/https?:\/\/\S+/giu, '')))
       : undefined;
   if (registeredSurfaceStatus) {
     return {
@@ -730,6 +758,7 @@ function statusQuery(text: string): NormalizedActionIntent | null {
 }
 
 function clientNavigation(text: string): NormalizedActionIntent | null {
+  text = withoutLocationLiterals(text);
   if (!CLIENT_NAVIGATION_VERB_RE.test(text)) return null;
   const surface = CLIENT_SURFACE_RULES.find(candidate => {
     const match = text.match(candidate.pattern);
@@ -801,6 +830,9 @@ export function withoutChatReplyDestination(text: string): string {
 function inboundMessageRead(text: string): NormalizedActionIntent | null {
   text = withoutChatReplyDestination(text);
   if (isExplicitArtifactCreationText(text)) return null;
+  text = text.replace(/https?:\/\/[^\s，。；;！？!?]+/giu, ' ')
+    .replace(/(?:不要|别|不用|无需|不)\s*(?:发|发送|读取|查看|回复)[^，。！？!?；;、\n]{0,24}(?:消息|对话|聊天|评论)/giu, ' ') // i18n-allow: a prohibited communication is not a reading request.
+    .replace(/\b(?:do not|don't|never)\s+(?:send|read|reply|post)[^,.;!?\n]{0,40}\b(?:messages?|chat|comments?)\b/giu, ' ');
   const inboundPatterns = [ // i18n-allow: Chinese inbound-message semantic-role recognition; not user-visible copy.
     /^(?!(?:看|查|读|告诉我))([^\s，。！？!?]{1,24}?)\s*(?:最近|刚刚|刚才)?\s*给我发(?:了)?(?:的)?(?:什么|哪些)?\s*(?:消息|内容|微信)/u, // i18n-allow: Chinese inbound-message semantic-role recognition.
     /(?:看(?:一下|看)?|查(?:一下|看)?|读(?:一下|取)?|告诉我)?\s*([^\s，。！？!?]{1,24}?)(?:最近|刚刚|刚才)?\s*给我发(?:了)?(?:的)?(?:什么|哪些)?\s*(?:消息|内容|微信)?/u, // i18n-allow: Chinese inbound-message semantic-role recognition.
@@ -960,7 +992,8 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   const objectFirst = text.match(/^(?:请|请你|帮我)?\s*(?:先)?(?:把|将|用)\s*([^，。！？!?；;\n]{1,80}?)\s*(?:先)?(打开|启动|运行|最大化|最小化|还原|关闭)(?:一下|吧)?[。！!]*$/u); // i18n-allow: Object-before-verb desktop instructions.
   if (!instrumented && !direct && !objectFirst) return null;
   const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || objectFirst?.[2] || direct?.[1] || '');
-  const target = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '');
+  const rawTarget = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '');
+  const target = rawTarget.match(/^https?:\/\/[^\s\u3002\uff0c\uff1b,;]+/iu)?.[0] || rawTarget;
   if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null; // i18n-allow: Chinese interrogative input recognition.
   return {
     kind: 'desktop_operation',
@@ -999,14 +1032,17 @@ function persistentWorkTaskCreation(text: string): NormalizedActionIntent | null
 /** Media creation spends provider capacity; it is an explicit external action. */
 export function mediaGenerationIntent(value: string): NormalizedActionIntent | null {
   const text = currentTurnText(value).trim();
-  const head = text.split(/[：:，,。；;\n]/u)[0]; // i18n-allow: instruction/creative-brief boundary.
+  const head = (mediaCreationInstruction(text) || text).split(/[：:，,。；;\n]/u)[0]; // i18n-allow: instruction/creative-brief boundary.
   // Only an affirmative creation/edit imperative owns a new generation. A
   // prompt, script, configuration question or historical result does not.
-  if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|编辑|修改|重绘|替换).{0,50}(?:图片|图像|照片|插画|海报|视频|短片)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
+  if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|编辑|修改|重绘|替换).{0,50}(?:图片|图像|照片|插画|海报|视频|短片|人像)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
   if (/(?:提示词|脚本|文案|方案|大纲|字幕|标题|配置|模型|代码|网页|组件|是否|了吗|了没|吗[？?]?|不要生成|不要创建)|\b(?:prompt|script|copy|plan|outline|caption|configuration|model|code|webpage)\b|\?/iu.test(head)) return null; // i18n-allow: non-media deliverables and questions.
   const target = /^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:编辑|修改|重绘|替换)|^(?:please\s+)?(?:edit|modify|redraw)\b/iu.test(head) // i18n-allow: media editing.
     ? 'ai_edit_image' : /视频|短片|\b(?:video|clip)\b/iu.test(head) ? 'generate_video' : 'generate_image'; // i18n-allow: media kind.
+  const expressionWorkflow = target === 'generate_image' && isAvatarAuthoringRequest(text)
+    && /闭眼|开口|表情变体|expression\s*variants/iu.test(text); // i18n-allow: requested expression variants use the same source image.
   return { kind: 'media_generation', operation: 'create', subject: 'user', target,
+    ...(expressionWorkflow ? { mediaTools: ['generate_image', 'ai_edit_image'] as const as Array<'generate_image' | 'ai_edit_image'> } : {}),
     payload: text, sideEffectClass: 'external_commit', relation: 'new', confidence: 0.98, rule: 'explicit-media-generation' };
 }
 

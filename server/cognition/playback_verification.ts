@@ -1,5 +1,5 @@
 /** Pure playback evidence: runtime-owned captures, not a model's completion vote. */
-export interface PlaybackGoal { player: string; title: string; season: string; episode: string }
+export interface PlaybackGoal { player: string; title: string; season: string; episode: string; artist?: string }
 export interface VisualPlaybackObservation extends PlaybackGoal {
   phase: 'content' | 'advertisement' | 'buffering' | 'paused' | 'blocked' | 'unknown';
   positionSeconds: number | null;
@@ -104,7 +104,12 @@ export function parsePlaybackGoal(task: string): PlaybackGoal {
   }
   // i18n-allow: Generic/current-media commands do not require a newly named work.
   if (/^(?:(?:当前|现在|这首|这个|这部|一首|一个|一集|随机|随便)(?:的)?)*(?:音乐|歌曲?|视频|电影|电视剧|它|music|songs?|videos?|movies?|current\s+(?:track|song|music|video))?$|^episode\b|^第[\d一二三四五六七八九十百零〇两]+集/iu.test(title)) title = '';
-  return { player, title, season, episode };
+  let artist = '';
+  if (PLAYERS.slice(6).some(names => names[0] === player)) {
+    const performer = text.match(/(?:播放|放一?首|听一?首)\s*([^的《》\n]{1,40})的(?:《([^》]+)》|([^，。！？!?\n]+))/u); // i18n-allow: Singer/title request grammar.
+    if (performer) { artist = performer[1].trim(); title = (performer[2] || performer[3]).replace(/(?:吧|就行|这首歌)$/u, '').trim(); } // i18n-allow: Spoken command suffixes.
+  }
+  return { player, title, season, episode, ...(artist ? { artist } : {}) };
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -121,8 +126,9 @@ export function parseVisualPlaybackObservation(value: unknown): VisualPlaybackOb
       && Number.isFinite(row.positionSeconds) && row.positionSeconds >= 0 && row.positionSeconds <= 86_400))) return null;
   const season = ordinal(row.season as string); const episode = ordinal(row.episode as string);
   if (season === null || episode === null) return null;
+  if (row.artist !== undefined && (typeof row.artist !== 'string' || row.artist.length > 160 || /[\u0000-\u001f\u007f]/u.test(row.artist))) return null;
   return { phase: row.phase as VisualPlaybackObservation['phase'], player: (row.player as string).trim(),
-    title: (row.title as string).trim(), season, episode, positionSeconds: row.positionSeconds as number | null };
+    title: (row.title as string).trim(), season, episode, positionSeconds: row.positionSeconds as number | null, ...(row.artist ? { artist: (row.artist as string).trim() } : {}) };
 }
 
 function sample(value: unknown): PlaybackSample | null {
@@ -138,13 +144,14 @@ function sample(value: unknown): PlaybackSample | null {
 
 function sameGoal(left: PlaybackGoal, right: PlaybackGoal): boolean {
   return playerIdentity(left.player) === playerIdentity(right.player) && normalizeText(left.title) === normalizeText(right.title)
-    && left.season === right.season && left.episode === right.episode;
+    && left.season === right.season && left.episode === right.episode && normalizeText(left.artist || '') === normalizeText(right.artist || '');
 }
 
 function matchesGoal(observed: PlaybackGoal, goal: PlaybackGoal): boolean {
   return (!goal.player || playerIdentity(observed.player) === playerIdentity(goal.player))
     && (!goal.title || normalizeText(observed.title) === normalizeText(goal.title))
-    && (!goal.season || observed.season === goal.season) && (!goal.episode || observed.episode === goal.episode);
+    && (!goal.season || observed.season === goal.season) && (!goal.episode || observed.episode === goal.episode)
+    && (!goal.artist || normalizeText(observed.artist || '') === normalizeText(goal.artist));
 }
 
 export function buildPlaybackVerification(task: string, samples: PlaybackSample[]): PlaybackVerification | null {
@@ -170,5 +177,5 @@ export function validatePlaybackVerification(value: unknown, task: string): valu
     || GOAL_FIELDS.some(field => typeof target[field] !== 'string')
     || !Array.isArray(row.samples) || row.samples.length !== 2) return false;
   const recomputed = buildPlaybackVerification(task, row.samples as PlaybackSample[]);
-  return Boolean(recomputed && GOAL_FIELDS.every(field => target[field] === recomputed.target[field]));
+  return Boolean(recomputed && GOAL_FIELDS.every(field => target[field] === recomputed.target[field]) && (target.artist || '') === (recomputed.target.artist || ''));
 }

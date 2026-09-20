@@ -27,6 +27,13 @@ const activeState: ConversationActionContinuationState = {
 };
 
 describe('active task message relation', () => {
+  it('retries the identical unfinished goal without allocating an independent task', () => {
+    const goal = '生成 D:/work/result.xlsx 采购报表，金额使用公式并回读。';
+    const state = { ...activeState, goal, latestInstruction: goal, activeRequestId: undefined, status: 'blocked' as const };
+    expect(resolveActiveTaskMessageRelation(goal, state)).toMatchObject({ taskRelation: 'continue', taskId: state.taskId, preservesRootGoal: true });
+    expect(resolveActiveTaskMessageRelation(goal.replace('result.xlsx', 'different.xlsx'), state).taskRelation).toBe('new');
+    expect(resolveActiveTaskMessageRelation(goal, { ...state, status: 'completed', unfinished: false }).taskRelation).toBe('new');
+  });
   it('reconciles stale new-task display metadata with the prepared durable continuation', () => {
     const early = resolveActiveTaskMessageRelation('Continue the unfinished task.', null);
     expect(early.taskRelation).toBe('new');

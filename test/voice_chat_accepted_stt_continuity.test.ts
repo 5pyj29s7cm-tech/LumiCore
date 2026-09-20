@@ -762,11 +762,12 @@ describe('accepted STT Voice -> Chat task continuity', () => {
     expect(fs.readFileSync(target, 'utf8')).toBe(content);
     expect(getPendingConfirmation(userId)).toBeNull();
     expect(mocks.runWithTools).toHaveBeenCalledTimes(readbackRequired ? 2 : 1);
-    expect(mocks.makeLLMCallStreaming).toHaveBeenCalledTimes(readbackRequired ? 2 : 1);
+    expect(mocks.makeLLMCallStreaming).toHaveBeenCalledTimes(1); // Exact saved-output readback needs no extra planning call.
     const receipts = await querySQL('SELECT toolName,outcome FROM conversation_action_receipts WHERE requestId=?', [result.requestId]);
     expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'write_file', outcome: 'verified_success' })]));
     if (readbackRequired) expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'read_file', outcome: 'verified_success' })]));
-    expect(getConversationActionStateByTaskId(readDB(), { conversationId: proposal.conversationId, userId, taskId: pending!.taskId! }))
+    const savedState = getConversationActionStateByTaskId(readDB(), { conversationId: proposal.conversationId, userId, taskId: pending!.taskId! });
+    expect(savedState, JSON.stringify(savedState))
       .toMatchObject({ status: 'completed', unfinished: false });
   }, 30_000);
 

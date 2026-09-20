@@ -1,4 +1,5 @@
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { buildHistoricalFileObservations } from './file_observation_history';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { estimateTokenCount } from '../llm/providers';
 import {
@@ -309,6 +310,8 @@ export interface MessageRecord {
   toolCalls?: any[];
   /** Server-derived receipt evidence retained after prompt compaction removes raw tool calls. */
   toolReceiptLedger?: string;
+  /** In-process server projection; never accepted from client-supplied history. */
+  toolFileObservations?: string;
   domain?: string;
   orgId?: string;
   source?: string;
@@ -4232,6 +4235,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       ? `${compactedResponse}\n${evidenceNote}`.trim()
       : compactedResponse,
     toolReceiptLedger: evidenceNote || undefined,
+    toolFileObservations: buildHistoricalFileObservations(m.toolCalls) || undefined,
     toolCalls: undefined,
   };
 }

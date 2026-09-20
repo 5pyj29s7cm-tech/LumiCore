@@ -20,6 +20,57 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it('keeps a WPS report open-and-check request out of Lumi client navigation', () => {
+    const text = '用电脑上的 WPS 打开 D:/LumiCore-Audit-Reports/20260920/chat-task-repair/cloud-output/采购报表_执行进度复测更新.xlsx，核对表格的总金额和图表，告诉我实际看到的结果。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'wps-open-read', channel: 'chat', source: 'chat', operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 10 } });
+    expect(pipeline.turnIntent.flow.clientActionOnlyTurn).toBe(false);
+    expect(pipeline.normalizedIntent.kind).not.toBe('client_navigation');
+    expect(pipeline.modelToolProjection.toolNames).toContain('desktop_open');
+    expect(pipeline.modelToolProjection.toolNames).toContain('read_xlsx');
+    expect(pipeline.modelToolProjection.toolNames).toContain('ocr_screen');
+  });
+  it.each(['chat', 'voice'] as const)('allows fresh %s window observation while prohibiting further player input', channel => {
+    const text = '先不要再操作播放器。只查看当前网易云音乐窗口，告诉我当前歌曲和歌手、暂停还是播放状态，以及底部显示的已播放时间和总时长；看不清的项目明确说明。';
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'read-only-player', channel, source: channel,
+      operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
+    expect(pipeline.turnIntent.flow.modelToolAccess).toBe('manifest');
+    expect(pipeline.modelToolProjection.toolNames).toContain('ocr_screen');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('computer_use');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('mouse_click');
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('keyboard_type');
+  });
+  it.each(['chat', 'voice'] as const)('keeps explicit report edits executable after a %s progress question', channel => {
+    for (const destination of ['D:/LumiCore-Audit-Reports/20260920/chat-task-repair/cloud-output/采购报表_执行进度复测更新.xlsx', '/tmp/lumi/chat-repair/采购报表_执行进度.xlsx', '\\\\host\\lumi\\chat-repair\\采购报表_执行进度.xlsx']) {
+    const text = `把刚才报表的 B类数量改成6，其余不变，另存到 ${destination}，检查公式和图表，并告诉我新总金额。`;
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'report-edit-after-status', channel, source: channel,
+      operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 } });
+    expect(pipeline.executionRequested, JSON.stringify(pipeline)).toBe(true);
+    expect(pipeline.capabilityPlan.lane).toBe('artifact_work');
+    expect(pipeline.modelToolProjection.toolNames).toContain('modify_xlsx');
+    const statusText = '刚才报表实际改好了吗？新总额多少？只根据已经保存的结果回答，不要重新操作文件。';
+    const status = buildLumiExecutionPipeline({ dispatch: { userId: 'report-edit-after-status', channel, source: channel,
+      operationMode: 'assistant', text: statusText, targetIsLumi: true }, registry: createRegistry() });
+    expect(status.executionRequested).toBe(false);
+    }
+  });
+  it.each(['chat', 'voice'] as const)('retains browser session inspection after a bound %s confirmation', channel => {
+    const goal = '用 Google Chrome 打开 https://www.douyin.com/，检查我之前保存的登录是否仍有效。只查看登录状态，不发消息、不点赞。';
+    const state = { version: 2, taskId: 'browser-confirm-task', goal, latestInstruction: goal, status: 'waiting_confirmation', unfinished: true,
+      appTarget: 'Google Chrome', sourcePaths: [], latestBlocker: '', evidenceTools: [], assistantState: '', toolSummaries: [], revision: 1, updatedAt: new Date().toISOString() } as const;
+    const run = (taskId: string) => buildLumiExecutionPipeline({ dispatch: { userId: 'browser-confirm-user', channel, source: channel,
+      operationMode: 'assistant', text: '确认', targetIsLumi: true, continuationContext: `- followupIntent: confirm\n- taskId: ${taskId}` },
+      actionTaskState: state as any, registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: ['browser_open_task'], forbiddenTools: ['send_email'], maxIterations: 10 } });
+    const result = run(state.taskId);
+    expect(result.turnIntent.flow.routeText).toContain(goal);
+    expect(result.capabilityPlan.promptOverlay).toContain('cookies/password store are separate');
+    expect(result.modelToolProjection.toolNames).toContain('desktop_ui_snapshot');
+    expect(result.modelToolProjection.toolNames).toContain('ocr_screen');
+    expect(result.authorizationPolicy.forbiddenTools).toContain('send_email');
+    expect(run('wrong-task').turnIntent.flow.routeText).not.toContain(goal);
+  });
+
   it.each(['chat', 'voice'] as const)('keeps the unfinished execute-and-capture plan through detailed %s resumption', channel => {
     const goal = '请读取 C:/Users/Administrator/Documents/input-4.csv，按数量乘单价增加 total 列，保存为 C:/Users/Administrator/Documents/output-4.csv。然后把完整的读取、计算、写文件流程保存为可复用工作流草稿。源文件不要改动。';
     const policy = { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: ['send_email'], maxIterations: 10 };

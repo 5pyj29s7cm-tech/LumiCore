@@ -4,11 +4,14 @@ import { verifiedExternalCliStatus } from './external_cli_status';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
-import { artifactPathFromRecord, artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { artifactPathFromRecord, artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery, sameArtifactPath } from '../tools/artifact_evidence';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
-import { hasExplicitNoToolInstruction, hasRequestedArtifactMutation, isInformationOnlyQuestion } from './tool_intent';
+import { hasExplicitNoToolInstruction, hasExplicitNoMutationInstruction, hasRequestedArtifactMutation, isInformationOnlyQuestion } from './tool_intent';
 import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { preservedSourceOutputScope, matchesRequestedArtifactOutput } from './artifact_write_scope';
+import { sourceDocumentInstruction } from '../conversation/task_target_anchor';
+import { extractExplicitArtifactTextRequirements, projectArtifactProgress } from './artifact_progress';
+export { extractExplicitArtifactTextRequirements } from './artifact_progress';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import { parsePlaybackGoal, validatePlaybackVerification } from './playback_verification';
@@ -203,6 +206,11 @@ export function requestedDesktopWindowAction(input: string): DesktopWindowAction
 export function requiresCurrentAppUiMutation(input: string): boolean {
   const raw = String(input || '');
   const primary = compact(extractPrimaryTaskText(input));
+  // Creating an artifact and opening it afterwards does not mean editing
+  // whatever document happens to be in the foreground right now.
+  const createsArtifact = /(?:\u751f\u6210|\u5236\u4f5c|\u8d77\u8349|\u65b0\u5efa|\u521b\u5efa)|\b(?:generate|create|draft)\b/iu.test(primary)
+    && /\.(?:docx|xlsx|pptx)\b/iu.test(primary);
+  if (createsArtifact && !/(?:\u5f53\u524d|\u6b63\u5728|\u5df2\u6253\u5f00).{0,10}(?:\u7a97\u53e3|\u6587\u6863)|\b(?:current|active|existing)\s+(?:window|document)\b/iu.test(primary)) return false;
   const hasRecoveredTarget = /(?:^|\r?\n)\s*-\s*appTarget:\s*(?!none|null|unknown|n\/a)[^\r\n]+/i.test(raw);
   const openIntent = primary.match(APP_OPEN_INTENT_RE);
   const textAfterOpen = openIntent
@@ -364,6 +372,7 @@ export function requiresVisualModelAvailabilityCheck(input: string): boolean {
  * is only preparation, and a generic key dispatch is not playback state. */
 export function requiresMediaPlaybackAction(input: string): boolean {
   const text = compact(extractPrimaryTaskText(input));
+  if (hasExplicitNoMutationInstruction(text)) return false;
   if (isMediaPauseRequest(text)) return false;
   if (isVideoPlaybackRequest(text)) return true;
   if (!text || /(?:AutoCAD|\bCAD\b|\u56de\u653e\u56fe\u7eb8|\u7ed8\u56fe\u56de\u653e)/iu.test(text)) return false;
@@ -372,25 +381,6 @@ export function requiresMediaPlaybackAction(input: string): boolean {
   // verified playback, not merely for the player/window to be discovered.
   const positivePlayback = /(?:\u64ad\u653e|\u653e\u4e00?\u9996|\u542c\u4e00?\u9996|\u7ee7\u7eed\u64ad\u653e|(?:\u7ed9\u6211)?\u76f4\u63a5\u653e(?:\u4e00\u4e0b)?(?:\u5f53\u524d(?:\u7684)?|\u73b0\u5728(?:\u7684)?|\u8fd9\u9996|\u97f3\u4e50|\u6b4c\u66f2?|\u5b83))|\b(?:play|resume|listen\s+to|put\s+on)\b/iu.test(text);
   return mediaSurface && positivePlayback;
-}
-
-/** Exact user-authored strings that a generated text artifact must preserve. */
-export function extractExplicitArtifactTextRequirements(input: string): string[] {
-  const text = String(input || '');
-  const requirements: string[] = [];
-  const patterns = [
-    // i18n-allow: Chinese exact user-supplied content recognition, not UI copy.
-    /(?:明确写出|原样写入|精确写入|(?:只|仅)写入|内容(?:为|是)|必须(?:包含|写入))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/gu,
-    /第(?:[一二三四五六七八九十百\d]+)行\s*[：:]?\s*[“"]([^”"\r\n]{1,1000})[”"]/gu,
-    /\b(?:exactly\s+(?:include|write)|must\s+(?:include|contain))\s*[：:]?\s*[“"]([^”"\r\n]{1,200})[”"]/giu,
-  ];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const value = String(match[1] || '').trim();
-      if (value && !requirements.includes(value)) requirements.push(value);
-    }
-  }
-  return requirements.slice(0, 20);
 }
 
 export function requiresDesktopAiRequest(input: string): boolean {
@@ -407,7 +397,10 @@ export function requiresDesktopAiRequest(input: string): boolean {
   // not divert an industry task into the external-AI lane.
   const hasGenericAiTarget = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|让|跟|和).{0,48}(?:AI|模型|agent|智能体)|(?:AI|模型|agent|智能体).{0,48}(?:聊天|对话|讨论|回答|协同|合作|汇总|对比)/iu.test(positiveText);
   // i18n-allow: multilingual external-AI request recognition; not user-visible copy.
-  const hasAskAction = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|跟|和).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(positiveText);
+  const requestedActionText = positiveText.replace(/https?:\/\/[^\s，。；;！？!?]+/giu, ' ')
+    .replace(/(?:不要|别|不必|无需|不用)\s*(?:发送|发|进行)?(?:消息|聊天|对话)[^，,。；;！？!?\n]*/gu, ' '); // i18n-allow: Prohibited conversations are not requests to contact an AI.
+  // i18n-allow: Positive external-AI action recognition.
+  const hasAskAction = /(?:问(?!题)(?:一下|问)?|询问|发给|发送给|交给|跟|和).{0,48}(?:聊天|聊|对话|说|问|讨论)|(?:聊天|对话|讨论|回答|结果|总结|对比|汇总)|\b(?:ask|send\s+to|hand\s+off|chat|talk|discuss|answer|collect|compare|summari[sz]e)\b/iu.test(requestedActionText);
   return (hasNamedAiSurface || hasGenericAiTarget) && hasAskAction;
 }
 
@@ -489,9 +482,9 @@ function buildMediaPlaybackContract(): LumiActionContract {
       'matching player window/open evidence',
       'a verified playback receipt, or a playback action followed by visible playing-state evidence',
     ],
-    preferredTools: ['desktop_list_apps', 'desktop_open', 'desktop_active_window', 'desktop_ui_snapshot', 'desktop_ui_invoke', 'desktop_keyboard_press', 'ocr_screen'],
-    verificationTools: ['desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen'],
-    nextStep: 'Focus the exact player, perform the playback action once, then observe a playing state without toggling it again.',
+    preferredTools: ['computer_use', 'desktop_list_apps', 'desktop_open', 'desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen'],
+    verificationTools: ['computer_use', 'desktop_ui_snapshot', 'ocr_screen'],
+    nextStep: 'Use computer_use with the exact player, song and performer to own the playback action and its read-only progress verification. It can focus, search and play as needed, and returns a verified playback receipt. Do not spend the turn repeatedly listing windows or capturing raw screenshots; raw image bytes are not perception. Once verified, report that receipt without restarting or toggling playback.',
     caution: 'A successful Space/media-key dispatch proves input delivery only; it cannot distinguish play from pause.',
   });
 }
@@ -678,6 +671,53 @@ export function requiresAuthenticatedWebResult(input: string): boolean {
   return hasAccountSurface && hasTargetWork;
 }
 
+/** An existing browser session check is distinct from a managed account workflow. */
+export function isBrowserSessionInspection(input: string): boolean {
+  const text = extractPrimaryTaskText(input);
+  const positive = text.split(/[，,。；;\n]/u).filter(clause => !/(?:不要|不发|不点|不用|无需)|\b(?:do not|don't|without)\b/iu.test(clause)).join(' '); // i18n-allow: negative scope in observation-only requests.
+  return /(?:检查|核对|查看|确认).{0,32}(?:登录|会话)|(?:登录|会话).{0,24}(?:状态|是否|有效)|\b(?:check|inspect|verify)\b.{0,40}\b(?:login|session|logged.in)\b/iu.test(text) // i18n-allow: existing browser-session inspection intent.
+    && !/(?:搜索|检索|查找|找一下|下载|发送|发布|创建|生成|导出|写入|修改|删除|下单|付款|点赞)|\b(?:search|look.up|download|send|publish|create|generate|export|write|modify|delete|pay|like)\b/iu.test(positive); // i18n-allow: separate authenticated account work.
+}
+
+/** A login-state check can finish with a verified logged-out observation too. */
+export function browserSessionObservation(records: ToolExecutionRecord[], task: string): string | null {
+  if (!isBrowserSessionInspection(task)) return null;
+  const url = extractPrimaryTaskText(task).match(/https?:\/\/[^\s，。；;<>"'）)]+/iu)?.[0];
+  if (!url) return null;
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase().replace(/^www\./u, ''); } catch { return null; }
+  const reverseLaunchIndex = [...records].reverse().findIndex(record => {
+    if (!['browser_open_task', 'desktop_open'].includes(record.name) || record.error || record.terminalVerification?.status !== 'verified') return false;
+    const payload = parseRecordJson(record);
+    if (payload?.target !== url) return false;
+    if (record.name === 'browser_open_task') return record.arguments?.url === url && payload?.opened === true;
+    return record.arguments?.target === url && payload?.targetMatched === true
+      && /^(?:chrome|msedge|firefox|brave|opera)\.exe$/iu.test(String(payload?.actualTarget?.processName || ''));
+  });
+  if (reverseLaunchIndex < 0) return null;
+  const launchIndex = records.length - reverseLaunchIndex - 1;
+  for (const record of records.slice(launchIndex + 1).reverse()) {
+    if (!/^(?:ocr_screen|ocr_region|desktop_ui_snapshot)$/u.test(record.name) || record.error || record.terminalVerification?.status !== 'verified') continue;
+    const payload = parseRecordJson(record);
+    const observed = payload ? String(payload.description || payload.text || payload.analysis || '') : terminalPayloadText(record);
+    // Bind visible state to the requested site, not a generic Login button on
+    // a different monitor or an unrelated profile store.
+    if (!observed.toLowerCase().includes(host)) continue;
+    if (!/(?:未登录|已登录|登录状态|登录按钮|登录入口|扫码|验证码)|\b(?:logged (?:in|out)|login (?:button|form)|sign.in|captcha)\b/iu.test(observed)) continue; // i18n-allow: directly observed browser session state.
+    // Deliver the login finding, not unrelated tabs, bookmarks or feed text
+    // that a broad screen OCR response may also have transcribed.
+    const findings = observed.split(/\n+/u).map(line => line.trim())
+      .filter(paragraph => !/^\s*#{1,6}\s+[^\n]+\s*$/u.test(paragraph))
+      .filter(paragraph => /(?:未登录|已登录|登录状态|登录按钮|登录入口|右上角|扫码|验证码|需要登录)|\b(?:logged (?:in|out)|login (?:button|form)|sign.in|captcha)\b/iu.test(paragraph)); // i18n-allow: relevant observed login facts.
+    // Preserve the actual conclusion before broad header/navigation OCR. A
+    // section heading alone cannot answer whether the saved session survived.
+    const conclusions = findings.filter(paragraph => /(?:未登录|已登录|需要登录)|\b(?:logged (?:in|out))\b/iu.test(paragraph)); // i18n-allow: directly observed session conclusions.
+    return [...conclusions, ...findings.filter(paragraph => !conclusions.includes(paragraph))]
+      .slice(0, 2).join('\n\n').slice(0, 1200) || null;
+  }
+  return null;
+}
+
 export function hasAuthenticatedWebResultEvidence(records: ToolExecutionRecord[] = [], text = ''): boolean {
   const successful = records.filter(record => !record.error && String(record.result || '').trim());
   if (successful.length === 0) return false;
@@ -827,6 +867,20 @@ function buildDesktopOperationContract(): LumiActionContract {
   });
 }
 
+export function isDocumentOpenAndReviewRequest(text: string): boolean {
+  // i18n-allow: Requested document opening and content verification.
+  if (/(?:不要|别|禁止|无需).{0,18}(?:打开|启动)|\b(?:do\s+not|don't|never|without)\b.{0,28}\b(?:open|launch)\b/iu.test(text)) return false;
+  const candidate = text
+    .replace(/(?:不能|不要|别|禁止|不可).{0,64}(?:替代|冒充|代替)/gu, ' ') // i18n-allow: Exact-target exclusions.
+    .replace(/\b(?:do\s+not|don't|never)\b.{0,80}\b(?:substitute|replace|use\s+instead)\b/giu, ' ');
+  const wantsOpen = /(?:打开|启动)|\b(?:open|launch)\b/iu.test(candidate); // i18n-allow: Open intent.
+  const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b/iu.test(candidate) // i18n-allow: Document targets.
+    || /(?:打开|启动|阅读|读取).{0,24}(?:报告|介绍)|(?:报告|介绍)(?:文件|文档)/u.test(candidate) // i18n-allow: Named report targets.
+    || /\b(?:open|launch|read|review).{0,32}\breport\b/iu.test(candidate);
+  const wantsReview = /(?:分析|总结|介绍|讲解|读取|阅读|逐页|一页一页|看一下|看看|核对|核验|检查|查看)|\b(?:analy[sz]e|summari[sz]e|review|read|present|walk\s+through|inspect|check|verify)\b/iu.test(candidate); // i18n-allow: Reading or inspecting contents is work after launch.
+  return wantsOpen && hasDocument && wantsReview;
+}
+
 function isDesktopLaunchVerificationOnly(
   text: string,
   normalizedIntent: ReturnType<typeof normalizeActionIntent>,
@@ -836,6 +890,7 @@ function isDesktopLaunchVerificationOnly(
     || normalizedIntent.operation !== 'navigate'
     || normalizedIntent.sideEffectClass !== 'none'
   ) return false;
+  if (isDocumentOpenAndReviewRequest(text)) return false;
   const target = compact(normalizedIntent.target);
   if (!target || /(?:https?:|www\.|\u7f51\u7ad9|\u7f51\u9875|\u6d4f\u89c8\u5668)/iu.test(target)) return false;
   const withoutExclusions = text
@@ -859,6 +914,16 @@ export function hasRequestedArtifactPostWriteReadback(
 ): boolean {
   if (!requiresArtifactPostWriteReadback(taskText)) return true;
   return Boolean(resolveArtifactDelivery(records)?.readback);
+}
+
+export function getArtifactTaskProgress(task: string, records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}) {
+  const current = expandSuccessfulRecords(records).filter(record => artifactRecordMatchesTurn(record, turn));
+  return projectArtifactProgress(task, current, {
+    readbackRequired: requiresArtifactPostWriteReadback(task),
+    openRequired: requiresArtifactOpen(task),
+    openVerified: file => hasRequestedDesktopOpenEvidence(current, task, file),
+    acceptsOutput: file => matchesRequestedArtifactOutput(task, file),
+  });
 }
 
 function buildCustomerOperationsContract(): LumiActionContract {
@@ -1227,7 +1292,7 @@ export function buildActionContract(input: string): LumiActionContract {
   const directedMessageSend = normalizedIntent.kind === 'messaging_send' || (
     normalizedIntent.kind !== 'messaging_read'
     && (
-      matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[\s\S]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
+      matches(text, /(?:\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32}\s*(?:\u53d1\u9001|\u53d1|\u56de\u590d|\u8bf4|\u544a\u8bc9))|(?:\u53d1\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})|(?:(?:\u53d1\u9001|\u53d1)\s*[^,\uFF0C\u3002\uFF01\uFF1F!?;\uFF1B\u3001\n]{1,200}?\s*\u7ed9\s*[^\s,\uFF0C\u3002\uFF01\uFF1F!?:\uFF1A;\uFF1B\u3001]{1,32})/u)
       || matches(text, /\b(?:send\s+(?:a\s+)?(?:message|note|reply)\s+to|send\s+(?:him|her|them|the\s+(?:client|customer|contact|group))|message\s+(?:him|her|them|the\s+(?:client|customer|contact|group)|@?(?!(?:has|have|had|is|was|were|contains?|includes?|body|content|attachment|file|text)\b)[\p{L}\p{N}_.'-]{1,40})|reply\s+to)\b/iu)
     )
   );
@@ -1299,7 +1364,10 @@ export function buildActionContract(input: string): LumiActionContract {
     });
   }
 
-  const messageSourceText = withoutChatReplyDestination(text);
+  // URLs and prohibitions on sending are not a request to read messages.
+  // i18n-allow: Negative message-action clause recognition.
+  const messageSourceText = withoutChatReplyDestination(text).replace(/https?:\/\/[^\s，。；;！？!?]+/giu, ' ')
+    .replace(/(?:不要|无需|不用|别|不)\s*(?:发送|发|读|读取|查看)(?:任何)?(?:消息|聊天|对话)[^，,。；;！？!?\n]*/gu, ' ');
   if (
     !readOnlyArtifactInspection &&
     matches(messageSourceText, /wechat|weixin|\u5fae\u4fe1|\u804a\u5929|\u804a\u5929\u8bb0\u5f55|\u804a\u5929\u5185\u5bb9|\u6d88\u606f|message|chat/i) &&
@@ -1413,9 +1481,11 @@ export function buildActionContract(input: string): LumiActionContract {
       coreAction: '\u6253\u5f00\u76ee\u6807\u7ad9\u70b9\uff0c\u68c0\u67e5\u5f53\u524d\u4f1a\u8bdd\uff0c\u4f7f\u7528\u53ef\u63a7\u6d4f\u89c8\u5668\u6216\u684c\u9762\u8fdb\u884c\u767b\u5f55\u540e\u64cd\u4f5c',
       preparationIsNotCompletion: ['\u6253\u5f00\u6d4f\u89c8\u5668', '\u6253\u5f00\u767b\u5f55\u9875', '\u770b\u5230\u7f51\u7ad9\u9996\u9875'],
       requiredEvidence: ['logged-in page/session evidence', '\u76ee\u6807\u9875\u9762\u72b6\u6001\u6216\u8d26\u53f7\u72b6\u6001\u9a8c\u8bc1', '\u82e5\u8bf7\u6c42\u5305\u542b\u68c0\u7d22/\u67e5\u627e\uff1b\u8fd8\u9700\u8981\u76ee\u6807\u68c0\u7d22\u7ed3\u679c\u6216\u660e\u786e\u7684\u672a\u767b\u5f55/\u9a8c\u8bc1\u963b\u585e\u8bc1\u636e'],
-      preferredTools: ['web_login_profile_list', 'web_login_profile_save_from_preset', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_click', 'browser_open_task', 'desktop_active_window', 'desktop_capture_screen'],
-      verificationTools: ['web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot', 'desktop_capture_screen'],
-      nextStep: '\u5148\u68c0\u67e5\u5df2\u4fdd\u5b58\u7684\u767b\u5f55 profile/\u4f1a\u8bdd\uff1b\u5df2\u77e5\u7ad9\u70b9\u53ef\u5148\u521b\u5efa\u5bf9\u5e94 preset profile \u5e76\u8fd0\u884c web_login_run\uff1b\u9047\u5230\u5bc6\u7801\u3001\u626b\u7801\u3001\u9a8c\u8bc1\u7801\u30012FA \u6216\u672a\u4fdd\u5b58\u51ed\u636e\u5c31\u505c\u4e0b\u8bf4\u660e\u3002',
+      preferredTools: [...(isBrowserSessionInspection(text) ? ['browser_open_task', 'desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen'] : []), 'web_login_profile_list', 'web_login_profile_save_from_preset', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_click', 'browser_open_task', 'desktop_active_window', 'desktop_ui_snapshot', 'ocr_screen'],
+      verificationTools: ['desktop_ui_snapshot', 'ocr_screen', 'web_login_run', 'url_fetch_logged_in', 'mcp_playwright_browser_snapshot'],
+      nextStep: isBrowserSessionInspection(text)
+        ? 'Open the exact URL in the requested browser and inspect that same window using desktop_ui_snapshot or ocr_screen. An empty Lumi login-profile list does not prove the browser is logged out: its cookies/password store are separate. Do not create a new profile or start a separate browser merely to inspect the existing session. Report visible account or login-form evidence; if verification is required, explain that specific step.'
+        : 'First inspect saved login profiles or existing sessions. Reuse an authorized profile with web_login_run for the requested account work, and verify the target results. Stop at missing credentials, QR/captcha/2FA or an external submission requiring confirmation.',
       caution: '\u4e0d\u80fd\u628a\u6253\u5f00\u7f51\u9875\u8bf4\u6210\u5df2\u767b\u5f55\u6216\u5df2\u5b8c\u6210\u8d26\u53f7\u64cd\u4f5c\u3002',
     });
   }
@@ -1759,6 +1829,18 @@ function hasMatchingDesktopOpenEvidence(record: ToolExecutionRecord, requestedTa
   // Invocation arguments prove intent, not outcome. Completion requires a
   // matching structured post-open target from the desktop client.
   if (!verifiedPostState || structuredTargets.length === 0) return false;
+  if (/^(?:[A-Za-z]:[\\/]|\/|\\\\)/u.test(requestedTarget)) {
+    // Native office windows expose the filename, not the absolute path. Bind
+    // that title to the exact invoked AND acknowledged path before accepting it.
+    if (!argumentTargets.some(value => sameArtifactPath(String(value), requestedTarget))
+      || !sameArtifactPath(String(payload?.target || ''), requestedTarget)) return false;
+    if (payload?.verificationBasis === 'post_open_foreground') {
+      const actual = payload?.actualTarget || payload?.verification?.actualTarget;
+      const filename = requestedTarget.replace(/\\/g, '/').split('/').pop()!.normalize('NFKC').toLowerCase();
+      const title = String(actual?.title || actual?.windowTitle || '').normalize('NFKC').trim().toLowerCase();
+      if (title === filename || (title.startsWith(filename) && /^\s+[-–—|]\s+/u.test(title.slice(filename.length)))) return true;
+    }
+  }
   return structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases));
 }
 
@@ -2120,6 +2202,12 @@ function scopedMediaEvidence(
   });
 }
 
+export function requiresArtifactOpen(input: string): boolean {
+  // i18n-allow: Negated opening instructions are constraints, not pending actions.
+  const positive = input.replace(/(?:不要|无需|不用|不必|别)\s*(?:再|另外)?\s*打开[^，,。.!?！？;\n]*|\b(?:do not|don't|without)\s+open(?:ing)?\b[^,;.!?\n]*/giu, ' ');
+  return /打开|\bopen\b/iu.test(positive); // i18n-allow: Artifact opening input grammar.
+}
+
 export function hasMediaPauseEvidence(records: ToolExecutionRecord[], taskText: string, currentTurn?: { requestId?: string; taskId?: string }): boolean {
   const target = requestedMediaPlayerTarget(taskText);
   let paused = false;
@@ -2181,9 +2269,11 @@ export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], ta
           && !matchesTarget(applicationIdentity))) continue;
     }
     const match = playbackPlayerMatch(record, target);
+    // Looking at another window cannot disprove playback in the verified
+    // player. Only a later observation of that player can supersede it.
+    if (match === false) continue;
     if (match !== null) {
       playerMatched = match;
-      if (!match) { actuated = false; verified = false; }
     }
     if (action && playerMatched) { actuated = true; verified = false; }
     const state = observedPlaybackState(record);
@@ -2998,9 +3088,10 @@ function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
   // create/write/edit request may inspect the source first, but that read is
   // preparation rather than completion of the requested mutation.
   // i18n-allow: file analysis includes calculations over the accepted source.
-  const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker)\b/iu.test(primary);
+  const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|列出|金额|数量|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker|amount|quantity)\b/iu.test(primary);
   if (!wantsSemanticRead) return false;
-  const hasFileSubject = /(?:\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:file|document|filepath|path)\b|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf|rtf)\b/iu.test(primary);
+  // i18n-allow: File/attachment subject recognition.
+  const hasFileSubject = /(?:附件|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b|\.(?:txt|md|csv|json|docx?|xlsx?|pptx?|pdf|rtf)\b/iu.test(primary);
   if (!hasFileSubject) return false;
   const wantsMutation = hasRequestedArtifactMutation(primary);
   return !wantsMutation;
@@ -3034,6 +3125,7 @@ export function documentReadMatchesRequestedTarget(
   record: ToolExecutionRecord,
   taskText: string,
   acceptedTaskTarget?: AcceptedTaskTarget,
+  currentAttachmentPaths: string[] = [],
 ): boolean {
   // Target correlation is independent from content retention. Large structured
   // reads may be compacted before a later finalization pass, but their exact
@@ -3049,7 +3141,7 @@ export function documentReadMatchesRequestedTarget(
   const requestedTask = compact(extractPrimaryTaskText(taskText));
   // The save-as destination belongs to output verification. It must not
   // replace an explicitly preserved source or its server-owned continuation.
-  const primaryTask = preservedSourceOutputScope(requestedTask)?.sourceText || requestedTask;
+  const primaryTask = sourceDocumentInstruction(preservedSourceOutputScope(requestedTask)?.sourceText || requestedTask);
   if (!target || !primaryTask) return false;
 
   // When the user supplied an absolute document path, basename equality is
@@ -3059,6 +3151,11 @@ export function documentReadMatchesRequestedTarget(
   ) || [];
   if (absoluteTargets.length > 0) {
     return absoluteTargets.some(candidate => sameExactDocumentTarget(candidate, target));
+  }
+
+  // i18n-allow: Current-upload reference recognition.
+  if (/(?:附件|这个文件|该文件|\b(?:this\s+)?attachment\b)/iu.test(primaryTask) && currentAttachmentPaths.length) {
+    return currentAttachmentPaths.some(candidate => sameExactDocumentTarget(candidate, target));
   }
 
   if (acceptedTaskTarget?.target.path) {
@@ -3420,7 +3517,7 @@ export function hasCoreActionEvidence(
     return hasPublicPostEvidence(successful) || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'browser_account') {
-    return hasAuthenticatedWebResultEvidence(successful, taskText)
+    return Boolean(browserSessionObservation(successful, taskText)) || hasAuthenticatedWebResultEvidence(successful, taskText)
       || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'cad_document') {
@@ -3467,8 +3564,7 @@ export function hasCoreActionEvidence(
       return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText, resolvedTarget);
     }
     const current = successful.filter(record => artifactRecordMatchesTurn(record, currentTurn || {}));
-    if (!hasRequestedArtifactPostWriteReadback(current, taskText)) return false;
-    return current.some(record => isArtifactProducerRecord(record) && matchesRequestedArtifactOutput(taskText, artifactPathFromRecord(record)));
+    return getArtifactTaskProgress(taskText, current)?.complete === true;
   }
   if (contract.kind === 'external_cli_status') return verifiedExternalCliStatus(taskText, records, currentTurn) !== null;
   if (contract.kind === 'external_ai_request') {

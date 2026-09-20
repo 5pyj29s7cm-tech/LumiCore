@@ -6,6 +6,7 @@ import { capabilityContract, capabilityEvidence } from '../capability_contracts'
 import type { ToolContext } from '../types';
 import { getDataPath } from '../../config/data_path';
 import { hasApprovedWorkflowToolCall } from '../../workflows/runtime';
+import { assertTextFileFormat } from '../text_file_format';
 
 function isPathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -370,6 +371,7 @@ export function registerFileOpsTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'write_file',
+    preflight: assertTextFileFormat,
     description: 'Write content to a file. Creates parent directories if needed.',
     parameters: {
       type: 'object',

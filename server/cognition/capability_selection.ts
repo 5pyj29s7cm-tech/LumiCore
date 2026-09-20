@@ -5,6 +5,7 @@ import type { LumiTurnDispatch } from './turn_dispatch';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   buildActionContract,
+  isBrowserSessionInspection,
   extractExplicitArtifactTextRequirements,
   formatActionContractPrompt,
   requestsBlankAutoCadDocument,
@@ -619,6 +620,9 @@ function laneRule(
       }
       return 'Use screen/window state as evidence. Move through visible UI deliberately and verify the app/result before claiming completion.';
     case 'web_or_account':
+      if (isBrowserSessionInspection(text)) {
+        return buildActionContract(text).nextStep;
+      }
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
       if (isExternalCliRequest(text)) {

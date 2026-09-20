@@ -194,7 +194,7 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
   registry.register({
     name: 'capture_screen',
     description:
-      'Capture a screenshot of the user\'s primary monitor and save it to disk. Returns the file path and dimensions. Use this sparingly when the user asks Lumi to look at the screen or when a desktop task needs current visual confirmation; do not use it for continuous surveillance.',
+      'Capture raw image data and geometry for the current authorized desktop task. This tool does not analyze or describe the image. Use ocr_screen to read page content or login state; use computer_use for visually guided actions. On Windows this spans all monitors and includes the virtual desktop origin.',
     parameters: {
       type: 'object',
       properties: {
@@ -210,7 +210,7 @@ export function registerScreenMonitorTools(registry: ToolRegistry): void {
   registry.register({
     name: 'desktop_capture_screen',
     description:
-      'Alias for capture_screen. Capture a fresh screenshot of the primary monitor for visible desktop verification. Use sparingly and only for current task context.',
+      'Alias for capture_screen: returns raw image transport, not a visual description. Use ocr_screen to read visible content/login state, or computer_use to perform and verify actions when native selectors are unavailable. On Windows includes all monitors and virtual-desktop geometry.',
     parameters: {
       type: 'object',
       properties: {

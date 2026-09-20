@@ -274,7 +274,12 @@ export function prepareLocalModelRequest(input: {
     Math.floor(contextTokens * (structuredOutput ? 0.4 : 0.25)),
   ));
   const safetyTokens = Math.max(384, Math.floor(contextTokens * 0.1));
-  const inputBudgetTokens = contextTokens - maxTokens - safetyTokens;
+  // Loaded context capacity is a hard ceiling, not a latency target. Sending
+  // the entire 32k context to a small local model caused healthy runtimes to
+  // miss the first-byte deadline on otherwise simple desktop requests.
+  const workingInputTokens = Math.max(2048, Math.min(32768,
+    Number(process.env.LUMI_LOCAL_MODEL_INPUT_BUDGET_TOKENS) || 6144));
+  const inputBudgetTokens = Math.min(contextTokens - maxTokens - safetyTokens, workingInputTokens);
   const original = input.messages.map(message => ({ ...message }));
   const sourceUserIndex = resolveAnnotatedSourceUserIndex(original);
   const systemIndexes = original
@@ -303,9 +308,15 @@ export function prepareLocalModelRequest(input: {
         0,
       ))
     : 0;
+  // Reserve the current request as well as its paired receipt before filling
+  // the remaining context with optional schemas. Otherwise the schemas fit
+  // while the next compaction step cannot retain the same task boundary.
+  const protectedUserTokens = protectedUserIndexes.reduce((total, index) => (
+    total + Math.max(64, Math.min(768, messageTokens(original[index])))
+  ), 0);
   const minimumMessageTokens = continuationTokens
     + minimumSystemTokens
-    + protectedUserIndexes.length * 64;
+    + protectedUserTokens;
   const toolDeclarations = input.compactToolDeclarations
     ? compactLocalToolDeclarations(
         input.toolDeclarations,
@@ -343,7 +354,10 @@ export function prepareLocalModelRequest(input: {
   const minimumSystemBudget = systemIndexes.length > 0
     ? Math.min(
         systemIndexes.reduce((total, index) => total + messageTokens(original[index]), 0),
-        Math.max(256, Math.floor(messageBudget * 0.4)),
+        Math.max(minimumSystemTokens, Math.min(
+          Math.floor(messageBudget * 0.4),
+          messageBudget - continuationTokens - protectedUserTokens,
+        )),
       )
     : 0;
   if (

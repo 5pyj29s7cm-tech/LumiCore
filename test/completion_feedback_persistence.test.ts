@@ -79,7 +79,7 @@ describe('foreground completion feedback persistence', () => {
       'status',
     ]);
     expect(stored.status).toBe('completed');
-    expect(stored.completed).toEqual(['The task is complete.']);
+    expect(stored.completed).toEqual(['Window observation completed.']);
     expect(stored.evidence).toEqual(['The current execution result was recorded.']);
     expect(JSON.stringify(stored)).not.toContain('definitely-secret-token-value');
     expect(JSON.stringify(stored)).not.toMatch(/desktop_active_window|verified terminal evidence|tool receipt/iu);

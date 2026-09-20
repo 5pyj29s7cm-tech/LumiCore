@@ -6,6 +6,8 @@ describe('vision routing intent', () => {
   it('detects screen and image recognition requests', () => {
     expect(hasVisionIntent('帮我识别一下屏幕上的内容')).toBe(true);
     expect(hasVisionIntent('read this screenshot')).toBe(true);
+    expect(hasVisionIntent('只查看当前网易云音乐窗口，告诉我底部显示的时间')).toBe(true);
+    expect(hasVisionIntent('Inspect the music player window without clicking anything')).toBe(true);
     expect(hasVisionIntent('请分析 C:\\Users\\me\\Desktop\\plan.png')).toBe(true);
   });
 

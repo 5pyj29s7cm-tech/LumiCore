@@ -13,6 +13,7 @@ import {
 } from '../server/cognition/execution_guard_recovery';
 import type { ExecutionGuardRecoveryFinalization } from '../server/cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../server/tools/types';
+import { hasRequestedArtifactMutation } from '../server/cognition/tool_intent';
 import { sanitizeToolRecordsForPersistence } from '../server/cognition/user_output_protection';
 import {
   clearAllPendingConfirmationsForTests,
@@ -37,6 +38,12 @@ function expectNaturalCustomerReply(text: string): void {
 }
 
 describe('execution guard recovery', () => {
+  it('keeps new document navigation and inspection executable despite status words in the file path', () => {
+    expect(classifyExecutionGuardIntent('用电脑上的 WPS 打开 D:/LumiCore-Audit-Reports/20260920/chat-task-repair/cloud-output/采购报表_执行进度复测更新.xlsx，核对表格的总金额和图表，告诉我实际看到的结果。')).toBe('action_execution');
+    expect(classifyExecutionGuardIntent('刚才任务的结果是什么？')).toBe('status_query');
+    expect(hasRequestedArtifactMutation('打开 D:/reports/采购报表_更新.xlsx，核对总额。')).toBe(false);
+    expect(hasRequestedArtifactMutation('修改 D:/reports/采购报表_更新.xlsx 的数量。')).toBe(true);
+  });
   it('keeps conceptual evidence questions in conversation while preserving real task-status queries', () => {
     expect(classifyExecutionGuardIntent('“文件保存成功”应该依据什么证据判断？请只解释，不执行任何操作。'))
       .toBe('conversation');

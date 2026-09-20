@@ -40,6 +40,14 @@ describe('playback goal and visible-fact parsing', () => {
 });
 
 describe('runtime recomputes completion from two capture-bound progress samples', () => {
+  it('verifies a requested song and singer independently of the programme-title field', () => {
+    const request = '在网易云音乐里播放陈奕迅的孤勇者。';
+    const samples = pair().map(row => ({ ...row, player: '网易云音乐', title: '孤勇者', artist: '陈奕迅', season: '', episode: '' }));
+    expect(parsePlaybackGoal(request)).toMatchObject({ title: '孤勇者', artist: '陈奕迅' });
+    expect(buildPlaybackVerification(request, samples)?.verified).toBe(true);
+    expect(buildPlaybackVerification(request, samples.map(row => ({ ...row, artist: '其他歌手' })))).toBeNull();
+    expect(buildPlaybackVerification(request, samples.map(({ artist, ...row }) => row))).toBeNull();
+  });
   it('builds and validates the requested content, including serialization and player aliases', () => {
     const samples = pair(); samples[1].player = 'iqiyi.exe';
     const proof = buildPlaybackVerification(task, samples);

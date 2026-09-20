@@ -11,7 +11,14 @@ describe('provider live connection test', () => {
     expect(result.ok).toBe(true);
     expect(result.provider).toBe('openai');
     expect(create).toHaveBeenCalledOnce();
-    expect(create.mock.calls[0][0]).toMatchObject({ model: 'gpt-test-model', max_tokens: 8 });
+    expect(create.mock.calls[0][0]).toMatchObject({ model: 'gpt-test-model', max_tokens: 64 });
+  });
+
+  it('rejects an HTTP-successful response containing no usable answer', async () => {
+    const create = vi.fn().mockResolvedValue({ choices: [{ message: { content: '', reasoning_content: 'Thinking only' } }] });
+    await expect(testLLMProviderConnection('openai', 'gpt-test-model', {
+      getOpenAI: () => ({ chat: { completions: { create } } }),
+    })).rejects.toThrow('empty response');
   });
 
   it('rejects configured-looking providers that have no runtime client', async () => {

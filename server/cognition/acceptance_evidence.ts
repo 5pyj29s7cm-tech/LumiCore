@@ -12,7 +12,10 @@ import {
   toolRecordHasTerminalPayload,
   toolRecordTerminalPayload,
 } from '../tools/receipt_payload';
-import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
+import { buildActionEvidenceContract, hasCoreActionEvidence, hasMediaPlaybackEvidence, requiresMediaPlaybackAction } from './action_contract';
+import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
+import { getArtifactTaskProgress } from './action_contract';
+import { artifactProgressFeedback } from './artifact_progress';
 import { isExternalCliRequest } from './external_cli_intent';
 import { normalizeActionIntent } from './normalized_action_intent';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
@@ -453,7 +456,15 @@ export function buildForegroundTaskCompletionFeedback(input: {
     && record.terminalVerification?.status === 'verified'
     && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error)
   ));
-  const missingRequestedActionEvidence = missingMediaEvidence || ((contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
+  const requestIds = [...new Set(records.map(record => record.requestId || record.envelope?.requestId).filter(Boolean))];
+  const artifactProgress = contract.kind === 'artifact_work'
+    ? getArtifactTaskProgress(input.taskLabel, records, { taskId: input.taskId,
+      ...(requestIds.length === 1 ? { requestId: requestIds[0] } : {}) }) : null;
+  const missingPlayback = requiresMediaPlaybackAction(input.taskLabel) && !hasMediaPlaybackEvidence(records, input.taskLabel,
+    requestIds.length === 1 ? { requestId: requestIds[0], taskId: input.taskId } : undefined);
+  const missingRequestedActionEvidence = missingMediaEvidence || missingPlayback
+    || Boolean(artifactProgress && !artifactProgress.complete)
+    || missingSpreadsheetRequirements(input.taskLabel, records).length > 0 || ((contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
     && !hasCoreActionEvidence(contract, records, input.taskLabel, undefined, { taskId: input.taskId }));
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
@@ -477,11 +488,19 @@ export function buildForegroundTaskCompletionFeedback(input: {
           : undefined,
     reason: terminalReason,
   });
-  return buildTaskCompletionFeedback(receipt, label, {
+  const feedback = buildTaskCompletionFeedback(receipt, label, {
     status: outcome,
     reason: terminalReason,
     accepted: outcome === 'completed' && receipt.verification === 'verified',
   });
+  if (artifactProgress) {
+    const stages = artifactProgressFeedback(artifactProgress, input.taskLabel);
+    return { ...feedback, ...stages,
+      // A transport cancellation or another unfinished action still owns the
+      // task outcome; keep its blocker even if this one deliverable is complete.
+      blockers: artifactProgress.complete ? feedback.blockers : stages.incomplete };
+  }
+  return feedback;
 }
 
 function receiptVerification(

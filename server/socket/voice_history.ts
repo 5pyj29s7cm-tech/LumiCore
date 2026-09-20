@@ -1,4 +1,5 @@
 import type { NormalizedMessage } from '../llm/providers';
+import { buildHistoricalFileObservations } from '../conversation/file_observation_history';
 import {
   isGuardGeneratedAssistantText,
   isGuardGeneratedConversationRecord,
@@ -54,7 +55,7 @@ export function normalizeVoiceHistoryRecord(record: any): NormalizedMessage[] {
     ? ''
     : message;
   const assistantContent = role === 'assistant'
-    ? [safeMessage, receiptNote].filter(Boolean).join('\n')
+    ? [safeMessage, receiptNote, hasToolCalls ? buildHistoricalFileObservations(record.toolCalls) : record.toolFileObservations || ''].filter(Boolean).join('\n')
     : safeMessage;
   if (assistantContent) entries.push({ role, content: assistantContent });
   if (role === 'user' && embeddedLegacyResponseReceipt) {

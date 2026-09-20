@@ -898,7 +898,7 @@ export async function testLLMProviderConnection(
     // Exercise the exact production adapter and request formatter. A raw SDK
     // probe can look healthy while the real Lumi route fails because it omits
     // provider-specific request fields, privacy gates, or local supervision.
-    await withConnectionTestTimeout(makeLLMCallDirect(
+    const response = await withConnectionTestTimeout(makeLLMCallDirect(
       [{ role: 'user', content: 'Reply with only OK.' }],
       [],
       {
@@ -906,7 +906,8 @@ export async function testLLMProviderConnection(
         model,
         userId,
         selectionMode: 'pinned',
-        maxTokens: 8,
+        maxTokens: 64,
+        thinkingMode: 'disabled',
         noImplicitFailover: true,
         authorizedRoutingCandidate: true,
         signal: controller.signal,
@@ -924,6 +925,7 @@ export async function testLLMProviderConnection(
       llm.getGlm,
       llm.getRelay,
     ), provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000);
+    if (!response.text?.trim()) throw new Error('The model returned an empty response to the connection test.');
   } finally {
     controller.abort();
   }
@@ -1131,7 +1133,8 @@ export async function testLumiModelFailoverConfiguration(
       selectionMode: 'ordered_fallback',
       fallbackCandidates,
       allowCloudFallback: preference.allowCloudFallback,
-      maxTokens: 8,
+      maxTokens: 64,
+      thinkingMode: 'disabled',
     },
     {
       getDeepSeek: llm.getDeepSeek || (() => null),

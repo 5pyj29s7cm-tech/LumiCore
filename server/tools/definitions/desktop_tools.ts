@@ -4,6 +4,7 @@ import { assertValidCommandForHost } from '../command_platform';
 import { desktopFingerprintMatchesRequestedTarget } from '../../desktop/execution_plan';
 import { parseDesktopWindowFingerprint } from '../../desktop/execution_runtime';
 import crypto from 'node:crypto';
+import { assertTextFileFormat } from '../text_file_format';
 
 function parseRelayPayload(value: unknown): Record<string, any> | null {
   let current = value;
@@ -392,6 +393,7 @@ export function registerDesktopTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_write_text_file',
+    preflight: assertTextFileFormat,
     description:
       'Write an exact text payload to an exact path on the user\'s real desktop machine through the native client. This is the cross-platform file semantic for Desktop/Documents and other host paths; never replace it with a shell command. Choose fail_if_exists to protect an existing file or replace only when overwriting is explicitly intended. Returns a native byte-level read-back receipt. A one-time user confirmation is always required.',
     parameters: {

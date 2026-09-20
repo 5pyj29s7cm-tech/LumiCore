@@ -4,6 +4,8 @@ export type MediaArtifactReceipt = {
   version: 1;
   verified: true;
   verificationStatus: 'verified';
+  /** Container validation does not imply the requested size/duration matched. */
+  settingsMatch?: boolean;
   toolName: 'generate_image' | 'ai_edit_image' | 'generate_video';
   settings: {
     size?: string;
@@ -83,6 +85,7 @@ export function sanitizeMediaArtifactReceipt(value: unknown): MediaArtifactRecei
     verified: true,
     verificationStatus: 'verified',
     toolName: candidate.toolName,
+    ...(typeof candidate.settingsMatch === 'boolean' ? { settingsMatch: candidate.settingsMatch } : {}),
     settings: {
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count: Math.min(4, Math.max(1, count)) } : {}),
@@ -162,15 +165,17 @@ export function buildMediaArtifactReceipt(
   const parameters: Record<string, unknown> = recoveringImage
     ? { size: storedSettings?.size, n: storedSettings?.count }
     : args && typeof args === 'object' ? args as Record<string, unknown> : {};
-  const size = String(parameters.size || '').trim().slice(0, 40) || undefined;
+  const measured = kind === 'video' && typeof payload.settingsMatch === 'boolean';
+  const size = String((measured ? payload.actualSettings?.size : parameters.size) || '').trim().slice(0, 40) || undefined;
   const count = Number(parameters.n);
-  const duration = Number(parameters.duration);
+  const duration = Number(measured ? payload.actualSettings?.duration : parameters.duration);
 
   return sanitizeMediaArtifactReceipt({
     version: 1,
     verified: true,
     verificationStatus: 'verified',
     toolName: toolName as MediaArtifactReceipt['toolName'],
+    ...(measured ? { settingsMatch: payload.settingsMatch } : {}),
     settings: {
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count } : {}),

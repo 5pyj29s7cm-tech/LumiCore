@@ -1,9 +1,13 @@
 import path from 'path';
 import fs from 'fs/promises';
 import ExcelJSModule from 'exceljs/dist/exceljs.min.js';
+import JSZip from 'jszip';
+import { generatedCellValue, recalculateSpreadsheet } from './spreadsheet_formulas';
+import { addSpreadsheetCharts, preserveSpreadsheetCharts, type SheetCharts } from './spreadsheet_charts';
 
 type Workbook = any;
 type Worksheet = any;
+const originalPackages = new WeakMap<object, JSZip>();
 
 export function assertModernSpreadsheet(filePath: string): void {
   const ext = path.extname(filePath).toLowerCase();
@@ -23,13 +27,32 @@ export async function createXlsxWorkbook(): Promise<Workbook> {
 export async function loadXlsxWorkbook(filePath: string): Promise<Workbook> {
   assertModernSpreadsheet(filePath);
   const workbook = await createXlsxWorkbook();
-  await workbook.xlsx.load(await fs.readFile(filePath));
+  const buffer = await fs.readFile(filePath);
+  await workbook.xlsx.load(buffer);
+  originalPackages.set(workbook, await JSZip.loadAsync(buffer));
   return workbook;
 }
 
-export async function writeXlsxWorkbook(workbook: Workbook, filePath: string): Promise<void> {
+export async function writeXlsxWorkbook(workbook: Workbook, filePath: string, charts: SheetCharts[] = []): Promise<{ formulaCount: number; totalFormulaCount: number; chartCount: number; unresolvedFormulas: string[]; calculatedCells: Array<{ sheet: string; cell: string; value: number; label?: string }> }> {
+  const calculation = recalculateSpreadsheet(workbook);
   const buffer = await workbook.xlsx.writeBuffer();
-  await fs.writeFile(filePath, Buffer.from(buffer));
+  const zip = await JSZip.loadAsync(buffer);
+  const original = originalPackages.get(workbook);
+  const preserved = original ? await preserveSpreadsheetCharts(original, zip, workbook) : 0;
+  const added = await addSpreadsheetCharts(zip, workbook, charts);
+  await fs.writeFile(filePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  const calculatedCells: Array<{ sheet: string; cell: string; value: number; label?: string }> = [];
+  let totalFormulaCount = 0;
+  workbook.eachSheet((sheet: any) => sheet.eachRow((row: any) => row.eachCell((cell: any) => {
+    // i18n-allow: Spreadsheet aggregate-label data recognition.
+    if (cell.formula && (row.values || []).some((value: unknown) => typeof value === 'string'
+      && /^(?:总计|合计|总金额|总额|总价|总费用|grand\s+total|total(?:\s+(?:amount|cost|price))?)[:：\s]*$/iu.test(value.trim()))) totalFormulaCount++;
+    if (calculatedCells.length < 80 && cell.formula && typeof cell.result === 'number' && Number.isFinite(cell.result)) {
+      const label = typeof row.getCell(1).value === 'string' ? row.getCell(1).value.trim().slice(0, 120) : '';
+      calculatedCells.push({ sheet: sheet.name, cell: cell.address, value: cell.result, ...(label ? { label } : {}) });
+    }
+  })));
+  return { ...calculation, totalFormulaCount, chartCount: preserved + added, calculatedCells };
 }
 
 function cellValueToText(value: any): string {
@@ -144,14 +167,15 @@ export function prepareSpreadsheetRows(headers: string[] = [], data: any[] = [])
   return {
     headers: keys,
     rows: data.map(row => {
-      if (Array.isArray(row)) return row;
+      if (Array.isArray(row)) return row.map(generatedCellValue);
       if (!row || typeof row !== 'object') throw new Error('Spreadsheet data rows must be arrays or objects.');
-      return keys.map(key => Object.prototype.hasOwnProperty.call(row, key) ? row[key] ?? null : null);
+      return keys.map(key => generatedCellValue(Object.prototype.hasOwnProperty.call(row, key) ? row[key] ?? null : null));
     }),
   };
 }
 
-export function applySpreadsheetOperations(workbook: Workbook, operations: any[]): void {
+export function applySpreadsheetOperations(workbook: Workbook, operations: any[]): Array<{ sheet: string; cell: string; previous: any; value: any }> {
+  const edits: Array<{ sheet: string; cell: string; previous: any; value: any }> = [];
   for (const op of operations) {
     if (op.addSheet) {
       const sheetName = normalizeSheetName(op.sheet, `Sheet${workbook.worksheets.length + 1}`);
@@ -163,6 +187,34 @@ export function applySpreadsheetOperations(workbook: Workbook, operations: any[]
     }
 
     const worksheet = getWorksheetOrThrow(workbook, op.sheet);
-    worksheet.getCell(op.cell || 'A1').value = op.value ?? null;
+    let address = op.cell;
+    if (op.match !== undefined || op.column !== undefined) {
+      if (address) throw new Error('Use either an exact cell or a row/column selector, not both.');
+      if (!op.match || typeof op.match.column !== 'string' || typeof op.column !== 'string'
+        || op.match.value === undefined) throw new Error('A label edit requires match.column, match.value and column.');
+      const headerRow = op.headerRow ?? 1;
+      if (!Number.isSafeInteger(headerRow) || headerRow < 1 || headerRow > worksheet.rowCount) throw new Error('Invalid headerRow.');
+      const text = (value: any) => cellValueToText(value).normalize('NFKC').trim();
+      const columnIndex = (label: string) => {
+        const matches: number[] = [];
+        worksheet.getRow(headerRow).eachCell((cell: any, index: number) => {
+          if (text(cell.value) === text(label)) matches.push(index);
+        });
+        if (matches.length !== 1) throw new Error(`Column label must match exactly one header: ${label} (${matches.length} matches).`);
+        return matches[0];
+      };
+      const keyColumn = columnIndex(op.match.column), valueColumn = columnIndex(op.column);
+      const rows: number[] = [];
+      worksheet.eachRow((row: any, index: number) => {
+        if (index > headerRow && text(row.getCell(keyColumn).value) === text(op.match.value)) rows.push(index);
+      });
+      if (rows.length !== 1) throw new Error(`Row selector must match exactly one data row (${rows.length} matches).`);
+      address = worksheet.getRow(rows[0]).getCell(valueColumn).address;
+    }
+    if (!address) throw new Error('A cell address or exact row/column selector is required for spreadsheet edits.');
+    const cell = worksheet.getCell(address), previous = cell.value;
+    cell.value = generatedCellValue(op.value ?? null);
+    edits.push({ sheet: worksheet.name, cell: cell.address, previous, value: cell.value });
   }
+  return edits;
 }

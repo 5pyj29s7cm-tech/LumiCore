@@ -93,6 +93,10 @@ export function isOperationModeInventoryQuestion(text: string): boolean {
 export function isCurrentOperationModeQuestion(text: string): boolean {
   const normalized = String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   if (!normalized || hasConcreteExecutionIntent(normalized)) return false;
+  // A meeting, an assistant or ordinary conversation is not itself a question
+  // about operating modes. Require the actual subject before using a canned
+  // answer; otherwise separate sentences can accidentally satisfy the regex.
+  if (!/(?:\u6a21\u5f0f|\bmodes?\b)/iu.test(normalized)) return false;
   return Boolean(
     CURRENT_OPERATION_MODE_RE.test(normalized)
     || OPERATION_MODE_CONFIRMATION_RE.test(normalized)

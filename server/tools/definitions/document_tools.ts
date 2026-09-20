@@ -20,7 +20,7 @@ import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getW
 import { extractPdfText } from '../../utils/pdf_text';
 import { getGeneratedOutputDir } from '../../config/data_path';
 import { canonicalPathIdentity } from '../../conversation/task_target_anchor';
-import { requestedSingleArtifact } from '../../cognition/artifact_write_scope';
+import { requestedSingleArtifact, requestedArtifactSaveAsPath } from '../../cognition/artifact_write_scope';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const require = createRequire(import.meta.url);
@@ -382,7 +382,7 @@ async function ingestDocumentToRag(args: Record<string, any>, context?: any): Pr
 
 async function createXlsx(args: Record<string, any>): Promise<string> {
   const { sheets, filename } = args;
-  if (!sheets || (Array.isArray(sheets) && sheets.length === 0)) {
+  if (!Array.isArray(sheets) || sheets.length === 0) {
     throw new Error('sheets (non-empty array) is required');
   }
 
@@ -441,8 +441,8 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
   const outPath = resolveExplicitSpreadsheetOutput(args.outputPath)
     || path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  await writeXlsxWorkbook(wb, outPath);
-  return JSON.stringify({ ok: true, status: 'created', path: outPath, sheetCount: wb.worksheets.length, size: fs.statSync(outPath).size }, null, 2);
+  const verification = await writeXlsxWorkbook(wb, outPath, sheets.map((sheet: any, index: number) => ({ sheet: wb.worksheets[index].name, charts: sheet.charts || [] })));
+  return JSON.stringify({ ok: true, status: 'created', path: outPath, sheetCount: wb.worksheets.length, ...verification, size: fs.statSync(outPath).size }, null, 2);
 }
 
 async function modifyXlsx(args: Record<string, any>): Promise<string> {
@@ -453,27 +453,31 @@ async function modifyXlsx(args: Record<string, any>): Promise<string> {
   }
 
   const wb = await loadXlsxWorkbook(filePath);
-  applySpreadsheetOperations(wb, operations);
+  const appliedEdits = applySpreadsheetOperations(wb, operations);
 
   const outPath = resolveExplicitSpreadsheetOutput(args.outputPath)
     || filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`);
   if (canonicalPathIdentity(outPath) === canonicalPathIdentity(filePath)) throw new Error('Spreadsheet output must differ from the source file.');
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  await writeXlsxWorkbook(wb, outPath);
-  return JSON.stringify({ ok: true, status: 'modified', path: outPath, size: fs.statSync(outPath).size }, null, 2);
+  const verification = await writeXlsxWorkbook(wb, outPath);
+  return JSON.stringify({ ok: true, status: 'modified', path: outPath, sourcePath: filePath, appliedEdits, ...verification, size: fs.statSync(outPath).size }, null, 2);
 }
 
 // ── DOCX Creation & Modification ──
 function resolveExplicitSpreadsheetOutput(value: unknown): string | undefined {
+  return resolveExplicitDocumentOutput(value, 'xlsx');
+}
+
+function resolveExplicitDocumentOutput(value: unknown, extension: 'xlsx' | 'docx'): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || !path.isAbsolute(value) || !/\.xlsx$/i.test(value)) {
-    throw new Error('Spreadsheet outputPath must be an absolute .xlsx file path.');
+  if (typeof value !== 'string' || !path.isAbsolute(value) || path.extname(value).toLowerCase() !== `.${extension}`) {
+    throw new Error(`Document outputPath must be an absolute .${extension} file path.`);
   }
   return path.resolve(value);
 }
 
 async function createDocx(args: Record<string, any>): Promise<string> {
-  const { title, content, paragraphs, headings, tables, filename } = args;
+  const { title, content, paragraphs, headings, tables, filename, blocks } = args;
 
   const { Document, Packer, Paragraph, TextRun, HeadingLevel,
           Table, TableRow, TableCell, WidthType, AlignmentType } = require('docx');
@@ -489,7 +493,23 @@ async function createDocx(args: Record<string, any>): Promise<string> {
     }));
   }
 
-  if (headings && Array.isArray(headings)) {
+  const orderedBlocks = Array.isArray(blocks) && blocks.length > 0;
+  if (orderedBlocks) {
+    for (const block of blocks) {
+      if (block.type === 'heading') {
+        const levels = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4];
+        children.push(new Paragraph({ text: String(block.text || ''), heading: levels[Math.min(3, Math.max(0, (block.level || 1) - 1))], spacing: { before: 240, after: 120 } }));
+      } else if (block.type === 'paragraph') {
+        children.push(new Paragraph({ text: String(block.text || ''), spacing: { after: 160 } }));
+      } else if (block.type === 'table') {
+        const rows = [...(block.headers?.length ? [block.headers] : []), ...(block.rows || [])];
+        if (!rows.length) throw new Error('A document table needs at least one row.');
+        children.push(new Table({ rows: rows.map((row: unknown[], index: number) => new TableRow({ children: row.map(cell => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(cell ?? ''), bold: Boolean(block.headers?.length && index === 0) })] })] })) })), width: { size: 9000, type: WidthType.DXP } }));
+      } else throw new Error(`Unsupported document block type: ${block.type}`);
+    }
+  }
+
+  if (!orderedBlocks && headings && Array.isArray(headings)) {
     for (const h of headings) {
       const level = Math.min(Math.max(h.level || 1, 1), 4);
       const headingMap: Record<number, typeof HeadingLevel.HEADING_1> = {
@@ -504,7 +524,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
     }
   }
 
-  if (paragraphs && Array.isArray(paragraphs)) {
+  if (!orderedBlocks && paragraphs && Array.isArray(paragraphs)) {
     for (const p of paragraphs) {
       if (typeof p === 'string') {
         children.push(new Paragraph({
@@ -515,7 +535,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
     }
   }
 
-  if (!headings && !paragraphs && content) {
+  if (!orderedBlocks && !headings && !paragraphs && content) {
     for (const line of String(content).split('\n')) {
       children.push(new Paragraph({
         children: [new TextRun(line || ' ')],
@@ -524,7 +544,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
     }
   }
 
-  if (tables && Array.isArray(tables)) {
+  if (!orderedBlocks && tables && Array.isArray(tables)) {
     for (const tbl of tables) {
       const colCount = (tbl.headers || (tbl.rows?.[0]) || []).length || 1;
       const cellWidth = Math.floor(9000 / colCount);
@@ -553,7 +573,8 @@ async function createDocx(args: Record<string, any>): Promise<string> {
 
   const outDir = ensureOutputDir();
   const safeName = (filename || title || 'document').replace(/[\\/:*?"<>|]/g, '_');
-  const outPath = path.join(outDir, `${safeName}_${Date.now()}.docx`);
+  const outPath = resolveExplicitDocumentOutput(args.outputPath, 'docx') || path.join(outDir, `${safeName}_${Date.now()}.docx`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, buffer);
   return JSON.stringify({ ok: true, status: 'created', path: outPath, size: buffer.length }, null, 2);
 }
@@ -822,14 +843,23 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'create_xlsx',
-    description: 'Create a new Excel .xlsx spreadsheet. Supports multiple sheets with headers and data rows, or JSON arrays. Use outputPath for an exact requested absolute .xlsx path; otherwise saves a generated filename to lumi_output.',
+    description: 'Create an Excel .xlsx workbook with real formulas and optional charts. Strings beginning with = become formulas; common arithmetic and SUM/AVERAGE/MIN/MAX/ROUND are calculated. Other formulas require office recalculation, reported in unresolvedFormulas. Use outputPath for the exact destination.',
     parameters: {
       type: 'object',
       properties: {
         sheets: {
           type: 'array',
-          description: 'Array of sheet definitions: [{ name?: string, headers?: string[], data: any[][] | object[] }]. For object rows, headers must be field keys (missing values become blank); omit headers to infer all keys in stable order.',
-          items: { type: 'object' },
+          description: 'Worksheets. Formulas may be strings like =B2*C2 or {formula:"SUM(D2:D4)"}. Include charts when requested; charts are embedded, editable and preserved by modify_xlsx.',
+          items: { type: 'object', properties: {
+            name: { type: 'string' }, headers: { type: 'array', items: { type: 'string' } },
+            data: { type: 'array', description: 'Rows of cells in column order. With headers, data starts at row 2. Put calculated values in cells, e.g. ["Item",2,10,"=B2*C2"]. Every referenced chart value cell must exist; formulas go in data, never in chart.values.', items: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }, { type: 'object', properties: { formula: { type: 'string' } }, required: ['formula'], additionalProperties: false }] } } },
+            charts: { type: 'array', items: { type: 'object', properties: {
+              type: { type: 'string', enum: ['column', 'bar'] }, title: { type: 'string' },
+              categories: { type: 'string', description: 'Category cells in this sheet, e.g. A2:A4' },
+              values: { type: 'string', description: 'Existing numeric/calculated cell range ONLY, e.g. D2:D4. Must match category count. Never put an arithmetic expression here.' },
+              anchor: { type: 'string', description: 'Top-left display cell, e.g. F2' },
+            }, required: ['type', 'categories', 'values'] } },
+          }, required: ['data'] },
         },
         filename: { type: 'string', description: 'Output filename (without extension)' },
         outputPath: { type: 'string', description: 'Optional exact absolute .xlsx output path. Use this when the user specifies where to save the file.' },
@@ -854,7 +884,7 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'modify_xlsx',
-    description: 'Modify an existing .xlsx file — update cell values or add new sheets, preserving the original and saving a separate copy. Use outputPath for an exact requested destination.',
+    description: 'Modify an existing .xlsx file, preserving formulas/charts and saving a separate copy. For a named item and field, prefer exact row/column labels instead of guessing a cell address. Use outputPath for an exact requested destination.',
     parameters: {
       type: 'object',
       properties: {
@@ -862,18 +892,29 @@ export function registerDocumentTools(registry: ToolRegistry): void {
         outputPath: { type: 'string', description: 'Optional absolute .xlsx destination, which must differ from filePath. Otherwise saves a new timestamped copy next to the source.' },
         operations: {
           type: 'array',
-          description: 'Operations: [{ sheet: "Sheet1", cell: "A1", value: "new" }] or [{ addSheet: true, sheet: "New", headers: [...], data: [[...]] }]',
-          items: { type: 'object' },
+          description: 'Prefer {sheet:"Orders",match:{column:"item",value:"B"},column:"qty",value:6}. Both headers and the matched row must be unique. Or use {sheet,cell:"C3",value:6} after reading coordinates. For a new sheet use {addSheet:true,sheet,headers,data}. Do not overwrite an amount formula when changing a quantity.',
+          items: { type: 'object', properties: {
+            sheet: { type: 'string' }, cell: { type: 'string' }, column: { type: 'string' },
+            headerRow: { type: 'integer' },
+            match: { type: 'object', properties: { column: { type: 'string' }, value: { anyOf: [{type:'string'},{type:'number'}] } }, required: ['column','value'] },
+            value: { anyOf: [{type:'string'},{type:'number'},{type:'boolean'},{type:'null'},{type:'object',properties:{formula:{type:'string'}},required:['formula']}] },
+            addSheet: { type: 'boolean' }, headers: {type:'array',items:{type:'string'}}, data: {type:'array',items:{type:'array'}},
+          } },
         },
       },
       required: ['filePath', 'operations'],
     },
     handler: modifyXlsx,
-    serverOwnedArgumentBinder: args => ({
-      ...args,
-      outputPath: resolveExplicitSpreadsheetOutput(args.outputPath)
-        || (typeof args.filePath === 'string' ? path.resolve(args.filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`)) : undefined),
-    }),
+    serverOwnedArgumentBinder: (args, context) => {
+      const requestedPath = requestedArtifactSaveAsPath(String(context?.actionIntent || ''));
+      const declared = resolveExplicitSpreadsheetOutput(args.outputPath);
+      if (requestedPath && declared && canonicalPathIdentity(requestedPath) !== canonicalPathIdentity(declared)) {
+        throw new Error(`Use the exact requested save-as destination: ${requestedPath}`);
+      }
+      return { ...args, outputPath: declared
+        || resolveExplicitSpreadsheetOutput(requestedPath)
+        || (typeof args.filePath === 'string' ? path.resolve(args.filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`)) : undefined) };
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: documentArtifactCapability('office.xlsx.modify-copy', 'spreadsheet', 'modified XLSX workbook copy'),
@@ -882,11 +923,16 @@ export function registerDocumentTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'create_docx',
-    description: 'Create a new Word .docx document with headings, paragraphs, and tables. Supports structured layout with title, heading levels (1-4), body paragraphs, and formatted tables with headers. Saves to lumi_output directory.',
+    description: 'Create a Word .docx document. Prefer ordered blocks to interleave headings, paragraphs and tables in reading order. Use outputPath for the exact requested absolute .docx destination; filename is only a name, not a path.',
     parameters: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Document title (large centered heading)' },
+        blocks: { type: 'array', description: 'Document body in reading order; replaces legacy headings/paragraphs/tables.', items: { type: 'object', properties: {
+          type: { type: 'string', enum: ['heading', 'paragraph', 'table'] }, text: { type: 'string' }, level: { type: 'number' },
+          headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+        }, required: ['type'] } },
+        outputPath: { type: 'string', description: 'Exact absolute .docx output path requested by the user.' },
         headings: { type: 'array', items: { type: 'object', properties: { level: { type: 'number' }, text: { type: 'string' } } }, description: 'Array of { level: 1|2|3|4, text: string }' },
         paragraphs: { type: 'array', items: { type: 'string' }, description: 'Array of paragraph text strings' },
         tables: { type: 'array', items: { type: 'object', properties: { headers: { type: 'array' }, rows: { type: 'array' } } }, description: 'Array of { headers: string[], rows: string[][] }' },
@@ -896,6 +942,13 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: createDocx,
+    serverOwnedArgumentBinder: (args, context) => {
+      const artifact = requestedSingleArtifact(String(context?.actionIntent || ''));
+      const requestedPath = artifact?.producer === 'create_docx' ? artifact.path : undefined;
+      const filenamePath = typeof args.filename === 'string' && path.isAbsolute(args.filename) ? args.filename : undefined;
+      return { ...args, outputPath: resolveExplicitDocumentOutput(args.outputPath || requestedPath || filenamePath, 'docx')
+        || path.join(OUTPUT_DIR, `${String(args.filename || args.title || 'document').replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.docx`) };
+    },
     permission: 'user',
     securityLevel: 'safe',
     capability: documentArtifactCapability('office.docx.create', 'document', 'new DOCX document'),

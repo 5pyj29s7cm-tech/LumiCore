@@ -17,6 +17,7 @@ export const CN_MEDIA_PROGRESS = {
   providerVideoSubmitted: (provider: string) => `${provider} 视频生成任务已提交。`,
   providerVideoRunning: (provider: string) => `${provider} 视频任务正在排队或生成中。`,
   videoCompleteSaved: '视频生成完成，结果已保存。',
+  videoSettingsReview: '视频文件已保存，但实际尺寸或时长尚未满足请求，需要核对。',
   videoCompleteRemote: '视频生成完成，已取得结果链接。',
   videoDownloading: '视频已生成，正在下载结果。',
   videoRetrieving: '视频已生成，正在获取并下载结果。',

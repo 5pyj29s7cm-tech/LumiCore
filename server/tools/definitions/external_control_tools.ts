@@ -278,6 +278,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'desktop_ui_snapshot',
+    serverOwnedArgumentBinder: (args, context) => context?.desktopExecutionTracker?.bindSnapshotArguments(args) || args,
     description: 'Capture a read-only platform-native semantic accessibility tree for the active/focused/desktop window, including control names, types, identifiers, enabled/focused state, and bounding boxes. Windows uses UI Automation and macOS uses Accessibility. Use this before clicking native apps so Lumi can reason about real controls instead of only screen pixels.',
     parameters: {
       type: 'object',
@@ -291,7 +292,7 @@ export function registerExternalControlTools(registry: ToolRegistry): void {
         processId: { type: 'number', description: 'Optional root process id selector.' },
         nativeWindowHandle: { type: 'number', description: 'Optional native window handle selector.' },
         allMatches: { type: 'boolean', description: 'Return up to six matching native-window trees instead of only the first.' },
-        maxDepth: { type: 'number', description: 'Maximum UI tree depth, default 3, max 6.' },
+        maxDepth: { type: 'number', description: 'Maximum UI tree depth, default 3, max 8. Browser document controls may require depth 8. If semantic controls remain unavailable, use ocr_screen for reading or computer_use for actions.' },
         maxNodes: { type: 'number', description: 'Maximum controls to return, default 80, max 300.' },
         includeOffscreen: { type: 'boolean', description: 'Include offscreen controls. Defaults false.' },
         timeoutMs: { type: 'number', description: 'Timeout in milliseconds, default 5000, max 15000.' },

@@ -10,6 +10,14 @@ import {
 
 describe('capability access explanations', () => {
   it.each([
+    '人数改成六人，预算不变。现在每人预算是多少？会议时间是什么？请沿用刚才的上下文，不调用工具。',
+    '我现在问的是会议时间，不是让你介绍自己。',
+    '用 Google Chrome 打开 https://chat.deepseek.com/，检查已有登录状态。不要发送对话。',
+  ])('preserves ordinary follow-ups and website actions: %s', (text) => {
+    expect(isCurrentOperationModeQuestion(text)).toBe(false);
+    expect(buildOperationModeMetaResponse({ text })).toBeNull();
+  });
+  it.each([
     '\u4f60\u6709\u591a\u5c11\u79cd\u6a21\u5f0f',
     '\u4f60\u6709\u51e0\u79cd\u6a21\u5f0f',
     '\u6709\u54ea\u4e9b\u6a21\u5f0f',

@@ -22,6 +22,29 @@ function verifiedRecord(name: string, result: string): ToolExecutionRecord {
 }
 
 describe('desktop execution runtime', () => {
+  it('binds default content snapshots to the identified window without renewing input authority', () => {
+    const tracker = new DesktopExecutionTracker(buildDesktopExecutionPlan({ text: 'open Google Chrome', lane: 'desktop_control', taskId: 'browser-read' }));
+    tracker.record(verifiedRecord('desktop_active_window', JSON.stringify({ title: 'DeepSeek - Google Chrome', process_name: 'chrome.exe', pid: 42, window_id: 123 })));
+    expect(tracker.bindSnapshotArguments({ maxDepth: 4 })).toEqual({ maxDepth: 4, root: 'desktop', processId: 42, nativeWindowHandle: 123 });
+    for (const explicit of [{ root: 'focused' }, { root: 'desktop' }, { processId: 90 }, { nameContains: 'Other' }]) {
+      expect(tracker.bindSnapshotArguments(explicit)).toBe(explicit);
+    }
+    const before = tracker.receipt();
+    tracker.record(verifiedRecord('desktop_capture_screen', JSON.stringify({ imageBase64: 'content-only' })));
+    tracker.record(verifiedRecord('desktop_ui_snapshot', JSON.stringify({ status: 'ok', tree: { name: 'DeepSeek', processId: 42, nativeWindowHandle: 123 } })));
+    expect(tracker.receipt()).toEqual(before);
+    tracker.record(verifiedRecord('desktop_keyboard_type', JSON.stringify({ status: 'verified' })));
+    tracker.record(verifiedRecord('desktop_ui_snapshot', JSON.stringify({ status: 'ok', tree: { name: 'DeepSeek' } })));
+    expect(tracker.authorize('desktop_keyboard_type').allowed).toBe(false);
+  });
+  it('does not apply a foreground lease to background Office file creation', () => {
+    const plan = buildDesktopExecutionPlan({ text: '用 WPS 制作一份文档', lane: 'desktop_control', taskId: 'background-office' });
+    const tracker = new DesktopExecutionTracker(plan);
+    for (const name of ['create_docx', 'create_xlsx']) {
+      expect(tracker.authorize(name, { lane: 'office', operation: 'mutate', sideEffects: [{ type: 'local_write' }] } as any).allowed).toBe(true);
+    }
+    expect(tracker.authorize('desktop_keyboard_type').allowed).toBe(false);
+  });
   function externalWechatPlan(taskId: string) {
     return buildDesktopExecutionPlan({
       text: '微信发送消息给 Alice',

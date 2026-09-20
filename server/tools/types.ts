@@ -503,6 +503,8 @@ export interface NormalizedLLMResponse {
   toolCalls: ParsedToolCall[] | null;
   reasoningContent?: string | null;
   usage?: LLMUsage;
+  /** Provider termination status, retained for text as well as tool calls. */
+  finishReason?: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'unknown';
   /** The provider produced usable output but stopped delivering stream frames before a terminal frame. */
   streamIncomplete?: boolean;
   /** Exact model route used for this call, including explicit fallback evidence. */

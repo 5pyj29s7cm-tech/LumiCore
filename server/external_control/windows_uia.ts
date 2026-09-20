@@ -29,7 +29,7 @@ export async function captureWindowsUiSnapshot(options: DesktopUiSnapshotOptions
   }
 
   const root = options.root === 'desktop' || options.root === 'focused' ? options.root : 'active';
-  const maxDepth = clampInt(options.maxDepth, 3, 0, 6);
+  const maxDepth = clampInt(options.maxDepth, 3, 0, 8);
   const maxNodes = clampInt(options.maxNodes, 80, 1, 300);
   const includeOffscreen = options.includeOffscreen === true;
   const timeoutMs = clampInt(options.timeoutMs, 5000, 1000, 15000);
@@ -168,6 +168,10 @@ public static class LumiNativeMethods {
 
 function RectToMap($rect) {
   if ($null -eq $rect) { return $null }
+  if ($rect.IsEmpty) { return $null }
+  foreach ($value in @($rect.X, $rect.Y, $rect.Width, $rect.Height, $rect.Right, $rect.Bottom)) {
+    if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { return $null }
+  }
   return [ordered]@{
     x = [Math]::Round($rect.X, 2)
     y = [Math]::Round($rect.Y, 2)
@@ -397,6 +401,10 @@ public static class LumiNativeMethods {
 
 function RectToMap($rect) {
   if ($null -eq $rect) { return $null }
+  if ($rect.IsEmpty) { return $null }
+  foreach ($value in @($rect.X, $rect.Y, $rect.Width, $rect.Height, $rect.Right, $rect.Bottom)) {
+    if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { return $null }
+  }
   return [ordered]@{
     x = [Math]::Round($rect.X, 2)
     y = [Math]::Round($rect.Y, 2)

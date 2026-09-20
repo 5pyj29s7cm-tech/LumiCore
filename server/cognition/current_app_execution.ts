@@ -257,7 +257,9 @@ export function guardCurrentAppToolCall(input: {
       };
     }
     const requestedText = extractRequestedCurrentAppText(primaryTurnText(input.taskText));
-    if (WRITE_INTENT_RE.test(primaryTurnText(input.taskText)) && !requestedText) {
+    const generativeDraft = /(?:\u8d77\u8349|\u64b0\u5199|\u751f\u6210|\u5236\u4f5c|\u6839\u636e.{0,30}(?:\u8d44\u6599|\u6750\u6599))|\b(?:draft|compose|generate)\b/iu.test(primaryTurnText(input.taskText));
+    const documentText = requestedText || (generativeDraft && typeof args.text === 'string' ? args.text.trim() : '');
+    if (WRITE_INTENT_RE.test(primaryTurnText(input.taskText)) && !documentText) {
       return {
         allowed: false,
         reason: `${WPS_CREATE_DOCUMENT_TOOL} requires an exact text payload recoverable from the user's write/type instruction.`,
@@ -275,7 +277,7 @@ export function guardCurrentAppToolCall(input: {
       // The dedicated WPS tool must receive the trusted payload from the user
       // turn, not a model reconstruction that may omit punctuation or alter
       // wording. It has no other supported arguments.
-      normalizedArguments: { text: requestedText },
+      normalizedArguments: { text: documentText },
     };
   }
 

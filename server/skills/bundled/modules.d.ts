@@ -3,7 +3,7 @@ declare module 'mailparser' {
 }
 
 declare module 'sharp' {
-  function sharp(input?: string | Buffer): any;
+  function sharp(input?: string | Buffer, options?: { limitInputPixels?: number }): any;
   export default sharp;
 }
 

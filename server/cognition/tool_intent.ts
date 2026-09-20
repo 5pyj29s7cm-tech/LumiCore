@@ -1,4 +1,5 @@
 import { withoutNegatedLookupClauses, isStoredMemoryRecallQuestion } from './normalized_action_intent';
+import { withoutLocationLiterals } from './location_literals';
 import {
   detectRequestedOperationMode,
   isPureOperationModeSwitchRequest,
@@ -97,7 +98,7 @@ export function hasExplicitNoMutationInstruction(text: string): boolean {
 export function hasRequestedArtifactMutation(text: string): boolean {
   const positive = EXPLICIT_NO_MUTATION_PATTERNS.reduce(
     (value, pattern) => value.replace(new RegExp(pattern.source, `${pattern.flags.replace('g', '')}g`), ' '),
-    String(text || ''),
+    withoutLocationLiterals(String(text || '')),
   );
   // i18n-allow: multilingual task-operation recognition, not user-facing copy.
   return /(?:创建|新建|写入|编辑|修改|更新|追加|替换|删除|重命名|移动|复制|保存|另存|导出|生成|覆盖)|\b(?:creat(?:e|es|ed|ing)|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|append(?:s|ed|ing)?|replac(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|renam(?:e|es|ed|ing)|mov(?:e|es|ed|ing)|copy|copies|copied|copying|sav(?:e|es|ed|ing)|export(?:s|ed|ing)?|generat(?:e|es|ed|ing)|overwrit(?:e|es|ing|ten))\b/iu.test(positive);
@@ -309,7 +310,10 @@ export function isCoordinatedClientHealthRequest(text: string): boolean {
 }
 
 export function isCurrentClientDiagnosticRequest(text: string): boolean {
-  const normalized = String(text || '').trim();
+  // Location tokens are data, not the subject of a diagnostic. In particular,
+  // a report saved below D:/LumiCore-... must not make "check the formulas"
+  // look like "check Lumi".
+  const normalized = withoutLocationLiterals(text).trim();
   if (!normalized) return false;
   if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return false;
   if (/^(?:请|帮我)?(?:做一下|进行|执行|检查一下)?状态检查[。！!\s]*$/u.test(normalized)) return true; // i18n-allow: Standalone runtime status-check request.
@@ -723,8 +727,16 @@ export function traceToolIntentDecision(text: string, source?: string, operation
  * exact server-bound continuation can still execute the corrected task.
  */
 export function isConversationalProductFeedback(text: string): boolean {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const normalized = String(text || '').replace(/[^\S\n]+/g, ' ').trim();
   if (!normalized) return false;
+  // A media brief describes the requested artifact, not Lumi's chat UI.
+  // Words such as "bubble", "natural" and "do not" must not cancel the
+  // explicit creation operation. Current-turn tool/mutation vetoes remain
+  // enforced separately by the execution pipeline.
+  if (normalizeActionIntent(normalized).kind === 'media_generation') return false;
+  // A correction in one sentence must not consume a fresh inspection in the
+  // next. The execution pipeline independently preserves the no-mutation veto.
+  if (hasVisionIntent(withoutNegatedLookupClauses(normalized))) return false;
   const replyOrUiSubject = /(?:\u56de\u590d|\u56de\u7b54|\u56de\u5e94|\u6d88\u606f|\u8bdd\u672f|\u8868\u8fbe|\u8bf4\u8bdd\u65b9\u5f0f|\u8f93\u51fa|\u6392\u7248|\u683c\u5f0f|\u6362\u884c|\u5206\u6bb5|\u4e00\u5768|\u4e00\u5927\u6bb5|\u6c14\u6ce1|\u5b57\u4f53|\u663e\u793a|\u754c\u9762|\u63d0\u793a\u8bed|reply|answer|response|message|wording|format|layout|paragraph|line\s*break|bubble|display|ui)/iu.test(normalized);
   if (!replyOrUiSubject) return false;
   const preferenceOrCorrection = /(?:\u80fd\u4e0d\u80fd|\u53ef\u4e0d\u53ef\u4ee5|\u4ee5\u540e|\u4e0b\u6b21|\u6bcf\u6b21|\u603b\u662f|\u8001\u662f|\u4e0d\u8981|\u522b\u518d|\u522b\u603b|\u6211\u5e0c\u671b|\u9ebb\u70e6\u4f60|\u5e94\u8be5|can\s+you|could\s+you|please|from\s+now\s+on|stop|don't|do\s+not).{0,100}(?:\u4e0d\u8981|\u522b|\u6539\u6210|\u6362\u6210|\u5206\u6bb5|\u6362\u884c|\u6392\u7248|\u7b80\u6d01|\u6e05\u695a|\u81ea\u7136|\u597d\u770b|\u4e00\u5768|\u4e00\u5927\u6bb5|format|layout|paragraph|line\s*break|concise|clear|natural)|(?:\u4e0d\u8981|\u522b\u518d|\u522b\u603b).{0,100}(?:\u56de\u590d|\u56de\u7b54|\u6d88\u606f|\u8f93\u51fa|\u663e\u793a|reply|answer|message|display)/iu.test(normalized);

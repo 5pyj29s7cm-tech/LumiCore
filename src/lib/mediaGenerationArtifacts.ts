@@ -245,6 +245,7 @@ export function mediaGenerationReceiptSettingsMatch(
   if (
     (receipt as Record<string, any>).verified !== true
     || (receipt as Record<string, any>).verificationStatus !== 'verified'
+    || (receipt as Record<string, any>).settingsMatch === false
   ) return false;
   const operation = resolveMediaGenerationOperation(expectation);
   if (mediaGenerationKindForOperation(operation) !== expectation.mode) return false;
@@ -266,6 +267,6 @@ export function mediaGenerationReceiptSettingsMatch(
     return settings.hasSource == null || settings.hasSource === true;
   }
   const expectsReference = operation === 'image_to_video';
-  return Number(settings.duration) === Number(expectation.duration)
+  return Number.isFinite(Number(settings.duration)) && Math.abs(Number(settings.duration) - Number(expectation.duration)) <= 0.15
     && Boolean(settings.hasReference) === expectsReference;
 }

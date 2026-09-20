@@ -94,6 +94,11 @@ export function resolveExactConversationCorrection(
     return findLatestRepeatableAssistantReply(history) || null;
   }
 
+  // Literal sentence replacement is only a conversational convenience. File
+  // edits, calculations and save-as work must reach the execution pipeline.
+  // i18n-allow: Artifact operations and derived results, not output copy.
+  if (/(?:文件|文档|报表|表格|附件|工作簿|合同|另存|保存|导出|计算|总金额)|\b(?:file|document|report|spreadsheet|attachment|workbook|save|export|calculate|total)\b/iu.test(userText)) return null;
+
   const replacement = parseExactReplacement(userText);
   if (!replacement) return null;
 
@@ -101,6 +106,9 @@ export function resolveExactConversationCorrection(
     const record = history[index];
     if (!record || !['assistant', 'user'].includes(String(record.role || ''))) continue;
     const source = recordText(record);
+    // A previous correction command is not a fact to rewrite. Repeating the
+    // command used to produce nonsense such as "change 6 to 6".
+    if (parseExactReplacement(source)) continue;
     if (!source.includes(replacement.from)) continue;
     const sentence = sentenceContaining(source, replacement.from);
     if (!sentence) continue;

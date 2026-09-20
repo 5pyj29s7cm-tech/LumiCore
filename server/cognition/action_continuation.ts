@@ -971,7 +971,11 @@ function explicitlyReferencesUnfinishedTask(text: string): boolean {
 
 /** Explicitly referential resumption precedes the self-contained action gate. */
 export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
-  if (!state?.unfinished || !state.taskId || !state.goal || !explicitlyReferencesUnfinishedTask(text)) return false;
+  if (!state?.unfinished || !state.taskId || !state.goal) return false;
+  const comparable = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  const repeatsUnfinishedGoal = comparable(text) === comparable(state.goal)
+    && normalizeActionIntent(text).operation !== 'status' && buildActionContract(text).applies;
+  if (!repeatsUnfinishedGoal && !explicitlyReferencesUnfinishedTask(text)) return false;
   const value = compact(text, 700);
   const current = buildActionContract(value);
   const root = buildActionContract(state.goal);
@@ -1007,6 +1011,17 @@ export function isTaskPreparationContinuation(text: string, state?: Conversation
   return target.length > 1 && (goal.includes(target) || browserPlaybackStep) && rootContract.applies && rootContract.kind !== 'none';
 }
 
+/** A value edit with a deictic file reference keeps the existing file task.
+ * A separately named save destination is not a replacement input. */
+export function isReferentialArtifactEdit(text: string, state?: ConversationActionContinuationState | null): boolean {
+  if (!state?.goal || !state.unfinished) return false;
+  const hasFileTask = /\.(?:xlsx?|docx?|csv|txt|md)\b/i.test(state.goal)
+    || state.sourcePaths.some(value => /\.(?:xlsx?|docx?|csv|txt|md)$/i.test(value));
+  return hasFileTask
+    && /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u6b65|\u8fd9\u4efd|\u8be5).{0,16}(?:\u62a5\u8868|\u8868\u683c|\u6587\u4ef6|\u6587\u6863)|\b(?:that|previous|last)\s+(?:file|workbook|document|spreadsheet)\b/iu.test(text)
+    && /(?:\u6539\u6210|\u6539\u4e3a|\u4fee\u6539|\u8c03\u6574)|\b(?:change|update|edit|modify)\b/iu.test(text);
+}
+
 export function classifyConversationActionFollowupIntent(
   text: string,
   state?: ConversationActionContinuationState | null,
@@ -1027,6 +1042,7 @@ export function classifyConversationActionFollowupIntent(
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
   if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
   if (isTaskPreparationContinuation(compactText, durableState)) return 'execute';
+  if (isReferentialArtifactEdit(text, durableState)) return 'execute';
   if (isExplicitUnfinishedTaskContinuation(compactText, durableState)) return 'execute';
   const normalizedIntent = normalizeActionIntent(text);
   if (

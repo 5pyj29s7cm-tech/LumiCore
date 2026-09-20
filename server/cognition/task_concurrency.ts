@@ -3,6 +3,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   isBlockedTaskRetryAcceptance,
   isTaskPreparationContinuation,
+  isReferentialArtifactEdit,
   isExplicitUnfinishedTaskContinuation,
   type ConversationActionContinuationState,
 } from './action_continuation';
@@ -191,6 +192,7 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = normalizeActionIntent(normalized);
+  if (isReferentialArtifactEdit(normalized, state)) return 'correction';
   if (isTaskPreparationContinuation(normalized, state)) return 'continue';
   if (isExplicitUnfinishedTaskContinuation(normalized, state)) return 'continue';
   if (isBlockedTaskRetryAcceptance(normalized, state)) return 'retry';
