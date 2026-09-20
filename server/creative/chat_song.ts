@@ -12,6 +12,7 @@ import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 import { runMediaProcess } from '../media/process';
 import { CHAT_SONG_DEFAULT_BRIEF, chatSongLyrics, chatSongSongCurrent, type ChatSongProject, type ChatSongBrief, type ChatSongLine, type ChatSongTiming, type ChatSongRender } from '../../shared/chat_song';
 import { CHAT_SONG_EXPORT_NAMES as names, chatSongEditingNotes, chatSongSingingPrompt, chatSongTaskPrompt } from '../regions/packs/cn/chat_song';
+import { CHAT_SONG_TEMPLATE, chatSongStripLayout } from '../../shared/chat_song_layout';
 
 export class ChatSongError extends Error { constructor(public status: number, message: string) { super(message); } }
 const text = (max: number) => z.string().trim().max(max);
@@ -169,12 +170,12 @@ export function setChatSongTimings(project: ChatSongProject, input: unknown): vo
 }
 const xml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[char]!));
 export async function renderChatSongStrip(line: ChatSongLine, avatar?: Buffer): Promise<Buffer> {
-  const textImage = await (sharp as any)({ text: { text: xml(line.text), font: 'sans 36', width: 750, rgba: true, wrap: 'word-char' } }).png().toBuffer({ resolveWithObject: true });
-  const height = Math.max(128, textImage.info.height + 56), right = line.role === 'B';
-  const bubbleWidth = Math.max(96, textImage.info.width + 40), bubbleX = right ? 948 - bubbleWidth : 132;
-  const background = Buffer.from(`<svg width="1080" height="${height}"><rect width="1080" height="${height}" fill="#ededed"/><rect x="${bubbleX}" y="14" width="${bubbleWidth}" height="${height - 28}" rx="16" fill="${right ? '#9eea6a' : '#ffffff'}"/><rect x="${right ? 978 : 18}" y="18" width="84" height="84" rx="10" fill="#46515d"/><text x="${right ? 1020 : 60}" y="74" text-anchor="middle" font-family="sans" font-size="36" fill="white">${line.role}</text></svg>`);
-  const layers: any[] = [{ input: textImage.data, left: bubbleX + 20, top: 28 }];
-  if (avatar) layers.push({ input: await (sharp as any)(avatar, { limitInputPixels: 25_000_000 }).resize(84, 84, { fit: 'cover' }).png().toBuffer(), left: right ? 978 : 18, top: 18 });
+  const { height, bubbleWidth, bubbleX, textX, textTop, rows, avatarX, avatarY } = chatSongStripLayout(line);
+  const s = CHAT_SONG_TEMPLATE;
+  const labels = rows.map((row, index) => `<text x="${textX}" y="${textTop + s.fontSize + index * s.lineHeight}" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="${s.fontSize}" fill="#111111" xml:space="preserve">${xml(row)}</text>`).join('');
+  const background = Buffer.from(`<svg width="1080" height="${height}"><rect width="1080" height="${height}" fill="#ededed"/><rect x="${bubbleX}" y="16" width="${bubbleWidth}" height="${height - 32}" rx="18" fill="${line.role === 'B' ? '#9eea6a' : '#ffffff'}"/><rect x="${avatarX}" y="${avatarY}" width="${s.avatarSize}" height="${s.avatarSize}" rx="12" fill="#46515d"/><text x="${avatarX + 60}" y="${avatarY + 80}" text-anchor="middle" font-family="sans" font-size="56" fill="white">${line.role}</text>${labels}</svg>`);
+  const layers: any[] = [];
+  if (avatar) layers.push({ input: await (sharp as any)(avatar, { limitInputPixels: 25_000_000 }).resize(s.avatarSize, s.avatarSize, { fit: 'cover' }).png().toBuffer(), left: avatarX, top: avatarY });
   return sharp(background).composite(layers).png().toBuffer();
 }
 function csvCell(value: unknown): string {

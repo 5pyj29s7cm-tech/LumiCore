@@ -4,6 +4,7 @@ export type ChatSongAssetKind = 'background' | 'avatarA' | 'avatarB' | 'reaction
 export type ChatSongAsset = { id: string; kind: ChatSongAssetKind; lineId: string; fileId: string; name: string; sha256: string };
 export type ChatSongTiming = { lineId: string; start: number; end: number };
 export type ChatSongRender = {
+  templateVersion?: number;
   fileId: string; sha256: string; sourceRevision: number; duration: number;
   width: number; height: number; createdAt: string; warnings: string[];
 };

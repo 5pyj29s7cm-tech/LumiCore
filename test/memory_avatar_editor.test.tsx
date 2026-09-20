@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { DEFAULT_MEMORY_AVATAR_APPEARANCE, type MemoryAvatar, type MemoryAvatarMaterial } from '../shared/memory_avatar';
+import { DEFAULT_MEMORY_AVATAR_APPEARANCE, LUMI_COMPANION_APPEARANCE, type MemoryAvatar, type MemoryAvatarMaterial } from '../shared/memory_avatar';
 const mocks = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn(), get: vi.fn(), materials: vi.fn(), addMaterial: vi.fn(), removeMaterial: vi.fn(), archive: vi.fn(), voices: vi.fn(), api: vi.fn() }));
 vi.mock('../src/services/apiClient', () => ({ apiFetch: mocks.api }));
 vi.mock('../src/services/memoryAvatarService', async original => ({ ...await original<typeof import('../src/services/memoryAvatarService')>(), memoryAvatarService: mocks }));
@@ -10,6 +10,8 @@ vi.mock('../src/services/voiceService', () => ({ listVoices: mocks.voices }));
 vi.mock('../src/components/MemoryAvatarPortraitSettings', () => ({ MemoryAvatarPortraitSettings: () => null }));
 import { MemoryAvatarCreate } from '../src/components/MemoryAvatarCreate';
 import { MemoryAvatarProfile } from '../src/components/MemoryAvatarProfile';
+import { MemoryAvatarAnimationEditor } from '../src/components/MemoryAvatarAnimationEditor';
+import { memoryAvatarMediaService } from '../src/services/memoryAvatarMediaService';
 import { MemoryAvatarApiError } from '../src/services/memoryAvatarService';
 const makeAvatar = (extra: Partial<MemoryAvatar> = {}): MemoryAvatar => ({
   id: 'avatar-a', name: 'Synthetic person', relationshipType: 'close_friend', status: 'active', revision: 1,
@@ -48,6 +50,18 @@ function profile(extra: Partial<React.ComponentProps<typeof MemoryAvatarProfile>
   return { ...render(<Harness />), updated, archived };
 }
 async function loaded() { await act(async () => {}); }
+
+it('offers the 2D character without the retired 3D option and replaces the old cloud portrait presentation', async () => {
+  record = makeAvatar({ publicBrief: 'Approved company facts', presentation: { mode: 'portrait', mediaId: 'owned-photo' } });
+  const preview = vi.fn(); profile({ onPreviewAppearance: preview }); await loaded();
+  fireEvent.click(screen.getByRole('tab', { name: 'Appearance & voice' })); await loaded();
+  expect(screen.queryByRole('button', { name: /Lumi · Custom 3D character/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Lumi · Relaxed conversation/ }));
+  expect(preview).toHaveBeenCalledWith(expect.objectContaining({ style: 'lumi2d' }));
+  expect(mocks.update).not.toHaveBeenCalled();
+  fireEvent.click(button('Save details')); await waitFor(() => expect(mocks.update).toHaveBeenCalled());
+  expect(mocks.update.mock.calls[0][1]).toMatchObject({ appearance: { style: 'lumi2d' }, presentation: { mode: 'human3d' }, publicBrief: 'Approved company facts', narrative: record.narrative });
+});
 
 it('creates a blank person, and safely reuses the request ID after a failed attempt', async () => {
   const created = vi.fn(); mocks.create.mockRejectedValueOnce(new Error('save failed')).mockResolvedValueOnce(record);
@@ -133,6 +147,26 @@ it('archives only after the explicit second click and waits for server confirmat
   await act(async () => gate.resolve({ ok: true })); expect(h.archived).toHaveBeenCalledWith('avatar-a');
 });
 
+it('edits and persists public briefing separately from the private biography', async () => {
+  profile(); await loaded();
+  change('Public identity and briefing', 'Approved public identity');
+  fireEvent.click(button('Save details')); await screen.findByRole('status');
+  expect(mocks.update.mock.calls[0][1]).toMatchObject({ publicBrief: 'Approved public identity', narrative: 'A synthetic biography' });
+  expect((screen.getByLabelText('Public identity and briefing') as HTMLTextAreaElement).value).toBe('Approved public identity');
+});
+
+it('previews and saves the local Lumi companion then can return to a human preset', async () => {
+  const preview = vi.fn(); profile({ onPreviewAppearance: preview }); await loaded();
+  fireEvent.click(screen.getByRole('tab', { name: 'Appearance & voice' }));
+  fireEvent.click(screen.getByRole('button', { name: /Lumi · Original companion/ }));
+  expect(preview).toHaveBeenLastCalledWith(LUMI_COMPANION_APPEARANCE);
+  expect(screen.getByLabelText('Shell')).toBeTruthy(); expect(screen.getByLabelText('Visor')).toBeTruthy();
+  fireEvent.click(button('Save details')); await screen.findByRole('status');
+  expect(mocks.update.mock.calls[0][1].appearance).toEqual(LUMI_COMPANION_APPEARANCE);
+  await waitFor(() => expect(button('Save details').disabled).toBe(false));
+  fireEvent.click(button('Soft')); expect(preview).toHaveBeenLastCalledWith({ ...DEFAULT_MEMORY_AVATAR_APPEARANCE, preset: 'feminine' });
+});
+
 it('does not reuse old profile state or a late save after switching owner and avatar', async () => {
   const gate = deferred<MemoryAvatar>(); mocks.update.mockReturnValueOnce(gate.promise);
   const updated = vi.fn(); const props = { locale: 'en' as const, onUpdated: updated, onArchived: vi.fn(), onClose: vi.fn() };
@@ -173,4 +207,35 @@ it('rejects malformed successful transport responses instead of manufacturing a 
   await expect(realService.create({ name: 'Not confirmed', clientRequestId: 'request' })).rejects.toThrow();
   mocks.api.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
   await expect(realService.update('avatar-a', { revision: 1, name: 'Not confirmed' })).rejects.toThrow();
+});
+
+it('can leave local animation by selecting the same built-in appearance and saving', async () => {
+  record = makeAvatar({ presentation: { mode: 'localportrait', mediaId: 'idle', animation: { idleMediaId: 'idle', blinkInterval: 5, breathing: .4, backgroundMotion: true } } });
+  profile(); await loaded();
+  fireEvent.click(screen.getByRole('tab', { name: 'Appearance & voice' }));
+  fireEvent.click(button('Natural'));
+  fireEvent.click(button('Save details'));
+  await waitFor(() => expect(mocks.update).toHaveBeenCalled());
+  expect(mocks.update.mock.calls[0][1].presentation).toEqual({ mode: 'human3d' });
+});
+
+it('saves frame choices using the current revision and releases the mutation when closed', async () => {
+  const list = vi.spyOn(memoryAvatarMediaService, 'list').mockResolvedValue({ revision: 1, media: [
+    { id: 'idle', title: 'Neutral image', kind: 'image', hasThumbnail: true },
+    { id: 'blink', title: 'Closed-eye image', kind: 'image', hasThumbnail: true },
+    { id: 'speech', title: 'Open-mouth image', kind: 'image', hasThumbnail: true },
+  ] as any });
+  const before = vi.fn(), updated = vi.fn(), busy = vi.fn();
+  const gate = deferred<MemoryAvatar>(); mocks.update.mockReturnValueOnce(gate.promise);
+  const view = render(<MemoryAvatarAnimationEditor avatar={record} locale="en" disabled={false} onBeforeMutation={before} onBusyChange={busy} onUpdated={updated} />);
+  await screen.findAllByRole('option', { name: 'Neutral image' });
+  change('Neutral expression', 'idle'); change('Eyes closed', 'blink'); change('Mouth open', 'speech');
+  fireEvent.click(button('Save and use local animation'));
+  await waitFor(() => expect(mocks.update).toHaveBeenCalled());
+  expect(before).toHaveBeenCalledTimes(1);
+  expect(mocks.update.mock.calls[0][1]).toMatchObject({ revision: 1, presentation: { mode: 'localportrait', animation: { idleMediaId: 'idle', blinkMediaId: 'blink', speakMediaId: 'speech' } } });
+  const signal = mocks.update.mock.calls[0][2] as AbortSignal;
+  view.unmount(); expect(signal.aborted).toBe(true); expect(busy).toHaveBeenLastCalledWith(false);
+  await act(async () => gate.resolve(makeAvatar({ revision: 2 })));
+  expect(updated).not.toHaveBeenCalled(); list.mockRestore();
 });

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import JSZip from 'jszip';
 import sharp from 'sharp';
 import { generatedKnowledgeDirectory } from '../server/files/knowledge_directory';
-import { changeChatSongProject, getChatSongProject, renderChatSongStrip } from '../server/creative/chat_song';
+import { changeChatSongProject, getChatSongProject, renderChatSongStrip, saveChatSongRender } from '../server/creative/chat_song';
 import { chatSongRenderTimeline, renderChatSongVideo } from '../server/creative/chat_song_render';
 import { mountChatSongRoutes } from '../server/routes/chat_song_routes';
 import { chatSongSongCurrent, visibleChatSongLines, type ChatSongProject } from '../shared/chat_song';
@@ -142,10 +142,13 @@ it('keeps AI drafts separate from saved dialogue and pins calls to the official 
   const p = await locked();
   upsertUserPreferredLLM(owner, { provider: 'relay', selectionMode: 'ordered_fallback', fallbackCandidates: [{ provider: 'qwen', model: 'qwen-plus' }] });
   const result = await request(`/${p.id}/draft`, 'POST', { revision: p.revision });
-  expect(result.status).toBe(200); expect(mock.llm.mock.calls[0][2]).toMatchObject({ provider: 'relay', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false });
+  expect(result.status).toBe(200); expect(mock.llm.mock.calls[0][2]).toMatchObject({ provider: 'relay', thinkingMode: 'disabled', responseFormat: 'json_object', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false });
   expect(getChatSongProject(owner, p.id)).toEqual(p);
   mock.llm.mockResolvedValueOnce({ text: '{"lines":[' });
   expect((await request(`/${p.id}/draft`, 'POST', { revision: p.revision })).status).toBe(502);
+  mock.llm.mockRejectedValueOnce(new Error('Cloud operation timed out after 60000ms'));
+  expect((await request(`/${p.id}/draft`, 'POST', { revision: p.revision })).status).toBe(504);
+  expect(getChatSongProject(owner, p.id)).toEqual(p);
   upsertUserPreferredLLM(owner, { provider: 'qwen' });
   expect((await request(`/${p.id}/draft`, 'POST', { revision: p.revision })).status).toBe(409);
 });
@@ -161,6 +164,20 @@ it('preflights official media selections without rewriting user settings', async
   expect((await request(`/${confirmed.id}/media-preflight`, 'POST', { mode: 'video', revision: confirmed.revision - 1 })).status).toBe(409);
   const handoff = await request(`/${confirmed.id}/handoff`);
   expect(handoff.body.prompts.filter((p: any) => p.kind === 'clip')).toHaveLength(confirmed.lines.length);
+});
+
+it('repairs singleton model groups into cumulative pairs without changing lyrics or saved user groups', async () => {
+  const p = await locked();
+  upsertUserPreferredLLM(owner, { provider: 'relay' });
+  const draft = Array.from({ length: 7 }, (_, index) => ({ ...lines[index % 3], group: index + 1 }));
+  mock.llm.mockResolvedValueOnce({ text: JSON.stringify({ lines: draft }), finishReason: 'stop' });
+  const result = await request(`/${p.id}/draft`, 'POST', { revision: p.revision });
+  expect(result.status).toBe(200);
+  expect(result.body.lines.map((line: any) => line.group)).toEqual([1, 1, 2, 2, 3, 3, 4]);
+  expect(result.body.lines.map((line: any) => line.text)).toEqual(draft.map(line => line.text));
+  expect(getChatSongProject(owner, p.id)).toEqual(p);
+  mock.llm.mockResolvedValueOnce({ text: JSON.stringify({ lines }), finishReason: 'length' });
+  expect((await request(`/${p.id}/draft`, 'POST', { revision: p.revision })).status).toBe(502);
 });
 it('requires confirmed music, complete timing and a current revision before composition', async () => {
   const p = await locked();
@@ -182,6 +199,11 @@ it('publishes only a verified render, reuses its receipt and rejects changed sou
   expect((await request(`/${p.id}/render`)).body).toEqual(result.body);
   expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).body).toEqual(result.body);
   expect(mock.media.mock.calls.filter(([binary]) => binary === 'ffmpeg')).toHaveLength(1);
+  saveChatSongRender(owner, p.id, { ...result.body.render, templateVersion: undefined });
+  const refreshed = await request(`/${p.id}/render`, 'POST', { revision: p.revision });
+  expect(refreshed.body.render.fileId).not.toBe(result.body.render.fileId);
+  expect(refreshed.body.render.templateVersion).toBe(2);
+  expect(mock.media.mock.calls.filter(([binary]) => binary === 'ffmpeg')).toHaveLength(2);
   const source = fs.readFileSync(path.join(dir, 'song.wav'));
   try { fs.writeFileSync(path.join(dir, 'song.wav'), 'replaced'); expect((await request(`/${p.id}/render`, 'POST', { revision: p.revision })).status).toBe(409); }
   finally { fs.writeFileSync(path.join(dir, 'song.wav'), source); }

@@ -11,6 +11,7 @@ interface AvatarCallOptions {
   enabled: boolean;
   portrait?: boolean;
   portraitMediaId?: string;
+  portraitProvider?: 'did' | 'aliyun';
   onTranscript?: (text: string, isFinal: boolean, meta?: VoiceTranscriptMeta) => void;
   onResponse?: (text: string, meta?: { requestId?: string }) => void;
 }
@@ -95,22 +96,25 @@ export function createMemoryAvatarVoiceSocket(socket: any, avatarId: string, lif
   return adapter;
 }
 
-export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enabled, portrait = false, portraitMediaId, onTranscript, onResponse }: AvatarCallOptions) {
+export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enabled, portrait = false, portraitMediaId, portraitProvider, onTranscript, onResponse }: AvatarCallOptions) {
   const [portraitOutput, setPortraitOutput] = useState<{ scope: string; stream: MediaStream | null } | null>(null);
-  const portraitScope = JSON.stringify([ownerId, avatarId, portraitMediaId]);
+  const portraitScope = JSON.stringify([ownerId, avatarId, portraitMediaId, portraitProvider]);
+  const [portraitSurface, setPortraitSurface] = useState<{ scope: string; surface: HTMLDivElement | null } | null>(null);
   const [portraitPlayback, setPortraitPlayback] = useState<{ scope: string; playing: boolean } | null>(null);
   const portraitSpeaking = portraitPlayback?.scope === portraitScope && portraitPlayback.playing;
   const [portraitError, setPortraitError] = useState(false);
   const endVoiceRef = useRef<() => void>(() => {});
-  const portraitConnection = useMemo(() => createMemoryAvatarPortraitConnection({ avatarId,
+  const portraitConnection = useMemo(() => createMemoryAvatarPortraitConnection({ avatarId, provider: portraitProvider,
+    onSurface: surface => setPortraitSurface({ scope: portraitScope, surface }),
     onStream: stream => setPortraitOutput({ scope: portraitScope, stream }),
     onPlayback: playing => setPortraitPlayback({ scope: portraitScope, playing }),
     onFailure: () => { setPortraitError(true); endVoiceRef.current(); },
-  }), [avatarId, portraitScope]);
+  }), [avatarId, portraitScope, portraitProvider]);
   const adapter = useMemo(() => createMemoryAvatarVoiceSocket(socket, avatarId, portrait ? {
     prepareStart: portraitConnection.connect, onStop: portraitConnection.close,
-  } : {}), [socket, avatarId, ownerId, portrait, portraitConnection]);
+  } : {}), [socket, avatarId, portrait, portraitConnection]);
   const voice = useVoiceCall({ socket: adapter, disabled: !enabled, privateCapture: true, onTranscript, onResponse });
+  const { endCall, startCall, interrupt: interruptVoice } = voice;
   endVoiceRef.current = voice.endCall;
   const startGeneration = useRef(0);
   const portraitAttempt = useRef(0);
@@ -131,7 +135,7 @@ export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enable
     setCameraStream(null);
     adapter.emit('audio:video', { enabled: false });
   }, [adapter]);
-  const end = useCallback(() => { startGeneration.current++; portraitAttempt.current++; stopCamera(); voice.endCall(); }, [stopCamera, voice.endCall]);
+  const end = useCallback(() => { startGeneration.current++; portraitAttempt.current++; stopCamera(); endCall(); }, [stopCamera, endCall]);
   const startCamera = useCallback(async () => {
     if (!enabled || cameraRef.current) return;
     const generation = ++cameraGeneration.current;
@@ -152,12 +156,12 @@ export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enable
     setCameraError(null);
     setTransportErrorCode(null);
     setPortraitError(false);
-    await voice.startCall(voiceId, avatarId, avatarId, { domain: 'personal' });
+    await startCall(voiceId, avatarId, avatarId, { domain: 'personal' });
     try { await adapter.startPending; }
     catch {
-      if (generation === startGeneration.current && currentAdapter.current === adapter) { voice.endCall(); setPortraitError(true); }
+      if (generation === startGeneration.current && currentAdapter.current === adapter) { endCall(); setPortraitError(true); }
     }
-  }, [enabled, avatarId, voiceId, voice.startCall, voice.endCall, adapter]);
+  }, [enabled, avatarId, voiceId, startCall, endCall, adapter]);
   const startVideo = useCallback(async () => {
     if (!enabled || !avatarId) return;
     // Start audio synchronously with the click to preserve output activation.
@@ -178,6 +182,20 @@ export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enable
 
   useEffect(() => {
     if (!portrait) return;
+    const audio = (data: { audioBase64: string; format: string; requestId: string }) => {
+      if (!portraitConnection.usesBrowserAudio) return;
+      const attempt = portraitAttempt.current, sessionId = adapter.sessionId;
+      void portraitConnection.playAudio(data, data.requestId).catch(() => {
+        if (attempt === portraitAttempt.current && currentAdapter.current === adapter && adapter.sessionId === sessionId && sessionId) { setPortraitError(true); endVoiceRef.current(); }
+      });
+    };
+    adapter.on('audio:portrait', audio);
+    return () => { adapter.off('audio:portrait', audio); };
+  }, [adapter, portrait, portraitConnection]);
+
+  useEffect(() => {
+    if (!portrait) return;
+    const attemptRef = portraitAttempt;
     const interrupted = () => {
       const sessionId = adapter.sessionId;
       if (!sessionId) return;
@@ -189,15 +207,15 @@ export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enable
       });
     };
     adapter.on('audio:interrupt-ack', interrupted);
-    return () => { portraitAttempt.current++; adapter.off('audio:interrupt-ack', interrupted); portraitConnection.close(); };
+    return () => { attemptRef.current++; adapter.off('audio:interrupt-ack', interrupted); portraitConnection.close(); };
   }, [adapter, portrait, portraitConnection]);
   const interrupt = useCallback(() => {
     if (portrait && adapter.sessionId) {
       portraitAttempt.current++;
       portraitConnection.close();
       adapter.emit('audio:interrupt', { source: 'user_control' });
-    } else voice.interrupt();
-  }, [adapter, portrait, portraitConnection, voice.interrupt]);
+    } else interruptVoice();
+  }, [adapter, portrait, portraitConnection, interruptVoice]);
 
   useEffect(() => {
     if (!cameraStream) return;
@@ -242,6 +260,7 @@ export function useMemoryAvatarCall({ socket, avatarId, ownerId, voiceId, enable
     errorCode: portraitError ? 'PORTRAIT_UNAVAILABLE' : cameraError ? 'CAMERA_UNAVAILABLE' : voice.error ? transportErrorCode || 'VOICE_INPUT_UNAVAILABLE' : null,
     startVoice, startVideo, end, toggleCamera, toggleMute: voice.toggleMute,
     interrupt, portraitStream: portraitOutput?.scope === portraitScope ? portraitOutput.stream : null,
+    portraitSurface: portraitSurface?.scope === portraitScope ? portraitSurface.surface : null,
     portraitSpeaking: Boolean(portraitSpeaking),
     cameraStream, isCameraOn: Boolean(cameraStream),
     isMuted: voice.isMuted, outputLevelRef: voice.outputLevelRef, inputLevelRef: voice.inputLevelRef,

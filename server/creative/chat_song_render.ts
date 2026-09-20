@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { chatSongSongCurrent, visibleChatSongLines, type ChatSongProject, type ChatSongRender } from '../../shared/chat_song';
+import { CHAT_SONG_TEMPLATE, chatSongGroupLayout } from '../../shared/chat_song_layout';
 import { runMediaProcess } from '../media/process';
 import { generatedKnowledgeDirectory } from '../files/knowledge_directory';
 import { registerGeneratedKnowledgeFile } from '../files/generated_archive';
@@ -51,19 +52,16 @@ async function renderFrames(project: ChatSongProject, images: Map<string, Buffer
     const interval = timeline[index], visible = visibleChatSongLines(project, interval.seconds);
     const group = project.lines.filter(line => line.group === visible[0]?.group);
     const hasReaction = group.some(line => images.has(`reaction:${line.id}`));
-    const height = group.reduce((n, line) => n + strips.get(line.id)!.height + 10, 0);
-    const scale = Math.min(1000 / 1080, (HEIGHT - 144 - (hasReaction ? 340 : 0)) / Math.max(1, height));
-    if (visible.length && scale < 0.5) throw new ChatSongError(400, copy.crowdedGroup);
+    const layout = chatSongGroupLayout(group, hasReaction);
+    if (visible.length && layout.scale < 0.5) throw new ChatSongError(400, copy.crowdedGroup);
     const layers: { input: Buffer; left: number; top: number }[] = [];
-    let top = 72;
     for (const line of visible) {
       const strip = strips.get(line.id)!;
-      const width = Math.round(strip.width * scale), h = Math.round(strip.height * scale);
-      layers.push({ input: await sharp(strip.bytes).resize(width, h).png().toBuffer(), left: Math.round((WIDTH - width) / 2), top });
-      top += h + Math.round(10 * scale);
+      const { width, height: h, left, top } = layout.strips.find(row => row.lineId === line.id)!;
+      layers.push({ input: await sharp(strip.bytes).resize(width, h).png().toBuffer(), left, top });
     }
     const reaction = [...visible].reverse().map(line => images.get(`reaction:${line.id}`)).find(Boolean);
-    if (reaction) layers.push({ input: await (sharp as any)(reaction, { limitInputPixels: 25_000_000 }).resize(420, 300, { fit: 'contain', background: '#00000000' }).png().toBuffer(), left: 330, top: HEIGHT - 348 });
+    if (reaction) layers.push({ input: await (sharp as any)(reaction, { limitInputPixels: 25_000_000 }).resize(layout.reaction.width, layout.reaction.height, { fit: 'contain', background: '#00000000' }).png().toBuffer(), left: layout.reaction.left, top: layout.reaction.top });
     const name = `frame-${index}.png`;
     await (sharp as any)({ create: { width: WIDTH, height: HEIGHT, channels: 4, background: '#00000000' } }).composite(layers).png().toFile(path.join(work, name));
     concat.push(`file '${name}'`, 'option framerate 25', `duration ${interval.duration.toFixed(8)}`);
@@ -102,7 +100,7 @@ export async function renderChatSongVideo(userId: string, id: string, revision: 
     }
     // Validate every input even for a cached result, so replaced files cannot be silently reused.
     const previous = getChatSongRender(userId, id);
-    if (previous?.sourceRevision === project.revision) {
+    if (previous?.sourceRevision === project.revision && previous.templateVersion === CHAT_SONG_TEMPLATE.version) {
       const existing = path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), previous.fileId);
       if (createHash('sha256').update(fs.readFileSync(existing)).digest('hex') === previous.sha256) return previous;
     }
@@ -135,7 +133,7 @@ export async function renderChatSongVideo(userId: string, id: string, revision: 
     const bytes = fs.readFileSync(output);
     if (!bytes.length || bytes.length >= 256 * 1024 * 1024) throw new ChatSongError(400, copy.outputTooLarge);
     const result: ChatSongRender = { fileId: `chat-song-${id}-r${project.revision}-${randomUUID().slice(0, 8)}.mp4`, sha256: createHash('sha256').update(bytes).digest('hex'), sourceRevision: project.revision,
-      duration: Number(probe.format.duration), width: WIDTH, height: HEIGHT, createdAt: new Date().toISOString(), warnings: [!background && !clips.length ? copy.plainBackground : '', !images.has('avatarA:') || !images.has('avatarB:') ? copy.letterAvatars : ''].filter(Boolean) };
+      templateVersion: CHAT_SONG_TEMPLATE.version, duration: Number(probe.format.duration), width: WIDTH, height: HEIGHT, createdAt: new Date().toISOString(), warnings: [!background && !clips.length ? copy.plainBackground : '', !images.has('avatarA:') || !images.has('avatarB:') ? copy.letterAvatars : ''].filter(Boolean) };
     await runSerializedMutation(`chat-song:${userId}`, async () => {
       signal?.throwIfAborted();
       if (getChatSongProject(userId, id).revision !== project.revision) throw new ChatSongError(409, copy.changedProject);

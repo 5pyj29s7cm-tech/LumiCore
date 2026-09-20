@@ -1,4 +1,5 @@
 import { apiFetch } from './apiClient';
+import { validMemoryAvatarAnimation } from '../../shared/memory_avatar';
 import type { MemoryAvatar, MemoryAvatarMaterial, CreateMemoryAvatarInput, PatchMemoryAvatarInput, AddMemoryAvatarMaterialInput } from '../../shared/memory_avatar';
 
 export class MemoryAvatarApiError extends Error {
@@ -10,12 +11,14 @@ export const validMemoryAvatar = (value: any): boolean => object(value)
   && typeof value.id === 'string' && Boolean(value.id) && typeof value.name === 'string'
   && Number.isSafeInteger(value.revision) && value.revision >= 1
   && ['active', 'archived'].includes(value.status) && typeof value.narrative === 'string'
-  && object(value.appearance) && value.appearance.style === 'human3d'
+  && (value.publicBrief === undefined || (typeof value.publicBrief === 'string' && value.publicBrief.length <= 4000))
+  && object(value.appearance) && ['human3d', 'lumi3d', 'lumi2d', 'lumivrm'].includes(value.appearance.style)
   && ['neutral', 'feminine', 'masculine'].includes(value.appearance.preset)
   && ['skinColor', 'hairColor', 'outfitColor', 'backgroundColor'].every(field => typeof value.appearance[field] === 'string' && /^#[0-9a-f]{6}$/i.test(value.appearance[field]))
   && object(value.voice) && (value.voice.voiceId === undefined || typeof value.voice.voiceId === 'string')
   && (value.presentation === undefined || (object(value.presentation)
-    && ['human3d', 'portrait'].includes(value.presentation.mode)
+    && ['human3d', 'portrait', 'localportrait'].includes(value.presentation.mode)
+    && (value.presentation.mode !== 'localportrait' || (validMemoryAvatarAnimation(value.presentation.animation) && value.presentation.mediaId === value.presentation.animation.idleMediaId))
     && (value.presentation.mode !== 'portrait' || (typeof value.presentation.mediaId === 'string' && Boolean(value.presentation.mediaId)))))
   && Number.isSafeInteger(value.memoryCount) && value.memoryCount >= 0;
 const validAvatar = validMemoryAvatar;

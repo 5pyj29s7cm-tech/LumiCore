@@ -14,6 +14,18 @@ vi.mock('../src/components/NodeDetailPanel', () => ({ NodeDetailPanel: ({ node, 
 import { KnowledgeBase } from '../src/components/KnowledgeBase';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+it('opens knowledge without a transparent reveal and removes it immediately on close', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ files: [], tree: [], vaults: [] }))));
+  const props={isOpen:true,t:{langCode:'en'},onClose:vi.fn()};
+  const view=render(<KnowledgeBase {...props}/>);
+  const surface=view.container.querySelector('[data-knowledge-base]') as HTMLElement;
+  expect(surface).not.toBeNull();expect(surface.style.clipPath).toBe('');expect(surface.style.opacity).not.toBe('0');
+  view.rerender(<KnowledgeBase {...props} isOpen={false}/>);
+  expect(view.container.querySelector('[data-knowledge-base]')).toBeNull();
+  await act(async()=>{});
+  expect(view.container.querySelector('[data-knowledge-base]')).toBeNull();
+});
+
 it('does not report failed protection as success and retries the same target instead of reversing the server toggle', async () => {
   let tier = 'episodic'; let attempts = 0; let treeReads = 0;
   const targets: unknown[] = [];

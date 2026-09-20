@@ -71,6 +71,17 @@ beforeEach(() => {
 });
 
 describe('private Memory Territory voice handlers', () => {
+  it('hands existing Lumi speech to the Aliyun browser renderer without duplicate local playback', async () => {
+    fixture.portraitSpeak.mockResolvedValue({ status: 'accepted', browserAudio: true });
+    const { socket, data, stt } = await setup(true);
+    await stt.result({ text: 'Tell me about the garden', isFinal: true });
+    await vi.waitFor(() => expect(socket.outputs.some(([event]) => event === 'avatar:audio:portrait')).toBe(true));
+    const [, audio] = socket.outputs.find(([event]) => event === 'avatar:audio:portrait')!;
+    expect(audio).toMatchObject({ avatarId: data.avatarId, sessionId: data.sessionId, audioBase64: 'AQID', format: 'wav' });
+    expect(socket.outputs.some(([event]) => event === 'avatar:audio:response')).toBe(false);
+    expect(fixture.model).toHaveBeenCalledTimes(1); expect(fixture.synthesis).toHaveBeenCalledTimes(1);
+    await socket.receive('avatar:audio:stop', data);
+  });
   it('rejects a work-scoped socket before opening private speech recognition', async () => {
     const { socket } = await setup(false, 'organization');
     expect(fixture.stts).toHaveLength(0);

@@ -195,8 +195,11 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
           call.playbackUntil = Date.now() + Math.min(120_000, Math.max(3000, reply.length * 170));
           emit(call, 'audio:status', { status: 'speaking', requestId, lane: 'conversation' });
           if (call.portrait) {
-            await speakMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId,
+            const receipt = await speakMemoryAvatarPortrait({ userId: call.userId, avatarId: call.avatarId, callSessionId: call.sessionId,
               requestId, audioBuffer: audio.audioBuffer, format: audio.format, signal: controller.signal });
+            if ('browserAudio' in receipt && receipt.browserAudio && !controller.signal.aborted && live(call)) {
+              emit(call, 'audio:portrait', { audioBase64: audio.audioBuffer.toString('base64'), format: audio.format, requestId });
+            }
             assertCurrent();
           } else emit(call, 'audio:response', { buffer: audio.audioBuffer, format: audio.format, requestId, lane: 'conversation' });
         } catch {

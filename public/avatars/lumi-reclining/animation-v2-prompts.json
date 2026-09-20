@@ -1,0 +1,46 @@
+{
+  "tool": "built-in image_gen",
+  "date": "2026-09-19",
+  "jobs": [
+    {
+      "key": "base",
+      "args": {
+        "referenced_image_paths": [
+          "D:/lumiOS/public/avatars/lumi-reclining/idle-v1.png"
+        ],
+        "prompt": "Use case: precise-object-edit. Animation clean plate of this exact seated Lumi. Remove ONLY the entire viewer-left arm (his right arm) and hand: the sleeve from shoulder near pixel x450,y245, upper arm over the sofa, bent forearm and hand hanging near x420,y450. Inpaint the now-visible taupe sofa cushions and armrest behind the removed arm, and complete the torso's coat side under that shoulder. Leave a clean sleeveless shoulder edge that an independently animated sleeve can attach to. Keep his head/face/hair, neck, torso, other arm on viewer-right, crossed legs, clothing, sofa edges, lighting, and transparent background EXACTLY unchanged and aligned. 1536x1024 exact same framing and scale. Do not remove the viewer-right arm. No added hands. This is an invisible-underlay production asset for real-time arm animation."
+      }
+    },
+    {
+      "key": "sky",
+      "args": {
+        "prompt": "Photorealistic night-time city background texture for the distant view through a luxury apartment window. Landscape 1536x1024. Actual architectural photography, realistic dense modern Chinese city at 11pm: layered office towers and apartment buildings at different distances, realistic glass curtain wall facades, mostly dark windows with sparse warm amber and soft white offices lit, very restrained cool cyan architectural accent lights, atmospheric depth and thin distant haze. Deep navy nearly black sky in the top 40 percent, tiny realistic half moon near upper right (diameter about 22 pixels, not a giant cartoon moon), just a few faint stars. Correct night exposure: building silhouettes dark, luminous windows small, natural dynamic range without glowing outlines. Horizon mid-height. View across a river with small blurred reflections near lower edge. No interior, no window frame, no people, no huge neon signs, no typography, no stylized/vector/game-like buildings, no daytime light. This texture will sit behind real 3D window geometry; render edge to edge opaque."
+      }
+    },
+    {
+      "key": "smile",
+      "args": {
+        "referenced_image_paths": [
+          "D:/lumiOS/public/avatars/lumi-reclining/idle-v1.png"
+        ],
+        "prompt": "Use case: precise-object-edit. Make an exactly aligned facial-expression frame of this seated Lumi. Change ONLY facial expression: a visible warm, affectionate but restrained CLOSED-LIP smile, mouth corners raised, soft smiling eyes and gently raised cheeks. Same young adult man identity, exact same head and eye positions, head size, head angle, hair, body, sofa, lighting, framing and transparent alpha. Do not show teeth or open mouth. Nothing except facial expression changes. Same exact 1536x1024 canvas. Production animation frame to blend only over the face, never reposition face."
+      }
+    },
+    {
+      "key": "thoughtful",
+      "args": {
+        "referenced_image_paths": [
+          "D:/lumiOS/public/avatars/lumi-reclining/idle-v1.png"
+        ],
+        "prompt": "Use case: precise-object-edit. Make an exactly aligned facial-expression frame of this seated Lumi. Change ONLY facial expression: thoughtful concentration, slightly knit inner eyebrows, attentive eyes subtly lowered, mouth closed and relaxed without smiling or looking angry. Same recognizable man, exactly same head angle, head scale, eye positions, facial proportions, hair, body, sofa, lighting and transparent alpha. Everything else absolutely unchanged. Exact same 1536x1024 canvas, no reframing. Production facial-expression frame."
+      }
+    }
+  ],
+  "lamp": {
+    "prompt": "Use case: photorealistic-natural. Production transparent cutout of a single realistic elegant floor reading lamp for a dim night-time apartment corner. Entire lamp in frame from shade top to floor base, upright, front view at seated eye level. Slim aged bronze stem, small round bronze base, softly tapered ivory linen drum lampshade, lamp switched ON with a 2700K warm bulb. The woven fabric shade softly glows warm amber from INSIDE with natural uneven light falloff, visible linen threads, top/bottom edges slightly darker; NOT an opaque flat gray cone and NOT a white neon bottom stripe. Real product photography, physically plausible light, fine materials and subtle wear. Night exposure: lamp is warm and readable, not blown out, bronze stem mostly dark. No light rays, no floor, no room, no people, no text, no fake vector shapes. Genuine transparent RGBA background with alpha zero outside lamp and tight clean edge, no rectangular gradient or shadow background. Tall portrait 1024x1536, lamp occupies 90 percent of height and roughly 42 percent of width, centered."
+  },
+  "alphaCleanup": {
+    "reference": "clean-plate-v2.png",
+    "prompt": "Use case: background-extraction. Make a production-quality clean TRANSPARENT cutout of the exact supplied man and sofa, maintaining exact 1536x1024 canvas, alignment, subject pixels, existing missing viewer-left arm and pose. Remove every trace of the brown/black gradient background around the outside silhouette: outside the hair, torso and sofa must be RGBA alpha=0, with only a tight clean antialiased edge. No opaque or semitransparent halo or rectangular background remnants. All solid subject interiors must be alpha=255. Do not add the missing arm. Do not change face, clothing, remaining hand, upholstery, lighting, colors or framing. Also replace the dark empty armhole on the viewer-left shoulder (x500,y270) with continuous matching charcoal coat fabric, so there is no black oval hole; that small area will be covered by an animated sleeve. No other edits."
+  }
+}

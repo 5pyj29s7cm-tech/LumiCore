@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, useMem
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useDragControls, useMotionValue, useTransform } from 'motion/react';
 import { sounds } from '../services/soundService';
+import { KnowledgeBaseEntry } from './KnowledgeBaseEntry';
 import {
   Rocket,
   Cpu,
@@ -162,7 +163,6 @@ const DesktopOnboarding = lazy(() => import('./DesktopOnboarding').then(m => ({ 
 const ContributorNodePanel = lazy(() => import('./ContributorNodePanel').then(m => ({ default: m.ContributorNodePanel })));
 const DeviceSyncCenter = lazy(() => import('./DeviceSyncCenter').then(m => ({ default: m.DeviceSyncCenter })));
 const GitHubMCPBrowser = lazy(() => import('./GitHubMCPBrowser').then(m => ({ default: m.GitHubMCPBrowser })));
-const KnowledgeBase = lazy(() => import('./KnowledgeBase').then(m => ({ default: m.KnowledgeBase })));
 const MeshSyncSelector = lazy(() => import('./MeshSyncSelector').then(m => ({ default: m.MeshSyncSelector })));
 const NotificationCenter = lazy(() => import('./NotificationCenter').then(m => ({ default: m.NotificationCenter })));
 const OrgPortal = lazy(() => import('./OrgPortal').then(m => ({ default: m.OrgPortal })));
@@ -6314,15 +6314,13 @@ export function DesktopUI({
 
       {/* Knowledge Base fullscreen overlay */}
       {knowledgeLoaded && (
-        <Suspense fallback={null}>
-          <KnowledgeBase
+          <KnowledgeBaseEntry
             scopeKey={`${user?.uid || 'guest'}:${workDomain}:${orgConnection?.orgId || ''}`}
             t={t}
             isOpen={knowledgeOpen}
             onClose={closeKnowledgeBase}
             domain={workDomain}
           />
-        </Suspense>
       )}
 
       {/* Chat fullscreen overlay */}

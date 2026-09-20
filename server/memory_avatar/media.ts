@@ -224,7 +224,7 @@ export async function deleteMemoryAvatarMedia(userId: string, avatarId: string, 
     payload.media = rows(payload).filter(media => media.id !== mediaId);
     payload.materials = (payload.materials || []).filter((material: any) => material.sourceMediaId !== mediaId && material.id !== item.materialId);
     payload.deletedMedia = [...(payload.deletedMedia || []), { id: mediaId, clientRequestId: item.clientRequestId, extension: item.extension }];
-    if (payload.presentation?.mediaId === mediaId) payload.presentation = { mode: 'human3d' };
+    if (payload.presentation?.mediaId === mediaId || [payload.presentation?.animation?.blinkMediaId, payload.presentation?.animation?.speakMediaId].includes(mediaId)) payload.presentation = { mode: 'human3d' };
     return { value: item, invalidate: true };
   });
   pendingFinalSaves.delete(key);

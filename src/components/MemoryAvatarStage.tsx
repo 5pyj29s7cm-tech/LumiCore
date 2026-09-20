@@ -1,10 +1,16 @@
 import { Component, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import type { MemoryAvatarAppearance } from '../../shared/memory_avatar';
+import type { MemoryAvatarAppearance, MemoryAvatarPresentation } from '../../shared/memory_avatar';
+import { MemoryAvatarAnimatedPortrait } from './MemoryAvatarAnimatedPortrait';
 import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
+import { LumiCompanionModel } from './LumiCompanionModel';
+import { LumiLayeredCharacter } from './LumiLayeredCharacter';
+import { LumiHomeScene, LumiHomeCamera } from './LumiHomeScene';
 
 export interface MemoryAvatarStageProps {
+  avatarId?: string;
+  presentation?: MemoryAvatarPresentation;
   appearance: MemoryAvatarAppearance;
   outputLevelRef: MutableRefObject<number>;
   state?: string;
@@ -242,10 +248,14 @@ function ContextLossGuard({ onLost }: { onLost: () => void }) {
   return null;
 }
 
-export default function MemoryAvatarStage({ appearance, outputLevelRef, state, name, locale, active = true }: MemoryAvatarStageProps) {
+export default function MemoryAvatarStage({ appearance, outputLevelRef, state, name, locale, active = true, avatarId, presentation }: MemoryAvatarStageProps) {
+  // Legacy records use the supported 2D character; the retired VRM is not loaded.
+  const portrait = appearance.style === 'lumi2d' || appearance.style === 'lumivrm';
+  const lumi = appearance.style === 'lumi3d' || portrait;
   const [available, setAvailable] = useState<boolean | null>(null);
   const [lost, setLost] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [framing, setFraming] = useState<'conversation' | 'full'>('conversation');
   useEffect(() => {
     if (!active) return;
     setLost(false);
@@ -268,21 +278,31 @@ export default function MemoryAvatarStage({ appearance, outputLevelRef, state, n
     <span style={{ maxWidth: 320, fontSize: 13 }}>{memoryTerritoryCopy(locale).renderFallback}</span>
   </div>;
   if (!active) return null;
+  if (avatarId && presentation?.mode === 'localportrait' && presentation.animation) return <MemoryAvatarAnimatedPortrait avatarId={avatarId} animation={presentation.animation} outputLevelRef={outputLevelRef} name={name} locale={locale} />;
   if (available === false || lost) return fallback;
   return <div role="figure" aria-label={name} data-state={state} style={{ width: '100%', height: '100%', minHeight: 320, position: 'relative' }}>
     {available && <PortraitBoundary fallback={fallback}>
-      <Canvas dpr={[1, 1.5]} camera={{ position: [0, 0.21, 6.0], fov: 34, near: 0.1, far: 30 }}
+      <Canvas dpr={[1, 1.5]} shadows={lumi ? {type:THREE.PCFShadowMap} : false} camera={{ position: [0, lumi ? 0.35 : 0.21, lumi ? 7.7 : 6.0], fov: 34, near: 0.1, far: lumi ? 260 : 30 }}
         gl={{ alpha: true, antialias: true, powerPreference: 'low-power', toneMapping: THREE.ACESFilmicToneMapping }}
         style={{ background: 'transparent' }} fallback={fallback} onCreated={({ gl }) => { gl.setClearColor(0x000000, 0); gl.toneMappingExposure = 1.04; }}>
         <ContextLossGuard onLost={() => setLost(true)} />
+        {lumi ? <>
+          <LumiHomeScene tint={safeColor(appearance.backgroundColor, '#d5d6c5')} reducedMotion={reducedMotion} seated={portrait} />
+          <LumiHomeCamera reducedMotion={reducedMotion || portrait} fullBody={portrait && framing === 'full'} portraitCloseUp={portrait && framing === 'conversation'} />
+          {portrait ? <LumiLayeredCharacter outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} state={state} /> : <LumiCompanionModel outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} accent={safeColor(appearance.outfitColor, '#6bbaa8')} shellColor={safeColor(appearance.skinColor, '#f1eee2')} visorColor={safeColor(appearance.hairColor, '#183534')} />}
+        </> : <>
         <ambientLight intensity={0.65} color="#eee4d8" />
         <hemisphereLight args={['#fff0dc', '#7b7589', 1.15]} />
         <directionalLight position={[-3.5, 4, 5]} intensity={2.15} color="#ffe2c5" />
         <directionalLight position={[3, 1, 3]} intensity={0.85} color="#dbe6fb" />
         <directionalLight position={[1, 3, -3]} intensity={1.8} color="#efd0a5" />
         <Portrait appearance={appearance} outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} />
+        </>}
       </Canvas>
     </PortraitBoundary>}
+    {portrait && available && !lost && <div className="absolute bottom-4 right-4 flex gap-1 rounded-full border border-white/15 bg-black/45 p-1 text-xs text-white backdrop-blur-md">
+      {(['conversation', 'full'] as const).map(mode => <button key={mode} type="button" aria-pressed={framing === mode} onClick={() => setFraming(mode)} className={`rounded-full px-3 py-2 ${framing === mode ? 'bg-white/20' : 'hover:bg-white/10'}`}>{mode === 'conversation' ? memoryTerritoryCopy(locale).framingConversation : memoryTerritoryCopy(locale).framingFullBody}</button>)}
+    </div>}
   </div>;
 }
 

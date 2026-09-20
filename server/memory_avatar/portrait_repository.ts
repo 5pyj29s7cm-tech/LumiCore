@@ -28,13 +28,15 @@ const empty = (): PortraitUserRecord => ({ version: 1, config: { consent: false,
 /** Private local storage, using the same host ACL/DPAPI and atomic fsync adapter
  * as durable tool confirmations. Windows protection failures never fall back to
  * plaintext. On POSIX, the key and encrypted records require owner-only modes. */
-export class PortraitRepository {
+export class PortraitRepository<T extends { version: 1; config: object; sessions: unknown[] } = PortraitUserRecord> {
   private masterKey?: Buffer;
   private readonly directory: string;
   private readonly platform: NodeJS.Platform;
   private readonly files: PrivateFilePersistenceAdapter;
   private readonly protection: PrivateKeyProtectionAdapter;
-  constructor(options: { directory?: string; platform?: NodeJS.Platform; files?: PrivateFilePersistenceAdapter; protection?: PrivateKeyProtectionAdapter } = {}) {
+  private readonly initial: () => T;
+  constructor(options: { directory?: string; platform?: NodeJS.Platform; files?: PrivateFilePersistenceAdapter; protection?: PrivateKeyProtectionAdapter; initial?: () => T } = {}) {
+    this.initial = options.initial || (empty as () => T);
     this.directory = options.directory || getDataPath('memory-avatar-portrait');
     this.platform = options.platform || process.platform;
     this.files = options.files || hostPrivateFilePersistenceAdapter;
@@ -65,10 +67,10 @@ export class PortraitRepository {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > limit) throw new Error('Unsafe portrait persistence file.');
     return fs.readFileSync(filename, 'utf8');
   }
-  read(userId: string): PortraitUserRecord {
+  read(userId: string): T {
     const filename = this.filename(userId);
     try {
-      if (!fs.existsSync(filename)) return empty();
+      if (!fs.existsSync(filename)) return this.initial();
       const envelope = JSON.parse(this.readFile(filename, 16 * 1024 * 1024));
       if (envelope.version !== 1) throw new Error('Unknown portrait persistence schema.');
       const decipher = crypto.createDecipheriv('aes-256-gcm', this.key(), Buffer.from(envelope.iv, 'base64'));
@@ -78,7 +80,7 @@ export class PortraitRepository {
       return record;
     } catch { throw new PortraitError('portrait_storage_unavailable', 'The private portrait configuration or recovery log could not be opened.', 503); }
   }
-  write(userId: string, value: PortraitUserRecord): void {
+  write(userId: string, value: T): void {
     try {
       const plain = JSON.stringify(value);
       if (Buffer.byteLength(plain) > 10 * 1024 * 1024) throw new Error('Portrait log is full.');

@@ -70,7 +70,23 @@ describe('unified execution pipeline', () => {
     expect(result.authorizationPolicy.forbiddenTools).toContain('send_email');
     expect(run('wrong-task').turnIntent.flow.routeText).not.toContain(goal);
   });
-
+  it.each(['chat', 'voice'] as const)('preserves requested person authoring through scoped %s prohibitions', channel => {
+    const text = '请实际完成一轮数字人形象制作验收：在记忆领地新建一个独立人物，名称为“Lumi 动画验收”。用 Lumi 官方 API 生成正面半身人像，浅棕发、墨绿色衣装；再基于这张图生成闭眼和开口两张表情变体。实际导入三张图片，配置眨眼、呼吸、语音口型和环境微动，保存后读取确认。不要覆盖现有 Lumi，不修改代码或数据库、不接第三方数字人服务、不开始直播。';
+    const run = (text: string) => buildLumiExecutionPipeline({ dispatch: { userId: 'avatar-acceptance', channel, source: channel,
+      operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: ['send_email'], maxIterations: 16 } });
+    const pipeline = run(text);
+    for (const name of ['memory_avatar_read', 'memory_avatar_create', 'memory_avatar_import_image', 'memory_avatar_configure_animation', 'generate_image', 'ai_edit_image', 'get_image_generation_status']) {
+      expect(pipeline.modelToolProjection.toolNames, name).toContain(name);
+      expect(pipeline.authorizationPolicy.forbiddenTools, name).not.toContain(name);
+    }
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('write_file');
+    expect(pipeline.modelToolProjection.allowDynamicDiscovery).toBe(false);
+    expect(pipeline.authorizationPolicy.forbiddenTools).toContain('send_email');
+    const blocked = run(text + '现在不要创建或修改任何内容。');
+    expect(blocked.authorizationPolicy.forbiddenTools).toContain('memory_avatar_create');
+    expect(blocked.authorizationPolicy.forbiddenTools).toContain('memory_avatar_configure_animation');
+  });
   it.each(['chat', 'voice'] as const)('keeps the unfinished execute-and-capture plan through detailed %s resumption', channel => {
     const goal = '请读取 C:/Users/Administrator/Documents/input-4.csv，按数量乘单价增加 total 列，保存为 C:/Users/Administrator/Documents/output-4.csv。然后把完整的读取、计算、写文件流程保存为可复用工作流草稿。源文件不要改动。';
     const policy = { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: ['send_email'], maxIterations: 10 };

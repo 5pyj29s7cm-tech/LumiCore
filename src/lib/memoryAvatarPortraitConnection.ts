@@ -1,7 +1,10 @@
 import { memoryAvatarPortraitService as service } from '../services/memoryAvatarPortraitService';
+import { createAliyunAvatarConnection } from './aliyunAvatarConnection';
 
 export interface PortraitConnectionOptions {
   avatarId: string;
+  provider?: 'did' | 'aliyun';
+  onSurface?: (surface: HTMLDivElement | null) => void;
   onStream: (stream: MediaStream | null) => void;
   onPlayback?: (playing: boolean) => void;
   onFailure: () => void;
@@ -9,6 +12,8 @@ export interface PortraitConnectionOptions {
 
 /** One owner/person instance, one peer. No automatic retry of a billed create/speak. */
 export function createMemoryAvatarPortraitConnection(options: PortraitConnectionOptions) {
+  if (options.provider === 'aliyun') return createAliyunAvatarConnection(options);
+  let cleanup = Promise.resolve();
   let current: {
     controller: AbortController; peer?: RTCPeerConnection; sessionId: string;
     requestId: string; remoteId?: string; stream?: MediaStream; channel?: RTCDataChannel;
@@ -30,7 +35,8 @@ export function createMemoryAvatarPortraitConnection(options: PortraitConnection
     options.onStream(null);
     options.onPlayback?.(false);
     // Cancelling by request also covers an accepted create with a lost HTTP response.
-    void service.cancel(options.avatarId, call.sessionId, call.requestId).catch(() => {});
+    cleanup = service.cancel(options.avatarId, call.sessionId, call.requestId).then(() => {});
+    void cleanup.catch(() => {});
   };
   const connect = async (sessionId: string, signal?: AbortSignal) => {
     close();
@@ -107,5 +113,8 @@ export function createMemoryAvatarPortraitConnection(options: PortraitConnection
       throw error;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   };
-  return { connect, close };
+  // Long-running live previews must confirm cleanup before renewing a billed renderer.
+  const closeAndWait = () => { close(); return cleanup; };
+  return { connect, close, closeAndWait, usesBrowserAudio: false,
+    playAudio: async (_reply: { audioBase64: string; format: string }, _requestId: string, _signal?: AbortSignal) => { throw new Error('D-ID audio is sent by the server'); } };
 }

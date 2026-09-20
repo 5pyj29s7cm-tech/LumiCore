@@ -1,0 +1,9 @@
+{
+  "tool": "built-in image_gen",
+  "date": "2026-09-19",
+  "editTarget": "idle-v1.png",
+  "asset": "seated-arm-v3.png",
+  "source": "C:/Users/Administrator/.codex/generated_images/01a070b2-6aa9-73b0-b801-bb97af129332/exec-3b8a4f8c-e83f-47bd-8d4e-f13b313dfad1.png",
+  "prompt": "Use case: background-extraction. Edit target: the provided Lumi seated portrait. Create a production 2D animation cutout of ONLY HIS RIGHT ARM (on VIEWER LEFT), including the ENTIRE original jacket sleeve from shoulder through elbow, original white shirt cuff, original bare wrist and complete original relaxed hand/fingers. Output a true transparent PNG, exactly 1536x1024 canvas. CRITICAL preserve the original pixels/shape/position as closely as possible: shoulder at x460 y275, elbow x270 y362, wrist x374 y389, fingers down to x460 y507. Keep sleeve gold embroidery and cloth folds, skin shading and original relaxed anatomy. Do NOT redesign or straighten arm, do NOT move or enlarge it, do NOT change hand pose. Remove EVERYTHING ELSE including torso, head, other arm, couch, clothes below arm and background. Only viewer-left arm remains in its exact original image coordinates, with clean alpha edges, no sofa fragments, no ghost shadow or opaque background. No text, no guide markers.",
+  "note": "Generated cutout was enlarged despite the positioning instruction; coordinates are fitted in the renderer. Alpha fringe and overlapping upper sleeve are masked in the shader. Cuff, wrist and fingers use one continuous source and forearm transform. Rest pose uses the original seated portrait."
+}

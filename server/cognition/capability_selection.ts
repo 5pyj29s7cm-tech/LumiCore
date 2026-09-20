@@ -428,6 +428,7 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
+  if (routeHas(input, 'memory_avatar')) return { lane: 'internal_memory', primary: 'memory person authoring', reasons: [...reasons, 'Create, import and configure the selected private memory person.'] };
   if (flow.executionGovernance.capabilityLearningIntent !== 'none') {
     return {
       lane: 'capability_learning',

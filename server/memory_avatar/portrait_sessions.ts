@@ -7,6 +7,7 @@ import { isStrictPrivacy } from '../config/privacy';
 import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
 import { DidPortraitProvider, normalizePortraitApiKey, PortraitError, requirePortraitCloud, type PortraitOffer } from './portrait_provider';
 import { PortraitRepository, type PortraitSessionRecord, type PortraitUserRecord } from './portrait_repository';
+import { getAliyunAvatarSessions } from './aliyun_sessions';
 
 type Scope = { userId: string; avatarId: string; callSessionId: string };
 type Authorization = ReturnType<typeof captureMemoryAvatarAuthorization>;
@@ -360,11 +361,16 @@ export class MemoryAvatarPortraitSessions {
 
 let singleton: MemoryAvatarPortraitSessions | undefined;
 export function getMemoryAvatarPortraitSessions(): MemoryAvatarPortraitSessions { return singleton ??= new MemoryAvatarPortraitSessions(); }
-export function speakMemoryAvatarPortrait(input: PortraitSpeechInput) { return runtimeBackgroundWork.track(getMemoryAvatarPortraitSessions().speak(input)); }
-export function isMemoryAvatarPortraitReady(scope: Scope): boolean { return getMemoryAvatarPortraitSessions().ready(scope); }
+export function speakMemoryAvatarPortrait(input: PortraitSpeechInput) {
+  return runtimeBackgroundWork.track(Promise.resolve().then(() => getAliyunAvatarSessions().selected(input.userId, input.avatarId)
+    ? getAliyunAvatarSessions().speak(input) : getMemoryAvatarPortraitSessions().speak(input)));
+}
+export function isMemoryAvatarPortraitReady(scope: Scope): boolean {
+  return getAliyunAvatarSessions().selected(scope.userId, scope.avatarId) ? getAliyunAvatarSessions().ready(scope) : getMemoryAvatarPortraitSessions().ready(scope);
+}
 export function stopMemoryAvatarPortrait(scope: Scope): Promise<void>;
 export function stopMemoryAvatarPortrait(userId: string, avatarId: string, callSessionId: string): Promise<void>;
 export function stopMemoryAvatarPortrait(scopeOrUser: Scope | string, avatarId?: string, callSessionId?: string): Promise<void> {
   const scope = typeof scopeOrUser === 'string' ? { userId: scopeOrUser, avatarId: avatarId!, callSessionId: callSessionId! } : scopeOrUser;
-  return runtimeBackgroundWork.track(getMemoryAvatarPortraitSessions().stop(scope));
+  return runtimeBackgroundWork.track(Promise.all([getMemoryAvatarPortraitSessions().stop(scope), getAliyunAvatarSessions().stop(scope)]).then(() => {}));
 }

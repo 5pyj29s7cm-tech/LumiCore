@@ -4,10 +4,12 @@ import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from '../llm/providers';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { getUserPreferredGenerationModels } from '../llm/generation_preferences';
+import { modelRoutingErrorReason } from '../llm/model_routing_receipts';
 import { isStrictPrivacy } from '../config/privacy';
 import type { mountCreativeRoutes } from './creative_routes';
-import { chatSongDraftPrompt, chatSongImagePrompt, chatSongSingingPrompt } from '../regions/packs/cn/chat_song';
+import { CHAT_SONG_RENDER_COPY as copy, chatSongDraftPrompt, chatSongImagePrompt, chatSongSingingPrompt } from '../regions/packs/cn/chat_song';
 import { chatSongLyrics, chatSongSongCurrent } from '../../shared/chat_song';
+import { groupChatSongDraft } from '../../shared/chat_song_layout';
 import {
   ChatSongError, listChatSongProjects, getChatSongProject, createChatSongProject, changeChatSongProject,
   editChatSongProject, lockChatSongScript, attachChatSongAsset, selectChatSongAudio, confirmChatSongAudio,
@@ -54,14 +56,18 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
       const config = getUserPreferredLLMConfig(req.user!.uid, { maxTokens: 4000, domain: 'personal', source: 'chat-song-draft' });
       if (isStrictPrivacy() || config.provider !== 'relay') throw new ChatSongError(409, 'Choose Lumi Official API in model settings. Cloud creation is unavailable in local-only privacy mode.');
       const response = await makeLLMCall([{ role: 'user', content: chatSongDraftPrompt(project) }], [],
-        { ...config, selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false, signal: request.signal },
+        { ...config, thinkingMode: 'disabled', responseFormat: 'json_object', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false, signal: request.signal },
         getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama,
-        getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+        getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay).catch(error => {
+          request.signal.throwIfAborted();
+          throw new ChatSongError(modelRoutingErrorReason(error) === 'timeout' ? 504 : 502, copy.draftUnavailable);
+        });
       request.signal.throwIfAborted();
+      if (response.streamIncomplete || (response.finishReason && response.finishReason !== 'stop')) throw new ChatSongError(502, 'The model returned an incomplete draft. Your saved dialogue has not changed.');
       let output: unknown;
       try { output = JSON.parse(String(response.text || '').replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '')); }
       catch { throw new ChatSongError(502, 'The model returned an incomplete draft. Your saved dialogue has not changed.'); }
-      const lines = normalizeChatSongLines((output as any)?.lines);
+      const lines = groupChatSongDraft(normalizeChatSongLines((output as any)?.lines));
       if (lines.length < 2 || !lines.some(line => line.role === 'A') || !lines.some(line => line.role === 'B')) throw new ChatSongError(502, 'The draft must include both speakers.');
       res.json({ revision: project.revision, lines });
     } finally { request.dispose(); }

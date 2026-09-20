@@ -8,6 +8,8 @@ import { captureMemoryAvatarAuthorization } from '../server/memory_avatar/lifecy
 import { addScopedVoiceProfile, voiceProfileScope } from '../server/tts/profile_store';
 import { addMessageIdempotent, getOrCreateActiveConversation } from '../server/conversation/manager';
 import { generateSystemPrompt } from '../server/personality/engine';
+import { LUMI_COMPANION_APPEARANCE, LUMI_OTOME_APPEARANCE } from '../shared/memory_avatar';
+import { validMemoryAvatar } from '../src/services/memoryAvatarService';
 
 let base = '';
 let server: Awaited<ReturnType<typeof makeApp>>['server'];
@@ -47,6 +49,24 @@ it('makes simultaneous create retries idempotent and rejects conflicting reuse',
   expect((await request('', 'POST', { ...body, name: 'Changed' })).status).toBe(409);
 });
 
+it('persists the Lumi companion appearance and accepts it in the client without changing memories', async () => {
+  const a = (await create({ narrative: 'Keep this biography' })).body;
+  const updated = await request(`/${a.id}`, 'PATCH', { revision: a.revision, appearance: LUMI_COMPANION_APPEARANCE });
+  expect(updated.status).toBe(200);
+  const loaded = (await request(`/${a.id}`)).body;
+  expect(loaded.appearance).toEqual(LUMI_COMPANION_APPEARANCE);
+  expect(loaded.narrative).toBe(a.narrative); expect(loaded.memoryCount).toBe(a.memoryCount);
+  expect(validMemoryAvatar(loaded)).toBe(true);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: loaded.revision, appearance: { ...LUMI_COMPANION_APPEARANCE, style: 'unknown' } })).status).toBe(400);
+});
+
+it.each([LUMI_OTOME_APPEARANCE, { ...LUMI_OTOME_APPEARANCE, style: 'lumivrm' }])('persists local style $style without changing public identity or private memory',async(appearance)=>{
+  const a=(await create({publicBrief:'Approved company identity',narrative:'Private biography'})).body;
+  const next=await request(`/${a.id}`,'PATCH',{revision:a.revision,appearance});
+  expect(next.status).toBe(200);expect(validMemoryAvatar(next.body)).toBe(true);
+  expect((await request(`/${a.id}`)).body).toMatchObject({appearance,publicBrief:a.publicBrief,narrative:a.narrative});
+});
+
 it('keeps materials private by owner and avatar, including the full later text', async () => {
   const a = (await create()).body;
   const b = (await create()).body;
@@ -61,6 +81,27 @@ it('keeps materials private by owner and avatar, including the full later text',
   expect((await request(`/${a.id}/materials`, 'GET', undefined, 'other-owner')).status).toBe(404);
   expect((await request(`/${a.id}`, 'PATCH', { revision: 2, name: 'Stolen' }, 'other-owner')).status).toBe(404);
   expect((readDB().memories || []).filter((row: any) => row.agentId === a.id)).toHaveLength(0);
+});
+
+it('saves bounded public identity across database reopen, shares it with conversation and revokes stale generation', async () => {
+  const a = (await create({ publicBrief: 'Initial public identity', narrative: 'Private biography stays here.' })).body;
+  const guard = captureMemoryAvatarAuthorization(uid, a.id);
+  const controller = new AbortController(); const release = guard.watch(controller);
+  const publicBrief = 'Lumi: a warm virtual ambassador for local personal AI.';
+  expect((await request(`/${a.id}`, 'PATCH', { revision: 1, publicBrief: 'x'.repeat(4001) })).status).toBe(400);
+  expect(controller.signal.aborted).toBe(false);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: 1, publicBrief })).status).toBe(200);
+  expect(controller.signal.aborted).toBe(true); release();
+  await closeDatabase(); await initDatabase();
+  const saved = (await request(`/${a.id}`)).body;
+  expect(saved).toMatchObject({ publicBrief, revision: 2, narrative: a.narrative });
+  expect(validMemoryAvatar(saved)).toBe(true);
+  expect(buildMemoryAvatarContext(uid, a.id, 'unrelated topic', 200)[0]).toContain(publicBrief);
+  expect(buildMemoryAvatarContext(uid, a.id, 'unrelated', 20).join('').length).toBeLessThanOrEqual(20);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: 2, publicBrief }, 'other')).status).toBe(404);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: 1, publicBrief: 'stale' })).status).toBe(409);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: 2, publicBrief: '' })).body.publicBrief).toBe('');
+  expect(buildMemoryAvatarContext(uid, a.id, 'unrelated').join('\n')).not.toContain(publicBrief);
 });
 
 it('rejects stale changes and preserves source revision on title/appearance edits', async () => {

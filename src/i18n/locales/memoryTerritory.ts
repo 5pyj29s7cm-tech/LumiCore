@@ -2,6 +2,9 @@ import type { Locale } from '../runtime';
 
 const COPY = {
   zh: {
+    framingConversation: '近景', framingFullBody: '全身',
+    localCharacterLoading: '正在载入三维人物…', localCharacterError: '人物模型载入失败。请重新进入；文字和语音对话仍可使用。',
+    lumiOtome: 'Lumi · 沙发对话形象', lumiOtomeHint: '固定沙发坐姿，保留眨眼和语音口型。默认近景，也可查看完整坐姿。',
     materialLoadError: '暂时无法读取补充资料，请重试。',
     waiting: '等待回复…',
     cameraUnavailable: '摄像头暂时不可用，仍可继续语音对话。',
@@ -16,6 +19,7 @@ const COPY = {
     createBlank: '直接创建', createFromRecords: '从已有资料创建',
     name: '名字', namePlaceholder: '你想怎样称呼这个人', relationship: '与你的关系',
     introduction: '人物介绍', introductionPlaceholder: '他的经历、性格、说话习惯，以及你们之间的故事……',
+    publicBrief: '对外身份与公开资料', publicBriefHint: '保存后，日常对话和直播回复都会使用。只填写可以公开的身份、介绍、表达风格和已确认的产品信息；私人记忆及未公开设定请勿放在这里。',
     createAction: '创建并进入领地', creating: '正在创建…',
     createError: '创建未确认成功，请重试；相同请求不会重复创建。',
     leave: '返回主程序', profile: '人物资料', conversation: '对话记录', appearance: '形象与声音',
@@ -43,6 +47,7 @@ const COPY = {
     fileTooLarge: '文件过大，请拆分为不超过 20,000 字符的文字资料。', invalidFile: '请选择 TXT 或 Markdown 文字文件。',
     look: '人物风格', neutral: '自然', feminine: '柔和', masculine: '利落',
     skin: '肤色', hair: '发色', outfit: '衣服', background: '背景',
+    lumiCompanion: 'Lumi · 原创科幻伙伴', lumiCompanionHint: '温润陶瓷、发光表情与动态观景台。近景为实时 3D，远景为写实图像。', shell: '外壳', visor: '面罩', accent: '点缀色',
     voice: '声音', defaultVoice: '使用主程序当前声音', voiceHint: '沿用主程序的语音服务；你也可以选择已配置的声音。',
     loadingVoices: '正在读取可用声音…', voicesUnavailable: '暂时无法读取声音列表，仍可沿用当前声音。',
     archive: '归档这个数字人', archiveHint: '归档后从领地移出并结束其对话，已保存的资料不会删除。',
@@ -53,6 +58,10 @@ const COPY = {
     editStopsCall: '修改人物资料会结束当前通话，让下一次对话使用最新内容。',
   },
   en: {
+    framingConversation: 'Close view', framingFullBody: 'Full body',
+    localCharacterLoading: 'Loading the 3D character…', localCharacterError: 'The character could not load. Reopen to retry; text and voice conversation remain available.',
+    lumiOtome: 'Lumi · Relaxed conversation', lumiOtomeHint: 'A fixed seated portrait with blinking and speech-driven mouth motion. Starts close; the complete seated pose is also available.',
+    publicBrief: 'Public identity and briefing', publicBriefHint: 'Saved for both conversation and live replies. Include only public identity, expression style and confirmed product facts. Keep private memories and unreleased lore out of this field.',
     title: 'Memory Territory', subtitle: 'A place to meet the people in your memories.',
     people: 'My digital people', create: 'Create a person', createTitle: 'Meet someone new',
     createHint: 'Start with a name. Add their stories, voice and background whenever you like.',
@@ -93,6 +102,7 @@ const COPY = {
     fileTooLarge: 'Split this file into text sources of up to 20,000 characters.', invalidFile: 'Choose a TXT or Markdown text file.',
     look: 'Character style', neutral: 'Natural', feminine: 'Soft', masculine: 'Defined',
     skin: 'Skin', hair: 'Hair', outfit: 'Clothing', background: 'Background',
+    lumiCompanion: 'Lumi · Original companion', lumiCompanionHint: 'Warm ceramic, expressive lights and an atmospheric observatory. Real-time 3D foreground with a photographic landscape image.', shell: 'Shell', visor: 'Visor', accent: 'Accent',
     voice: 'Voice', defaultVoice: 'Use Lumi’s current voice', voiceHint: 'Uses the existing speech service. You can choose an already configured voice.',
     loadingVoices: 'Loading available voices…', voicesUnavailable: 'Voice list unavailable. You can still use the current voice.',
     archive: 'Archive this person', archiveHint: 'Ends their conversation and removes them from the territory. Saved records are retained.',

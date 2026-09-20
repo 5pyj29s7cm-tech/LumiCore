@@ -19,6 +19,7 @@ import { registerDocumentTools } from './document_tools';
 import { registerKnowledgeTools } from './knowledge_tools';
 import { registerWorkflowTools } from './workflow_tools';
 import { registerImageTools } from './image_tools';
+import { registerMemoryAvatarTools } from './memory_avatar_tools';
 import { registerVideoTools } from './video_tools';
 import { registerInputTools } from './input_tools';
 import { registerComputerUseTool } from './computer_use_tool';
@@ -72,6 +73,7 @@ export function registerAllTools(
   registerKnowledgeTools(registry);
   registerWorkflowTools(registry);
   registerImageTools(registry);
+  registerMemoryAvatarTools(registry);
   registerVideoTools(registry);
   registerInputTools(registry);
   registerComputerUseTool(registry);

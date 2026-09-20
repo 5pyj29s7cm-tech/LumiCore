@@ -1,4 +1,5 @@
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
+import { isAvatarAuthoringRequest } from './media_creation_intent';
 import { classifyExternalCliIntent, isExternalCliDelegation, requestedCliProviders } from './external_cli_intent';
 import { verifiedExternalCliStatus } from './external_cli_status';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
@@ -43,6 +44,7 @@ import {
 } from '../tools/receipt_payload';
 
 export type LumiActionContractKind =
+  | 'avatar_authoring'
   | 'skill_authoring'
   | 'none'
   | 'messaging_read'
@@ -1072,6 +1074,13 @@ export function buildActionContract(input: string): LumiActionContract {
 
   const text = compact(withoutNegatedLookupClauses(rawInput));
   if (!text) return NONE_CONTRACT;
+  if (isAvatarAuthoringRequest(text)) return withDefaults({ kind:'avatar_authoring', label:'Memory person authoring',
+    coreAction:'Create/import/configure the requested person through the memory person tools and read back the saved state.',
+    preparationIsNotCompletion:['Generating a still image','Opening Memory Territory','Writing a plan'],
+    requiredEvidence:['Verified memory_avatar_read or configuration receipt for the requested person and every requested animation feature'],
+    preferredTools:['memory_avatar_read','memory_avatar_create','memory_avatar_import_image','memory_avatar_configure_animation','generate_image','ai_edit_image'],
+    verificationTools:['memory_avatar_read'], nextStep:'Import the actual generated images, save the animation config, then read the same person back.',
+    caution:'Do not overwrite an existing person unless requested. Missing expression frames cannot be reported as working blinking or speech.' });
   if (classifyExternalCliIntent(text) === 'inspect') {
     return withDefaults({ kind: 'external_cli_status', label: 'External CLI availability check',
       coreAction: 'Inspect the named local CLI installation and login/configuration; answer the capability question from that receipt.',
@@ -3479,6 +3488,26 @@ export function hasCoreActionEvidence(
     : false;
   if (successful.length === 0 && !recoverableObservedOpen) return false;
   const toolNames = successful.map(record => record.name);
+  if (contract.kind === 'avatar_authoring') return successful.some(record => {
+    if (!['memory_avatar_read','memory_avatar_configure_animation','memory_avatar_create','memory_avatar_import_image'].includes(record.name)) return false;
+    const p = parseRecordJson(record);
+    if (p?.verified !== true || p.saved !== true || !p.avatarId) return false;
+    // i18n-allow: requested animation features must have corresponding saved evidence.
+    if (/动画|animation/iu.test(taskText) && !p.animation?.configured) return false;
+    if (/眨眼|闭眼|blink/iu.test(taskText) && !p.animation?.blink) return false;
+    // i18n-allow: feature names parsed from the user's request, not UI text.
+    if (/口型|说话|lip|speech/iu.test(taskText) && !p.animation?.speech) return false;
+    // i18n-allow: requested animation feature.
+    if (/呼吸|breath/iu.test(taskText) && !p.animation?.breathing) return false;
+    // i18n-allow: requested environment animation feature.
+    if (/背景动画|环境微动|背景微动|background\s*(?:motion|animation)/iu.test(taskText) && !p.animation?.backgroundMotion) return false;
+    const samePersonReceipt = (name: string) => successful.some(item => item.name === name && parseRecordJson(item)?.avatarId === p.avatarId);
+    // i18n-allow: requested person creation requires creation evidence.
+    if (/新建|创建|create/iu.test(taskText) && !samePersonReceipt('memory_avatar_create')) return false;
+    // i18n-allow: requested media import requires import evidence.
+    if (/导入|import/iu.test(taskText) && (!p.media?.length || !samePersonReceipt('memory_avatar_import_image'))) return false;
+    return true;
+  });
   if (contract.kind === 'task_control') {
     const intent = classifyRuntimeWorkIntent(taskText);
     const expectedTool = contract.preferredTools.includes('runtime_work_cancel')

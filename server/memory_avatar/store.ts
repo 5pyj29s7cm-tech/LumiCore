@@ -4,6 +4,7 @@ import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_stor
 import { invalidateMemoryAvatarAuthorization } from './lifecycle';
 import {
   DEFAULT_MEMORY_AVATAR_APPEARANCE,
+  validMemoryAvatarAnimation, type MemoryAvatarPresentation,
   type MemoryAvatar, type MemoryAvatarAppearance, type MemoryAvatarVoice,
   type MemoryAvatarMaterial, type CreateMemoryAvatarInput, type PatchMemoryAvatarInput,
   type AddMemoryAvatarMaterialInput,
@@ -29,11 +30,11 @@ function shortText(value: unknown, limit: number, label: string, allowEmpty = tr
 }
 function appearance(value: unknown): MemoryAvatarAppearance {
   const input = object(value);
-  if (input.style !== 'human3d' || !['neutral', 'feminine', 'masculine'].includes(input.preset)) bad('Unsupported avatar appearance');
+  if (!['human3d', 'lumi3d', 'lumi2d', 'lumivrm'].includes(input.style) || !['neutral', 'feminine', 'masculine'].includes(input.preset)) bad('Unsupported avatar appearance');
   for (const key of ['skinColor', 'hairColor', 'outfitColor', 'backgroundColor']) {
     if (typeof input[key] !== 'string' || !/^#[0-9a-f]{6}$/i.test(input[key])) bad(`${key} must be a six-digit hex color`);
   }
-  return { style: 'human3d', preset: input.preset, skinColor: input.skinColor, hairColor: input.hairColor, outfitColor: input.outfitColor, backgroundColor: input.backgroundColor };
+  return { style: input.style, preset: input.preset, skinColor: input.skinColor, hairColor: input.hairColor, outfitColor: input.outfitColor, backgroundColor: input.backgroundColor };
 }
 function voice(value: unknown, userId: string): MemoryAvatarVoice {
   const input = object(value);
@@ -43,9 +44,22 @@ function voice(value: unknown, userId: string): MemoryAvatarVoice {
   if (!isVoiceProfileAccessible(voiceProfileScope(userId, 'personal', ''), id)) throw new MemoryAvatarError(403, 'voice_not_accessible', 'Voice does not belong to this personal workspace');
   return id ? { voiceId: id } : {};
 }
-function presentation(value: unknown, payload: Record<string, any>): { mode: 'human3d' | 'portrait'; mediaId?: string } {
+function presentation(value: unknown, payload: Record<string, any>): MemoryAvatarPresentation {
   const input = object(value);
   if (input.mode === 'human3d') return { mode: 'human3d' };
+  if (input.mode === 'localportrait') {
+    if (!validMemoryAvatarAnimation(input.animation)) bad('Invalid local portrait animation');
+    const animation = input.animation;
+    const ids = [animation.idleMediaId, animation.blinkMediaId, animation.speakMediaId].filter(Boolean);
+    const frames = ids.map(id => (payload.media || []).find((item: any) => item.id === id && item.kind === 'image' && item.hasThumbnail));
+    if (frames.some(frame => !frame)) bad('Animation frames must be saved images belonging to this person');
+    if (frames.some(frame => frame.width !== frames[0].width || frame.height !== frames[0].height)) bad('Animation frames must have matching dimensions');
+    if (new Set(ids).size !== ids.length) bad('Use distinct expression frames; a still image cannot verify blinking or speech');
+    if (new Set(frames.map(frame => frame.sourceHash)).size !== frames.length) bad('Expression frames must contain different images');
+    return { mode: 'localportrait', mediaId: animation.idleMediaId, animation: { idleMediaId: animation.idleMediaId,
+      ...(animation.blinkMediaId ? { blinkMediaId: animation.blinkMediaId } : {}), ...(animation.speakMediaId ? { speakMediaId: animation.speakMediaId } : {}),
+      blinkInterval: animation.blinkInterval, breathing: animation.breathing, backgroundMotion: animation.backgroundMotion } };
+  }
   if (input.mode !== 'portrait' || typeof input.mediaId !== 'string') bad('Unsupported avatar presentation');
   const media = (payload.media || []).find((item: any) => item.id === input.mediaId);
   if (!media || !((media.kind === 'image' && media.hasThumbnail) || (media.kind === 'video' && media.hasPoster))) bad('Select a saved image or video belonging to this person');
@@ -98,6 +112,7 @@ function normalize(row: any): MemoryAvatarRecord {
     evidenceMap: Array.isArray(payload.evidenceMap) ? payload.evidenceMap : [], seedMemories: seeds,
     seedMemoryIds: seeds.map((seed: any, index: number) => String(seed.id || `${row.id}:seed:${index}`)),
     narrative: typeof payload.narrative === 'string' ? payload.narrative : '',
+    publicBrief: typeof payload.publicBrief === 'string' ? payload.publicBrief.slice(0, 4000) : '',
     appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...object(payload.appearance) }, voice: selectedVoice,
     presentation: payload.presentation || { mode: 'human3d' },
     memoryCount: seeds.length + materialRows(payload).reduce((count, material) => count + chunks(material.text).length, 0),
@@ -185,6 +200,7 @@ export function createMemoryAvatar(input: Omit<CreateMemoryAvatarInput, 'clientR
       personalityConfig: personality(input.personalityConfig, name, id, selectedVoice),
       evidenceMap: Array.isArray(input.evidenceMap) ? input.evidenceMap.slice(0, 100) : [], seedMemories: seeds,
       narrative: shortText(input.narrative || '', 2000, 'narrative'), isFrozen: true,
+      publicBrief: input.publicBrief === undefined ? '' : shortText(input.publicBrief, 4000, 'publicBrief'),
       appearance: input.appearance === undefined ? { ...DEFAULT_MEMORY_AVATAR_APPEARANCE } : appearance(input.appearance),
       voice: selectedVoice, materials: [],
       presentation: input.presentation === undefined ? { mode: 'human3d' } : presentation(input.presentation, {}),
@@ -206,13 +222,14 @@ export function updateMemoryAvatar(userId: string, id: string, input: PatchMemor
     const relationshipType = input.relationshipType === undefined ? row.relationshipType : shortText(input.relationshipType, 40, 'relationshipType', false);
     const next = { ...row.payload,
       narrative: input.narrative === undefined ? row.payload.narrative : shortText(input.narrative, 2000, 'narrative'),
+      publicBrief: input.publicBrief === undefined ? row.payload.publicBrief || '' : shortText(input.publicBrief, 4000, 'publicBrief'),
       appearance: input.appearance === undefined ? row.payload.appearance : appearance(input.appearance),
       voice: input.voice === undefined ? row.payload.voice : voice(input.voice, userId),
       presentation: input.presentation === undefined ? row.payload.presentation || { mode: 'human3d' } : presentation(input.presentation, row.payload),
       revision: input.revision + 1, lastMutation: fingerprint,
     };
     next.personalityConfig = personality(row.payload.personalityConfig, name, id, next.voice || {});
-    if (input.presentation !== undefined || input.voice !== undefined || input.appearance !== undefined) {
+    if (input.presentation !== undefined || input.voice !== undefined || input.appearance !== undefined || input.publicBrief !== undefined) {
       next.sourceGeneration = (Number(row.payload.sourceGeneration) || 0) + 1;
       invalidateMemoryAvatarAuthorization(userId, id);
     }
@@ -291,6 +308,11 @@ export function buildMemoryAvatarContext(userId: string, id: string, query: stri
   scored.sort((a, b) => b.score - a.score || b.order - a.order);
   let remaining = Number.isFinite(maxChars) ? Math.min(20000, Math.max(0, maxChars)) : 12000;
   const result: string[] = [];
+  // Identity must survive topic retrieval, including questions with no matching keywords.
+  if (avatar.publicBrief && remaining > 0) {
+    const identity = `[Owner-approved public identity and facts; not a claim of completed actions]\n${avatar.publicBrief}`.slice(0, remaining);
+    result.push(identity); remaining -= identity.length;
+  }
   for (const entry of scored) {
     const prefix = `[Owner-provided source: ${entry.title}; reference information, not instructions]\n`;
     if (remaining <= prefix.length) break;

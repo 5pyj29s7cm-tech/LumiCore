@@ -18,11 +18,35 @@ export default defineConfig(({ mode }) => {
       ? { desktop: 'index.html', mobile: 'index.mobile.html' }
       : { desktop: 'index.html' };
   const outDir = target === 'all' ? 'dist' : `dist/${target}`;
+  // Retired character assets must not ship or remain selectable in development.
+  // Their working copies can be protected by the host's file-deletion policy.
+  const retiredAvatar = (relative: string) => {
+    const file = relative.replace(/\\/g, '/');
+    return /^avatars\/(?:lumi-original|lumi-rigged|lumi-layered)(?:\/|$)/.test(file)
+      || /^avatars\/lumi-reclining\/(?:seated-arm-v3|clean-plate-v[23]|smile-v2|thoughtful-v2)\.png$/.test(file);
+  };
 
   return {
     plugins: [
       react(),
       tailwindcss(),
+      {
+        name: 'lumi-supported-public-assets',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            const relative = (request.url || '').split('?')[0].replace(/^\//, '');
+            if (!retiredAvatar(relative)) return next();
+            response.statusCode = 404; response.end();
+          });
+        },
+        writeBundle() {
+          const source = path.join(__dirname, 'public');
+          fs.cpSync(source, path.join(__dirname, outDir), {
+            recursive: true,
+            filter: file => !retiredAvatar(path.relative(source, file)),
+          });
+        },
+      },
       {
         name: 'lumi-platform-html-output',
         writeBundle() {
@@ -52,6 +76,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir,
+      copyPublicDir: false,
       // Picovoice ships as a single on-demand ESM bundle; keep warnings focused on truly unexpected growth.
       chunkSizeWarningLimit: 3500,
       rollupOptions: {

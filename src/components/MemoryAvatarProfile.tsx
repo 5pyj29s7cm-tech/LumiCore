@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Archive, BookOpen, Check, ChevronDown, FileText, Loader2, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import type { MemoryAvatar, MemoryAvatarAppearance, MemoryAvatarMaterial } from '../../shared/memory_avatar';
+import { DEFAULT_MEMORY_AVATAR_APPEARANCE, LUMI_COMPANION_APPEARANCE, LUMI_OTOME_APPEARANCE } from '../../shared/memory_avatar';
 import { memoryAvatarService, MemoryAvatarApiError } from '../services/memoryAvatarService';
 import { listVoices } from '../services/voiceService';
 import { memoryAvatarCopy } from '../i18n/locales/memoryAvatar';
@@ -8,7 +9,11 @@ import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
 import { memoryMediaCopy } from '../i18n/locales/memoryMedia';
 import { MemoryAvatarMediaPanel } from './MemoryAvatarMediaPanel';
 import { MemoryAvatarPortraitSettings } from './MemoryAvatarPortraitSettings';
+import { AliyunAvatarSettings } from './AliyunAvatarSettings';
+import { aliyunAvatarCopy } from '../i18n/locales/aliyunAvatar';
 import { getStoredToken } from '../services/authService';
+import { MemoryAvatarAnimationEditor } from './MemoryAvatarAnimationEditor';
+import { avatarAnimationCopy } from '../i18n/locales/avatarAnimation';
 
 interface Props {
   avatar: MemoryAvatar; ownerId: string; locale: 'zh' | 'en';
@@ -30,8 +35,10 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
   const [record, setRecord] = useState(avatar);
   const [name, setName] = useState(avatar.name);
   const [narrative, setNarrative] = useState(avatar.narrative);
+  const [publicBrief, setPublicBrief] = useState(avatar.publicBrief || '');
   const [relationship, setRelationship] = useState(avatar.relationshipType);
   const [appearance, setAppearance] = useState(avatar.appearance);
+  const [appearanceSelected, setAppearanceSelected] = useState(false);
   const [voiceId, setVoiceId] = useState(avatar.voice?.voiceId || '');
   const [voices, setVoices] = useState<Array<{ id: string; name: string }>>([]);
   const [voiceLoading, setVoiceLoading] = useState(false);
@@ -58,7 +65,9 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
   const fileRef = useRef<HTMLInputElement>(null);
 
   const acceptRecord = useCallback((next: MemoryAvatar) => {
+    setAppearanceSelected(false);
     setRecord(next); setName(next.name); setNarrative(next.narrative);
+    setPublicBrief(next.publicBrief || '');
     setRelationship(next.relationshipType); setAppearance(next.appearance); setVoiceId(next.voice?.voiceId || '');
     onUpdated(next);
   }, [onUpdated]);
@@ -75,6 +84,8 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
     const controller = new AbortController();
     busy.current = false; setPending(false);
     setRecord(avatar); setName(avatar.name); setNarrative(avatar.narrative);
+    setAppearanceSelected(false);
+    setPublicBrief(avatar.publicBrief || '');
     setRelationship(avatar.relationshipType); setAppearance(avatar.appearance); setVoiceId(avatar.voice?.voiceId || '');
     setConflict(false); setError(''); setMaterialsReady(false); setLoading(true);
     memoryAvatarService.materials(avatar.id, controller.signal).then(result => {
@@ -112,7 +123,7 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
   const save = () => {
     const current = generation.current;
     void mutate(async () => {
-      const next = await memoryAvatarService.update(record.id, { revision: record.revision, name: name.trim(), narrative: narrative.trim(), relationshipType: relationship, appearance, voice: { voiceId } });
+      const next = await memoryAvatarService.update(record.id, { revision: record.revision, name: name.trim(), narrative: narrative.trim(), publicBrief: publicBrief.trim(), relationshipType: relationship, appearance: appearance.style === 'lumivrm' ? { ...appearance, style: 'lumi2d' } : appearance, voice: { voiceId }, ...(appearanceSelected && (record.presentation?.mode === 'localportrait' || appearance.style === 'lumi2d') ? { presentation: { mode: 'human3d' as const } } : {}) });
       if (current !== generation.current) return;
       acceptRecord(next); setNotice(copy.saved); setConflict(false); onPreviewAppearance?.(null);
     });
@@ -177,7 +188,7 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
     } catch { if (current === generation.current) setError(copy.invalidFile); }
     finally { if (fileRef.current) fileRef.current.value = ''; }
   };
-  const previewAppearance = (next: MemoryAvatarAppearance) => { setAppearance(next); onPreviewAppearance?.(next); };
+  const previewAppearance = (next: MemoryAvatarAppearance) => { setAppearanceSelected(true); setAppearance(next); onPreviewAppearance?.(next); };
 
   return <section aria-label={copy.profile} className="flex h-full min-h-0 flex-col bg-[#1c2022] text-[#d9dcd6]">
     <div className="flex items-center justify-between border-b border-white/[.07] px-5 py-4">
@@ -195,15 +206,21 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
         <label className="block text-xs text-white/60">{copy.relationship}<select className={inputClass} value={relationship} disabled={editorBusy} onChange={e => setRelationship(e.target.value)}>{Object.entries(relationships).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}</select></label>
         <label className="block text-xs text-white/60">{copy.introduction}<textarea className={`${inputClass} resize-y leading-6`} rows={7} maxLength={2000} value={narrative} disabled={editorBusy} placeholder={copy.introductionPlaceholder} onChange={e => setNarrative(e.target.value)} /></label>
         <p className="text-xs leading-6 text-white/35">{copy.editStopsCall}</p>
+        <label className="block text-xs text-white/60">{copy.publicBrief}<textarea className={`${inputClass} resize-y leading-6`} rows={8} maxLength={4000} value={publicBrief} disabled={editorBusy} onChange={e => setPublicBrief(e.target.value)} /></label>
+        <p className="text-xs leading-6 text-white/40">{copy.publicBriefHint}</p>
         <button type="button" disabled={editorBusy || conflict || !name.trim()} onClick={save} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#d4c5a8] px-4 py-3 text-sm font-semibold text-[#222825] disabled:opacity-40">{pending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{pending ? copy.saving : copy.save}</button>
         <div className="border-t border-white/10 pt-6"><p className="text-xs leading-6 text-white/35">{copy.archiveHint}</p><button type="button" disabled={editorBusy || conflict} onClick={archive} className="mt-3 flex items-center gap-2 text-xs text-rose-200/70 disabled:opacity-40"><Archive size={14} />{confirmRemove === 'archive' ? copy.archiveConfirm : copy.archive}</button></div>
       </>}
       {tab === 'appearance' && <>
-        <p className="text-xs leading-6 text-white/50">{mediaCopy.portraitHint}</p>
         <button type="button" onClick={() => setTab('media')} className="text-xs text-[#d5c6a9] underline underline-offset-4">{mediaCopy.choosePortrait}</button>
-        <MemoryAvatarPortraitSettings ownerId={ownerId} locale={locale} />
-        <fieldset disabled={editorBusy}><legend className="mb-3 text-xs text-white/55">{copy.look}</legend><div className="grid grid-cols-3 gap-2">{(['neutral', 'feminine', 'masculine'] as const).map(preset => <button type="button" aria-pressed={appearance.preset === preset} key={preset} onClick={() => previewAppearance({ ...appearance, preset })} className={`rounded-xl border py-3 text-xs ${appearance.preset === preset ? 'border-[#c5baa2]/50 bg-[#c5baa2]/10 text-[#e2d5bd]' : 'border-white/10 text-white/50'}`}>{copy[preset]}</button>)}</div></fieldset>
-        <div className="grid grid-cols-2 gap-3">{([['skinColor', 'skin'], ['hairColor', 'hair'], ['outfitColor', 'outfit'], ['backgroundColor', 'background']] as const).map(([field, label]) => <label key={field} className="flex items-center justify-between rounded-xl border border-white/10 px-3 py-3 text-xs text-white/60">{copy[label]}<input type="color" aria-label={copy[label]} value={appearance[field]} disabled={editorBusy} onChange={e => previewAppearance({ ...appearance, [field]: e.target.value })} className="h-7 w-8 cursor-pointer rounded border-0 bg-transparent" /></label>)}</div>
+        <MemoryAvatarAnimationEditor avatar={record} locale={locale} disabled={editorBusy||conflict} onUpdated={acceptRecord} onBeforeMutation={onBeforeMutation} onBusyChange={updateMediaBusy} />
+        <details><summary className="cursor-pointer text-xs text-[#9eac96]">{avatarAnimationCopy(locale).optionalCloud}</summary><p className="my-3 text-xs leading-5 text-white/50">{avatarAnimationCopy(locale).cloudHint}</p><AliyunAvatarSettings ownerId={ownerId} avatarId={avatar.id} locale={locale} onBeforeMutation={onBeforeMutation} /></details>
+            <details><summary className="cursor-pointer text-xs text-[#9eac96]">{aliyunAvatarCopy(locale).did}</summary><MemoryAvatarPortraitSettings ownerId={ownerId} locale={locale} /></details>
+        <fieldset disabled={editorBusy}><legend className="mb-3 text-xs text-white/55">{copy.look}</legend>
+          <button type="button" aria-pressed={appearance.style === 'lumi2d'} onClick={() => previewAppearance({ ...LUMI_OTOME_APPEARANCE })} className={`mb-3 w-full rounded-xl border p-4 text-left ${appearance.style === 'lumi2d' ? 'border-[#a4c8b6]/60 bg-[#a4c8b6]/10' : 'border-white/10'}`}><span className="block text-sm text-[#d9e7d6]">{copy.lumiOtome}</span><span className="mt-1 block text-xs leading-5 text-white/50">{copy.lumiOtomeHint}</span></button>
+          <button type="button" aria-pressed={appearance.style === 'lumi3d'} onClick={() => previewAppearance({ ...LUMI_COMPANION_APPEARANCE })} className={`mb-3 w-full rounded-xl border p-4 text-left ${appearance.style === 'lumi3d' ? 'border-[#a4c8b6]/60 bg-[#a4c8b6]/10' : 'border-white/10'}`}><span className="block text-sm text-[#d9e7d6]">{copy.lumiCompanion}</span><span className="mt-1 block text-xs leading-5 text-white/50">{copy.lumiCompanionHint}</span></button>
+          <div className="grid grid-cols-3 gap-2">{(['neutral', 'feminine', 'masculine'] as const).map(preset => <button type="button" aria-pressed={appearance.style === 'human3d' && appearance.preset === preset} key={preset} onClick={() => previewAppearance({ ...(appearance.style !== 'human3d' ? DEFAULT_MEMORY_AVATAR_APPEARANCE : appearance), style: 'human3d', preset })} className={`rounded-xl border py-3 text-xs ${appearance.style === 'human3d' && appearance.preset === preset ? 'border-[#c5baa2]/50 bg-[#c5baa2]/10 text-[#e2d5bd]' : 'border-white/10 text-white/50'}`}>{copy[preset]}</button>)}</div></fieldset>
+        {!['lumi2d', 'lumivrm'].includes(appearance.style) && <div className="grid grid-cols-2 gap-3">{([['skinColor', appearance.style === 'lumi3d' ? 'shell' : 'skin'], ['hairColor', appearance.style === 'lumi3d' ? 'visor' : 'hair'], ['outfitColor', appearance.style === 'lumi3d' ? 'accent' : 'outfit'], ['backgroundColor', 'background']] as const).map(([field, label]) => <label key={field} className="flex items-center justify-between rounded-xl border border-white/10 px-3 py-3 text-xs text-white/60">{copy[label]}<input type="color" aria-label={copy[label]} value={appearance[field]} disabled={editorBusy} onChange={e => previewAppearance({ ...appearance, [field]: e.target.value })} className="h-7 w-8 cursor-pointer rounded border-0 bg-transparent" /></label>)}</div>}
         <label className="block text-xs text-white/60">{copy.voice}<select className={inputClass} value={voiceId} disabled={editorBusy || voiceLoading} onChange={e => setVoiceId(e.target.value)}><option value="">{copy.defaultVoice}</option>{voiceId && !voices.some(voice => voice.id === voiceId) && <option value={voiceId}>{voiceId}</option>}{voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name}</option>)}</select></label>
         <p className="text-xs leading-6 text-white/35">{voiceLoading ? copy.loadingVoices : voiceError ? copy.voicesUnavailable : copy.voiceHint}</p>
         <button type="button" disabled={editorBusy || conflict} onClick={save} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#d4c5a8] px-4 py-3 text-sm font-semibold text-[#222825] disabled:opacity-40">{pending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{pending ? copy.saving : copy.save}</button>

@@ -1,8 +1,11 @@
 import type { NextFunction, Request, Response, Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { runtimeBackgroundWork } from '../runtime/shutdown_work';
+import { createRequestAbortController } from '../http/request_abort';
+import { liveAudioEncoding } from '../../shared/avatar_live';
 import { PortraitError } from './portrait_provider';
 import { getMemoryAvatarPortraitSessions, type MemoryAvatarPortraitSessions } from './portrait_sessions';
+import { getAliyunAvatarSessions, type AliyunAvatarSessions } from './aliyun_sessions';
 
 function personal(req: Request, res: Response, next: NextFunction): void {
   if (req.user?.orgId) { res.status(403).json({ error: 'Use a personal session for a private memory portrait.', code: 'portrait_personal_scope_required' }); return; }
@@ -20,8 +23,9 @@ const handler = (fn: (req: Request, res: Response) => Promise<unknown>) => (req:
   });
 };
 
-export function mountMemoryAvatarPortraitRoutes(router: Router, manager?: MemoryAvatarPortraitSessions): void {
+export function mountMemoryAvatarPortraitRoutes(router: Router, manager?: MemoryAvatarPortraitSessions, aliyunManager?: AliyunAvatarSessions): void {
   const service = () => manager || getMemoryAvatarPortraitSessions();
+  const aliyun = () => aliyunManager || getAliyunAvatarSessions();
   const scope = (req: Request) => {
     const callSessionId = req.body?.callSessionId;
     if (typeof callSessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(callSessionId)) throw new PortraitError('portrait_request_invalid', 'A valid callSessionId is required.', 400);
@@ -29,9 +33,35 @@ export function mountMemoryAvatarPortraitRoutes(router: Router, manager?: Memory
   };
   router.get('/memory-avatar-portrait/config', requireAuth, personal, handler(async (req, res) => res.json(service().config(req.user!.uid))));
   router.put('/memory-avatar-portrait/config', requireAuth, personal, handler(async (req, res) => res.json(await service().configure(req.user!.uid, req.body || {}))));
+  router.get('/memory-avatars/:id/portrait/aliyun/config', requireAuth, personal, handler(async (req, res) => res.json(aliyun().config(req.user!.uid, String(req.params.id)))));
+  router.put('/memory-avatars/:id/portrait/aliyun/config', requireAuth, personal, handler(async (req, res) => res.json(await aliyun().configure(req.user!.uid, String(req.params.id), req.body || {}))));
+  router.post('/memory-avatars/:id/portrait/aliyun/cleanup', requireAuth, personal, handler(async (req, res) => res.json(await aliyun().retryCleanup(req.user!.uid, String(req.params.id)))));
+  router.post('/memory-avatars/:id/portrait/aliyun/streams', requireAuth, personal, handler(async (req, res) => {
+    const result = await aliyun().create(scope(req), req.body?.clientRequestId, req.body?.cloudConsent === true);
+    if (!res.destroyed) res.status(201).json(result);
+  }));
+  router.post('/memory-avatars/:id/portrait/aliyun/streams/:portraitSessionId/ready', requireAuth, personal, handler(async (req, res) => res.json(aliyun().markReady(scope(req), String(req.params.portraitSessionId)))));
+  router.post('/memory-avatars/:id/portrait/aliyun/streams/:portraitSessionId/heartbeat', requireAuth, personal, handler(async (req, res) => res.json(aliyun().heartbeat(scope(req), String(req.params.portraitSessionId)))));
+  router.delete('/memory-avatars/:id/portrait/aliyun/streams/by-request/:clientRequestId', requireAuth, personal, handler(async (req, res) => {
+    await aliyun().stopByRequest(scope(req), String(req.params.clientRequestId)); res.json({ ok: true });
+  }));
   router.post('/memory-avatars/:id/portrait/streams', requireAuth, personal, handler(async (req, res) => {
+    if (aliyun().selected(req.user!.uid, String(req.params.id))) throw new PortraitError('portrait_provider_changed', 'This person now uses Aliyun. Reopen the call before starting.', 409);
     const result = await service().create({ ...scope(req), clientRequestId: req.body?.clientRequestId, cloudConsent: req.body?.cloudConsent });
     if (!res.destroyed) res.status(201).json(result);
+  }));
+  router.post('/memory-avatars/:id/portrait/speak', requireAuth, personal, handler(async (req, res) => {
+    const { audioBase64, format, requestId } = req.body || {};
+    if (typeof audioBase64 !== 'string' || !audioBase64.length || audioBase64.length > 8_000_000
+      || !/^[A-Za-z0-9+/=]+$/.test(audioBase64) || !liveAudioEncoding(format)) {
+      throw new PortraitError('portrait_request_invalid', 'Invalid portrait audio.', 400);
+    }
+    const request = createRequestAbortController(req, res);
+    try {
+      const input = { ...scope(req), requestId, format, audioBuffer: Buffer.from(audioBase64, 'base64'), signal: request.signal };
+      const result = await (aliyun().selected(input.userId, input.avatarId) ? aliyun().speak(input) : service().speak(input));
+      if (!res.destroyed) res.json(result);
+    } finally { request.dispose(); }
   }));
   router.delete('/memory-avatars/:id/portrait/streams/by-request/:clientRequestId', requireAuth, personal, handler(async (req, res) => {
     await service().stopById(scope(req), String(req.params.clientRequestId), true); res.json({ ok: true });

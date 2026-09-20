@@ -1,6 +1,6 @@
 ﻿// @vitest-environment jsdom
 import React, { useEffect } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DEFAULT_MEMORY_AVATAR_APPEARANCE, type MemoryAvatar } from '../shared/memory_avatar';
 const fixture = vi.hoisted(() => ({ uid: 'owner-a', state: 'idle', mounts: [] as string[], released: [] as string[], callOptions: null as any,
@@ -23,6 +23,7 @@ vi.mock('../src/components/MemoryAvatarProfile', () => ({ MemoryAvatarProfile: (
   <button onClick={async () => { await props.onBeforeMutation(); props.onUpdated({ ...props.avatar, name: 'Updated person', revision: props.avatar.revision + 1 }); }}>Save fixture</button>
   <button onClick={() => props.onArchived(props.avatar.id)}>Archive fixture</button>
 </div> }));
+vi.mock('../src/components/AvatarLiveWorkbench', () => ({ AvatarLiveWorkbench: (props:any) => <div data-testid="live-brief">{props.avatar.publicBrief}</div> }));
 import { Sanctuary } from '../src/components/Sanctuary';
 const avatar: MemoryAvatar = { id: 'memory_avatar_a', name: 'Synthetic person', relationshipType: 'close_friend', revision: 1, status: 'active', narrative: '',
   appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE }, voice: {}, memoryCount: 2, isFrozen: true, personalityConfig: {}, evidenceMap: [], seedMemoryIds: [], createdAt: '', updatedAt: '' };
@@ -32,6 +33,14 @@ beforeEach(() => {
   fixture.send.mockReturnValue(true); fixture.startVoice.mockResolvedValue(undefined); fixture.startVideo.mockResolvedValue(undefined);
 });
 afterEach(cleanup);
+
+it('has no duplicate header profile button and passes saved public identity into live preview', () => {
+  const view=render(<Sanctuary agent={{...avatar,publicBrief:'Approved identity'}} lang="en" isOpen onClose={vi.fn()} />);
+  expect(within(view.container.querySelector('header')!).queryByRole('button',{name:'Person details'})).toBeNull();
+  expect(screen.getAllByRole('button',{name:'Person details'})).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:'Avatar live preview'}));
+  expect(screen.getByTestId('live-brief').textContent).toBe('Approved identity');
+});
 
 it('does not mount devices while closed or unauthenticated, and releases each identity on close and owner switch', () => {
   const props = { agent: avatar, lang: 'en' as const, onClose: vi.fn() };

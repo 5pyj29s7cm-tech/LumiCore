@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { createRequestAbortController } from '../http/request_abort';
 import { mountMemoryAvatarMediaRoutes } from '../memory_avatar/media_routes';
 import { mountMemoryAvatarPortraitRoutes } from '../memory_avatar/portrait_routes';
+import { mountMemoryAvatarLiveRoutes } from '../memory_avatar/live_routes';
 import { createMemoryAvatar, getMemoryAvatar, listMemoryAvatars, archiveMemoryAvatar, updateMemoryAvatar, listMemoryAvatarMaterials, addMemoryAvatarMaterial, removeMemoryAvatarMaterial, MemoryAvatarError } from '../memory_avatar/store';
 
 const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) =>
@@ -26,6 +27,7 @@ function publicAvatar(avatar: any) {
     voice: avatar.voice,
     presentation: avatar.presentation,
     narrative: avatar.narrative || '',
+    publicBrief: avatar.publicBrief || '',
     personalityConfig: avatar.personalityConfig || {},
     createdAt: avatar.createdAt,
     updatedAt: avatar.updatedAt,
@@ -48,6 +50,7 @@ export function mountMemoryAvatarRoutes(
   });
   mountMemoryAvatarMediaRoutes(router, llmGetters, publicAvatar);
   mountMemoryAvatarPortraitRoutes(router);
+  mountMemoryAvatarLiveRoutes(router, llmGetters);
   router.post('/memory-avatars/distill', requireAuth, asyncHandler(async (req, res) => {
     const { chatLog, format, relationshipType, name: targetName, audioTranscript } = req.body || {};
     if (typeof chatLog !== 'string' || !chatLog.trim() || !format) {

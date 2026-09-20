@@ -6,6 +6,8 @@ import { saveFileResource } from '@/services/fileResource';
 import { openExternalHttpUrl } from '@/lib/externalNavigation';
 import { useFileResource } from '@/hooks/useFileResource';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
+import { ChatSongPreview } from './ChatSongPreview';
+import { CHAT_SONG_TEMPLATE } from '../../shared/chat_song_layout';
 import type { FileEntry } from './MemoryTree/types';
 import type { MediaGenerationRequest } from './MediaGenerationStudio';
 import { chatSongLyrics, chatSongSongCurrent, visibleChatSongLines, type ChatSongProject, type ChatSongLine, type ChatSongAssetKind, type ChatSongTiming, type ChatSongRender } from '../../shared/chat_song';
@@ -175,8 +177,6 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
   const videoAsset = project?.assets.find(asset => asset.kind === 'clip' && asset.lineId === videoLine?.id);
   const timed = Boolean(currentSong && project && project.timings.length === project.lines.length);
   const previewLines = project ? (timed ? visibleChatSongLines(project, seconds) : project.lines.filter(line => line.group === 1)) : [];
-  const bg = project?.assets.find(asset => asset.kind === 'background');
-  const visibleReaction = [...previewLines].reverse().map(line => project?.assets.find(asset => asset.kind === 'reaction' && asset.lineId === line.id)).find(Boolean);
 
   return <section aria-label={c.title} className={`${embedded ? 'relative min-h-0 flex-1' : 'absolute inset-0 z-[216]'} flex flex-col overflow-hidden bg-[#0b1017] text-white`}>
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
@@ -246,20 +246,13 @@ const ChatSongWorkbench = React.forwardRef<ChatSongWorkbenchHandle, ChatSongWork
               })}</div></div>)}</div><button className={primary} disabled={disabled || contentDirty} onClick={() => void run(() => act('set-timings', timings))}>{c.saveTiming}</button></> : <p className="text-xs text-amber-200">{c.needSong}</p>}
             </div>
             <div className="order-first w-full max-w-[340px] self-start justify-self-center xl:sticky xl:top-0 xl:order-none"><h3 className="mb-3 text-sm font-semibold">{c.preview}</h3><div className="relative aspect-[3/4] overflow-hidden rounded-2xl border border-white/15 bg-[#263338]">
-              {bg && <FileResourceImage src={fileUrl(bg.fileId, bg.sha256)} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-40 blur-sm" />}
-              <div className="relative space-y-1.5 px-3 pt-8">{previewLines.map(line => {
-                const avatar = project.assets.find(asset => asset.kind === `avatar${line.role}`);
-                return <div key={line.id} className={`flex items-start gap-1.5 bg-[#ededed] px-2 py-2 ${line.role === 'B' ? 'flex-row-reverse' : ''}`}>
-                  {avatar ? <FileResourceImage src={fileUrl(avatar.fileId, avatar.sha256)} alt="" className="h-7 w-7 shrink-0 rounded object-cover" /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-slate-600 text-[10px]">{line.role}</span>}
-                  <p className={`max-w-[82%] whitespace-pre-wrap break-words rounded px-2 py-1.5 text-[11px] leading-4 text-black ${line.role === 'B' ? 'bg-[#9eea6a]' : 'bg-white'}`}>{line.text}</p>
-                </div>;
-              })}</div>{visibleReaction && <FileResourceImage src={fileUrl(visibleReaction.fileId, visibleReaction.sha256)} alt="" className="relative mx-auto mt-4 max-h-28 w-2/5 rounded-lg object-contain" />}
+              <ChatSongPreview project={project} lines={previewLines} />
             </div><p className="mt-3 text-xs leading-5 text-white/40">{c.previewHint}</p></div>
           </div>}
           {tab === 3 && <div className="mx-auto mt-8 max-w-6xl space-y-5 border-t border-white/10 pt-6"><div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"><h3 className="mb-3 text-lg font-bold">{project.title}</h3><div className="space-y-2 text-sm text-white/60"><p>{project.scriptLocked && !dirty ? c.locked : c.needLock}</p><p>{currentSong ? c.songConfirmed : c.needSong}</p><p>{timed ? c.saved : c.needTiming}</p></div></div>
             <p className="text-sm leading-6 text-white/60">{c.renderHint}</p>
             <button className={primary} disabled={disabled || !timed || dirty} onClick={() => void run(renderVideo)}><Film size={16} />{c.renderVideo}</button>
-            {renderResult && <div className="space-y-3 rounded-2xl border border-emerald-200/20 p-4"><h3 className="font-semibold text-emerald-100">{c.finishedVideo}</h3>{(renderResult.sourceRevision !== project.revision || dirty) && <p className="text-xs text-amber-100">{c.renderOutdated}</p>}{renderResult.warnings.map(warning => <p key={warning} className="text-xs text-amber-100">{warning}</p>)}<FileResourceVideo src={fileUrl(renderResult.fileId, renderResult.sha256)} controls preload="metadata" className="max-h-[600px] w-full max-w-md rounded-xl bg-black" /><button className={button} onClick={() => void run(() => saveFileResource(fileUrl(renderResult.fileId, renderResult.sha256), renderResult.fileId))}>{c.downloadVideo}</button></div>}
+            {renderResult && <div className="space-y-3 rounded-2xl border border-emerald-200/20 p-4"><h3 className="font-semibold text-emerald-100">{c.finishedVideo}</h3>{(renderResult.sourceRevision !== project.revision || renderResult.templateVersion !== CHAT_SONG_TEMPLATE.version || dirty) && <p className="text-xs text-amber-100">{c.renderOutdated}</p>}{renderResult.warnings.map(warning => <p key={warning} className="text-xs text-amber-100">{warning}</p>)}<FileResourceVideo src={fileUrl(renderResult.fileId, renderResult.sha256)} controls preload="metadata" className="max-h-[600px] w-full max-w-md rounded-xl bg-black" /><button className={button} onClick={() => void run(() => saveFileResource(fileUrl(renderResult.fileId, renderResult.sha256), renderResult.fileId))}>{c.downloadVideo}</button></div>}
             <details className="rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-sm text-white/65">{c.optionalEditing}</summary><p className="my-4 text-sm leading-6 text-white/60">{c.bundleHint}</p><div className="flex flex-wrap gap-2"><button className={button} disabled={disabled || !project.scriptLocked || dirty} onClick={() => void run(async () => { const result = await makeBundle(); await saveFileResource(result.url, result.fileId); })}>{c.export}</button><button className={button} disabled={disabled || !timed || dirty} onClick={() => void run(() => task('edit'))}>{c.editTask}</button></div>
             {bundle && <div className="space-y-2 rounded-xl border border-emerald-200/20 p-4"><p className="text-sm text-emerald-200">{c.exported}</p>{bundle.warnings.map(warning => <p key={warning} className="text-xs text-amber-100">{warning}</p>)}<button className={button} onClick={() => void run(() => saveFileResource(bundle.url, bundle.fileId))}>{c.download}</button></div>}
             <p className="text-xs leading-6 text-white/50">{c.handoffHint}</p><p className="rounded-xl border border-amber-200/15 bg-amber-200/5 p-4 text-xs leading-6 text-amber-100/80">{c.externalLimit}</p>
