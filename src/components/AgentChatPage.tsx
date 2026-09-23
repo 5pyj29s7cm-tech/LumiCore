@@ -503,6 +503,8 @@ export function AgentChatPage({
   prefillMessage,
   prefillSource = 'proactive',
   onPrefillConsumed,
+  creationRequestId,
+  onCreationRequestConsumed,
   attachmentRequest,
   onAttachmentRequestConsumed,
   layout = 'standalone',
@@ -521,6 +523,8 @@ export function AgentChatPage({
   prefillMessage?: string;
   prefillSource?: string;
   onPrefillConsumed?: () => void;
+  creationRequestId?: string;
+  onCreationRequestConsumed?: (requestId: string) => void;
   attachmentRequest?: ChatAttachmentRequest;
   onAttachmentRequestConsumed?: (requestId: string) => void;
   layout?: 'standalone' | 'command-center';
@@ -3348,6 +3352,14 @@ export function AgentChatPage({
     }
     setMediaStudioMode(mode);
   }, [refreshKnowledgeFiles]);
+
+  const consumedCreationRequestRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isOpen || !isOfficeCommandCenter || !creationRequestId || consumedCreationRequestRef.current === creationRequestId) return;
+    consumedCreationRequestRef.current = creationRequestId;
+    openMediaGenerationStudio('image');
+    onCreationRequestConsumed?.(creationRequestId);
+  }, [creationRequestId, isOfficeCommandCenter, isOpen, onCreationRequestConsumed, openMediaGenerationStudio]);
 
   const handleMediaSourceChange = useCallback((change: MediaGenerationSourceChange) => {
     const artifactId = change.artifact?.id || '';

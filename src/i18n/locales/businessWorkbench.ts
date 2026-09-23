@@ -1,7 +1,15 @@
 export const businessWorkbenchCopy = {
   zh: {
     title: '经营工作台', commerce: '电商运营', finance: '财务管理', archive: '任务与归档', legacy: '旧版历史归档', importLegacy: '导入旧版记录', historical: '历史参考，包含旧版验收记录，不作为当前账目或日常记忆。',
-    subtitle: '订单、经营与财务，在同一个 Lumi 中协作。',
+    subtitle: '社媒、电商与财务，在同一个 Lumi 中协作。',
+    social: '社媒运营',
+    socialOverview: {
+      title: '让品牌持续被看见',
+      description: '整理品牌资料，创作图文与短视频，让 Lumi 成为你的内容伙伴。',
+      creation: { title: 'AI 内容创作', description: '制作图片、短视频和聊天唱歌作品，查看已有创作素材。', action: '打开 AI 创作' },
+      library: { title: '品牌与素材库', description: '整理企业介绍、产品资料、参考内容和作品，供后续创作引用。', action: '打开知识库' },
+      avatar: { title: '数字人与直播', description: '使用已有数字人形象，补充人物资料，准备直播内容与公屏互动。', action: '打开记忆领地' },
+    },
     subject: '当前店铺 / 企业', emptySubject: '尚未绑定', create: '新增并绑定', name: '店铺或企业名称', period: '报表期间，例如 2026-09',
     loading: '正在读取…', refresh: '刷新', noTasks: '还没有经营任务。分析与交付结果会保存在这里。',
     linkedEntity: '所属企业（可选）', noEntity: '不关联企业', currency: '币种', saved: '已绑定',
@@ -12,7 +20,15 @@ export const businessWorkbenchCopy = {
   },
   en: {
     title: 'Business workspace', commerce: 'Commerce', finance: 'Finance', archive: 'Tasks & archive', legacy: 'Retired edition history', importLegacy: 'Import edition history', historical: 'Historical references, including old acceptance records; excluded from current books and personal memory.',
-    subtitle: 'Orders, operations and finance, together in Lumi.', subject: 'Current store / company', emptySubject: 'Not bound', create: 'Create and select', name: 'Store or company name', period: 'Reporting period, e.g. 2026-09',
+    subtitle: 'Social media, commerce and finance, together in Lumi.', subject: 'Current store / company', emptySubject: 'Not bound', create: 'Create and select', name: 'Store or company name', period: 'Reporting period, e.g. 2026-09',
+    social: 'Social media',
+    socialOverview: {
+      title: 'Keep your brand in view',
+      description: 'Organize brand materials and create visual posts and short videos with Lumi as your content partner.',
+      creation: { title: 'AI content creation', description: 'Create images, short videos and chat-song projects, and browse existing creative assets.', action: 'Open AI Creation' },
+      library: { title: 'Brand & asset library', description: 'Organize company profiles, product information, references and work for future content.', action: 'Open knowledge base' },
+      avatar: { title: 'Digital people & streaming', description: 'Use your digital characters, add background information, and prepare stream content and audience interaction.', action: 'Open Memory Territory' },
+    },
     loading: 'Loading…', refresh: 'Refresh', noTasks: 'No business tasks yet. Analysis and deliveries will appear here.',
     linkedEntity: 'Company (optional)', noEntity: 'No linked company', currency: 'Currency', saved: 'Selected',
     commerceEntries: { 'today-operations': 'Today', 'store-data': 'Store data', 'trend-discovery': 'Trends', 'listing-automation': 'Products', 'ai-customer-service': 'Content & service' },

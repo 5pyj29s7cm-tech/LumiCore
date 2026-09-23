@@ -500,6 +500,19 @@ export function Settings({
         </div>
 
         <div className="px-2 pb-4 pt-2 border-t border-white/[0.08]">
+          <a
+            href="https://lumiai.asia/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium text-white/60 transition-colors hover:bg-white/[0.06] hover:text-white"
+          >
+            <Globe size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="block">{uiMessage('settings.lumi-website.29f47c3d10', lang)}</span>
+              <span className="mt-0.5 block text-[10px] text-white/35">lumiai.asia</span>
+            </span>
+            <ExternalLink size={13} className="shrink-0" />
+          </a>
           <button
             onClick={logout}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium text-red-400/60 transition-all hover:bg-red-500/10 hover:text-red-300"

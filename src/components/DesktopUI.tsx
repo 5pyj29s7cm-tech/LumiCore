@@ -16,11 +16,8 @@ import {
   Search,
   FileText,
   Activity,
-  Wifi,
   Volume2,
   VolumeX,
-  Bluetooth,
-  Moon,
   Minimize2,
   Maximize2,
   Minus,
@@ -532,144 +529,6 @@ function OSWindow({
         </div>
       </motion.div>
     </>
-  );
-}
-
-function ControlCenter({ isOpen, onClose, t, brightness, setBrightness, volume, setVolume, lang, setLang, toggleWindow }: {
-  isOpen: boolean;
-  onClose: () => void;
-  t: any;
-  brightness: number | null;
-  setBrightness: (v: number) => void;
-  volume: number | null;
-  setVolume: (v: number) => void;
-  lang: 'en' | 'zh';
-  setLang: (l: 'en' | 'zh') => void;
-  toggleWindow: (id: string) => void;
-}) {
-  const { selectedVoiceId, unreadCount } = useApp();
-
-  const brightnessSaving = useRef(false);
-  const volumeSaving = useRef(false);
-  if (!isOpen) return null;
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: -20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -20, scale: 0.95 }}
-      className="lumi-control-center fixed right-6 top-12 z-[100] max-h-[calc(100dvh-3.5rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[2.5rem] border border-white/10 p-6 shadow-[0_30px_70px_rgba(0,0,0,0.7)] backdrop-blur-3xl glass-dark"
-    >
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-xs font-black uppercase tracking-widest text-white/40">{t.nexusControl || 'Nexus Control'}</h3>
-        <div className="flex bg-white/5 p-1 rounded-xl">
-           <button 
-            onClick={() => setLang('en')}
-            className={`px-3 py-1 text-xs font-black uppercase tracking-widest rounded-lg transition-all ${lang === 'en' ? 'bg-white text-black' : 'text-white/40'}`}
-           >EN</button>
-           <button 
-            onClick={() => setLang('zh')}
-            className={`px-3 py-1 text-xs font-black uppercase tracking-widest rounded-lg transition-all ${lang === 'zh' ? 'bg-white text-black' : 'text-white/40'}`}
-           >ZH</button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="col-span-1 bg-white/5 rounded-2xl p-4 flex items-center justify-center gap-3">
-             <button
-               onClick={async () => {
-                 try { const r = await fetch('/api/health'); if (r.ok) toast.info(t.serverOnline); else toast.info(t.serverDegraded); }
-                 catch { toast.error(t.serverOffline); }
-               }}
-               className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white active:scale-95 transition-transform"
-               title={t.wifi}
-             ><Wifi size={18} /></button>
-             <button
-               onClick={() => toast.info(t.bluetoothRequiresDesktop)}
-               className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white/40 active:scale-95 transition-transform"
-               title={t.bluetooth}
-             ><Bluetooth size={18} /></button>
-        </div>
-        <div className="col-span-1 bg-white/5 rounded-[1.5rem] p-5 flex flex-col justify-between">
-           <div className="space-y-2">
-             <div className="flex justify-between items-center text-xs font-bold text-white/40 uppercase">
-               <span>{t.display || 'Display'}{brightness === null ? ` (${t.systemControlUnavailable || 'Unavailable'})` : ''}</span>
-               <Moon size={12} className="text-blue-300/70" />
-             </div>
-             <div className="h-4 w-full bg-white/5 rounded-full relative group cursor-pointer" onClick={(e) => {
-               const rect = e.currentTarget.getBoundingClientRect();
-               const percent = (e.clientX - rect.left) / rect.width;
-               const v = Math.min(100, Math.max(0, Math.round(percent * 100)));
-               if (brightness === null || brightnessSaving.current) return;
-               brightnessSaving.current = true;
-               void systemService.setBrightness(v).then(() => setBrightness(v))
-                 .catch(error => toast.error(String(error?.message || error)))
-                 .finally(() => { brightnessSaving.current = false; });
-             }}>
-               <motion.div 
-                 animate={{ width: `${brightness ?? 0}%` }}
-                 className="h-full bg-white/60 rounded-full" 
-               />
-             </div>
-           </div>
-           <div className="space-y-2">
-             <div className="flex justify-between items-center text-xs font-bold text-white/40 uppercase">
-               <span>{t.sound || 'Sound'}{volume === null ? ` (${t.systemControlUnavailable || 'Unavailable'})` : ''}</span>
-               <Volume2 size={12} />
-             </div>
-             <div className="h-4 w-full bg-white/5 rounded-full relative group cursor-pointer" onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const percent = (e.clientX - rect.left) / rect.width;
-                const v = Math.min(100, Math.max(0, Math.round(percent * 100)));
-                if (volume === null || volumeSaving.current) return;
-                volumeSaving.current = true;
-                void systemService.setVolume(v).then(() => setVolume(v))
-                  .catch(error => toast.error(String(error?.message || error)))
-                  .finally(() => { volumeSaving.current = false; });
-             }}>
-               <motion.div
-                 animate={{ width: `${volume ?? 0}%` }}
-                 className="h-full bg-celestial-saturn rounded-full"
-               />
-             </div>
-           </div>
-        </div>
-      </div>
-
-      {/* Quick Access: Personality / Voice / LLM */}
-      <div className="space-y-2 mb-6">
-        <span className="text-xs font-black text-white/45 uppercase tracking-widest px-2">{t.aiCore || 'AI Core'}</span>
-        <div className="space-y-1">
-          {/* Voice selector */}
-          <button
-            onClick={() => { toggleWindow('voice'); onClose(); }}
-            className="w-full flex items-center justify-between p-3 bg-white/5 rounded-xl hover:bg-white/10 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Volume2 size={14} className="text-pink-400" />
-              <span className="text-xs font-bold text-white/70">{t.voiceLabel || 'Voice'}</span>
-            </div>
-            <span className="text-xs font-black text-pink-400 uppercase truncate max-w-[100px]">{selectedVoiceId || (t.defaultLabel || 'Default')}</span>
-          </button>
-
-          {/* Notifications shortcut */}
-          <button
-            onClick={() => { toggleWindow('notifications'); onClose(); }}
-            className="w-full flex items-center justify-between p-3 bg-white/5 rounded-xl hover:bg-white/10 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Bell size={14} className="text-amber-400" />
-              <span className="text-xs font-bold text-white/70">{t.notificationsLabel || 'Notifications'}</span>
-            </div>
-            <span className="text-xs font-black text-amber-400">{unreadCount} {t.unread || 'unread'}</span>
-          </button>
-        </div>
-      </div>
-      <div className="mt-6 pt-6 border-t border-white/5 flex items-center justify-between font-sans">
-        <span className="text-xs font-bold text-white/45 tracking-widest uppercase">{t.desktopVersion || 'LumiCore v3.1.0'}</span>
-        <button onClick={onClose} className="text-xs font-black text-celestial-saturn hover:underline uppercase tracking-widest">{t.closeNexus || 'Close Nexus'}</button>
-      </div>
-    </motion.div>
   );
 }
 
@@ -1619,6 +1478,7 @@ export function DesktopUI({
   const [commandCenterView, setCommandCenterView] = useState<CommandCenterView>('office');
   const [chatPrefill, setChatPrefill] = useState('');
   const [chatPrefillSource, setChatPrefillSource] = useState('proactive');
+  const [creationRequestId, setCreationRequestId] = useState<string | null>(null);
   const [chatAttachmentRequest, setChatAttachmentRequest] = useState<ChatAttachmentRequest | null>(null);
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
   const [sanctuaryLoaded, setSanctuaryLoaded] = useState(false);
@@ -1709,12 +1569,10 @@ export function DesktopUI({
 
   const [clientPermissions, setClientPermissions] = useState<ClientPermissionSnapshot>({});
   const [clientRuntime, setClientRuntime] = useState<ClientRuntimeSnapshot>({});
-  const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('general');
   const [personalizationSection, setPersonalizationSection] = useState<'appearance' | 'voice'>('appearance');
-  const [brightness, setBrightness] = useState<number | null>(null);
   const [volume, setVolume] = useState<number | null>(null);
   const [time, setTime] = useState(new Date());
   const [isWallpaperMode, setIsWallpaperMode] = useState(false);
@@ -2122,7 +1980,6 @@ export function DesktopUI({
     { id: 'business', label: businessWorkbenchCopy[lang === 'en' ? 'en' : 'zh'].title, icon: <BriefcaseBusiness size={24} />, colorClass: 'from-emerald-500 to-cyan-600', windowId: 'business' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
-    { id: 'personalization', label: t.personalization || (uiMessage('desktop-ui.personalization.2c4d8e1f06', (lang === 'zh') ? 'zh' : 'en')), icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
     ...reviewedExternalDesktopIcons,
   ];
   const desktopIconAreaHeight = Math.max(
@@ -3343,10 +3200,9 @@ export function DesktopUI({
     return () => window.removeEventListener('lumi:navigate', handler);
   }, [openCommandCenter, setActiveTab]);
 
-  // Restore real system volume/brightness on mount
+  // Read system volume for voice output and proactive greetings.
   useEffect(() => {
     systemService.getVolume().then(setVolume).catch(() => setVolume(null));
-    systemService.getBrightness().then(setBrightness).catch(() => setBrightness(null));
   }, []);
 
   const applyWallpaperMode = useCallback(async (
@@ -4006,7 +3862,6 @@ export function DesktopUI({
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
         e.preventDefault();
         setIsSearchOpen(false);
-        setIsControlCenterOpen(false);
         setIsNotificationPanelOpen(false);
         openCommandCenter('office');
         return;
@@ -4072,13 +3927,12 @@ export function DesktopUI({
           return;
         }
         setIsSearchOpen(false);
-        setIsControlCenterOpen(false);
         if (isWallpaperWorkbench) toggleWallpaperMode();
         return;
       }
       if (e.key === ' ' && !e.repeat) {
         if (isInputFocused()) return;
-        if (isSearchOpen || isControlCenterOpen) return;
+        if (isSearchOpen) return;
         if (meetingModeRef.current) return;
         e.preventDefault();
         const cs = callStateRef.current;
@@ -4106,7 +3960,7 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isControlCenterOpen, isSearchOpen, isWallpaperWorkbench, knowledgeOpen, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
+  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isSearchOpen, isWallpaperWorkbench, knowledgeOpen, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -4305,7 +4159,6 @@ export function DesktopUI({
   const enterDesktopWidgetMode = useCallback(async () => {
     try { sounds.playClick(); } catch {}
     surfaceReturnTargetRef.current = 'home';
-    setIsControlCenterOpen(false);
     setIsNotificationPanelOpen(false);
     setIsSearchOpen(false);
     setChatOpen(false);
@@ -5014,6 +4867,7 @@ export function DesktopUI({
     { id: 'personality', label: t.personality || 'Personality Lab', icon: <UserIcon size={24} />, color: 'from-violet-500 to-fuchsia-600' },
     { id: 'kernel', label: t.kernelMonitor || 'Kernel Monitor', icon: <Activity size={24} />, color: 'from-orange-500 to-red-600' },
     { id: 'devices', label: t.devices || 'Devices', icon: <Cpu size={24} />, color: 'from-blue-600 to-cyan-400' },
+    { id: 'personalization', label: t.personalization || 'Personalization', icon: <Brush size={24} />, color: 'from-cyan-400 to-indigo-600' },
     { id: 'settings', label: t.settings || 'OS Integrity', icon: <SettingsIcon size={24} />, color: 'from-gray-400 to-slate-600' },
   ];
 
@@ -5025,7 +4879,6 @@ export function DesktopUI({
   }));
   const utilityAppEntries = [
     { id: 'knowledge', label: t.knowledgeBase || 'Knowledge Base', icon: <BrainCircuit size={24} />, color: 'from-cyan-400 to-blue-600' },
-    { id: 'personalization', label: t.personalization || 'Personalization', icon: <Brush size={24} />, color: 'from-cyan-400 to-indigo-600' },
     { id: 'notifications', label: t.notificationsLabel || 'Notifications', icon: <Bell size={24} />, color: 'from-amber-500 to-orange-600' },
     { id: 'terminal', label: t.terminal || 'Terminal', icon: <TerminalIcon size={24} />, color: 'from-green-500 to-emerald-600' },
     { id: 'voice', label: t.voiceLabel || 'Voice', icon: <Volume2 size={24} />, color: 'from-pink-500 to-rose-600' },
@@ -5072,7 +4925,7 @@ export function DesktopUI({
   const dockApps = [
     ...appIcons,
     ...openWindows
-      .filter(windowId => windowId !== 'chat' && windowId !== 'personalization' && !appIcons.some(app => app.id === windowId))
+      .filter(windowId => windowId !== 'chat' && !appIcons.some(app => app.id === windowId))
       .map(getWindowMeta),
   ].filter(app => app.id !== 'devices');
   const operationModeOptions = [
@@ -5159,18 +5012,6 @@ export function DesktopUI({
           <X size={15} />
         </motion.button>
       )}
-      <ControlCenter
-        isOpen={isControlCenterOpen && !isWallpaperMode}
-        onClose={() => setIsControlCenterOpen(false)}
-        t={t}
-        brightness={brightness}
-        setBrightness={setBrightness}
-        volume={volume}
-        setVolume={setVolume}
-        lang={lang}
-        setLang={setLang}
-        toggleWindow={toggleWindow}
-      />
       {/* CRT Scanline / Noise Overlay */}
       <div className={`fixed inset-0 z-[1000] pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] select-none transition-opacity duration-500 ${isWallpaperMode ? 'opacity-0' : 'opacity-[0.03]'}`} />
       
@@ -5387,16 +5228,12 @@ export function DesktopUI({
                </button>
             </div>
 
-            <button
-              onClick={() => setIsControlCenterOpen(!isControlCenterOpen)}
-              className="lumi-shell-clock flex items-center gap-3 px-3 py-1 bg-white/5 hover:bg-white/10 rounded-full border border-white/5 transition-all group"
+            <time
+              dateTime={time.toISOString()}
+              className="lumi-shell-clock px-3 py-1 text-[12px] font-black tabular-nums text-white/80"
             >
-              <div className="flex flex-col items-end">
-                <span className="text-[12px] font-black text-white/80 leading-none">{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                <span className="lumi-shell-date text-xs font-bold text-white/55 uppercase tracking-tighter">{time.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
-              </div>
-              <Activity size={14} className="text-celestial-saturn group-hover:rotate-180 transition-transform duration-500" />
-            </button>
+              {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </time>
 
             {/* Window Controls */}
             <div className="lumi-shell-window-controls flex items-center gap-1 ml-2">
@@ -5472,8 +5309,6 @@ export function DesktopUI({
           )}
         </AnimatePresence>
 
-        {/* Global Control Center handled at top level for proper click detection */}
-
         {/* Global Search */}
         <AnimatePresence>
           {isSearchOpen && !isWallpaperMode && (
@@ -5503,6 +5338,7 @@ export function DesktopUI({
               <motion.button
                 key={app.id}
                 data-lumi-target={app.id}
+                aria-label={app.label}
                 layoutId={`dock-${app.id}`}
                 onClick={() => toggleWindow(app.id)}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all group relative ${
@@ -5541,7 +5377,6 @@ export function DesktopUI({
               );
             })}
           </AnimatePresence>
-          <div className="lumi-dock-separator h-8 w-px shrink-0 bg-white/10 mx-2" />
           {user ? (
             <button
               onClick={() => toggleWindow('profile')}
@@ -6205,7 +6040,9 @@ export function DesktopUI({
                 <div className="os-window-body custom-scrollbar">
                   <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   {windowId === 'business' ? (
-                    <BusinessWorkbench lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')} />
+                    <BusinessWorkbench lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')}
+                      onOpenCreation={() => { setCreationRequestId(crypto.randomUUID()); openCommandCenter('office'); }}
+                      onOpenDigitalHuman={() => { void openMemoryAvatar(undefined, 'home'); }} />
                   ) : windowId === 'kernel' ? (
                     <KernelMonitorApp t={t} onAsk={askComputerProfileQuestion} />
                   ) : windowId === 'settings' ? (
@@ -6365,6 +6202,8 @@ export function DesktopUI({
               onEnd: endVoiceCallFromUI,
             }}
             prefillMessage={chatPrefill}
+            creationRequestId={creationRequestId || undefined}
+            onCreationRequestConsumed={(requestId) => setCreationRequestId(current => current === requestId ? null : current)}
             prefillSource={chatPrefillSource}
             onPrefillConsumed={() => { setChatPrefill(''); setChatPrefillSource('proactive'); }}
             attachmentRequest={chatAttachmentRequest || undefined}

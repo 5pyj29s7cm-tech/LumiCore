@@ -1445,8 +1445,7 @@ body,
 [data-ui-density="compact"] .lumi-shell-brand-label,
 [data-ui-density="compact"] .lumi-shell-optional,
 [data-ui-density="compact"] .lumi-shell-tutorial-label,
-[data-ui-density="compact"] .lumi-shell-wallpaper-label,
-[data-ui-density="compact"] .lumi-shell-date {
+[data-ui-density="compact"] .lumi-shell-wallpaper-label {
   display: none;
 }
 
@@ -1472,10 +1471,6 @@ body,
   width: 40px;
   height: 40px;
   border-radius: 14px;
-}
-
-[data-ui-density="compact"] .lumi-dock-separator {
-  margin-inline: 4px;
 }
 
 [data-ui-density="compact"] .os-window-header {
@@ -1507,7 +1502,6 @@ body,
 [data-ui-density="tight"] .lumi-shell-optional,
 [data-ui-density="tight"] .lumi-shell-tutorial-label,
 [data-ui-density="tight"] .lumi-shell-wallpaper-label,
-[data-ui-density="tight"] .lumi-shell-date,
 [data-ui-density="tight"] .lumi-shell-battery {
   display: none;
 }
@@ -1560,11 +1554,6 @@ body,
   width: 34px;
   height: 34px;
   border-radius: 11px;
-}
-
-[data-ui-density="tight"] .lumi-dock-separator {
-  height: 24px;
-  margin-inline: 2px;
 }
 
 [data-ui-density="tight"] .os-window-header {
@@ -2752,11 +2741,6 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-com
   border-radius: 10px;
 }
 
-[data-ui-density="mini"] .lumi-dock-separator {
-  height: 22px;
-  margin-inline: 1px;
-}
-
 [data-ui-density="mini"] .os-window-header {
   height: 34px;
   padding-inline: 6px;
@@ -2769,22 +2753,6 @@ html[data-mode="light"] .lumi-chat-root[data-lumi-command-center-view] .lumi-com
 
 [data-ui-density="mini"] .os-window-body {
   padding: 8px;
-}
-
-[data-ui-density="mini"] .lumi-control-center {
-  right: 4px;
-  top: 38px;
-  width: min(340px, calc(100vw - 8px));
-  max-height: calc(100dvh - 42px);
-  padding: 12px;
-}
-
-[data-ui-density="compact"] .lumi-control-center,
-[data-ui-density="tight"] .lumi-control-center {
-  right: 8px;
-  top: 42px;
-  max-height: calc(100dvh - 50px);
-  padding: 16px;
 }
 
 @media (max-height: 700px) {

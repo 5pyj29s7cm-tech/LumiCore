@@ -15,7 +15,9 @@ describe('shared business workbench', () => {
       : url === '/api/industry/workflows' ? { tasks: [{ id: 'current', title: 'Current report', status: 'delivered', result: 'Verified balances', artifacts: [{ path: 'D:/reports/current.xlsx', status: 'verified' }] }] }
       : url === '/api/business/legacy' ? { items: [{ line: 'finance', tasks: 1 }] }
       : { tasks: [{ id: 'old', title: 'Historical report', result: 'Historical only' }], artifacts: [{ originalPath: 'D:/old/archived.xlsx', path: 'D:/private/hash.xlsx', sha256: 'a'.repeat(64) }] } })));
-    render(<BusinessWorkbench lang="en" domain="personal" onOpenSettings={vi.fn()} onOpenKnowledge={vi.fn()} onOpenSkills={vi.fn()} />);
+    render(<BusinessWorkbench lang="en" domain="personal" onOpenSettings={vi.fn()} onOpenKnowledge={vi.fn()} onOpenSkills={vi.fn()} onOpenCreation={vi.fn()} onOpenDigitalHuman={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Social media', pressed: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Commerce' }));
     expect(await screen.findByText('Commerce store-data')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Finance' }));
     expect(await screen.findByText('Finance business-dashboard')).toBeTruthy();

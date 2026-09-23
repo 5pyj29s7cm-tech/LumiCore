@@ -1,9 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { Archive, BriefcaseBusiness, RefreshCw } from 'lucide-react';
+import { Archive, ArrowUpRight, BriefcaseBusiness, Library, Radio, RefreshCw, WandSparkles } from 'lucide-react';
 import { businessWorkbenchCopy } from '../i18n/locales/businessWorkbench';
 import { getDesktopSessionProof } from '../services/authService';
 import type { EcommerceOutcomeId } from '../i18n/locales/ecommerceModules';
-import type { EcommerceWorkbenchSnapshot } from '../../shared/ecommerce_workbench';
+import type { EcommerceReportKind, EcommerceWorkbenchSnapshot } from '../../shared/ecommerce_workbench';
 import { makeChatArtifact, chatArtifactKind, type ChatArtifact } from '../../shared/chat_artifacts';
 import { ChatArtifactCards } from './ChatArtifactCards';
 import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
@@ -11,12 +11,14 @@ const Commerce = lazy(() => import('./EcommerceAutomationWorkspace').then(m => (
 const Finance = lazy(() => import('./FinanceWorkbench').then(m => ({ default: m.FinanceWorkbench })));
 type Line = 'ecommerce' | 'finance';
 type Subject = { id: string; productLine: Line; name: string; attributes: Record<string, string> };
-export function BusinessWorkbench({ lang, domain, onOpenSettings, onOpenKnowledge, onOpenSkills }: {
+export function BusinessWorkbench({ lang, domain, onOpenSettings, onOpenKnowledge, onOpenSkills, onOpenCreation, onOpenDigitalHuman }: {
   lang: string; domain: 'personal' | 'work'; onOpenSettings: () => void; onOpenKnowledge: () => void; onOpenSkills: () => void;
+  onOpenCreation: () => void; onOpenDigitalHuman: () => void;
 }) {
   const locale = lang === 'en' ? 'en' : 'zh'; const c = businessWorkbenchCopy[locale];
-  const [tab, setTab] = useState<Line | 'archive'>('ecommerce');
+  const [tab, setTab] = useState<Line | 'social' | 'archive'>('social');
   const [commerceEntry, setCommerceEntry] = useState<EcommerceOutcomeId>('store-data');
+  const [commerceReportKind, setCommerceReportKind] = useState<EcommerceReportKind>('orders');
   const [financeEntry, setFinanceEntry] = useState('business-dashboard');
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [active, setActive] = useState<Partial<Record<Line, Subject>>>({});
@@ -38,7 +40,7 @@ export function BusinessWorkbench({ lang, domain, onOpenSettings, onOpenKnowledg
   }, []);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal).catch(e => { if (!controller.signal.aborted) setError(String(e.message)); }); return () => controller.abort(); }, [load, tab, domain]);
   const bind = async (id?: string) => {
-    if (tab === 'archive' || saving) return;
+    if ((tab !== 'ecommerce' && tab !== 'finance') || saving) return;
     setSaving(true); setError('');
     try {
       const r = await fetch('/api/business/workspaces', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(id ? { id } : { productLine: tab, name, attributes: { currency, ...(tab === 'ecommerce' ? { reportingPeriod: period, entityId } : { accountingPeriod: period, entityName: name }) } }) });
@@ -60,8 +62,8 @@ export function BusinessWorkbench({ lang, domain, onOpenSettings, onOpenKnowledg
   return <div className="flex h-full min-h-0 flex-col bg-[#0b1318] text-white" data-business-workbench>
     <header className="shrink-0 border-b border-white/10 px-5 py-4">
       <div className="flex items-center gap-3"><BriefcaseBusiness size={22} className="text-emerald-300" /><div><h2 className="text-lg font-semibold">{c.title}</h2><p className="text-xs text-white/50">{c.subtitle}</p></div></div>
-      <nav className="mt-4 flex flex-wrap gap-2" aria-label={c.title}>{(['ecommerce', 'finance', 'archive'] as const).map(id => <button type="button" key={id} onClick={() => setTab(id)} aria-pressed={tab === id} className={`rounded-xl px-4 py-2 text-sm ${tab === id ? 'bg-emerald-300 text-slate-950' : 'bg-white/5 text-white/70 hover:bg-white/10'}`}>{id === 'ecommerce' ? c.commerce : id === 'finance' ? c.finance : c.archive}</button>)}</nav>
-      {tab !== 'archive' && <div className="mt-3 space-y-2">
+      <nav className="mt-4 flex flex-wrap gap-2" aria-label={c.title}>{(['social', 'ecommerce', 'finance', 'archive'] as const).map(id => <button type="button" key={id} onClick={() => setTab(id)} aria-pressed={tab === id} className={`rounded-xl px-4 py-2 text-sm ${tab === id ? 'bg-emerald-300 text-slate-950' : 'bg-white/5 text-white/70 hover:bg-white/10'}`}>{id === 'social' ? c.social : id === 'ecommerce' ? c.commerce : id === 'finance' ? c.finance : c.archive}</button>)}</nav>
+      {(tab === 'ecommerce' || tab === 'finance') && <div className="mt-3 space-y-2">
         <div className="flex flex-wrap items-center gap-2"><label className="text-xs text-white/60" htmlFor="business-subject">{c.subject}</label><select id="business-subject" value={active[tab]?.id || ''} onChange={e => void bind(e.target.value)} disabled={saving} className="rounded-lg bg-slate-800 p-2 text-xs"><option value="" disabled>{c.emptySubject}</option>{subjects.filter(s => s.productLine === tab).map(s => <option key={s.id} value={s.id}>{s.name} · {s.attributes.accountingPeriod || s.attributes.reportingPeriod || ''}</option>)}</select></div>
         <form onSubmit={e => { e.preventDefault(); void bind(); }} className="flex flex-wrap gap-2">
           <input aria-label={c.name} placeholder={c.name} required value={name} onChange={e => setName(e.target.value)} className="min-w-32 rounded-lg bg-white/5 p-2 text-xs" />
@@ -75,7 +77,31 @@ export function BusinessWorkbench({ lang, domain, onOpenSettings, onOpenKnowledg
       {error && <p role="alert" className="mt-2 text-sm text-rose-300">{error}</p>}
     </header>
     <main className="min-h-0 flex-1 overflow-auto"><Suspense fallback={<p className="p-5">{c.loading}</p>}>
-      {tab === 'ecommerce' ? <Commerce key={`commerce:${active.ecommerce?.id || ''}:${commerceEntry}`} appId={commerceEntry} lang={locale} onOpenSettings={onOpenSettings} snapshot={snapshot} onSnapshotChange={setSnapshot} onOpenWorkspace={target => setCommerceEntry(target === 'reviews' || target === 'inventory' ? 'store-data' : target)} /> : tab === 'finance' ? <Finance key={`finance:${active.finance?.id || ''}:${financeEntry}`} lang={locale} domain={domain} initialWorkflowId={financeEntry} onOpenKnowledge={onOpenKnowledge} onOpenSkills={onOpenSkills} /> : <section className="space-y-3 p-5">
+      {tab === 'social' ? <section className="space-y-6 p-5 sm:p-7">
+        <div className="rounded-2xl border border-emerald-200/10 bg-gradient-to-br from-emerald-300/10 to-transparent p-6">
+          <p className="text-xs font-medium tracking-widest text-emerald-200">{c.social}</p>
+          <h3 className="mt-3 text-2xl font-semibold">{c.socialOverview.title}</h3>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/60">{c.socialOverview.description}</p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {[
+            { id: 'creation', copy: c.socialOverview.creation, Icon: WandSparkles, onClick: onOpenCreation },
+            { id: 'library', copy: c.socialOverview.library, Icon: Library, onClick: onOpenKnowledge },
+            ...(domain === 'personal' ? [{ id: 'avatar', copy: c.socialOverview.avatar, Icon: Radio, onClick: onOpenDigitalHuman }] : []),
+          ].map(({ id, copy, Icon, onClick }) => <button type="button" key={id} onClick={() => onClick()} className="group flex flex-col items-start rounded-2xl border border-white/10 bg-white/[0.025] p-5 text-left transition hover:border-emerald-200/30 hover:bg-white/[0.05]">
+            <Icon size={23} className="text-emerald-200" />
+            <h4 className="mt-5 font-semibold">{copy.title}</h4>
+            <p className="mt-2 flex-1 text-sm leading-6 text-white/55">{copy.description}</p>
+            <span className="mt-5 inline-flex items-center gap-2 text-sm text-emerald-200">{copy.action}<ArrowUpRight size={15} /></span>
+          </button>)}
+        </div>
+      </section> :
+      tab === 'ecommerce' ? <Commerce key={`commerce:${active.ecommerce?.id || ''}:${commerceEntry}`} appId={commerceEntry} lang={locale} initialReportKind={commerceReportKind} onOpenSettings={onOpenSettings} snapshot={snapshot} onSnapshotChange={setSnapshot} onOpenWorkspace={target => {
+        if (target === 'reviews' || target === 'inventory') {
+          setCommerceReportKind(target === 'inventory' ? 'inventory' : 'orders');
+          setCommerceEntry('store-data');
+        } else setCommerceEntry(target);
+      }} /> : tab === 'finance' ? <Finance key={`finance:${active.finance?.id || ''}:${financeEntry}`} lang={locale} domain={domain} initialWorkflowId={financeEntry} onOpenKnowledge={onOpenKnowledge} onOpenSkills={onOpenSkills} /> : <section className="space-y-3 p-5">
         <button type="button" onClick={() => void load().catch(e => setError(e.message))} className="flex items-center gap-2 text-sm text-emerald-200"><RefreshCw size={14} />{c.refresh}</button>
         <p className="text-xs text-white/50">{c.scope}</p>
         {domain === 'personal' && <section className="rounded-xl border border-white/10 p-4"><h3 className="font-medium">{c.legacy}</h3><p className="my-2 text-xs text-white/50">{c.historical}</p>{(['ecommerce', 'finance'] as const).map(line => <div key={line} className="my-3"><button type="button" disabled={saving} onClick={() => void legacyAction(line, !legacy.some(item => item.line === line))} className="text-sm text-emerald-200">{line === 'ecommerce' ? c.commerce : c.finance} · {legacy.find(item => item.line === line)?.tasks ?? c.importLegacy}</button><ChatArtifactCards files={legacyFiles[line] || []} isZh={locale === 'zh'} onPreview={setPreview} />{legacyTasks[line]?.map(task => <details className="mt-2 rounded-lg bg-white/5 p-3" key={task.id}><summary>{task.title}</summary><pre className="mt-2 whitespace-pre-wrap break-words text-xs text-white/65">{task.result || task.summary}</pre></details>)}</div>)}</section>}
