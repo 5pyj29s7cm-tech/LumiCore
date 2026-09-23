@@ -1,3 +1,4 @@
+import { businessToolHints } from '../regions/packs/cn/business_routing';
 import { ToolPolicy } from '../personality/types';
 import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
 import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
@@ -898,6 +899,9 @@ export function routeToolsForTurn(
     reasons.push('the exact server-bound task retained tools that already produced receipts for its unfinished step');
   }
   const manifestPriorities: string[] = [];
+  const businessHints = businessToolHints(instructionText);
+  for (const name of businessHints) addIfAvailable(selected, available, name);
+  manifestPriorities.push(...businessHints.filter(name => available.has(name)));
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
     instructionText,
     options?.pendingAssistantOfferContext,
@@ -1495,6 +1499,7 @@ export function routeToolsForTurn(
       ...(currentAuthoringDocumentInspection
         ? ['desktop_running_processes', 'desktop_active_window']
         : []),
+      ...businessHints.filter(name => selected.has(name)),
       ...priorityToolsForRoute(categories, text),
       ...manifestPriorities,
     ]),

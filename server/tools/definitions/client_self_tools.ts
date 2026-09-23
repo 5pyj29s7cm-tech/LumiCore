@@ -51,6 +51,7 @@ const ACTIONS = Array.from(new Set([
 
 const RECOVERY_SURFACE_ACTIONS: Record<string, { action: string; section?: string }> = {
   skills: { action: 'open_skills' },
+  business: { action: 'open_business' },
   skill: { action: 'open_skills' },
   logs: { action: 'open_computer_adaptation' },
   log: { action: 'open_computer_adaptation' },

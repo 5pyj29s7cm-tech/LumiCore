@@ -3337,7 +3337,8 @@ function hasEcommerceOperationsEvidence(records: ToolExecutionRecord[], taskText
   const takeoverOnly = /(?:\u63a5\u7ba1|\u5168\u6258|take\s*over|fully\s+manage)/iu.test(taskText)
     && !wantsAnalysis && !wantsImage && !wantsVideo && !wantsCopyOrScript && !wantsPlatformChange;
 
-  const analyzed = records.some(record => /^mcp_ecommerce-ops_/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20);
+  const analyzed = records.some(record => /^(?:mcp_ecommerce-ops_|business_ecommerce_|industry_ecommerce_(?:today_snapshot|store_data_snapshot|listing_action_queue|customer_service_drafts|trend_discovery)$)/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20
+    && (!record.name.startsWith('industry_') || (record.terminalVerification?.status === 'verified' && parseRecordJson(record)?.status === 'verified')));
   const copyProduced = records.some(record => /^(?:mcp_content-ops_|mcp_ecommerce-ops_product_listing_optimizer)/i.test(record.name) && hasMeaningfulArguments(record) && String(record.result).trim().length > 20)
     || hasCreatedArtifact(records, /^(?:create_docx|create_pdf|create_xlsx|write_file)$/i) && hasArtifactVerification(records);
   const platformChanged = hasAuthenticatedPlatformOutcome(records);

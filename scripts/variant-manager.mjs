@@ -1035,7 +1035,7 @@ async function createVariant(rawOptions) {
 function selectRecords(coreRoot, options) {
   if (options.all && options.id) throw new Error('Use either --all or --id, not both.');
   if (options.all) {
-    const records = discoverVariants(coreRoot);
+    const records = discoverVariants(coreRoot).filter(record => !retiredVariant(coreRoot, record.id));
     if (!records.length) throw new Error('No variants were discovered from .lumi/variant.json metadata.');
     return records;
   }
@@ -1043,9 +1043,15 @@ function selectRecords(coreRoot, options) {
   return [findVariantWorktree(coreRoot, options.id)];
 }
 
+function retiredVariant(coreRoot, id) {
+  const file = path.join(coreRoot, '.lumi', 'retired-variants.json');
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8')).variants?.[id] || null;
+}
+
 async function statusVariants(rawOptions) {
   const coreRoot = resolveCoreRoot(rawOptions.root || process.cwd());
-  const records = rawOptions.id ? [findVariantWorktree(coreRoot, rawOptions.id)] : discoverVariants(coreRoot);
+  const records = rawOptions.id ? [findVariantWorktree(coreRoot, rawOptions.id)] : discoverVariants(coreRoot).filter(record => !retiredVariant(coreRoot, record.id));
   const liveRemote = Boolean(rawOptions.fetch || rawOptions.verify || rawOptions.strict);
   if (liveRemote) {
     const branches = [...new Set(records.map(record => record.metadata.upstream.branch))];
@@ -1708,6 +1714,10 @@ async function promoteVariant(rawOptions) {
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const options = parseOptions(rest);
+  if (options.id && ['new', 'sync', 'publish-default', 'promote'].includes(command)) {
+    const retired = retiredVariant(resolveCoreRoot(options.root || process.cwd()), normalizeVariantId(options.id));
+    if (retired) throw new Error(`Variant ${options.id} is consolidated into ${retired.successor} (${retired.workspace}); independent releases are retired.`);
+  }
   if (command === 'new') return createVariant(options);
   if (command === 'status') return statusVariants(options);
   if (command === 'sync') return syncVariants(options);

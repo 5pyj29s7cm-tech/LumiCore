@@ -1,4 +1,5 @@
 import type { ToolPolicy } from '../personality/types';
+import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
 import { isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState } from './action_continuation';
@@ -209,8 +210,11 @@ function applyCurrentTurnNoMutationConstraint(
   if (!hasExplicitNoMutationInstruction(text)) return execution;
   const avatarInstruction = avatarAuthoringMutationInstruction(text);
   const scopedAvatarAuthoring = avatarInstruction !== null && !hasExplicitNoMutationInstruction(avatarInstruction);
+  const businessBoundary = localBusinessAnalysisBoundary(text);
+  const scopedBusinessTools = businessBoundary && !hasExplicitNoMutationInstruction(businessBoundary.instruction) ? businessBoundary.tools : [];
   const requestedWorkflowCapture = preservedOutput && executionBeforeWorkflowSave(text);
   const scopedTools = new Set([
+    ...scopedBusinessTools,
     ...(scopedAvatarAuthoring ? ['memory_avatar_create', 'memory_avatar_import_image', 'memory_avatar_configure_animation', 'generate_image', 'ai_edit_image', 'get_image_generation_status'] : []),
     ...(preservedOutput ? ['code_execution'] : []),
     ...(requestedWorkflowCapture ? ['capture_recent_workflow', 'save_workflow'] : []),
@@ -227,7 +231,9 @@ function applyCurrentTurnNoMutationConstraint(
     ...restricted,
     promptOverlay: [
       execution.promptOverlay,
-      scopedAvatarAuthoring
+      scopedBusinessTools.length
+        ? 'Only source-bound local business analysis and its task receipts may persist. Do not write personal memory, access store accounts, mutate external state, or perform unrelated local writes.'
+        : scopedAvatarAuthoring
         ? 'Only the requested memory-person authoring and image operations may mutate state. Preserve existing people and all implementation files. Do not edit code/databases, send messages, or start a livestream.'
         : preservedOutput
         ? 'Preserve the original input file. Read and calculate, then save only the separately requested local output. Do not modify the source or send, submit, launch, or mutate unrelated state.'

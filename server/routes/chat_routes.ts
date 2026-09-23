@@ -1,3 +1,4 @@
+import { getIndustryWorkflowTask, interruptIndustryWorkflow, observeIndustryWorkflowTool, recordIndustryWorkflowExecution, validateIndustryWorkflowSourceInput } from '../industry/workflow_service';
 import { Router } from "express";
 import { requireNotStrict } from '../config/privacy';
 import OpenAI from "openai";
@@ -111,6 +112,8 @@ async function finalizeRestChatResponse(input: {
   flow?: LumiTurnFlow;
   allowToolUse?: boolean;
   attempt?: ExecutionGuardRecoveryRunInput<RestChatFinalization>['attempt'];
+  taskId?: string;
+  requestId?: string;
 }) {
   const toolRecords = input.toolRecords || [];
   const finalization = finalizeLumiResponse({
@@ -119,6 +122,8 @@ async function finalizeRestChatResponse(input: {
     toolRecords,
     source: input.source,
     flow: input.flow,
+    taskId: input.taskId,
+    requestId: input.requestId,
   });
   return finalizeExecutionForOutboundDelivery({
     task: input.taskText,
@@ -133,6 +138,8 @@ async function finalizeRestChatResponse(input: {
       toolRecords: records,
       source: `${input.source}_guard_recovery`,
       flow: input.flow,
+      taskId: input.taskId,
+      requestId: input.requestId,
     }),
   });
 }
@@ -305,7 +312,17 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const requestScope = req.user ? resolveDomain(req.user) : { domain: 'personal' as const, orgId: '' };
     const domain = requestScope.domain;
     const orgId = requestScope.orgId;
-    const routeText = buildRestChatRouteText(messages, prompt);
+    const businessTaskId = String(req.body?.industryWorkflowTaskId || '').trim();
+    const businessTask = businessTaskId ? getIndustryWorkflowTask({ userId, domain, orgId }, businessTaskId) : null;
+    if (businessTaskId && (!businessTask || !trustedLocalExecution || isBYOK)) return res.status(403).json({ error: 'A scoped native business task is required' });
+    let businessSource = '';
+    if (businessTask) {
+      try { businessSource = validateIndustryWorkflowSourceInput(businessTask, req.body.industryWorkflowSourceInput); }
+      catch (error) { return res.status(409).json({ error: (error as Error).message }); }
+      if (!businessSource) return res.status(400).json({ error: 'The original business source is required' });
+    }
+    const businessMetadata = businessTask?.metadata?.industryWorkflow;
+    const routeText = businessSource || buildRestChatRouteText(messages, prompt);
     const restTurnDispatch = buildLumiTurnDispatch({
       userId,
       text: routeText,
@@ -365,6 +382,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         flow: restTurnDispatch.flow,
       });
     const toolContext = {
+      ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
       currentTurnExecutionRequested: restExecutionPipeline.executionRequested,
       trustedActionContinuation: restExecutionPipeline.trustedActionContinuation,
       userId,
@@ -463,8 +481,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         ) => runWithTools(
           turnMessages,
           toolRegistry,
-          { provider, model, userId, domain, orgId, signal: request.signal },
-          onToolRecord,
+          { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
+          async record => {
+            if (businessTask) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
+            await onToolRecord?.(record);
+          },
           restModelToolPolicy.maxIterations || 3,
           llm.getDeepSeek,
           llm.getGemini,
@@ -495,6 +516,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             toolRecords: result.toolCalls,
             source,
             flow: restTurnDispatch.flow,
+            taskId: toolContext.taskId,
+            requestId: toolContext.requestId,
             allowToolUse: restToolSessionActive,
             attempt: async ({ instruction, recordTool }) => {
               const recovery = await runRestToolTurn(
@@ -517,7 +540,10 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             },
           });
           request.signal.throwIfAborted();
-          return { outbound, usageRecords };
+          const industryWorkflow = businessTask ? recordIndustryWorkflowExecution({
+            userId, domain, orgId, taskId: businessTask.id, resultText: outbound.finalization.text, toolRecords: outbound.toolRecords, source,
+          }) : undefined;
+          return { outbound, usageRecords, industryWorkflow };
         };
 
         const stream = req.query.stream === 'true';
@@ -560,6 +586,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             done: true,
             text: responseText,
             toolCalls: delivery.outbound.toolRecords.length,
+            industryWorkflow: delivery.industryWorkflow ? { taskId: businessTask!.id, status: delivery.industryWorkflow.task.status, verification: delivery.industryWorkflow.verification } : undefined,
             finalized: true,
             blocked: finalized.blocked,
             reason: finalized.reason,
@@ -611,6 +638,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         notification: finalized.notification,
       });
     } catch (error: any) {
+      if (businessTask) interruptIndustryWorkflow({ userId, domain, orgId }, businessTask.id, request.signal.aborted, request.signal.aborted ? 'Business execution was cancelled; previous receipts retained.' : 'Business execution stopped before verified delivery.');
       if (request.signal.aborted) return;
       console.error("AI Proxy Error:", error);
       const publicError = sanitizeChatAgentErrorPayload({

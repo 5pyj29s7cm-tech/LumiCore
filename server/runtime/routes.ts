@@ -1,3 +1,4 @@
+import { mountIndustryWorkflowRoutes } from '../routes/industry_workflow_routes';
 // Route aggregator — mounts all shared routes on the API router
 import { Router } from "express";
 import { Server } from "socket.io";
@@ -65,6 +66,7 @@ export function mountAllRoutes({ apiRouter, jwtSecret, llm, getCookieOptions, io
 
   // AI Chat
   mountChatRoutes(apiRouter, jwtSecret, llmGetters);
+  mountIndustryWorkflowRoutes(apiRouter);
 
   // Auth
   mountAuthRoutes(apiRouter, jwtSecret, getCookieOptions);

@@ -1,3 +1,5 @@
+import { registerBusinessCalculationTools } from './business_calculation_tools';
+import { registerIndustryWorkflowTools } from './industry_workflow_tools';
 import { ToolRegistry } from '../registry';
 import { registerFileOpsTools } from './file_ops';
 import { registerSystemOpsTools } from './system_ops';
@@ -53,6 +55,8 @@ export function registerAllTools(
   registry: ToolRegistry,
   llmGetters?: NonNullable<Parameters<typeof setSkillLLMGetters>[0]>,
 ): void {
+  registerBusinessCalculationTools(registry);
+  registerIndustryWorkflowTools(registry);
   registerFileOpsTools(registry);
   registerSystemOpsTools(registry);
   registerWebOpsTools(registry);

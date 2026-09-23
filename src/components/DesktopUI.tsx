@@ -1,3 +1,5 @@
+import { businessWorkbenchCopy } from '../i18n/locales/businessWorkbench';
+import { BriefcaseBusiness } from 'lucide-react';
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useDragControls, useMotionValue, useTransform } from 'motion/react';
@@ -157,6 +159,7 @@ const RETURN_IDLE_SECONDS = 30;
 // came from instead of silently falling back to the personal desktop.
 type SurfaceReturnTarget = 'home' | 'command-center';
 const AgentChatPage = lazy(() => import('./AgentChatPage').then(m => ({ default: m.AgentChatPage })));
+const BusinessWorkbench = lazy(() => import('./BusinessWorkbench').then(m => ({ default: m.BusinessWorkbench })));
 const AutonomousFeed = lazy(() => import('./AutonomousFeed').then(m => ({ default: m.AutonomousFeed })));
 const AvatarStudio = lazy(() => import('./AvatarStudio').then(m => ({ default: m.AvatarStudio })));
 const DesktopOnboarding = lazy(() => import('./DesktopOnboarding').then(m => ({ default: m.DesktopOnboarding })));
@@ -2116,6 +2119,7 @@ export function DesktopUI({
     externalLaunch: { capability, action },
   }));
   const desktopIcons: DesktopIconDefinition[] = [
+    { id: 'business', label: businessWorkbenchCopy[lang === 'en' ? 'en' : 'zh'].title, icon: <BriefcaseBusiness size={24} />, colorClass: 'from-emerald-500 to-cyan-600', windowId: 'business' },
     { id: 'tools', labelKey: 'tools', icon: <Wrench size={24} />, colorClass: 'from-amber-500 to-orange-600', windowId: 'tools' },
     { id: 'skills', labelKey: 'skills', icon: <Sparkles size={24} />, colorClass: 'from-emerald-500 to-teal-600', windowId: 'skills' },
     { id: 'personalization', label: t.personalization || (uiMessage('desktop-ui.personalization.2c4d8e1f06', (lang === 'zh') ? 'zh' : 'en')), icon: <Brush size={24} />, colorClass: 'from-cyan-400 to-indigo-600', windowId: 'personalization' },
@@ -5047,6 +5051,7 @@ export function DesktopUI({
     chatOpen ? 'focused' : 'default';
 
   const getWindowSize = (windowId: string) => {
+    if (windowId === 'business') return { w: '1180px', h: '800px' };
     if (windowId === 'settings') return { w: '1050px', h: '720px' };
     if (windowId === 'knowledge') return { w: '1100px', h: '750px' };
     if (windowId === 'kernel') return { w: '1050px', h: '720px' };
@@ -6199,7 +6204,9 @@ export function DesktopUI({
               >
                 <div className="os-window-body custom-scrollbar">
                   <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
-                  {windowId === 'kernel' ? (
+                  {windowId === 'business' ? (
+                    <BusinessWorkbench lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')} />
+                  ) : windowId === 'kernel' ? (
                     <KernelMonitorApp t={t} onAsk={askComputerProfileQuestion} />
                   ) : windowId === 'settings' ? (
                     <Settings t={t} lang={lang} setLang={setLang} activeSection={settingsSection} onSectionChange={setSettingsSection} />

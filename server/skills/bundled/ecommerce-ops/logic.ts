@@ -1,3 +1,19 @@
+import {
+  analyzeEcommerceWorkbench,
+  parseDelimitedReport,
+  type EcommerceReportKind,
+  type EcommerceTable,
+} from './workbench';
+import {
+  REVIEW_SOURCE_SCHEMA_VERSION,
+  normalizeReviewSourceRecords,
+  normalizedReviewsToTable,
+  paginateNormalizedReviews,
+  type ReviewSourceColumnMapping,
+  type ReviewSourceFormat,
+  type ReviewSourceNormalizeArgs,
+} from './review_source';
+
 export function roundMoney(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 100) / 100;
@@ -116,13 +132,21 @@ export function parseOrderRows(orderText: string, defaults: {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const revenue = firstMetric(text, [/gmv|revenue|sales|amount|销售额|成交额|收入|实收|货款/]) ?? nums[0] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const cogs = firstMetric(text, [/cogs|cost|成本|采购|进货/]) ?? nums[1] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const shipping = firstMetric(text, [/shipping|freight|物流|运费|快递/]) ?? nums[2] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const platformFees = firstMetric(text, [/fee|commission|平台费|佣金|服务费|技术服务/]) ?? (revenue * platformFeeRate);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const adSpend = firstMetric(text, [/\bads?\b|\bad.spend\b|marketing|广告|投流|推广/]) ?? (revenue * adCostRate);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const refunds = firstMetric(text, [/refund|return|退款|退货|售后/]) ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const otherCost = firstMetric(text, [/other|misc|其他|包装|赠品|达人/]) ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const units = firstMetric(text, [/units|qty|quantity|件数|数量|单量|销量/]) ?? 1;
     return {
       sku: skuFromLine(text, index),
@@ -228,9 +252,13 @@ export function parseInventoryRows(inventoryText: string, defaults: {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const stock = firstMetric(text, [/stock|inventory|on.hand|库存|现货|可售/]) ?? nums[0] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const dailySales = firstMetric(text, [/daily|velocity|日销|日均|每天|每日/]) ?? nums[1] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const leadTimeDays = firstMetric(text, [/lead|arrival|采购周期|备货周期|到货|交期/]) ?? toNumber(defaults.leadTimeDays, nums[2] ?? 7);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const safetyStockDays = firstMetric(text, [/safety|buffer|安全库存|安全天数/]) ?? toNumber(defaults.safetyStockDays, nums[3] ?? 3);
     return {
       sku: skuFromLine(text, index),
@@ -301,11 +329,17 @@ export function reconcileSettlement(args: {
   currency?: string;
 }) {
   const text = String(args.settlementText || '');
-  const grossPayments = sumLabeledAmounts(text, [/payment|paid|receipt|收款|结算收入|货款|成交/]);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+  const grossPayments = sumLabeledAmounts(text, [/payment|paid|receipt|支付|收款|结算收入|货款|成交/]);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   const refunds = sumLabeledAmounts(text, [/refund|return|退款|退货|售后/]) || toNumber(args.expectedRefunds);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   const platformFees = sumLabeledAmounts(text, [/fee|commission|平台费|佣金|服务费|技术服务/]);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   const adSpend = sumLabeledAmounts(text, [/\bads?\b|\bad.spend\b|广告|投流|推广/]);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   const shipping = sumLabeledAmounts(text, [/shipping|freight|物流|运费|快递/]);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   const adjustments = sumLabeledAmounts(text, [/adjust|补差|调整|赔付|罚款|扣款/]);
   const settlementNet = grossPayments - refunds - platformFees - adSpend - shipping + adjustments;
   const expectedNet = toNumber(args.expectedOrderRevenue) - toNumber(args.expectedRefunds);
@@ -344,19 +378,25 @@ export function analyzeCampaignRoi(args: {
   grossMarginRate?: number;
   targetRoas?: number;
 }) {
-  const grossMarginRate = toRate(args.grossMarginRate, 0.35);
-  const targetRoas = Math.max(toNumber(args.targetRoas, grossMarginRate > 0 ? 1 / grossMarginRate : 3), 0);
+  const grossMarginRate = args.grossMarginRate === undefined ? null : toRate(args.grossMarginRate, 0);
+  const targetRoas = args.targetRoas !== undefined ? Math.max(toNumber(args.targetRoas, 0), 0)
+    : grossMarginRate !== null && grossMarginRate > 0 ? 1 / grossMarginRate : null;
   const rows = String(args.campaignText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
     const nums = extractNumbers(text);
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const spend = firstMetric(text, [/\bad.?spend\b|\bspend\b|\bcost\b|广告费|消耗|投放|花费/]) ?? nums[0] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const revenue = firstMetric(text, [/gmv|revenue|sales|turnover|销售额|成交额|收入/]) ?? nums[1] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const orders = firstMetric(text, [/orders?|conversions?|purchases?|订单|成交单|转化/]) ?? nums[2] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const clicks = firstMetric(text, [/clicks?|点击/]) ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const impressions = firstMetric(text, [/impressions?|views?|曝光|展现/]) ?? 0;
     const roas = spend > 0 ? revenue / spend : 0;
-    const contributionAfterAds = revenue * grossMarginRate - spend;
+    const contributionAfterAds = grossMarginRate === null ? null : revenue * grossMarginRate - spend;
     return {
       campaign: rowName(text, index),
       spend: roundMoney(spend),
@@ -369,10 +409,10 @@ export function analyzeCampaignRoi(args: {
       aov: orders > 0 ? roundMoney(revenue / orders) : null,
       cpc: clicks > 0 ? roundMoney(spend / clicks) : null,
       conversionRate: clicks > 0 ? roundMoney(orders / clicks * 100) : null,
-      contributionAfterAds: roundMoney(contributionAfterAds),
-      status: contributionAfterAds < 0 || roas < targetRoas * 0.85
+      contributionAfterAds: contributionAfterAds === null ? null : roundMoney(contributionAfterAds),
+      status: (contributionAfterAds !== null && contributionAfterAds < 0) || (targetRoas !== null && roas < targetRoas * 0.85)
         ? 'trim_or_fix'
-        : roas >= targetRoas * 1.2
+        : targetRoas !== null && roas >= targetRoas * 1.2
           ? 'scale_candidate'
           : 'watch',
     };
@@ -384,7 +424,7 @@ export function analyzeCampaignRoi(args: {
     acc.orders += row.orders;
     acc.clicks += row.clicks;
     acc.impressions += row.impressions;
-    acc.contributionAfterAds += row.contributionAfterAds;
+    acc.contributionAfterAds += row.contributionAfterAds ?? 0;
     return acc;
   }, { spend: 0, revenue: 0, orders: 0, clicks: 0, impressions: 0, contributionAfterAds: 0 });
 
@@ -400,7 +440,7 @@ export function analyzeCampaignRoi(args: {
       impressions: summary.impressions,
       roas: summary.spend > 0 ? roundMoney(summary.revenue / summary.spend) : 0,
       cpa: summary.orders > 0 ? roundMoney(summary.spend / summary.orders) : null,
-      contributionAfterAds: roundMoney(summary.contributionAfterAds),
+      contributionAfterAds: grossMarginRate === null ? null : roundMoney(summary.contributionAfterAds),
     },
     scaleCandidates: rows.filter(row => row.status === 'scale_candidate').map(row => row.campaign),
     fixList: rows.filter(row => row.status === 'trim_or_fix').map(row => row.campaign),
@@ -413,10 +453,15 @@ export function analyzeCampaignRoi(args: {
 }
 
 function inferAfterSalesCause(text: string): string {
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   if (/quality|broken|defect|damaged|瑕疵|质量|坏|破损/i.test(text)) return 'quality';
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   if (/logistics|shipping|delay|lost|快递|物流|延迟|丢件/i.test(text)) return 'logistics';
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   if (/size|fit|颜色|尺寸|尺码|不合适/i.test(text)) return 'fit_or_expectation';
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   if (/description|photo|mislead|描述|图片|不符/i.test(text)) return 'listing_mismatch';
+  // i18n-allow: Source-record field recognition, not user-facing copy.
   if (/service|客服|态度|响应/i.test(text)) return 'service';
   return 'unspecified';
 }
@@ -430,23 +475,47 @@ export function buildAfterSalesRiskReport(args: {
   const rows = String(args.afterSalesText || '').split(/\r?\n|;|\uFF1B/).map((line, index) => {
     const text = line.trim();
     if (!text) return null;
-    const nums = extractNumbers(text);
-    const orders = firstMetric(text, [/orders?|sales.?count|订单|销量|单量/]) ?? nums[0] ?? 0;
-    const refundCount = firstMetric(text, [/refund.?count|returns?|refunds?|退款数|退货数|售后数/]) ?? nums[1] ?? 0;
-    const refundAmount = firstMetric(text, [/refund.?amount|refund.?value|退款金额|售后金额/]) ?? nums[2] ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+    const orders = firstMetric(text, [/orders?|sales.?count|订单|销量|单量/])
+      ?? (toNumber(args.totalOrders) > 0 ? toNumber(args.totalOrders) : 0);
+    const explicitRefundCount = firstMetric(text, [
+      /refund.?count\b/,
+      /returns?\b/,
+      /refunds?\b(?!\s*(?:amount|value))/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /退款(?:数|单数)/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /退货数/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /售后数/,
+    ]);
+    const refundCountKnown = explicitRefundCount !== undefined;
+    const refundCount = explicitRefundCount ?? 0;
+    const refundAmount = firstMetric(text, [
+      /refund.?amount\b/,
+      /refund.?value\b/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /退款金额/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /售后金额/,
+  // i18n-allow: Source-record field recognition, not user-facing copy.
+      /退款(?=\s*[:=：]?\s*\d+(?:\.\d+)?\s*(?:元|块|人民币|cny|rmb|¥|￥))/,
+    ]) ?? 0;
+  // i18n-allow: Source-record field recognition, not user-facing copy.
     const complaints = firstMetric(text, [/complaints?|bad.?reviews?|差评|投诉|纠纷/]) ?? 0;
-    const refundRate = orders > 0 ? refundCount / orders : 0;
+    const refundRate = orders > 0 && refundCountKnown ? refundCount / orders : null;
     return {
       sku: rowName(text, index),
       orders: Math.max(0, Math.round(orders)),
       refundCount: Math.max(0, Math.round(refundCount)),
+      refundCountKnown,
       refundAmount: roundMoney(refundAmount),
       complaints: Math.max(0, Math.round(complaints)),
-      refundRate: roundMoney(refundRate * 100),
+      refundRate: refundRate === null ? null : roundMoney(refundRate * 100),
       cause: inferAfterSalesCause(text),
-      status: refundRate >= 0.1 || complaints >= 5
+      status: (refundRate !== null && refundRate >= 0.1) || complaints >= 5
         ? 'high_risk'
-        : refundRate >= 0.05 || complaints >= 2
+        : (refundRate !== null && refundRate >= 0.05) || complaints >= 2
           ? 'watch'
           : 'normal',
     };
@@ -454,6 +523,7 @@ export function buildAfterSalesRiskReport(args: {
 
   const totalOrders = toNumber(args.totalOrders, rows.reduce((sum, row) => sum + row.orders, 0));
   const totalRefundCount = rows.reduce((sum, row) => sum + row.refundCount, 0);
+  const refundCountKnown = rows.some(row => row.refundCountKnown);
   const totalRefundAmount = rows.reduce((sum, row) => sum + row.refundAmount, 0);
   const causeCounts = rows.reduce<Record<string, number>>((acc, row) => {
     acc[row.cause] = (acc[row.cause] || 0) + row.refundCount + row.complaints;
@@ -467,15 +537,144 @@ export function buildAfterSalesRiskReport(args: {
       totalOrders,
       totalRefundCount,
       totalRefundAmount: roundMoney(totalRefundAmount),
-      refundRate: totalOrders > 0 ? roundMoney(totalRefundCount / totalOrders * 100) : 0,
+      refundRate: totalOrders > 0 && refundCountKnown ? roundMoney(totalRefundCount / totalOrders * 100) : null,
       refundAmountRate: toNumber(args.totalRevenue) > 0 ? roundMoney(totalRefundAmount / toNumber(args.totalRevenue) * 100) : null,
       causeCounts,
     },
     highRiskSkus: rows.filter(row => row.status === 'high_risk').map(row => row.sku),
+    dataGaps: refundCountKnown ? [] : ['Refund amount is available, but refund/return count is missing; refund rate was not calculated.'],
     nextActions: [
       'Open the top-risk SKU pages and compare customer expectations against title, images, size/spec table, and promises.',
       'Tag after-sales causes before deciding whether to change product, listing, logistics, or customer-service scripts.',
       'Feed refund amounts back into SKU profit analysis before scaling promotions.',
     ],
   };
+}
+
+export interface ReviewInsightAnalysisArgs {
+  reviewText?: string;
+  sourceFormat?: ReviewSourceFormat;
+  platform?: string;
+  storeId?: string;
+  contentColumn?: string;
+  skuColumn?: string;
+  ratingColumn?: string;
+  dateColumn?: string;
+  helpfulColumn?: string;
+}
+
+/** Analyze a platform review export or one-comment-per-line text without retaining raw source rows. */
+export function analyzeReviewInsights(args: ReviewInsightAnalysisArgs) {
+  const reviewText = String(args.reviewText || '').trim();
+  if (!reviewText) throw new Error('reviewText must contain a review export or at least one review.');
+  const mapping = Object.fromEntries([
+    ['content', args.contentColumn],
+    ['sku', args.skuColumn],
+    ['rating', args.ratingColumn],
+    ['createdAt', args.dateColumn],
+    ['helpfulCount', args.helpfulColumn],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]))) as ReviewSourceColumnMapping;
+  const normalized = normalizeReviewSourceRecords({
+    sourceText: reviewText,
+    sourceFormat: args.sourceFormat,
+    platform: args.platform,
+    storeId: args.storeId,
+    mapping,
+  });
+  const reviews = normalizedReviewsToTable(normalized.records);
+  const snapshot = analyzeEcommerceWorkbench({ reviews });
+  return {
+    source: snapshot.sources[0],
+    normalization: normalized.source,
+    warnings: normalized.warnings,
+    insights: snapshot.reviewInsights,
+    risk: snapshot.risks.find(item => item.code === 'negative_reviews') || null,
+    methodology: {
+      sentiment: 'Ratings take priority: 4-5 positive, 1-2 negative, 3 neutral. Text keywords are used when rating is absent.',
+      topics: 'A review can contribute to multiple transparent keyword-based issue themes.',
+    },
+    privacy: 'Email addresses, phone numbers, labeled contact IDs, labeled addresses, IP addresses, and long numeric identifiers are masked before analysis. Buyer-name columns are ignored.',
+  };
+}
+
+export function normalizeReviewSourceImport(args: ReviewSourceNormalizeArgs) {
+  const normalized = normalizeReviewSourceRecords(args);
+  const page = paginateNormalizedReviews(normalized, args);
+  const snapshot = analyzeEcommerceWorkbench({ reviews: normalizedReviewsToTable(normalized.records) });
+  const repliedCount = normalized.records.filter(record => record.replyStatus === 'replied').length;
+  const unrepliedCount = normalized.records.filter(record => record.replyStatus === 'unreplied').length;
+  const knownReplyCount = repliedCount + unrepliedCount;
+  const dated = normalized.records.map(record => record.createdAt).filter((value): value is string => Boolean(value)).sort();
+  return {
+    readOnly: true,
+    externalWrites: false,
+    schema: {
+      name: 'lumi.normalized-review',
+      version: REVIEW_SOURCE_SCHEMA_VERSION,
+      fields: [
+        'reviewId', 'dedupeKey', 'platform', 'storeId', 'productId', 'sku', 'rating', 'content',
+        'createdAt', 'verifiedPurchase', 'replyStatus', 'sourceUrl', 'helpfulCount',
+      ],
+    },
+    source: normalized.source,
+    page,
+    operationalSummary: {
+      repliedCount,
+      unrepliedCount,
+      unknownReplyCount: normalized.records.length - knownReplyCount,
+      replyCoverage: knownReplyCount > 0 ? roundMoney(repliedCount / knownReplyCount * 100) : null,
+      verifiedPurchaseCount: normalized.records.filter(record => record.verifiedPurchase === true).length,
+      dateRange: dated.length > 0 ? { from: dated[0], to: dated[dated.length - 1] } : null,
+    },
+    insights: snapshot.reviewInsights,
+    risk: snapshot.risks.find(item => item.code === 'negative_reviews') || null,
+    warnings: normalized.warnings,
+    connectorPolicy: {
+      availableNow: ['csv', 'tsv', 'json', 'jsonl', 'plain-text'],
+      optionalConnectors: [
+        { id: 'supabase', mode: 'project-scoped read-only', status: 'credentials-required' },
+        { id: 'woocommerce', mode: 'read-only API key', status: 'store-configuration-required' },
+        { id: 'shopline', mode: 'review-read tool allowlist', status: 'store-configuration-required' },
+        { id: 'shopify-review-provider', mode: 'provider-specific read-only API', status: 'provider-selection-required' },
+      ],
+      blockedByDefault: ['reply-to-review', 'hide-review', 'approve-review', 'reject-review', 'refund', 'cancel-order', 'update-inventory'],
+    },
+    privacy: 'PII is masked before records are deduplicated, paginated, or analyzed. Source query strings and URL fragments are removed.',
+  };
+}
+
+export interface EcommerceSnapshotAnalysisArgs {
+  ordersReport?: string;
+  campaignsReport?: string;
+  inventoryReport?: string;
+  afterSalesReport?: string;
+  reviewsReport?: string;
+  grossMarginRate?: number;
+  targetStockDays?: number;
+}
+
+/** Build the same normalized, read-only operating snapshot used by the ecommerce workbench UI. */
+export function analyzeEcommerceSnapshot(args: EcommerceSnapshotAnalysisArgs) {
+  const inputs: Array<[EcommerceReportKind, string | undefined]> = [
+    ['orders', args.ordersReport],
+    ['campaigns', args.campaignsReport],
+    ['inventory', args.inventoryReport],
+    ['afterSales', args.afterSalesReport],
+    ['reviews', args.reviewsReport],
+  ];
+  const reports: Partial<Record<EcommerceReportKind, EcommerceTable>> = {};
+  for (const [kind, reportText] of inputs) {
+    const text = String(reportText || '').trim();
+    if (!text) continue;
+    reports[kind] = kind === 'reviews'
+      ? normalizedReviewsToTable(normalizeReviewSourceRecords({ sourceText: text }).records)
+      : parseDelimitedReport(text);
+  }
+  if (Object.keys(reports).length === 0) {
+    throw new Error('Provide at least one delimited orders, campaigns, inventory, after-sales, or reviews report.');
+  }
+  return analyzeEcommerceWorkbench(reports, {
+    grossMarginRate: toRate(args.grossMarginRate, 0.35),
+    targetStockDays: Math.max(1, toNumber(args.targetStockDays, 30)),
+  });
 }

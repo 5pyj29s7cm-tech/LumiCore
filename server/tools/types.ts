@@ -201,6 +201,12 @@ export interface CapabilityManifestEntry {
 }
 
 export interface ToolContext {
+  getCurrentToolRecords?: () => ToolExecutionRecord[];
+  industryWorkflowRequiredToolReceipts?: string[];
+  industryWorkflowSourceInput?: string;
+  industryWorkflowTaskId?: string;
+  industryWorkflowEntryId?: string;
+  industryWorkflowProductLine?: string;
   userId?: string;
   /** True only when an external principal was authenticated by the transport. */
   authenticated?: boolean;

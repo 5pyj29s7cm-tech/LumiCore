@@ -145,6 +145,13 @@ export const CLIENT_SETTINGS_SECTIONS: readonly ClientSettingsSectionDefinition[
 
 export const PERSONAL_CLIENT_SURFACES: readonly PersonalClientSurfaceDefinition[] = [
   {
+    id: 'business', label: 'Business workspace', target: 'business', actions: ['open_business'],
+    useWhen: 'Open commerce operations, finance workflows, business subjects and archived results in the main Lumi client.',
+    launcherIds: ['business'],
+    // i18n-allow: Spoken and typed navigation aliases, not rendered copy.
+    navigationAliases: ['经营工作台', '电商运营', '财务管理', 'business workspace'],
+  },
+  {
     id: 'home',
     label: 'Home / desktop shell',
     target: 'home',

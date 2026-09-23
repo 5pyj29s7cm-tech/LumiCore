@@ -277,7 +277,7 @@ function availablePreferredTools(input: LumiCapabilitySelectionInput, lane: Lumi
     legal_casework: ['industry', 'web', 'office'],
     messaging: ['messaging', 'desktop'],
     internal_memory: ['memory'],
-    artifact_work: ['files', 'office', 'media'],
+    artifact_work: ['files', 'office', 'media', 'industry'],
     design_cad: ['cad', 'media', 'files', 'desktop'],
     desktop_control: ['desktop'],
     web_or_account: ['web'],
@@ -559,6 +559,9 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
   }
 
   if (input.execution.toolRoute?.toolNames.length) {
+    if (routeHasTool(input, /^(?:business_(?:finance|ecommerce)_|industry_ecommerce_)/)) {
+      return { lane: 'artifact_work', primary: 'source-bound business analysis', reasons: [...reasons, 'registered business tools calculate and archive local results on the shared execution path'] };
+    }
     return {
       lane: 'external_tool',
       primary: fallbackPrimary(input),

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "variants": {
+    "ecommerce-client": { "successor": "main", "workspace": "business/ecommerce", "reason": "Commerce capabilities consolidated into LumiCore business workspace." },
+    "finance-client": { "successor": "main", "workspace": "business/finance", "reason": "Finance capabilities consolidated into LumiCore business workspace." }
+  }
+}

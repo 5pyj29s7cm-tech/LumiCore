@@ -76,6 +76,8 @@ export interface WorkTakeoverVerificationInput {
   minFileBytes?: number;
   requireExternalOutcome?: boolean;
   outcomeEvidence?: ToolExecutionRecord[];
+  /** Exclude task title/plan/source from content matching so a prepared plan cannot verify its own result. */
+  requireOutputEvidence?: boolean;
 }
 
 const SURFACE_PATTERNS: Record<WorkTakeoverExpectedSurface, RegExp[]> = {
@@ -226,10 +228,14 @@ function safeReadTextSnippet(filePath: string, limit = 24_000): string {
 }
 
 function taskArtifactPaths(task: WorkTakeoverTask): string[] {
-  return task.artifacts.map(artifact => artifact.path || '').filter(Boolean);
+  return task.artifacts
+    .filter(artifact => artifact.status !== 'planned')
+    .map(artifact => artifact.path || '')
+    .filter(Boolean);
 }
 
 function taskEvidenceText(task: WorkTakeoverTask, filePaths: string[]): string {
+  const materializedArtifacts = task.artifacts.filter(artifact => artifact.status !== 'planned');
   return [
     task.title,
     task.summary,
@@ -237,7 +243,17 @@ function taskEvidenceText(task: WorkTakeoverTask, filePaths: string[]): string {
     task.result,
     ...task.nextActions,
     ...task.drafts.map(draft => draft.text),
-    ...task.artifacts.flatMap(artifact => [artifact.label, artifact.content, artifact.path]),
+    ...materializedArtifacts.flatMap(artifact => [artifact.label, artifact.content, artifact.path]),
+    ...filePaths.map(filePath => safeReadTextSnippet(filePath)),
+  ].map(compact).filter(Boolean).join('\n');
+}
+
+function taskOutputEvidenceText(task: WorkTakeoverTask, filePaths: string[]): string {
+  const materializedArtifacts = task.artifacts.filter(artifact => artifact.status !== 'planned');
+  return [
+    task.result,
+    ...task.drafts.map(draft => draft.text),
+    ...materializedArtifacts.flatMap(artifact => [artifact.content, artifact.path]),
     ...filePaths.map(filePath => safeReadTextSnippet(filePath)),
   ].map(compact).filter(Boolean).join('\n');
 }
@@ -255,14 +271,19 @@ function matchedContentTerms(text: string, terms: string[]): string[] {
 }
 
 function fileTextEvidence(filePaths: string[]): string {
-  return filePaths.map(filePath => safeReadTextSnippet(filePath)).map(compact).filter(Boolean).join('\n');
+  return filePaths
+    .filter(filePath => TEXT_EXTENSIONS.has(path.extname(filePath).toLowerCase()))
+    .map(filePath => safeReadTextSnippet(filePath))
+    .map(compact)
+    .filter(Boolean)
+    .join('\n');
 }
 
 function shouldCheckArtifactContent(task: WorkTakeoverTask, input: WorkTakeoverVerificationInput, filePaths: string[]): boolean {
   return Boolean(
     input.expectedContentTerms?.length
     || input.requiredArtifactLabels?.length
-    || task.artifacts.length
+    || task.artifacts.some(artifact => artifact.status !== 'planned')
     || filePaths.length
   );
 }
@@ -375,7 +396,9 @@ export function verifyWorkTakeoverResult(
 
   const requiredArtifactLabels = unique(input.requiredArtifactLabels || []);
   if (requiredArtifactLabels.length) {
-    const labels = task.artifacts.map(artifact => artifact.label);
+    const labels = task.artifacts
+      .filter(artifact => artifact.status !== 'planned')
+      .map(artifact => artifact.label);
     const missingLabels = requiredArtifactLabels.filter(label => !labels.some(existing => existing.includes(label) || label.includes(existing)));
     checks.push(check(
       'artifact_labels',
@@ -386,8 +409,11 @@ export function verifyWorkTakeoverResult(
   }
 
   if (shouldCheckArtifactContent(task, input, filePaths)) {
-    const evidenceText = taskEvidenceText(task, filePaths);
+    const evidenceText = input.requireOutputEvidence
+      ? taskOutputEvidenceText(task, filePaths)
+      : taskEvidenceText(task, filePaths);
     const fileEvidenceText = fileTextEvidence(filePaths);
+    const textFilePaths = filePaths.filter(filePath => TEXT_EXTENSIONS.has(path.extname(filePath).toLowerCase()));
     const compactEvidence = evidenceText.replace(/\s+/g, '');
     const compactFileEvidence = fileEvidenceText.replace(/\s+/g, '');
     const terms = contentTermsForTask(task, input);
@@ -397,9 +423,11 @@ export function verifyWorkTakeoverResult(
       ? Math.max(0, Number(input.minMatchedContentTerms))
       : Math.min(2, terms.length);
     const hasEnoughText = compactEvidence.length >= 30;
-    const hasEnoughFileText = filePaths.length === 0 || compactFileEvidence.length >= 20;
+    // Binary deliverables are verified by exact path existence and byte size.
+    // Only text-readable files participate in content-term checks.
+    const hasEnoughFileText = textFilePaths.length === 0 || compactFileEvidence.length >= 20;
     const hasEnoughTerms = terms.length === 0 || matched.length >= minMatches;
-    const hasEnoughFileTerms = filePaths.length === 0 || terms.length === 0 || fileMatched.length >= Math.min(1, minMatches);
+    const hasEnoughFileTerms = textFilePaths.length === 0 || terms.length === 0 || fileMatched.length >= Math.min(1, minMatches);
     checks.push(check(
       'artifact_content_quality',
       '交付内容贴合任务',
@@ -407,7 +435,7 @@ export function verifyWorkTakeoverResult(
       [
         hasEnoughText ? `内容长度=${compactEvidence.length}` : `内容过少=${compactEvidence.length}`,
         terms.length ? `命中关键词=${matched.slice(0, 8).join('、') || '无'}；要求=${minMatches}` : '',
-        filePaths.length ? `文件内容长度=${compactFileEvidence.length}；文件关键词=${fileMatched.slice(0, 5).join('、') || '无'}` : '',
+        textFilePaths.length ? `文件内容长度=${compactFileEvidence.length}；文件关键词=${fileMatched.slice(0, 5).join('、') || '无'}` : '',
       ].filter(Boolean).join('；'),
     ));
   }
@@ -445,8 +473,12 @@ export function verifyWorkTakeoverResult(
   checks.push(check(
     'result_written',
     '任务结果已回写',
-    Boolean(compact(task.result) || task.artifacts.length > 0 || task.drafts.length > 0),
-    compact(task.result || `artifacts=${task.artifacts.length}; drafts=${task.drafts.length}`) || '暂无结果、交付物或草稿',
+    Boolean(
+      compact(task.result)
+      || task.artifacts.some(artifact => artifact.status !== 'planned')
+      || task.drafts.length > 0
+    ),
+    compact(task.result || `materializedArtifacts=${task.artifacts.filter(artifact => artifact.status !== 'planned').length}; drafts=${task.drafts.length}`) || '暂无结果、交付物或草稿',
   ));
 
   const failed = checks.filter(item => !item.passed);

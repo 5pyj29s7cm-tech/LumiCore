@@ -77,6 +77,15 @@ function withDiscoveryFixture(run: (fixture: { mainRepository: string; childWork
 }
 
 describe('Lumi variant release train', () => {
+  it('refuses independent releases of an edition retired into the core', () => {
+    withDiscoveryFixture(({ mainRepository }) => {
+      fs.mkdirSync(path.join(mainRepository, '.lumi'), { recursive: true });
+      writeJson(path.join(mainRepository, '.lumi/retired-variants.json'), { variants: { 'test-client': { successor: 'main', workspace: 'business/finance' } } });
+      const result = executeResult(process.execPath, [managerPath, 'sync', '--root', mainRepository, '--id', 'test-client']);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('independent releases are retired');
+    });
+  });
   it('uses the declared delivery worktree when a detached review snapshot sorts first', () => {
     withDiscoveryFixture(({ mainRepository, childWorktree, temporaryRoot }) => {
       const snapshot = path.join(temporaryRoot, 'a-review');

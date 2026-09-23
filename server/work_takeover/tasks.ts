@@ -436,3 +436,26 @@ export function continueWorkTakeoverTask(userId: string, taskId?: string): {
     confirmationRequired: updated.confirmationRequired,
   };
 }
+
+export function removeWorkTakeoverTaskArtifacts(
+  userId: string,
+  taskId: string,
+  artifactPaths: string[],
+): WorkTakeoverTask | null {
+  const targets = new Set(artifactPaths.map(value => String(value || '').trim()).filter(Boolean));
+  const tasks = readStoredTasks();
+  const index = tasks.findIndex(task => task.id === taskId && task.userId === userId);
+  if (index < 0) return null;
+  const task = tasks[index];
+  if (!targets.size) return task;
+  const retained = task.artifacts.filter(artifact => !artifact.path || !targets.has(String(artifact.path).trim()));
+  const removed = task.artifacts.length - retained.length;
+  if (removed === 0) return task;
+  task.artifacts = retained;
+  task.events.push(event('note', `Removed ${removed} failed task-owned artifact reference(s).`));
+  task.events.push(event('updated', 'Work takeover task updated.'));
+  task.updatedAt = nowIso();
+  tasks[index] = task;
+  writeStoredTasks(tasks);
+  return task;
+}

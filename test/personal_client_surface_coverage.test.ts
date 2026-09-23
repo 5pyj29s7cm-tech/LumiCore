@@ -130,7 +130,7 @@ describe('complete personal-client surface contract', () => {
     ])).sort();
 
     expect([...PERSONAL_CLIENT_LAUNCHER_IDS].sort()).toEqual(renderedLauncherIds);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toEqual(['tools', 'skills', 'personalization']);
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).toEqual(['business', 'tools', 'skills', 'personalization']);
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('command-center');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('runtime-log');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).toContain('personalization');

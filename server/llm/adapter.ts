@@ -1965,6 +1965,7 @@ async function runWithToolsInternal(
   const toolExecutionContext = sanitizedToolExecutionContext
     ? {
         ...sanitizedToolExecutionContext,
+        getCurrentToolRecords: () => executionLog.map(record => ({ ...record })),
         ...(sanitizedToolExecutionContext.modelToolProjection
           ? {
               modelToolProjection: {

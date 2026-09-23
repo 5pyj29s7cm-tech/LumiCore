@@ -2975,6 +2975,23 @@ function groundedModelIdentity(input: LumiResultFinalizerInput): LumiResultFinal
     blocked: false, reason: 'Model identity grounded in the current configuration-read receipt.' };
 }
 
+function groundedBusinessAnalysis(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  if (!input.taskId || !input.requestId) return null;
+  const task = resultTaskText(input);
+  const contract = taskActionContract(input);
+  if (contract.kind !== 'ecommerce_operations' || contract.components?.length) return null;
+  // Persisted inline analysis is not proof that a requested file was created.
+  if (/\.(?:xlsx?|pdf|docx?|csv)\b|\b(?:Excel|PDF|Word)\b|(?:导出|生成|制作).{0,12}(?:文件|表格|报表)/iu.test(task)) return null; // i18n-allow: extra artifact obligations.
+  const records = (input.toolRecords || []).filter(record => isVerifiedCurrentTurnRecord(input, record));
+  if (!hasCoreActionEvidence(contract, records, task)) return null;
+  const record = [...records].reverse().find(record => /^industry_ecommerce_(?:today_snapshot|store_data_snapshot|listing_action_queue|customer_service_drafts)$/u.test(record.name));
+  if (!record) return null;
+  const payload = parseReceiptObject(toolRecordTerminalPayload(record));
+  if (payload?.ok !== true || payload.status !== 'verified' || payload.persisted !== true || payload.sourceBound !== true || payload.externalMutation !== false
+    || payload.conversationTaskId !== input.taskId || !String(payload.message || '').trim()) return null;
+  return { text: String(payload.message), blocked: false, reason: 'verified_source_bound_business_analysis' };
+}
+
 export function tryFinalizeVerifiedBoundedAction(
   input: LumiResultFinalizerInput,
   acceptedTaskTarget?: LumiTurnFlow['acceptedTaskTarget'],
@@ -2984,6 +3001,8 @@ export function tryFinalizeVerifiedBoundedAction(
   const records = coalesceToolExecutionRecords(input.toolRecords || [])
     .filter(record => recordMatchesCurrentTurnIdentity(input, record));
   const scopedInput = { ...input, toolRecords: records, responseText: '' };
+  const business = groundedBusinessAnalysis(scopedInput);
+  if (business) return business;
   const windowObservation = groundedReadOnlyWindowObservation(scopedInput);
   if (windowObservation) return windowObservation;
   const sessionObservation = browserSessionObservation(records, task);
@@ -3076,6 +3095,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     )),
   };
   const actionText = resultTaskText(input);
+  const business = groundedBusinessAnalysis(input);
+  if (business) return business;
   const windowObservation = groundedReadOnlyWindowObservation(input);
   if (windowObservation) return windowObservation;
   const artifactProgress = taskActionContract(input).kind === 'artifact_work'
