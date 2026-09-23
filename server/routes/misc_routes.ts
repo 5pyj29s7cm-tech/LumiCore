@@ -1,5 +1,6 @@
 // Misc routes that didn't fit into other modules: founder vision, feedback, admin config
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
 
@@ -51,16 +52,19 @@ export function mountMiscRoutes(router: Router, _jwtSecret: string, _llm: {
       if (normalized.contact.length > 500) return res.status(400).json({ error: 'contact must be 500 characters or fewer' });
       if (normalized.position.length > 500) return res.status(400).json({ error: 'position must be 500 characters or fewer' });
       const db = readDB();
-      if (!db.feedback) db.feedback = [];
-      db.feedback.push({
-        id: Math.random().toString(36).substring(2, 15),
+      const feedback = {
+        id: randomUUID(),
         ...normalized,
         userId: req.user!.uid,
         createdAt: new Date().toISOString(),
-      });
+      };
+      // Only declared database tables are persisted. An ad-hoc db.feedback
+      // array previously vanished on restart despite a successful flush.
+      db.settings ||= [];
+      db.settings.push({ key: `user_feedback_v1:${feedback.id}`, value: JSON.stringify(feedback) });
       writeDB(db);
       await flushDBOrThrow();
-      res.json({ success: true });
+      res.json({ success: true, id: feedback.id });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

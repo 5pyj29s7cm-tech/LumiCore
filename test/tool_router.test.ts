@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mergeToolPolicyWithRoute, routeToolsForTurn } from '../server/cognition/tool_router';
 import { isDiagnosticOrRepairRequest } from '../server/cognition/tool_intent';
+import { traceToolIntentDecision } from '../server/cognition/tool_intent';
 
 function declaration(name: string, description = name) {
   return {
@@ -12,6 +13,23 @@ function declaration(name: string, description = name) {
     },
   };
 }
+
+it('exposes only the configuration reader for current model identity questions', () => {
+  for (const text of ['你现在是什么模型', '你用哪个模型？', 'What model are you using?']) {
+    expect(traceToolIntentDecision(text).allowToolUse).toBe(true);
+    const route = routeToolsForTurn(text, ['model_configuration_get','model_configuration_update','computer_use','client_get_state'].map(name=>declaration(name)));
+    expect(route.toolNames).toEqual(['model_configuration_get']); expect(route.hardAllowlist).toBe(true);
+  }
+  expect(traceToolIntentDecision('什么是语言模型？').allowToolUse).toBe(false);
+});
+
+it('offers real external case lookup instead of a planning-only tool', () => {
+  const route = routeToolsForTurn('打开中国裁判文书网查找浙江省衢州市中级法院最新的判例',
+    ['legal_external_research_plan','legal_search_external_authorities','web_login_profile_list','web_login_run','browser_open_task','computer_use'].map(name=>declaration(name)));
+  expect(route.toolNames).toContain('computer_use'); expect(route.toolNames).toContain('browser_open_task');
+  expect(route.toolNames).not.toContain('legal_external_research_plan');
+  expect(route.forbiddenToolNames).toContain('legal_external_research_plan');
+});
 
 it('keeps the grounded playback owner ahead of raw observations', () => {
   const route = routeToolsForTurn('在电脑上的网易云音乐里播放陈奕迅的十年。', [

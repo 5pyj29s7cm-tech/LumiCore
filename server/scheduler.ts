@@ -492,6 +492,7 @@ class ScheduledTaskExecutionError extends Error {
 }
 
 interface ScheduledInFlightHandler {
+  lifecycleGeneration: number;
   controller: AbortController;
   task: ScheduledTask;
   plan: CapabilityExecutionPlan | null;
@@ -529,10 +530,13 @@ export class Scheduler {
   io: SocketIOServer | null = null;
   private llmGetters: LLMGetters | null = null;
   private disabledTasks: Set<string> = new Set();
+  private maintenanceQueue: Array<{ task: ScheduledTask; generation: number; resolve: () => void }> = [];
+  private maintenanceActive = new Set<string>();
 
   constructor(
     private readonly strictFlush: () => Promise<void> = flushDBOrThrow,
     private readonly writeDatabase: (data: any) => void = writeDB,
+    private readonly maintenanceConcurrency = 2,
   ) {}
 
   setIO(io: SocketIOServer) {
@@ -848,6 +852,7 @@ export class Scheduler {
       ));
     }, contract.timeoutMs);
     execution = {
+      lifecycleGeneration: this.lifecycleGeneration,
       controller,
       task,
       plan: null,
@@ -987,6 +992,7 @@ export class Scheduler {
       lastStartedAt: task.lastStartedAt ?? null,
       nextRun: task.nextRun ?? null,
       running: this.runningTasks.has(task.id),
+      queued: this.maintenanceQueue.some(entry => entry.task.id === task.id),
       settlementPending: Boolean(
         this.inFlightHandlers.get(task.id)?.pendingLateSettlement
         && !this.executionOperationsSettled(this.inFlightHandlers.get(task.id)!)
@@ -1415,7 +1421,33 @@ export class Scheduler {
     }
   }
 
-  private async runTask(task: ScheduledTask): Promise<void> {
+  private runTask(task: ScheduledTask): Promise<void> {
+    if (task.executionClass !== 'maintenance') return this.runAdmittedTask(task);
+    if (task.enabled === false || task.requiresReconciliation || this.runningTasks.has(task.id)
+      || this.maintenanceActive.has(task.id) || this.maintenanceQueue.some(entry => entry.task.id === task.id)) return Promise.resolve();
+    // Interval jobs share startup offsets and used to all flush and call
+    // models at once. Queue before starting their execution deadlines, leaving
+    // foreground probes and reminder delivery outside this maintenance lane.
+    return new Promise(resolve => {
+      this.maintenanceQueue.push({ task, generation: this.lifecycleGeneration, resolve });
+      this.drainMaintenanceQueue();
+    });
+  }
+
+  private drainMaintenanceQueue(): void {
+    while (this.maintenanceActive.size < Math.max(1, this.maintenanceConcurrency) && this.maintenanceQueue.length) {
+      const entry = this.maintenanceQueue.shift()!;
+      if (entry.generation !== this.lifecycleGeneration || entry.task.enabled === false
+        || entry.task.requiresReconciliation || !this.tasks.includes(entry.task)) { entry.resolve(); continue; }
+      this.maintenanceActive.add(entry.task.id);
+      void this.runAdmittedTask(entry.task).finally(() => {
+        if (!this.runningTasks.has(entry.task.id)) this.maintenanceActive.delete(entry.task.id);
+        entry.resolve(); this.drainMaintenanceQueue();
+      });
+    }
+  }
+
+  private async runAdmittedTask(task: ScheduledTask): Promise<void> {
     if (
       task.enabled === false
       || task.requiresReconciliation
@@ -1901,6 +1933,13 @@ export class Scheduler {
     } finally {
       this.releaseHandlerFence(taskId, inFlight);
     }
+    if (timeout && !inFlight.handlerStarted && !inFlight.durableOperationRejected
+      && inFlight.lifecycleGeneration === this.lifecycleGeneration) {
+      // The delayed admission write has settled and no handler ever ran.
+      // This is a provable no-side-effect outcome, not a permanent quarantine.
+      // Reconcile durably and schedule a future slot; never replay this slot.
+      await this.reconcileTask(taskId, 'confirmed_no_side_effect');
+    }
   }
 
   private releaseHandlerFence(taskId: string, inFlight: ScheduledInFlightHandler) {
@@ -1911,6 +1950,8 @@ export class Scheduler {
       this.runningControllers.delete(taskId);
     }
     this.runningTasks.delete(taskId);
+    this.maintenanceActive.delete(taskId);
+    this.drainMaintenanceQueue();
   }
 
   private async executeTaskHandler(
@@ -2094,6 +2135,7 @@ export class Scheduler {
 
   stop(options: { drainSettledHandlers?: boolean } = {}) {
     this.lifecycleGeneration += 1;
+    for (const entry of this.maintenanceQueue.splice(0)) entry.resolve();
     for (const timer of this.timers.values()) {
       clearInterval(timer);
       clearTimeout(timer); // Also clear cron timeouts
@@ -2276,14 +2318,16 @@ export function registerScheduledTasks(
     quiet: true,
     lastRun: null,
     executionClass: 'maintenance',
-    handler: async () => {
+    handler: async (execution) => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
       for (const userId of userIds) {
+        execution?.signal.throwIfAborted();
         const episodic = getUnconsolidatedEpisodic(userId, 'personal', '');
         if (episodic.length < 10) continue;
         const ctx: ConsolidationContext = {
           ...getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '', source: 'scheduler_memory_consolidation' }),
+          signal: execution?.signal,
           domain: 'personal',
           orgId: '',
         };
@@ -2307,14 +2351,16 @@ export function registerScheduledTasks(
     quiet: true,
     lastRun: null,
     executionClass: 'maintenance',
-    handler: async () => {
+    handler: async (execution) => {
       const userIds = getAllUserIds();
       const messages: string[] = [];
 
       for (const userId of userIds) {
+        execution?.signal.throwIfAborted();
         try {
           const ctx: ConsolidationContext = {
             ...getUserPreferredLLMConfig(userId, { domain: 'personal', orgId: '', source: 'scheduler_narrative_consolidation' }),
+            signal: execution?.signal,
             domain: 'personal',
             orgId: '',
           };

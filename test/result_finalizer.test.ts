@@ -13,6 +13,20 @@ const verifiedDesktopReceipt = {
 };
 
 describe('Lumi result finalizer', () => {
+  it.each([true, false])('grounds model identity in current evidence (active receipt: %s)', async active => {
+    const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+    const input = { taskText: '你现在是什么模型', responseText: '', source: 'chat', requestId: 'identity-current', taskId: 'identity-task',
+      toolRecords: [{ name: 'model_configuration_get', arguments: {}, requestId: 'identity-current', taskId: 'identity-task',
+        result: JSON.stringify({ roles: { reasoning: { provider: 'relay', model: 'aliyun/deepseek-v4-pro' } },
+          activeCall: { requestId: active ? 'identity-current' : 'stale-request', provider: 'relay', model: 'aliyun/deepseek-v4-flash' } }),
+        terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'configuration read' } }] };
+    const result = finalizeLumiResponse(input);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toContain(active ? 'aliyun/deepseek-v4-flash' : 'aliyun/deepseek-v4-pro');
+    expect(result.text).toContain('Lumi 官方 API');
+    expect(tryFinalizeVerifiedBoundedAction(input)?.text).toBe(result.text);
+    expect(tryFinalizeVerifiedBoundedAction({ ...input, requestId: 'different-request' })).toBeNull();
+  });
   it('preserves a generated video but does not claim mismatched output settings completed the request', async () => {
     const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
     const input = { taskText: '生成6秒视频：公寓走廊。', responseText: '视频已生成。', source: 'chat', requestId: 'media-measured', taskId: 'media-task',

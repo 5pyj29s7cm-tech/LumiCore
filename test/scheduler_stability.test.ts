@@ -24,6 +24,43 @@ describe('scheduler stability', () => {
   });
   afterEach(() => resetRealtimeUserActivityForTests());
 
+  it('queues maintenance before its deadline while allowing foreground probes', async () => {
+    const { writeDB } = await import('../db_layer');
+    const scheduler = new Scheduler(async () => {}, writeDB, 1);
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    const task = (name: string, handler: ScheduledTask['handler'], timeoutMs = 2000): ScheduledTask => ({
+      id: `queue_${name}_${crypto.randomUUID()}`, cron: 'every_hour', lastRun: null, executionClass: 'maintenance', timeoutMs, handler,
+    });
+    const first = task('first', async () => { await gate; return null; });
+    const second = task('second', vi.fn(async () => null), 40);
+    const probe = { ...task('probe', vi.fn(async () => null)), executionClass: 'client_probe' as const };
+    scheduler.register(first); scheduler.register(second); scheduler.register(probe);
+    const a = (scheduler as any).runTask(first); const b = (scheduler as any).runTask(second);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(second.handler).not.toHaveBeenCalled();
+      expect(scheduler.listTasks().find(t=>t.id===second.id)).toMatchObject({queued:true,running:false,requiresReconciliation:false});
+      await (scheduler as any).runTask(probe); expect(probe.handler).toHaveBeenCalledOnce();
+      release(); await Promise.all([a,b]);
+      expect(second.handler).toHaveBeenCalledOnce(); expect(second.lastStatus).toBe('completed');
+    } finally { release(); await Promise.all([a,b]); scheduler.stop(); }
+  });
+
+  it('reconciles a settled admission timeout only when no handler ever ran', async () => {
+    let release!: () => void; const gate = new Promise<void>(resolve => { release=resolve; });
+    let flushes=0; const scheduler = new Scheduler(async () => { if (++flushes===1) await gate; });
+    const task: ScheduledTask = {id:`admission_${crypto.randomUUID()}`,cron:'every_hour',lastRun:null,executionClass:'maintenance',timeoutMs:40,handler:vi.fn(async()=>null)};
+    scheduler.register(task);
+    try {
+      await (scheduler as any).runTask(task);
+      expect(task.requiresReconciliation).toBe(true); expect(task.handler).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(()=>expect(task.requiresReconciliation).toBe(false));
+      expect(task.reconciliationResolution).toBe('confirmed_no_side_effect');
+      expect(task.nextRun).toBeTruthy(); expect(task.handler).not.toHaveBeenCalled();
+    } finally { release(); scheduler.stop(); }
+  });
+
   it('maps every built-in alias to its intended cadence', () => {
     expect(parseSchedule('every_10s')).toEqual({ type: 'interval', intervalMs: 10_000 });
     expect(parseSchedule('every_1m')).toEqual({ type: 'interval', intervalMs: 60_000 });

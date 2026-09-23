@@ -1,4 +1,7 @@
 export const CN_EXECUTION_EVIDENCE_MESSAGES = {
+  researchPlanOnly: '已保存检索行动单，但还没有检索并核对具体案例，你要求的查找尚未完成。',
+  playbackNotStarted: '这次还没执行到播放器操作，尚未开始或确认播放。',
+  groundedModelIdentity: (model: string, provider: string, active: boolean) => `${active ? '本轮实际调用的是' : '当前聊天主模型配置为'} ${model}（${provider === 'relay' ? 'Lumi 官方 API' : provider}）。`,
   artifactSavedStage: '文件已保存',
   artifactReadStage: '已回读当前版本',
   artifactOpenStage: '已在指定软件中打开',

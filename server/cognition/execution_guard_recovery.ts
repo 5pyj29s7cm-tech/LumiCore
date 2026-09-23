@@ -7,7 +7,7 @@ import {
   sanitizeUserFacingExecutionOutput,
   type UserFacingOutputProtectionOptions,
 } from './user_output_protection';
-import { buildActionContract } from './action_contract';
+import { buildActionContract, requiresMediaPlaybackAction } from './action_contract';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import {
   hasMixedStatusExecutionIntent,
@@ -16,6 +16,7 @@ import {
 import { formatUserVisibleReplyForReadability } from './reply_style';
 import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
 import { DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
+import { isModelConfigurationReadRequest } from './model_configuration_intent';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -113,7 +114,7 @@ export interface ExecutionGuardRecoveryRunResult<
 const MISSING_EXECUTION_REASON = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|promised action|execution-status claim|prior diagnostic run without matching diagnostic receipts|这一轮没有成功执行任何工具|回复声称已经(?:打开|加载|生成|保存).+没有成功的.+记录/i;
 const MISSING_ACTION_EVIDENCE_REASON = /Missing (?:verified in-app UI mutation|in-app UI mutation|core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|不是完成当前请求所需的执行证据|没有成功的(?:写入|生成|验收|打开|客户端动作)记录|缺少.+(?:执行|动作|验收|保存|写入|生成).{0,12}证据/i;
 const PROTOCOL_LEAK_REASON = /tool-call protocol leaked|internal tool request/i;
-const INVENTED_RUNTIME_REASON = /fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records/i;
+const INVENTED_RUNTIME_REASON = /fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|unsupported current-turn real-world claim: (?:playback|open|runtime_configuration)/i;
 // i18n-allow -- Chinese confirmation input recognition; not user-visible copy.
 const CONFIRMATION_BLOCK = /requires? (?:explicit )?(?:user )?confirmation|waiting_confirmation|confirmation step|需要(?:用户)?确认|等待确认/i;
 const SECRET_DETAIL = /((?:password|passphrase|secret|token|api.?key|authorization|cookie|credential))\s*[:=]\s*\S+/gi;
@@ -242,6 +243,7 @@ export function classifyExecutionGuardIntent(
   records: ToolExecutionRecord[] = [],
 ): ExecutionGuardIntent {
   const clean = String(task || '').replace(/\s+/g, ' ').trim();
+  if (isModelConfigurationReadRequest(clean)) return 'action_execution';
   const normalizedIntent = normalizeActionIntent(clean);
   // An explicit new operation owns the turn even when a scope fence contains a
   // status word (for example, "write <path>; do not report task status"). The
@@ -643,6 +645,14 @@ export function formatExecutionRecoveryFailure(
 ): string {
   const chinese = /[\u3400-\u9fff]/.test(task);
   const blocker = safeFailureDetail(records, chinese);
+  if (records.length && records.every(record => record.name === 'legal_external_research_plan' && receiptOutcome(record) === 'completed')) {
+    return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.researchPlanOnly
+      : 'The research plan was saved, but no specific case has been retrieved and checked yet. The requested search is incomplete.';
+  }
+  if (!records.length && requiresMediaPlaybackAction(task)) {
+    return chinese ? CN_EXECUTION_EVIDENCE_MESSAGES.playbackNotStarted
+      : 'I did not reach the player controls, so playback has not been started or verified.';
+  }
   if (chinese) {
     return records.length > 0
       ? CN_EXECUTION_EVIDENCE_MESSAGES.recoveryRetry(

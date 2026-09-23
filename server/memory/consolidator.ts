@@ -94,6 +94,7 @@ export interface ConsolidationContext {
   /** Optional explicit Memory Avatar lane; omitted means the Lumi lane. */
   agentId?: string;
   source?: string;
+  signal?: AbortSignal;
 }
 
 function sourceIdentity(memory: Memory): string {
@@ -156,7 +157,7 @@ export async function consolidateEpisodic(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_consolidation' },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 1024, thinkingMode: 'disabled', responseFormat: 'json_object', signal: ctx.signal, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_consolidation' },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -179,7 +180,7 @@ export async function consolidateEpisodic(
 
     if (!parsed.content || typeof parsed.content !== 'string') return null;
 
-    if (!sourcesCurrent()) return null;
+    if (ctx.signal?.aborted || !sourcesCurrent()) return null;
     const consolidated = addMemory(
       {
         userId: ctx.userId,
@@ -261,7 +262,7 @@ export async function selfReflect(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_self_reflection' },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 1024, thinkingMode: 'disabled', responseFormat: 'json_object', signal: ctx.signal, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_self_reflection' },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -284,7 +285,7 @@ export async function selfReflect(
 
     if (!parsed.content || typeof parsed.content !== 'string') return null;
 
-    if (!sourcesCurrent()) return null;
+    if (ctx.signal?.aborted || !sourcesCurrent()) return null;
     const reflection = addMemory(
       {
         userId: ctx.userId,
@@ -374,7 +375,7 @@ export async function consolidateNarrative(
     const response = await makeLLMCall(
       messages,
       [],
-      { provider: ctx.provider, model: ctx.model, maxTokens: 512, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_narrative_consolidation' },
+      { provider: ctx.provider, model: ctx.model, maxTokens: 1024, thinkingMode: 'disabled', responseFormat: 'json_object', signal: ctx.signal, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_narrative_consolidation' },
       getDeepSeek,
       getGemini,
       getOpenAI,
@@ -400,7 +401,7 @@ export async function consolidateNarrative(
     const title = parsed.title || `叙事记忆 ${new Date().toISOString().slice(0, 10)}`;
     const content = `[${title}] ${parsed.narrative.trim().slice(0, 500)}`;
 
-    if (!sourcesCurrent()) return null;
+    if (ctx.signal?.aborted || !sourcesCurrent()) return null;
     const narrative = addMemory(
       {
         userId: ctx.userId,

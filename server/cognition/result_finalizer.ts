@@ -1,4 +1,5 @@
 import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
+import { isModelConfigurationReadRequest } from './model_configuration_intent';
 import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
 import fs from 'node:fs';
 import { hasImmediateExecutionPromise } from './execution_claims';
@@ -2956,6 +2957,24 @@ function groundedReadOnlyWindowObservation(input: LumiResultFinalizerInput): Lum
   return { text: String(payload.description), blocked: false, reason: 'verified_readonly_window_observation' };
 }
 
+function groundedModelIdentity(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  if (!isModelConfigurationReadRequest(resultTaskText(input))) return null;
+  const record = (input.toolRecords || []).slice().reverse().find(row => row.name === 'model_configuration_get' && isVerifiedCurrentTurnRecord(input, row));
+  if (!record) return null;
+  const payload = parseReceiptObject(toolRecordTerminalPayload(record));
+  if (!payload) return null;
+  const active = payload.activeCall?.requestId === input.requestId ? payload.activeCall : null;
+  const configuration = payload.role === 'reasoning' ? payload.configuration : payload.roles?.reasoning;
+  const selected = active || configuration;
+  const model = String(selected?.model || '').trim();
+  const provider = String(selected?.provider || '').trim();
+  if (!model || !/^[\w./ :+-]{1,200}$/.test(model) || !/^[\w.-]{1,60}$/.test(provider)) return null;
+  const zh = isChineseText(resultTaskText(input));
+  return { text: zh ? CN_EXECUTION_EVIDENCE_MESSAGES.groundedModelIdentity(model, provider, Boolean(active))
+    : `${active ? 'This reply uses' : 'The configured primary chat model is'} ${model} (${provider === 'relay' ? 'Lumi Official API' : provider}).`,
+    blocked: false, reason: 'Model identity grounded in the current configuration-read receipt.' };
+}
+
 export function tryFinalizeVerifiedBoundedAction(
   input: LumiResultFinalizerInput,
   acceptedTaskTarget?: LumiTurnFlow['acceptedTaskTarget'],
@@ -2976,6 +2995,8 @@ export function tryFinalizeVerifiedBoundedAction(
   // publication/delivery tasks and missing artifacts still fail this check.
   const media = groundedMediaGeneration(scopedInput);
   if (media) return media;
+  const modelIdentity = groundedModelIdentity(scopedInput);
+  if (modelIdentity) return modelIdentity;
   const workflow = formatGroundedWorkflowProgress(scopedInput);
   if (workflow && ['workflow_completed', 'workflow_incomplete'].includes(workflow.reason || '')) return workflow;
   const contract = taskActionContract(scopedInput);
@@ -3228,6 +3249,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const actionContract = taskActionContract(input);
   const groundedRuntimeWork = formatGroundedRuntimeWorkResult(input, actionContract);
   if (groundedRuntimeWork) return groundedRuntimeWork;
+  const modelIdentity = groundedModelIdentity(input);
+  if (modelIdentity) return modelIdentity;
   const groundedCurrentAuthoringDocument = formatGroundedCurrentAuthoringDocumentResult(input);
   if (groundedCurrentAuthoringDocument) {
     return preserveModelWordingOnGroundedSuccess(input, groundedCurrentAuthoringDocument);

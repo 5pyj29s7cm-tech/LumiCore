@@ -4,7 +4,8 @@ import type { MemoryAvatarAppearance } from './memory_avatar';
 export interface AvatarLiveComment { id: string; nickname: string; text: string; receivedAt: number; source: 'screen' | 'test' }
 export interface VisibleLiveComment { nickname: string; text: string }
 export interface AvatarLiveTurn { nickname: string; comment: string; reply: string }
-export interface AvatarLiveReply { text: string; audioBase64: string; format: string }
+export interface AvatarLiveHistoryTurn extends AvatarLiveTurn { requestId: string; createdAt: string; spokenAt?: string | null }
+export interface AvatarLiveReply { text: string; audioBase64: string; format: string; requestId?: string }
 export function liveAudioEncoding(format: unknown): string | undefined {
   if (typeof format !== 'string') return undefined;
   const value = format.trim().toLowerCase().split(';')[0];

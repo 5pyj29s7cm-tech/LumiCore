@@ -180,7 +180,7 @@ export function buildModelToolProjection(
   const authorizedPinnedNames = unique(Array.from(hints.pinnedTools || []))
     .filter(isAuthorized);
   const pinnedNames = hardAllowlist ? [] : authorizedPinnedNames;
-  const hintedRequiredNames = unique(Array.from(hints.requiredTools || []))
+  const hintedRequiredNames = unique([...Array.from(hints.requiredTools || []), ...(route?.requiredTools || [])])
     .filter(isAuthorized);
   const semanticNames = hardAllowlist
     ? []

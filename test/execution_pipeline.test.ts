@@ -20,6 +20,27 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it.each(['chat', 'voice'] as const)('retains browser execution schemas through the complete %s legal lookup projection', channel => {
+    const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'court-lookup', channel, source: channel, operationMode: 'assistant',
+      text: '打开中国裁判文书网查找浙江省衢州市中级法院最新的判例', targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 10 } });
+    expect(pipeline.executionRequested).toBe(true);
+    for (const name of ['browser_open_task', 'computer_use', 'web_login_profile_list', 'url_fetch_logged_in']) {
+      expect(pipeline.modelToolProjection.toolNames).toContain(name);
+      expect(pipeline.modelToolProjection.requiredToolNames).toContain(name);
+    }
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('legal_external_research_plan');
+  });
+  it.each(['chat', 'voice'] as const)('routes current model identity through the complete %s read-only execution path', channel => {
+    const input = { dispatch: { userId: 'model-identity', channel, source: channel, operationMode: 'assistant', text: '你现在是什么模型', targetIsLumi: true }, registry: createRegistry(),
+      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 10 } };
+    const pipeline = buildLumiExecutionPipeline(input);
+    expect(pipeline.executionRequested).toBe(true);
+    expect(pipeline.modelToolProjection.toolNames).toEqual(['model_configuration_get']);
+    expect(pipeline.capabilityPlan.taskLedgerRequired).toBe(true);
+    const blocked = buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, text: '不要调用工具，只说说什么是大语言模型。' } });
+    expect(blocked.executionRequested).toBe(false);
+  });
   it('keeps a WPS report open-and-check request out of Lumi client navigation', () => {
     const text = '用电脑上的 WPS 打开 D:/LumiCore-Audit-Reports/20260920/chat-task-repair/cloud-output/采购报表_执行进度复测更新.xlsx，核对表格的总金额和图表，告诉我实际看到的结果。';
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'wps-open-read', channel: 'chat', source: 'chat', operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 10 } });

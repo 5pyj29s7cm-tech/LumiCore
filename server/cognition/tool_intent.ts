@@ -11,6 +11,7 @@ import { normalizeActionIntent } from './normalized_action_intent';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import { isVideoPlaybackRequest } from './media_intent';
 import { isExternalCliRequest } from './external_cli_intent';
+import { isModelConfigurationReadRequest } from './model_configuration_intent';
 
 interface IntentGrammarRule {
   name: string;
@@ -475,6 +476,7 @@ export function hasExplicitToolIntent(text: string): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
+  if (isModelConfigurationReadRequest(normalized)) return true;
   if (isExternalCliRequest(normalized)) return true;
   if (isVideoPlaybackRequest(normalized)) return true;
   if (isExternalAiHistoryActionRequest(normalized)) return true;
@@ -606,6 +608,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
         ? ['messaging-send']
         : matchedStructuredToolRules;
   if (canonical.kind === 'media_generation') structuredToolRules.push('media-generation');
+  if (isModelConfigurationReadRequest(normalized)) structuredToolRules.push('model-configuration-read');
   if (!informationOnlyQuestion && isVideoPlaybackRequest(normalized)) {
     structuredToolRules.push('video-playback');
   }

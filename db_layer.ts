@@ -627,6 +627,20 @@ function createTables(): Promise<void> {
         value TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS avatar_live_turns (
+        userId TEXT NOT NULL,
+        avatarId TEXT NOT NULL,
+        requestId TEXT NOT NULL,
+        nickname TEXT NOT NULL,
+        comment TEXT NOT NULL,
+        reply TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        spokenAt TEXT,
+        PRIMARY KEY (userId, avatarId, requestId)
+      );
+      CREATE INDEX IF NOT EXISTS idx_avatar_live_history
+        ON avatar_live_turns(userId, avatarId, createdAt DESC);
+
       CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
         userId TEXT NOT NULL,

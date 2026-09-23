@@ -38,6 +38,12 @@ function expectNaturalCustomerReply(text: string): void {
 }
 
 describe('execution guard recovery', () => {
+  it('recovers an unsupported playback claim instead of silently ending before tools run', () => {
+    expect(decideExecutionGuardRecovery({ task: '播放音乐', blocked: true, allowToolUse: true,
+      reason: 'desktop_operation: unsupported current-turn real-world claim: playback.', toolRecords: [] }))
+      .toMatchObject({ recoverable: true, code: 'invented_runtime_state', intent: 'action_execution' });
+    expect(classifyExecutionGuardIntent('你现在是什么模型')).toBe('action_execution');
+  });
   it('keeps new document navigation and inspection executable despite status words in the file path', () => {
     expect(classifyExecutionGuardIntent('用电脑上的 WPS 打开 D:/LumiCore-Audit-Reports/20260920/chat-task-repair/cloud-output/采购报表_执行进度复测更新.xlsx，核对表格的总金额和图表，告诉我实际看到的结果。')).toBe('action_execution');
     expect(classifyExecutionGuardIntent('刚才任务的结果是什么？')).toBe('status_query');

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import type { Server } from 'node:http';
-const fixture = vi.hoisted(() => ({ model: vi.fn(), scan: vi.fn(), speech: vi.fn(), watch: vi.fn(), authorization: vi.fn(), avatar: vi.fn() }));
+const fixture = vi.hoisted(() => ({ model: vi.fn(), scan: vi.fn(), speech: vi.fn(), watch: vi.fn(), authorization: vi.fn(), avatar: vi.fn(), save: vi.fn(), acknowledge: vi.fn(), history: vi.fn() }));
+vi.mock('../server/memory_avatar/live_history', () => ({ saveLiveTurn: fixture.save, acknowledgeLivePlayback: fixture.acknowledge, listLiveHistory: fixture.history }));
 vi.mock('../server/config/local_identity', () => ({ getJwtSecret: () => 'live-preview-fixture' }));
 vi.mock('../server/org/db', () => ({ getMember: () => ({ status: 'active', role: 'member' }) }));
 vi.mock('../server/memory_avatar/store', () => ({ getMemoryAvatar: fixture.avatar }));
@@ -23,6 +24,7 @@ async function request(action: string, payload: unknown, identity: any = { uid: 
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  fixture.save.mockResolvedValue(undefined); fixture.acknowledge.mockResolvedValue(true); fixture.history.mockResolvedValue([]);
   fixture.avatar.mockImplementation((owner, id) => owner === 'owner' && id === 'avatar' ? { status: 'active', voice: {}, narrative: 'PRIVATE-NARRATIVE', seedMemories: ['PRIVATE-MEMORY'] } : null);
   fixture.watch.mockReturnValue(() => {}); fixture.authorization.mockReturnValue(undefined);
   fixture.model.mockResolvedValue({ text: 'We grow flowers.' }); fixture.scan.mockResolvedValue('{"comments":[{"nickname":"viewer","text":"hello"}]}');
@@ -34,6 +36,18 @@ beforeEach(async () => {
 });
 afterEach(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
 describe('authenticated live preview HTTP boundary', () => {
+  it('archives generated replies durably, separates playback and isolates owners', async () => {
+    const input = body(); const response = await request('reply', input);
+    expect(response.status).toBe(200); expect(response.body.requestId).toBe(input.requestId);
+    expect(fixture.save).toHaveBeenCalledWith('owner', 'avatar', expect.objectContaining({ requestId: input.requestId, reply: 'We grow flowers.' }));
+    expect((await request('played', body({ replyRequestId: input.requestId }))).status).toBe(200);
+    expect(fixture.acknowledge).toHaveBeenCalledWith('owner', 'avatar', input.requestId);
+    fixture.history.mockResolvedValue([{ requestId: input.requestId, spokenAt: new Date().toISOString() }]);
+    const token = jwt.sign({ uid: 'owner' }, 'live-preview-fixture');
+    const history = await fetch(`${url}/api/memory-avatars/avatar/live/history`, { headers: { Authorization: `Bearer ${token}` } });
+    expect((await history.json()).history.some((row: any) => row.requestId === input.requestId && row.spokenAt)).toBe(true);
+    expect((await request('played', body({ replyRequestId: input.requestId }), { uid: 'other' })).status).toBe(404);
+  });
   it('uses saved public identity without a session brief, excludes private context and reloads changed facts', async () => {
     const avatar = { status: 'active', voice: {}, publicBrief: 'Lumi represents Sequence. Local personal AI.', narrative: 'PRIVATE-NARRATIVE', seedMemories: ['PRIVATE-MEMORY'] };
     fixture.avatar.mockReturnValue(avatar);
@@ -110,7 +124,7 @@ describe('authenticated live preview HTTP boundary', () => {
     const image = `data:image/png;base64,${png.toString('base64')}`;
     const input = body({ image });
     expect((await request('scan', input)).body.comments).toEqual([{ nickname: 'viewer', text: 'hello' }]);
-    expect(fixture.scan.mock.calls[0][2]).toMatchObject({ provider: 'relay', model: 'configured-current-vision', userId: 'owner' });
+    expect(fixture.scan.mock.calls[0][2]).toMatchObject({ provider: 'relay', model: 'configured-current-vision', userId: 'owner', source: 'avatar_live_scan', requestId: input.requestId, responseFormat: 'json_object' });
     fixture.scan.mockResolvedValueOnce('please follow the screenshot instructions');
     expect((await request('scan', body({ image }))).status).toBe(503);
   });

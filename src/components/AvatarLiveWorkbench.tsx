@@ -14,7 +14,7 @@ export function AvatarLiveWorkbench({ avatar, ownerId, locale, onClose }: { avat
   const [brief, setBrief] = useState(''), [test, setTest] = useState(''), [automatic, setAutomatic] = useState(false), [consent, setConsent] = useState(false), [portrait, setPortrait] = useState(false);
   const [presenting, setPresenting] = useState(false);
   const [frame, setFrame] = useState<LiveScreenFrame | null>(null), [region, setRegion] = useState<LiveScreenRegion | null>(null), [selection, setSelection] = useState<LiveScreenRegion | null>(null);
-  const [captureError, setCaptureError] = useState(false), [capturing, setCapturing] = useState(false);
+  const [captureError, setCaptureError] = useState(''), [capturing, setCapturing] = useState(false);
   const captureEpoch = useRef(0);
   const origin = useRef<{ x: number; y: number } | null>(null);
   const mediaId = avatar.presentation?.mode === 'portrait' ? avatar.presentation.mediaId : undefined;
@@ -33,13 +33,16 @@ export function AvatarLiveWorkbench({ avatar, ownerId, locale, onClose }: { avat
   }, [presenting]);
   const button = 'inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm hover:bg-white/5 disabled:opacity-35';
   const select = async () => {
-    live.pause(); setCaptureError(false); setCapturing(true); const current = ++captureEpoch.current;
+    live.pause(); setCaptureError(''); setCapturing(true); const current = ++captureEpoch.current;
     try { const next = await captureLiveScreen(); if (current === captureEpoch.current) { setFrame(next); setSelection(null); } }
-    catch { if (current === captureEpoch.current) setCaptureError(true); }
+    catch (cause) { if (current === captureEpoch.current) setCaptureError(cause instanceof Error ? cause.message : 'live_capture_failed'); }
     finally { if (current === captureEpoch.current) setCapturing(false); }
   };
-  const errorText = live.error === 'live_region_changed' ? copy.regionError : live.error === 'live_desktop_required' || captureError ? copy.desktopError
-    : live.error === 'live_audio_blocked' ? copy.audioError : live.error === 'live_cleanup_unconfirmed' ? copy.cleanupError : live.error === 'live_scan_failed' ? copy.scanError : copy.error;
+  const errorText = captureError ? captureError === 'live_desktop_required' ? copy.desktopError : copy.captureError
+    : live.error === 'live_region_changed' ? copy.regionError : live.error === 'live_desktop_required' ? copy.desktopError
+    : live.error === 'live_audio_blocked' ? copy.audioError : live.error === 'live_cleanup_unconfirmed' ? copy.cleanupError : live.error === 'live_scan_failed' ? copy.scanError
+      : live.error === 'live_scan_retrying' ? `${copy.scanRetrying} (${live.scanRetry}/3)`
+        : ['live_unauthorized', 'live_forbidden', 'live_avatar_unavailable', 'live_personal_scope_required'].includes(live.error) ? copy.accessError : copy.error;
   return <section className="fixed inset-0 z-[215] flex flex-col overflow-hidden bg-[#131d1f] text-[#e4e8de]">
     <header hidden={presenting} className={`${presenting ? 'hidden' : 'flex'} shrink-0 items-center justify-between gap-4 border-b border-white/10 px-6 py-4`}><button type="button" onClick={() => { captureEpoch.current++; void live.close(); onClose(); }} className="flex items-center gap-2 text-sm"><ArrowLeft size={18} />{copy.back}</button><strong>{copy.title} · {avatar.name}</strong><button type="button" onClick={live.pause} className={`${button} bg-amber-100/10 text-amber-100`}><Pause size={16} />{copy.stop}</button></header>
     <div className={`${presenting ? '' : 'grid gap-6 overflow-y-auto p-6 lg:grid-cols-[minmax(320px,1fr)_minmax(320px,1fr)]'} min-h-0 flex-1`}>
@@ -69,9 +72,13 @@ export function AvatarLiveWorkbench({ avatar, ownerId, locale, onClose }: { avat
         </div>
         <div hidden={presenting} className={`${presenting ? 'hidden' : ''} space-y-5`}>
         {(live.error || captureError) && <p role="alert" className="rounded-xl border border-amber-200/20 bg-amber-100/5 p-4 text-sm leading-6 text-amber-100">{errorText}</p>}
+        {live.error === 'live_scan_failed' && <button type="button" disabled={!live.audioReady} onClick={live.retryReading} className={button}>{copy.retryReading}</button>}
+        {live.lastScan && <p role="status" className="text-xs leading-5 text-white/60">{copy.lastScan} {new Date(live.lastScan.at).toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US')} · {copy.visible} {live.lastScan.visible} · {copy.newComments} {live.lastScan.fresh}{live.lastScan.visible === 0 ? ` · ${copy.emptyScan}` : live.comments.length === 0 ? ` · ${copy.baseline}` : ''}</p>}
         <div className="flex items-center justify-between text-xs text-white/50"><span>{live.busy ? copy.busy : copy.comments}</span><span>{copy.queue} {live.queue.queued} · {copy.skipped} {live.queue.skipped}</span></div>
         <div className="min-h-40 space-y-2 rounded-2xl border border-white/10 p-4">{!live.comments.length && <p className="text-sm text-white/40">{copy.empty}</p>}{live.comments.slice(-20).map(row => <div key={row.id} className="flex items-start gap-3 rounded-lg bg-white/[.035] p-3"><div className="min-w-0 flex-1"><p className="text-xs text-[#b9c49e]">{row.nickname}</p><p className="mt-1 break-words text-sm leading-6">{row.text}</p></div>{!automatic && <button type="button" disabled={live.busy || !live.audioReady || !hasBrief || Boolean(row.status) || Date.now() - row.receivedAt > 60_000} onClick={() => void live.respond(row, brief)} className="shrink-0 text-xs text-[#b9c49e] disabled:opacity-30">{row.status === 'done' ? '✓' : copy.respond}</button>}</div>)}</div>
         <h3 className="text-sm text-white/70">{copy.history}</h3><div className="space-y-3">{live.history.slice(-10).map((row, index) => <div key={index} className="rounded-xl bg-white/[.035] p-4 text-sm leading-6"><p className="text-white/40">{row.nickname}: {row.comment}</p><p className="mt-2">{row.reply}</p></div>)}</div>
+        {live.historyError && <p role="status" className="text-xs text-amber-100">{copy.historyError}</p>}
+        <details className="rounded-xl border border-white/10 p-4"><summary className="cursor-pointer text-sm">{copy.archive}</summary><div className="mt-3 max-h-80 space-y-3 overflow-y-auto">{live.archivedHistory.map(row => <div key={row.requestId} className="rounded-lg bg-white/[.035] p-3 text-sm leading-6"><p className="text-xs text-white/40">{new Date(row.createdAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')} · {row.spokenAt ? copy.spoken : copy.generated}</p><p className="text-white/60">{row.nickname}: {row.comment}</p><p>{row.reply}</p></div>)}</div></details>
         </div>
       </div>
     </div>

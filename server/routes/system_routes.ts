@@ -371,10 +371,17 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   router.get("/health", optionalAuth, (req, res) => {
     try {
       const persistence = getDatabasePersistenceStatus();
+      const scheduledTasks = scheduler.listTasks();
+      const schedulerHealth = {
+        degraded: scheduledTasks.some(task => task.requiresReconciliation),
+        pausedTasks: scheduledTasks.filter(task => task.requiresReconciliation).length,
+        queuedTasks: scheduledTasks.filter(task => task.queued).length,
+      };
       const detailed = /^(?:1|true|yes)$/i.test(String(req.query.details || ''));
       if (!detailed) {
         return res.json({
-          status: persistence.degraded ? 'degraded' : 'ok',
+          status: persistence.degraded || schedulerHealth.degraded ? 'degraded' : 'ok',
+          scheduler: schedulerHealth,
           timestamp: new Date().toISOString(),
           runtime: {
             name: runtimeBuildMetadata.name,
@@ -419,7 +426,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
         return counts;
       }, {});
       res.json({
-        status: persistence.degraded ? "degraded" : "ok",
+        status: persistence.degraded || schedulerHealth.degraded ? "degraded" : "ok",
+        scheduler: schedulerHealth,
         timestamp: new Date().toISOString(),
         runtime: getRuntimeVersionInfo(),
         database: {

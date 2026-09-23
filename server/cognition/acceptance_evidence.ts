@@ -354,8 +354,16 @@ export function validateCompletionTerminalReceipt(
   return { accepted: true, diagnosticCode: 'accepted', reason: receipt.reason };
 }
 
-function nextStepForReceipt(receipt: TaskTerminalReceipt | null | undefined): string {
+function nextStepForReceipt(receipt: TaskTerminalReceipt | null | undefined, taskLabel = ''): string {
   const code = String(receipt?.reasonCode || '');
+  if (/[\u3400-\u9fff]/u.test(taskLabel) && receipt?.outcome !== 'completed') {
+    // i18n-allow: localized public task feedback.
+    if (/confirmation/i.test(code)) return '确认待执行的具体操作后继续。';
+    // i18n-allow: localized public task feedback.
+    if (/runtime|provider|dependency|unavailable/i.test(code)) return '恢复不可用的服务后，从未完成的步骤继续。';
+    // i18n-allow: localized public task feedback.
+    if (receipt?.outcome === 'failed' || receipt?.outcome === 'blocked') return '核对当前停在哪一步，再继续未完成的部分；已经做好的内容保留。';
+  }
   if (/confirmation/i.test(code)) return 'Obtain the required user confirmation, then resume from the preserved receipt ledger.';
   if (/policy|forbidden/i.test(code)) return 'Resolve the policy boundary or select an allowed capability before retrying.';
   if (/runtime|provider|dependency|unavailable/i.test(code)) return 'Restore the unavailable runtime dependency, then resume without replaying verified side effects.';
@@ -399,7 +407,7 @@ export function buildTaskCompletionFeedback(
       : []),
     ...(!receipt && fallback?.accepted ? ['A verified terminal action receipt was recorded.'] : []),
   ];
-  const nextStep = nextStepForReceipt(trustedReceipt);
+  const nextStep = nextStepForReceipt(trustedReceipt, taskLabel);
   return {
     status,
     completed: status === 'completed' ? [`${label} completed with verified terminal evidence.`] : [],

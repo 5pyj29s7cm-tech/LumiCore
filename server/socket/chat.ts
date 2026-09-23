@@ -24,6 +24,7 @@ import {
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, runWithTools, type LLMResult } from "../llm/adapter";
+import { isModelConfigurationReadRequest } from '../cognition/model_configuration_intent';
 import {
   normalizeOperationMode,
 } from "../cognition/operation_modes";
@@ -4371,6 +4372,10 @@ export function registerChatHandler(
           ...conversationHistory,
           { role: 'user', content: text, sourceMessageId: acceptedUserMessageId },
         ];
+        const modelIdentityRead = toolSessionActive && isModelConfigurationReadRequest(text);
+        if (modelIdentityRead) messages.splice(0, messages.length,
+          { role: 'system', content: 'Read model_configuration_get with role reasoning to answer the current model question. Report the current-turn activeCall when supplied, otherwise label the value as configuration. Do not change settings or test providers.' },
+          { role: 'user', content: text, sourceMessageId: acceptedUserMessageId });
         normalTurnMessages = messages;
 
         try {
@@ -4430,6 +4435,7 @@ export function registerChatHandler(
               orgId: resolvedOrgId,
               signal: abortController.signal,
               ...reasoningRoutePolicy,
+              ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}),
             },
             (record) => {
               allToolRecords.push(record);

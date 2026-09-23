@@ -349,7 +349,7 @@ describe('scheduler capability execution protocol', () => {
 
   it('plans and persists before invoking a handler and requires policy on every built-in task', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'server', 'scheduler.ts'), 'utf8');
-    const runStart = source.indexOf('private async runTask');
+    const runStart = source.indexOf('private async runAdmittedTask');
     const runEnd = source.indexOf('private async executeTaskHandler', runStart);
     const run = source.slice(runStart, runEnd);
     expect(run.indexOf('buildScheduledTaskExecutionPlan(task, startedAt)'))

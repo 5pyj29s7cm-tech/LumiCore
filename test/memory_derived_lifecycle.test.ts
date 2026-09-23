@@ -14,6 +14,24 @@ vi.mock('../server/llm/embedding_provider', async importOriginal => ({
 
 describe('memory extraction and derived data lifecycle', () => {
   beforeAll(async () => { await initDatabase(); });
+  it.each(['episodic', 'reflection', 'narrative'])('does not store %s output after cancellation', async kind => {
+    const userId = `cancelled-consolidation-${kind}`;
+    addMemory({ userId, type: 'fact', content: 'A source statement', keywords: ['source'], confidence: 0.8, sourceInteractionId: 'synthetic' }, { tier: kind === 'reflection' ? 'growth' : 'episodic', generateEmbedding: false });
+    const controller = new AbortController();
+    let finish!: (value: any) => void;
+    vi.mocked(makeLLMCall).mockImplementationOnce((_messages, _tools, config) => {
+      expect(config).toMatchObject({ signal: controller.signal, thinkingMode: 'disabled', responseFormat: 'json_object', maxTokens: 1024 });
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const ctx = { userId, provider: 'openai' as const, model: 'synthetic', signal: controller.signal };
+    const pending = kind === 'episodic' ? consolidateEpisodic(ctx, 1, () => null, () => null)
+      : kind === 'reflection' ? selfReflect(ctx, () => null, () => null)
+        : consolidateNarrative(ctx, 7, 1, () => null, () => null);
+    controller.abort();
+    finish({ text: JSON.stringify({ content: 'Late output', narrative: 'Late output', title: 'Synthetic', keywords: [], importance: 0.5 }) });
+    expect(await pending).toBeNull();
+    expect(readDB().memories.filter(item => item.userId === userId)).toHaveLength(1);
+  });
   it.each(['object', 'array', 'fenced'])('parses a normal %s JSON model response', async shape => {
     const memories = [{ type: 'preference', content: 'The user prefers concise answers.', keywords: ['concise'], confidence: 0.8 }];
     const json = shape === 'array' ? JSON.stringify(memories) : JSON.stringify({ memories, reminders: [] });

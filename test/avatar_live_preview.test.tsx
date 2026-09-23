@@ -2,12 +2,12 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
-const fixture = vi.hoisted(() => ({ create: vi.fn(), enable: vi.fn(), close: vi.fn(), stop: vi.fn(), play: vi.fn(), reply: vi.fn(), scan: vi.fn(), capture: vi.fn(), crop: vi.fn(), mount: vi.fn(), unmount: vi.fn() }));
+const fixture = vi.hoisted(() => ({ create: vi.fn(), enable: vi.fn(), close: vi.fn(), stop: vi.fn(), play: vi.fn(), reply: vi.fn(), scan: vi.fn(), capture: vi.fn(), crop: vi.fn(), mount: vi.fn(), unmount: vi.fn(), history: vi.fn(), acknowledge: vi.fn() }));
 vi.mock('../src/lib/avatarLivePlayback', () => ({ AvatarLivePlayback: class {
   constructor(...args: unknown[]) { fixture.create(...args); }
   enable = fixture.enable; closeAndWait = fixture.close; stop = fixture.stop; play = fixture.play;
 } }));
-vi.mock('../src/services/avatarLiveService', () => ({ avatarLiveService: { reply: fixture.reply, scan: fixture.scan } }));
+vi.mock('../src/services/avatarLiveService', () => ({ avatarLiveService: { reply: fixture.reply, scan: fixture.scan, history: fixture.history, acknowledge: fixture.acknowledge } }));
 vi.mock('../src/lib/avatarLiveScreen', () => ({ captureLiveScreen: fixture.capture, cropLiveScreen: fixture.crop, validateLiveRegion: vi.fn() }));
 vi.mock('../src/hooks/useAliyunAvatarConfig', () => ({ useAliyunAvatarConfig: () => null }));
 vi.mock('../src/components/MemoryAvatarPortraitStage', () => ({ MemoryAvatarPortraitStage: () => null }));
@@ -32,10 +32,55 @@ async function ready(result: ReturnType<typeof renderHook<ReturnType<typeof useA
 }
 beforeEach(() => {
   vi.resetAllMocks(); fixture.enable.mockResolvedValue(undefined); fixture.close.mockResolvedValue(undefined);
+  fixture.history.mockResolvedValue([]); fixture.acknowledge.mockResolvedValue(undefined);
   fixture.reply.mockResolvedValue(reply); fixture.play.mockResolvedValue(undefined);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe('live preview in the current Lumi window', () => {
+  it('recovers a transient scan failure without resetting the baseline or audio', async () => {
+    vi.useFakeTimers();
+    fixture.capture.mockResolvedValue({}); let frame = 0;
+    fixture.crop.mockImplementation(async () => `frame-${++frame}`);
+    const old = { nickname: 'Viewer', text: 'Old comment' };
+    fixture.scan.mockResolvedValueOnce([old]).mockRejectedValueOnce(new Error('live_service_unavailable'))
+      .mockResolvedValue([old, { nickname: 'Viewer', text: 'New comment' }]);
+    const { result } = renderHook(() => useAvatarLivePreview(config)); await ready(result);
+    await act(async () => result.current.start(region, 'Public brief', true));
+    expect(result.current.lastScan).toMatchObject({ visible: 1, fresh: 0 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(result.current.running).toBe(true); expect(result.current.error).toBe('live_scan_retrying');
+    expect(fixture.stop).not.toHaveBeenCalled(); expect(fixture.close).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(fixture.reply).toHaveBeenCalledOnce();
+    expect(fixture.reply.mock.calls[0][1].comment.text).toBe('New comment');
+    expect(result.current.lastScan).toMatchObject({ visible: 2, fresh: 1 });
+    expect(result.current.running).toBe(true); expect(result.current.error).toBe('');
+  });
+  it('retains the selected read session after exhausted retries and resumes without replay', async () => {
+    vi.useFakeTimers(); fixture.capture.mockResolvedValue({}); let frame = 0;
+    fixture.crop.mockImplementation(async () => `frame-${++frame}`);
+    const old = { nickname: 'Viewer', text: 'Old comment' };
+    fixture.scan.mockResolvedValueOnce([old]).mockRejectedValue(new Error('live_scan_invalid'));
+    const { result } = renderHook(() => useAvatarLivePreview(config)); await ready(result);
+    await act(async () => result.current.start(region, 'Public brief', true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(24_000); });
+    expect(fixture.scan).toHaveBeenCalledTimes(5);
+    expect(result.current.running).toBe(false); expect(result.current.audioReady).toBe(true);
+    expect(result.current.error).toBe('live_scan_failed'); expect(fixture.stop).not.toHaveBeenCalled();
+    fixture.scan.mockResolvedValue([old, { nickname: 'Viewer', text: 'New comment' }]);
+    await act(async () => result.current.retryReading());
+    expect(result.current.running).toBe(true); expect(fixture.reply).toHaveBeenCalledOnce();
+    expect(fixture.reply.mock.calls[0][1].comment.text).toBe('New comment');
+  });
+  it('stops only reading when display geometry changes and does not retry the crop', async () => {
+    vi.useFakeTimers(); fixture.capture.mockResolvedValue({}); fixture.crop.mockRejectedValue(new Error('live_region_changed'));
+    const { result } = renderHook(() => useAvatarLivePreview(config)); await ready(result);
+    await act(async () => result.current.start(region, 'Public brief', true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.error).toBe('live_region_changed'); expect(result.current.running).toBe(false);
+    expect(fixture.capture).toHaveBeenCalledOnce(); expect(fixture.scan).not.toHaveBeenCalled();
+    expect(fixture.stop).not.toHaveBeenCalled(); expect(result.current.audioReady).toBe(true);
+  });
   it('waits for cloud cleanup before allowing another audio session', async () => {
     const closing = deferred(); fixture.close.mockReturnValueOnce(closing.promise);
     const { result } = renderHook(() => useAvatarLivePreview(config)); await ready(result);

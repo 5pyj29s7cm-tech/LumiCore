@@ -283,6 +283,10 @@ describe('route security hardening', () => {
       body: JSON.stringify({ message: 'A bounded authenticated report' }),
     });
     expect(accepted.status).toBe(200);
+    const receipt = await accepted.json();
+    const { querySQL } = await import('../db_layer');
+    const persisted = await querySQL<{ value: string }>('SELECT value FROM settings WHERE key=?', [`user_feedback_v1:${receipt.id}`]);
+    expect(JSON.parse(persisted[0].value)).toMatchObject({ userId, message: 'A bounded authenticated report' });
 
     // The canonical /chat route is mounted by chat_routes; misc_routes must not
     // install a second, weaker organization-scope implementation.

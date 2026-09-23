@@ -57,11 +57,14 @@ import { toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { hasRequestedArtifactMutation, hasExplicitNoMutationInstruction } from './tool_intent';
 import { hasVisionIntent } from './vision_routing';
 import { withoutLocationLiterals } from './location_literals';
+import { isModelConfigurationReadRequest } from './model_configuration_intent';
 
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
 export interface ToolRoute {
   toolNames: string[];
+  /** Core turn tools retained when schema/context budgets compact the route. */
+  requiredTools?: string[];
   categories: string[];
   reasons: string[];
   totalAvailable: number;
@@ -856,6 +859,12 @@ export function routeToolsForTurn(
   const available = new Set(
     availableNames.filter(name => !name.startsWith('mcp_filesystem_')),
   );
+  if (isModelConfigurationReadRequest(primaryInstructionText)) {
+    const toolNames = ['model_configuration_get'].filter(name => available.has(name));
+    return { toolNames, categories: ['model_configuration'], reasons: ['Read current configuration and current-turn routing evidence before answering model identity. No configuration mutation or paid probe is requested.'],
+      totalAvailable: availableNames.length, maxTools, truncated: false, hardAllowlist: true, maxIterations: 2,
+      forbiddenToolNames: availableNames.filter(name => !toolNames.includes(name)) };
+  }
   const authoring = classifySkillAuthoringIntent(primaryInstructionText);
   if (authoring !== 'none') {
     const executionText = executionBeforeWorkflowSave(primaryInstructionText);
@@ -1460,10 +1469,26 @@ export function routeToolsForTurn(
   const visualObservationTools = hasExplicitNoMutationInstruction(instructionText) && hasVisionIntent(instructionText)
     ? ['ocr_screen', 'ocr_region'].filter(name => !forbiddenToolNames.has(name)) : [];
   for (const name of visualObservationTools) addIfAvailable(selected, available, name);
+  // External case-law research needs an actual browser/data-source path.
+  // Generating a generic research plan is a separate requested deliverable.
+  const externalLegalLookup = categories.includes('legal')
+    // i18n-allow: input recognition for explicit external legal lookup.
+    && /(?:裁判文书网|人民法院案例库|法蝉|法信|北大法宝|Alpha|court website|case law database)/iu.test(instructionText)
+    // i18n-allow: lookup verbs and explicit planning-only exceptions.
+    && /(?:查找|查询|检索|搜索|找一下|search|find|look up)/iu.test(instructionText)
+    && !/(?:计划|方案|行动单|步骤|如何|怎么|plan|how to)/iu.test(instructionText);
+  const externalLookupTools = externalLegalLookup
+    ? ['web_login_profile_list', 'web_login_profile_save_from_preset', 'web_login_run', 'browser_open_task', 'computer_use', 'url_fetch_logged_in', 'legal_search_external_authorities'] : [];
+  if (externalLegalLookup) {
+    for (const name of externalLookupTools) if (!forbiddenToolNames.has(name)) addIfAvailable(selected, available, name);
+    selected.delete('legal_external_research_plan'); forbiddenToolNames.add('legal_external_research_plan');
+    reasons.push('Execute the requested search on the named source; opening the site or generating a plan is not a retrieved case. Preserve court/date filters, verify result content, and report any actual login/captcha/access blocker.');
+  }
 
   const orderedBeforeHealthGate = applyRoutePriority(
     availableNames.filter(name => selected.has(name)),
     unique([
+      ...externalLookupTools,
       ...visualObservationTools,
       ...artifactHandoffTools,
       ...continuationEvidenceTools,
@@ -1493,6 +1518,7 @@ export function routeToolsForTurn(
   const truncated = ordered.length > maxTools;
   return {
     toolNames: ordered.slice(0, maxTools),
+    requiredTools: externalLookupTools.filter(name => ordered.slice(0, maxTools).includes(name)),
     categories: unique(categories),
     reasons: unique(reasons),
     totalAvailable: declarations.length,

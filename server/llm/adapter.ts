@@ -75,6 +75,7 @@ export interface LLMConfig {
   /** Accepted transport provenance, separate from the model-routing stage. */
   workflowSource?: string;
   responseFormat?: LLMResponseFormat;
+  thinkingMode?: 'disabled';
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for each model candidate. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
@@ -2859,7 +2860,7 @@ export function parseScreenshotBase64(relayResult: string): { base64: string; mi
 export async function analyzeScreen(
   imageBase64: string,
   query: string,
-  config: { provider: string; model: string; userId?: string; maxTokens?: number; responseFormat?: LLMResponseFormat; signal?: AbortSignal },
+  config: { provider: string; model: string; userId?: string; maxTokens?: number; responseFormat?: LLMResponseFormat; signal?: AbortSignal; source?: string; requestId?: string; conversationId?: string },
   getDeepSeek?: () => any,
   getGemini?: () => any,
   getOpenAI?: () => any,
@@ -2911,6 +2912,9 @@ export async function analyzeScreen(
       model,
       maxTokens: config.maxTokens || 1000,
       userId: config.userId,
+      source: config.source,
+      requestId: config.requestId,
+      conversationId: config.conversationId,
       responseFormat: config.responseFormat,
       signal: config.signal,
     },

@@ -9,6 +9,7 @@ import {
 import type { ToolContext } from '../types';
 import type { ToolRegistry } from '../registry';
 import { CN_TOOL_DISCOVERY_HINTS } from '../../regions/packs/cn/tool_discovery_hints';
+import { readDB } from '../../../db_layer';
 
 function safeError(error: unknown): string {
   return String((error as any)?.message || error || 'Model configuration failed')
@@ -61,7 +62,12 @@ export function registerModelConfigurationTools(registry: ToolRegistry): void {
     },
     handler: async (args, context) => {
       const role = args.role === undefined ? undefined : requiredRole(args.role);
-      return JSON.stringify(getLumiModelConfiguration(context?.userId || 'anonymous', role), null, 2);
+      const requestId = context?.requestId;
+      const active = requestId && (readDB().modelRoutingReceipts || []).slice().reverse().find((receipt: any) =>
+        receipt.userId === context?.userId && receipt.requestId === requestId && receipt.status === 'succeeded'
+        && receipt.source === 'chat' && receipt.selectedProvider && receipt.selectedModel);
+      return JSON.stringify({ ...getLumiModelConfiguration(context?.userId || 'anonymous', role),
+        ...(active ? { activeCall: { provider: active.selectedProvider, model: active.selectedModel, requestId } } : {}) }, null, 2);
     },
     permission: 'user',
     securityLevel: 'safe',
