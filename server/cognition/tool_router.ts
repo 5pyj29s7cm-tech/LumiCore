@@ -878,7 +878,11 @@ export function routeToolsForTurn(
         maxTools, truncated: toolNames.length < execution.toolNames.length + skillAuthoringTools(authoring).filter(name => available.has(name) && !execution.toolNames.includes(name)).length };
     }
     const toolNames = skillAuthoringTools(authoring).filter(name => available.has(name)).slice(0, maxTools);
-    return { toolNames, categories: ['skill_authoring'], reasons: ['the user requested authoring a reusable skill/workflow, not executing the example domain task'], totalAvailable: declarations.length, maxTools, truncated: false, ...(authoring === 'save' ? { hardAllowlist: true } : {}) };
+    return { toolNames, categories: ['skill_authoring'], reasons: ['the requested workflow operation owns routing; reuse does not republish or reinstall it'], totalAvailable: declarations.length, maxTools, truncated: false,
+      ...(authoring === 'save' ? { hardAllowlist: true } : {}),
+      // Reuse may discover installed action tools. Keep that discovery open,
+      // while excluding authoring mutations that describe the existing object.
+      ...(authoring === 'use' ? { forbiddenToolNames: ['generate_skill', 'capture_recent_workflow', 'save_workflow', 'publish_workflow', 'install_skill', 'uninstall_skill'] } : {}) };
   }
   const diagnosticPlan = buildClientDiagnosticPlan(instructionText);
   if (diagnosticPlan.length) {

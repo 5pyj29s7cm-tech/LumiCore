@@ -85,6 +85,23 @@ describe('spreadsheet document tools', () => {
     expect(fs.readFileSync(outputPath)).toEqual(sourceBytes);
   });
 
+  it('normalizes an implicit edit to a copy while retaining explicit overwrite boundaries', async () => {
+    const registry = new ToolRegistry(); registerDocumentTools(registry);
+    const context = { requestConfirmation: async () => true };
+    const source = remember(path.join(os.tmpdir(), `lumi-echoed-output-${Date.now()}.xlsx`));
+    await registry.execute('create_xlsx', { outputPath: source, sheets: [{name:'Orders',headers:['item','qty','price','amount'],data:[['A',2,12,'=B2*C2']]}] }, context);
+    const bytes = fs.readFileSync(source);
+    const args = {filePath:source,outputPath:source,operations:[{sheet:'Orders',cell:'B2',value:4}]};
+    const result = JSON.parse(await registry.execute('modify_xlsx', args, {...context,actionIntent:'Update the previous workbook quantity to 4 and save the result.'}));
+    remember(result.path);
+    expect(result.path).not.toBe(source);
+    expect((await loadXlsxWorkbook(result.path)).getWorksheet('Orders').getCell('D2').value).toEqual({formula:'B2*C2',result:48});
+    expect(fs.readFileSync(source)).toEqual(bytes);
+    for (const actionIntent of ['Overwrite the original workbook in-place.', `Save as ${source}`]) {
+      await expect(registry.execute('modify_xlsx', args, {...context,actionIntent})).rejects.toThrow(/must differ/);
+      expect(fs.readFileSync(source)).toEqual(bytes);
+    }
+  });
   it('does not invent cached results for unsupported or circular formulas', async () => {
     const registry = new ToolRegistry();
     registerDocumentTools(registry);

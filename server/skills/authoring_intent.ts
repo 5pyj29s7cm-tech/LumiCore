@@ -8,10 +8,12 @@ export function classifySkillAuthoringIntent(value: string): SkillAuthoringInten
   if (/\b(?:generate|create)\b.{0,60}\bonly\s+if\b|(?:找不到|没有合适|现有.*不支持|缺少能力).{0,35}(?:再|才)(?:生成|创建)技能/iu.test(text)) return 'none';
   // i18n-allow: multilingual user-intent recognition, not user-visible copy.
   const clauses = text.split(/[。！？!?；;\n]/u)
+    // i18n-allow: remove whole negated clauses, including intervening objects.
+    .map(clause => clause.replace(/(?:^|[，,])\s*(?:请)?(?:先|暂时)?(?:不要|别|禁止|无需|不用)[^，,]*(?=[，,]|$)/gu, ' '))
     // i18n-allow: multilingual explanation-only input recognition.
     .filter(clause => !/^\s*(?:请\s*)?(?:只|仅|先|暂时只)(?:需|要)?(?:解释|讲解|说明|介绍|告诉我)|^\s*(?:please\s+)?(?:only|just)\s+(?:explain|describe|tell\s+me)/iu.test(clause))
     // i18n-allow: multilingual negated authoring input recognition.
-    .map(clause => clause.replace(/(?:不要|别|禁止|无需|不用|不必|暂时不|暂不|不|do\s+not|don't|never)\s*(?:再|重新|actually\s+)?(?:生成|创建|保存|安装|发布|create|generate|save|install|publish)/giu, ' '));
+    .map(clause => clause.replace(/(?:不要|别|禁止|无需|不用|不必|暂时不|暂不|不|do\s+not|don't|never)\s*(?:再|重新|actually\s+)?(?:生成|创建|保存|存下(?:来)?|安装|发布|登记|复用|运行|执行|使用|再跑|create|generate|save|install|publish|run|use)/giu, ' '));
   // A later explicit draft request names the next action even when the first
   // clause describes saving a previously observed workflow. Draft generation
   // does not authorize the separate installation or execution steps.
@@ -31,6 +33,13 @@ export function classifySkillAuthoringIntent(value: string): SkillAuthoringInten
     // requests a recipe; it must not silently enter package generation/install.
     // i18n-allow: explicit requested artifact type recognition.
     if (/(?:保存|沉淀).{0,25}(?:为|成).{0,12}技能|\b(?:save|capture)\b.{0,60}\bas\s+(?:a\s+)?(?:reusable\s+)?skill\b/iu.test(clause)) return 'generate';
+    // The requested verb owns the operation; an already registered skill is
+    // the object, not permission to publish it again. "可复用" describes a
+    // future artifact and must not match the affirmative verb "复用".
+    // i18n-allow: multilingual reuse and colloquial workflow capture recognition.
+    if (/(?:按|照|用).{0,35}(?:技能|工作流|流程).{0,20}(?:再跑|运行|执行|处理|(?<!可)复用)|(?:技能|工作流|流程).{0,20}(?:再跑一遍|再执行一次)|\b(?:reuse|rerun)\b.{0,50}\b(?:skill|workflow)\b/iu.test(clause)) return 'use';
+    // i18n-allow: colloquial workflow capture recognition.
+    if (/(?:技能|工作流|流程).{0,20}存下来|存下来.{0,20}(?:技能|工作流|流程)/u.test(clause)) return 'save';
     // i18n-allow: explicit continuation of a named workflow, not a new draft.
     if (/^\s*(?:请\s*)?继续(?:当前|这个|刚才的|已有的)?(?:工作流|流程)/u.test(clause)) return 'use';
     // The leading requested operation owns the turn: "run the published

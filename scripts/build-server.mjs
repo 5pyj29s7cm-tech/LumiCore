@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
 import { computeSourceIdentity } from './lib/source-identity.mjs';
 
 const packageMeta = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -90,6 +90,7 @@ if (/function isFileSystemCaseSensitive\(\)[\s\S]{0,500}swapCase\(__filename\)/u
 
 // Generate entry.cjs for CommonJS environments (Tauri node.exe, production serve)
 mkdirSync('dist-server', { recursive: true });
+copyFileSync('server/runtime/laya_shadow_worker.py', 'dist-server/laya-shadow-worker.py');
 writeFileSync('dist-server/runtime-meta.json', `${JSON.stringify(runtimeMeta, null, 2)}\n`);
 writeFileSync('dist-server/entry.cjs', `// CJS entry point - dynamically imports the ESM server bundle.
 process.env.LUMI_RUNTIME_META_FILE ||= require('path').join(__dirname, 'runtime-meta.json');

@@ -2,7 +2,7 @@ import type { ToolPolicy } from '../personality/types';
 import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
-import { isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState } from './action_continuation';
+import { classifyConversationActionFollowupIntent, isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
@@ -40,6 +40,7 @@ import {
   type CapabilityExecutionPlan,
 } from './capability_execution_plan';
 import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
+import { observeLayaDecision } from '../runtime/laya_shadow';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import { avatarAuthoringMutationInstruction } from './media_creation_intent';
 import { classifySkillAuthoringIntent, executionBeforeWorkflowSave } from '../skills/authoring_intent';
@@ -72,6 +73,7 @@ export interface LumiExecutionPipeline {
    * this bit.
    */
   trustedActionContinuation: boolean;
+  actionFollowupIntent: RecentActionFollowupIntent;
   intentTrace: LumiIntentTrace;
   shadowComparison: LumiRoutingShadowComparison;
 }
@@ -364,7 +366,10 @@ export function buildLumiExecutionPipeline(
       : ''].filter(Boolean).join('\n'),
   };
   let decisionText = mediaDecisionText || (acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText);
-  const trustedActionContinuation = !acceptedPlan && hasTrustedActionContinuation(input);
+  const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none'
+    : classifyConversationActionFollowupIntent(input.dispatch.text, input.actionTaskState);
+  const observationalFollowup = actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat';
+  const trustedActionContinuation = !acceptedPlan && !observationalFollowup && hasTrustedActionContinuation(input);
   if (trustedActionContinuation) turnIntent.flow.rootTaskText = input.actionTaskState?.goal;
   // Bind the planning input as well as the ledger id. Detailed "continue the
   // unfinished task" messages can themselves resemble authoring requests;
@@ -376,7 +381,7 @@ export function buildLumiExecutionPipeline(
   const confirmsBoundGoal = trustedActionContinuation
     && /^(?:确认|确定|同意|好的?|可以|继续|yes|ok(?:ay)?|confirm)[。.!！\s]*$/iu.test(input.dispatch.text.trim()); // i18n-allow: confirmation-only continuation.
   const resumesExplicitGoal = trustedActionContinuation
-    && (confirmsBoundGoal || isExplicitUnfinishedTaskContinuation(input.dispatch.text, input.actionTaskState));
+    && (actionFollowupIntent === 'execute' || confirmsBoundGoal || isExplicitUnfinishedTaskContinuation(input.dispatch.text, input.actionTaskState));
   const actionText = resumesExplicitGoal
     ? [input.actionTaskState!.goal, effectiveText].join('\n\n')
     : effectiveText;
@@ -390,6 +395,12 @@ export function buildLumiExecutionPipeline(
   // A bound retry inherits its authorized goal, not the side-effect class of
   // the acknowledgement ("yes"). Keep current-turn denials authoritative below.
   const currentIntent = normalizeActionIntent(decisionText);
+  const requestedArtifact = requestedSingleArtifact(actionText);
+  // An input/output transformation writes the destination, never the first
+  // source path that a generic action recognizer happened to encounter.
+  if (requestedArtifact && currentIntent.operation === 'create') {
+    currentIntent.target = requestedArtifact.path;
+  }
   const priorIntent = normalizeActionIntent(input.actionTaskState?.goal || '');
   const resumesMediaGoal = trustedActionContinuation && currentIntent.kind === 'none' && priorIntent.kind === 'media_generation';
   const normalizedIntent = resumesMediaGoal ? priorIntent : currentIntent;
@@ -436,7 +447,7 @@ export function buildLumiExecutionPipeline(
       resumesExplicitGoal && !preservedSourceOutputScope(actionText) ? effectiveText : actionText,
       visibilityContext,
     ),
-    input.additionalForbiddenTools,
+    observationalFollowup ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
   );
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,
@@ -463,7 +474,6 @@ export function buildLumiExecutionPipeline(
     turnIntent.flow.workflowHint || turnIntent.flow.specialWorkflow
   )?.requiredTools || [];
   const actionVerificationTools = buildActionContract(decisionText).verificationTools || [];
-  const requestedArtifact = requestedSingleArtifact(actionText);
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,
     preferredTools: selection.preferredTools,
@@ -531,6 +541,14 @@ export function buildLumiExecutionPipeline(
       intentTrace.blockedBy.push('external_commit_route_divergence');
     }
   }
+  // Observation is one-way and asynchronous. Laya cannot change this plan,
+  // permissions, task ownership, completion receipts or the user's response.
+  if (!input.isSanctuary) observeLayaDecision({
+    text: input.dispatch.text,
+    task: input.actionTaskState ? { goal: input.actionTaskState.goal, status: input.actionTaskState.status,
+      unfinished: input.actionTaskState.unfinished, latestBlocker: input.actionTaskState.latestBlocker } : undefined,
+    decision: { followup: actionFollowupIntent, skill: classifySkillAuthoringIntent(input.dispatch.text), executionRequested },
+  });
   return {
     normalizedIntent,
     turnIntent,
@@ -543,5 +561,6 @@ export function buildLumiExecutionPipeline(
     trustedActionContinuation,
     intentTrace,
     shadowComparison,
+    actionFollowupIntent,
   };
 }

@@ -6,6 +6,7 @@ import { mediaGenerationIntent } from '../cognition/normalized_action_intent';
 import {
   allowedTaskSearchRoots,
   buildTaskTargetAnchorProjection,
+  sourceDocumentInstruction,
   isUnconfirmedRuntimeCandidate,
   type TaskTargetAnchorSource,
 } from './task_target_anchor';
@@ -325,7 +326,7 @@ function targetUpdateFromTurn(text: string): {
   location: string;
   rejectCurrentTarget: boolean;
 } | null {
-  const clean = compact(text, 500);
+  const clean = compact(sourceDocumentInstruction(text), 500);
   if (!clean) return null;
   const boundedReplacement = explicitTargetReplacement(clean);
   const correction = TARGET_CORRECTION_RE.test(clean)
@@ -361,7 +362,9 @@ export function classifyTaskCapsuleTurn(
   source?: DurableTaskCapsuleSource | null,
 ): TaskCapsuleTurnKind {
   if (!source?.unfinished) return 'none';
-  const clean = compact(text, 500);
+  // Saving a result to a new path does not reject the input that still needs
+  // to be read. Share the same source/output split as the execution guard.
+  const clean = compact(sourceDocumentInstruction(text), 500);
   if (!clean) return 'none';
   if (TARGET_CORRECTION_RE.test(clean)) return 'target_correction';
   if (explicitTargetReplacement(clean)) return 'target_correction';

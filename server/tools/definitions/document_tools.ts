@@ -911,7 +911,15 @@ export function registerDocumentTools(registry: ToolRegistry): void {
       if (requestedPath && declared && canonicalPathIdentity(requestedPath) !== canonicalPathIdentity(declared)) {
         throw new Error(`Use the exact requested save-as destination: ${requestedPath}`);
       }
-      return { ...args, outputPath: declared
+      // This capability edits a copy. If the user did not choose an output,
+      // a model echoing the input path must not turn a normal edit into a
+      // failed overwrite attempt. Keep explicit destinations authoritative.
+      // i18n-allow: Explicit in-place overwrite requests must not silently become a copy.
+      const overwriteRequested = /原地(?:修改|保存|覆盖)|覆盖(?:原|源)文件|\b(?:in[- ]place|overwrite\s+(?:the\s+)?(?:original|source))\b/iu.test(String(context?.actionIntent || ''));
+      const echoedSource = Boolean(context?.actionIntent && !requestedPath && !overwriteRequested
+        && declared && typeof args.filePath === 'string'
+        && canonicalPathIdentity(declared) === canonicalPathIdentity(args.filePath));
+      return { ...args, outputPath: (echoedSource ? undefined : declared)
         || resolveExplicitSpreadsheetOutput(requestedPath)
         || (typeof args.filePath === 'string' ? path.resolve(args.filePath.replace(/\.xlsx$/i, `_modified_${Date.now()}.xlsx`)) : undefined) };
     },

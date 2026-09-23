@@ -6,7 +6,7 @@ import { Server, Socket } from "socket.io";
 import { TASK_TARGET_HISTORY_LIMIT, buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { pushNotification } from "../routes/notifications";
-import { NormalizedMessage, makeLLMCall, StreamCallback } from "../llm/providers";
+import { NormalizedMessage, StreamCallback } from "../llm/providers";
 import { runConversationTurn } from '../llm/conversation_turn';
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
@@ -184,7 +184,6 @@ import {
   buildDeterministicWorkTaskStatusCommand,
 } from "../cognition/quick_commands";
 import { classifyRuntimeWorkIntent } from '../cognition/runtime_work_intent';
-import { callIntentClassifier } from '../cognition/intent_classifier';
 import { recordTokenUsage } from "../llm/token_tracker";
 import { searchKnowledgeBase } from "../org/kb";
 import { buildProfessionOverlay } from "../autonomy/professions";
@@ -869,10 +868,6 @@ export function registerChatHandler(
       // every execution/recovery path, including reusable workflow traces.
       args[2] = { ...args[2], conversationId: selectedConversationId || args[2].conversationId, workflowSource: eventSource };
       return runWithTools(...args);
-    };
-    const callAuthorizedModel = (...args: Parameters<typeof makeLLMCall>) => {
-      turnAuthorization.assertCurrent();
-      return makeLLMCall(...args);
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;
@@ -4278,42 +4273,10 @@ export function registerChatHandler(
         llmModel: activeModel,
         isLLMAvailable: true,
       };
-      // Optional classification gets one bounded attempt; the main reply keeps
-      // the user's full routing policy and cannot wait on classifier failover.
-      const llmClassifier = async (prompt: string, userText: string): Promise<string> => {
-        const messages: NormalizedMessage[] = [
-          { role: 'system', content: prompt },
-          { role: 'user', content: userText, sourceMessageId: acceptedUserMessageId },
-        ];
-        const result = await callIntentClassifier(
-          {
-            provider: activeProvider,
-            model: activeModel,
-            userId: uid,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            signal: abortController.signal,
-            ...reasoningRoutePolicy,
-            // Keep classifier routing receipts distinguishable from the
-            // provider request that owns the user-visible answer. Both share
-            // the same request/user nonce, so source is the fail-closed stage
-            // discriminator used by request-only acceptance evidence.
-            source: 'chat_intent_classifier',
-          },
-          classifierConfig => callAuthorizedModel(
-            messages,
-            [],
-            classifierConfig,
-            llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-            llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi, llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
-          ),
-        );
-        return result.text;
-      };
-
-      const cognition = await processInput(text, cognitiveCtx, llmClassifier);
-      // Local classification fallback is allowed after its own short deadline,
-      // but must never swallow cancellation/revocation of the parent chat turn.
+      // Match voice: local cognition is advisory; the shared model/tool loop
+      // owns the request. A second cloud classification adds latency and can
+      // disagree with the execution plan that has already been authorized.
+      const cognition = await processInput(text, cognitiveCtx);
       abortController.signal.throwIfAborted();
       turnAuthorization.assertCurrent();
       console.log('[ChatHandler] cognition result:', cognition.intent.category, 'directToolExecuted:', cognition.directToolExecuted, 'responseText:', cognition.responseText?.slice(0, 100));

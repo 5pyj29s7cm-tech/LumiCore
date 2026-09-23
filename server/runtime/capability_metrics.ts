@@ -1,5 +1,6 @@
 import type { DesktopExecutionReceipt } from '../desktop/execution_plan';
 import type { KnowledgeCoverageReport, KnowledgeIngestionStatus } from '../knowledge/ingestion_manifest';
+import { getLayaShadowStatus } from './laya_shadow';
 
 interface CapabilityRuntimeCounters {
   desktop: {
@@ -152,6 +153,7 @@ export function getCapabilityRuntimeMetrics() {
     generatedAt: new Date().toISOString(),
     desktop: { ...counters.desktop },
     routing: { ...counters.routing },
+    layaShadow: getLayaShadowStatus(),
     knowledge: { ...counters.knowledge },
   };
 }

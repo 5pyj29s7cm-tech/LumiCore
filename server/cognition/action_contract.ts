@@ -1,4 +1,5 @@
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
+import { businessInstructionText } from '../regions/packs/cn/business_routing';
 import { isAvatarAuthoringRequest } from './media_creation_intent';
 import { classifyExternalCliIntent, isExternalCliDelegation, requestedCliProviders } from './external_cli_intent';
 import { verifiedExternalCliStatus } from './external_cli_status';
@@ -524,6 +525,7 @@ function isCustomerOperationsTurn(text: string): boolean {
 }
 
 function isEcommerceOperationsTurn(text: string): boolean {
+  text = businessInstructionText(text);
   const commerceSurface = /(?:\u7535\u5546|\u5e97\u94fa|\u5546\u54c1|\u5546\u5bb6\u540e\u53f0|\u8ba2\u5355|\u5e93\u5b58|\u8865\u8d27|\u6295\u653e|\u5e7f\u544a|\u8d26\u6237\u8fd0\u8425|\u5546\u54c1\u8be6\u60c5|\u6296\u5e97|\u6dd8\u5b9d|\u5929\u732b|\u4eac\u4e1c|\u62fc\u591a\u591a|\u5c0f\u7ea2\u4e66|\u6296\u97f3|\u5feb\u624b|\bSKU\b|e-?commerce|marketplace|seller|shopify|\bstore\b|inventory|campaign|listing)/iu.test(text);
   const operationalIntent = /(?:\u63a5\u7ba1|\u8fd0\u8425|\u4f18\u5316|\u5206\u6790|\u4f53\u68c0|\u6838\u7b97|\u5bf9\u8d26|\u8865\u8d27|\u589e\u957f|\u5185\u5bb9|\u77ed\u89c6\u9891|\u4e0a\u67b6|\u53d1\u5e03|\u7ba1\u7406|take\s*over|operate|optim|analy|audit|reconcile|restock|growth|content|publish|manage)/iu.test(text);
   return commerceSurface && operationalIntent;

@@ -297,9 +297,9 @@ describe('Lumi execution decision', () => {
     });
 
     expect(dispatch.boundary).toBe('client_action');
-    expect(decision.toolPolicy.allowedTools).toContain('*');
+    expect(decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(decision.toolPolicy.forbiddenTools).toEqual([]);
-    expect(decision.maxIterations).toBe(80);
+    expect(decision.maxIterations).toBe(4);
   });
 
   it('keeps generic self-checks on the minimal read-only diagnostic set', async () => {
@@ -839,7 +839,7 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
     expect(skillHallDispatch.boundary).toBe('client_action');
-    expect(skillHallDecision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(skillHallDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(skillHallDecision.promptOverlay).toContain('Lumi Execution Decision');
 
     const stockDispatch = buildLumiTurnDispatch({
@@ -913,7 +913,7 @@ describe('Lumi execution decision', () => {
       toolDeclarations: declarations,
     });
     expect(browseDispatch.boundary).toBe('client_action');
-    expect(browseDecision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(browseDecision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
   });
 
   it('projects the complete reuse-first Skill Hall and MCP capability chain for a real Lumi gap', async () => {
@@ -1030,7 +1030,7 @@ describe('Lumi execution decision', () => {
     const autonomousMode = decide('\u5f00\u59cb\u81ea\u4e3b\u6267\u884c\u6a21\u5f0f', 'chat');
     expect(autonomousMode.dispatch.boundary).toBe('client_action');
     expect(autonomousMode.dispatch.flow.effectiveOperationMode).toBe('assistant');
-    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['*']);
+    expect(autonomousMode.decision.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(autonomousMode.decision.promptOverlay).toContain('Lumi Execution Decision');
 
     const deliveryReport = decide('\u7ed9\u6211\u505a\u4e00\u4e2a\u5ba2\u6237\u4ea4\u4ed8\u62a5\u544a\u5e76\u5bfc\u51fa');
@@ -1209,7 +1209,7 @@ describe('Lumi execution decision', () => {
     expect(openSkillHall.trace.boundary).toBe('client_action');
     expect(openSkillHall.trace.allowed).toBe(true);
     expect(openSkillHall.trace.matched.clientActionOnlyTurn).toBe(true);
-    expect(openSkillHall.trace.toolPolicy.allowedTools).toEqual(['*']);
+    expect(openSkillHall.trace.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(openSkillHall.trace.matchedRules).toEqual(expect.arrayContaining([
       expect.objectContaining({ layer: 'structured_client', name: 'client-navigation' }),
       expect.objectContaining({ layer: 'turn_flow', name: 'client-action-only-turn' }),

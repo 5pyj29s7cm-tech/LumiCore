@@ -10,10 +10,10 @@ function mixedTaskOutputPath(text: string): string {
   // Only an affirmative output clause with one filename can select a result.
   // i18n-allow: multilingual file-output clause and same-directory recognition.
   for (const clause of text.split(/[，,。！？!?；;\n]/u)) {
-    if (!/(?:生成|创建|写入|导出|另存|保存到)|\b(?:create|write|export|save)\b/iu.test(clause)
+    if (!/(?:生成|创建|写入|导出|另存|保存(?:到|为|成))|\b(?:create|write|export|save)\b/iu.test(clause)
       || /(?:不要|别|禁止|不必|无需)|\b(?:do not|don't|never)\b/iu.test(clause)) continue; // i18n-allow: negated output recognition.
     if ((clause.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length !== 1) continue;
-    const absolute = buildTaskTargetAnchorProjection({ taskText: clause }).target.path;
+    const absolute = buildTaskTargetAnchorProjection({ taskText: outputDocumentInstruction(clause) || clause }).target.path;
     if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(absolute)) { outputs.push(absolute); continue; }
     if (!/(?:同目录|同一目录|同一文件夹)|\bsame\s+(?:directory|folder)\b/iu.test(clause)) continue; // i18n-allow: explicit output directory relation.
     const filename = clause.match(/(?:^|\s|["'“])([^\s/\\:"'“”<>，,。；;]+\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json))(?=$|[\s"'”])/iu)?.[1];

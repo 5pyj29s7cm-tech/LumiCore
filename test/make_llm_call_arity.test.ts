@@ -92,8 +92,10 @@ const { sites: productionCallSites, wrappers: authorizedWrappers } = collectMake
 describe('production makeLLMCall provider getter contract', () => {
   it('discovers production call sites', () => {
     expect(productionCallSites.length).toBeGreaterThan(0);
-    expect(productionCallSites.some(site => site.callee === 'callAuthorizedModel')).toBe(true);
-    expect(authorizedWrappers.map(wrapper => wrapper.file)).toEqual(['socket/chat.ts']);
+    expect(productionCallSites.some(site => site.callee === 'makeLLMCall')).toBe(true);
+    // Interactive chat and voice use the shared tool loop. There is no extra
+    // classifier call (or its now-unused forwarding wrapper) in chat.
+    expect(authorizedWrappers).toEqual([]);
   });
 
   it.each(authorizedWrappers)('$file:$line authorizes then forwards the full typed argument tuple unchanged', wrapper => {

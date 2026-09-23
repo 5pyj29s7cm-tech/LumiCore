@@ -2,6 +2,7 @@ import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { withoutLocationLiterals } from './location_literals';
+import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from '../regions/packs/cn/action_continuation';
 
 /** Read/search verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.
@@ -303,6 +304,16 @@ function explicitArtifactCreationIntent(text: string): NormalizedActionIntent | 
   };
 }
 
+function explicitArtifactEditIntent(text: string): NormalizedActionIntent | null {
+  const target = explicitArtifactPath(text);
+  // i18n-allow: User-directed edits to an existing local document, not a status query.
+  const refersToFile = Boolean(target) || /(?:刚才|刚刚|上一份|这份|该).{0,20}(?:表格|文件|文档|Excel|工作簿)/iu.test(text);
+  if (!refersToFile || !matchesCnBoundArtifactEdit(text, text)) return null;
+  return { kind: 'desktop_operation', operation: 'mutate', subject: 'user',
+    target: target || 'recent_artifact', payload: text, sideEffectClass: 'local_write',
+    relation: 'new', confidence: 0.96, rule: 'explicit-artifact-edit' };
+}
+
 function explicitLocalArtifactReadIntent(text: string): NormalizedActionIntent | null {
   const target = explicitArtifactPath(text);
   if (!target) return null;
@@ -561,6 +572,11 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // affirmative artifact-action recognizer.
   if (explicitArtifactCreationIntent(text)) return null;
   if (hasMixedStatusExecutionIntent(text)) return null;
+  if (matchesCnTaskReceiptQuestion(text)) return {
+    kind: 'status_query', operation: 'status', subject: 'lumi', target: 'recent_task',
+    payload: '', sideEffectClass: 'none', relation: 'status', confidence: 0.99,
+    rule: 'saved-task-receipt-question',
+  };
   if (WALLPAPER_STATE_MUTATION_RE.test(text)) return null;
   // Reporting the id/status after creating a specifically described new task
   // is part of that creation contract, not a query about an older task.
@@ -1099,6 +1115,7 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
     mediaGenerationIntent(text),
     persistentWorkTaskCreation(text),
     artifactCreation,
+    explicitArtifactEditIntent(text),
     artifactRead,
     currentAuthoringDocumentRead,
     compositeNavigation.find(item => item.intent.kind === 'desktop_operation')?.intent,

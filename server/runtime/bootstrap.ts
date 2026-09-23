@@ -57,6 +57,7 @@ import { installRuntimeFileLogger } from './file_logger';
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
 import { RuntimeShutdownCoordinator, registerShutdownSignals, type ShutdownIngress } from './shutdown';
 import { runtimeBackgroundWork, runtimeShutdownCancellation, waitUntilRuntimeIdle } from './shutdown_work';
+import { stopLayaShadow } from './laya_shadow';
 
 interface BootstrapContext {
   server: any;
@@ -278,6 +279,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       for (const timer of startupTimers) clearTimeout(timer);
       startupTimers.clear();
       stopSystemExplorationWorker();
+      stopLayaShadow();
       scheduler.stop({ drainSettledHandlers: true });
       unifiedRuntimeSupervisor?.stop();
     },

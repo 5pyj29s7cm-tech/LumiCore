@@ -184,22 +184,38 @@ describe('real shared-loop document delivery and Socket terminal consistency', (
     expect((await loadXlsxWorkbook(first)).getWorksheet('订单')?.getCell('D2').value).toBe(24);
     expect((await loadXlsxWorkbook(second)).getWorksheet('订单')?.getCell('D2').value).toBe(48);
   });
-  it('exports the prior CSV and reads the new XLSX without confusing input and output identities',async()=>{
+  it.each([false,true])('exports the prior CSV and reads the new XLSX without confusing input and output identities (initial model unavailable: %s)',async(initialUnavailable)=>{
     const id=conversation(),output=path.join(root,'csv-export.xlsx').replace(/\\/g,'/');
-    await turn(id,`读取 ${csv}，按数量乘单价计算每项金额和总额，原文件不动。`,[read(),{text:'读取计算完成，水杯24、笔记本24、贴纸12，总额60。原文件未修改。'}]);
+    await turn(id,`读取 ${csv}，按数量乘单价计算每项金额和总额，原文件不动。`,initialUnavailable?[{text:''}]:[read(),{text:'读取计算完成，水杯24、笔记本24、贴纸12，总额60。原文件未修改。'}]);
     const result=await turn(id,`把刚才读取的那份 CSV 做成 Excel，按 CSV 文件里的原始数量。工作表叫“订单”，列为商品、数量、单价、金额，增加总额行。原文件不动，另存为 ${output}。实际保存后回读，告诉我各项金额和总额。`,[
       read(),
       {text:'',toolCalls:[{id:'csv-export-create',name:'create_xlsx',arguments:{outputPath:output,sheets:[{name:'订单',headers:['商品','数量','单价','金额'],data:[['水杯',2,12,24],['笔记本',3,8,24],['贴纸',4,3,12],['总额','','',60]]}]}}]},
       {text:'',toolCalls:[{id:'csv-export-readback',name:'read_xlsx',arguments:{filePath:output,sheetName:'订单'}}]},
       {text:'文件已保存。'},
     ]);
-    expect(result.terminal,JSON.stringify({ terminal: result.terminal, records: JSON.parse(result.persisted.toolCalls), trace: providerTrace.filter(row=>row.requestId===result.requestId) })).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
+    expect(result.terminal,JSON.stringify({ terminal: result.terminal, records: JSON.parse(result.persisted.toolCalls), trace: providerTrace.filter(row=>row.requestId===result.requestId), context:{actionIntent:contexts.at(-1)?.actionIntent,routedTaskText:contexts.at(-1)?.routedTaskText,acceptedTaskTarget:contexts.at(-1)?.acceptedTaskTarget,trustedActionContinuation:contexts.at(-1)?.trustedActionContinuation} })).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
     expect(result.terminal.text).toContain('60');
     expect(result.receipts.filter(row=>row.outcome==='verified_success').map(row=>row.toolName)).toEqual(['read_file','create_xlsx','read_xlsx']);
     expect((await loadXlsxWorkbook(output)).getWorksheet('订单')?.getCell('D5').value).toBe(60);
     expect(result.terminal.fileArtifacts[0].path.replaceAll('\\', '/')).toBe(output);
     expect(result.terminal.fileArtifacts[0].kind).toBe('sheet');
     expect(new URL(result.terminal.fileArtifacts[0].url, 'http://local.invalid').searchParams.get('conversationId')).toBe(id);
+    expect(fs.readFileSync(csv,'utf8')).toBe(csvText);
+    const editedOutput=path.join(root,'csv-export-updated.xlsx').replace(/\\/g,'/');
+    const edited=await turn(id,'水杯数量改成4，其余不变，更新刚才生成的 Excel，保存后回读告诉我结果。',[
+      {text:'',toolCalls:[{id:'edit-read',name:'read_xlsx',arguments:{filePath:output,sheetName:'订单'}}]},
+      {text:'',toolCalls:[{id:'edit-write',name:'modify_xlsx',arguments:{filePath:output,outputPath:output,operations:[{sheet:'订单',cell:'B2',value:4},{sheet:'订单',cell:'D2',value:48},{sheet:'订单',cell:'D5',value:84}]}}]},
+      {text:'',toolCalls:[{id:'edit-verify',name:'read_xlsx',arguments:{filePath:editedOutput,sheetName:'订单'}}]},
+      {text:'已经修改并保存。'},
+    ]);
+    expect(edited.terminal,JSON.stringify({terminal:edited.terminal,records:JSON.parse(edited.persisted.toolCalls).map((r:any)=>({name:r.name,error:r.error,result:r.result}))})).toMatchObject({blocked:false,completionFeedback:{status:'completed'}});
+    expect(edited.terminal.reason).not.toBe('task_status');
+    expect(edited.terminal.text).toContain('84');
+    expect(edited.receipts.filter(row=>row.outcome==='verified_success').map(row=>row.toolName)).toEqual(['read_xlsx','modify_xlsx','read_xlsx']);
+    const savedEdit=JSON.parse(JSON.parse(edited.persisted.toolCalls).find((r:any)=>r.name==='modify_xlsx').result).path;
+    expect(savedEdit).not.toBe(output);
+    expect((await loadXlsxWorkbook(savedEdit)).getWorksheet('订单')?.getCell('D5').value).toBe(84);
+    expect((await loadXlsxWorkbook(output)).getWorksheet('订单')?.getCell('D5').value).toBe(60);
     expect(fs.readFileSync(csv,'utf8')).toBe(csvText);
     const retryOutput=path.join(root,'csv-export-again.xlsx').replace(/\\/g,'/');
     // Keep the real read/creation receipts, but move them outside the old

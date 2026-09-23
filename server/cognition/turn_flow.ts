@@ -38,6 +38,10 @@ import { isCapabilityMetaQuestion } from './capability_meta';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 
 export type LumiTurnChannel = 'chat' | 'voice' | 'task' | 'scheduler' | 'autonomy';
+/** Input modality changes presentation, never the interactive decision owner. */
+export function isInteractiveTurnChannel(channel: LumiTurnChannel): boolean {
+  return channel === 'chat' || channel === 'voice';
+}
 export type LumiVerificationIntent = 'none' | 'completion_evidence' | 'work_takeover_result' | 'capability_experiment';
 export type LumiCapabilityLearningIntent = 'none' | 'inspect_reuse' | 'learn_missing' | 'stabilize_existing';
 
@@ -428,13 +432,14 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
           taskEntryTurn ||
           actionContractRequiresTools ||
           readOnlyKnowledgeInspection ||
+          classifySkillAuthoringIntent(input.text) !== 'none' ||
           continuationMayDriveAction ||
           workTakeover.shouldResumeTask ||
           shouldAllowToolUseForTurn(input.text, input.source, effectiveOperationMode);
   // Legacy action detection still describes the likely lane, but it no longer
   // decides whether the main chat model can inspect/use the manifest. Only
   // explicit no-tool/read-only/status/meeting boundaries turn model access off.
-  const modelToolAccess = input.channel === 'chat'
+  const modelToolAccess = isInteractiveTurnChannel(input.channel)
     && !immediateAssistantRestatement
     && !explicitNoToolInstruction
     && !readOnlyConversationTurn
@@ -453,7 +458,7 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   // entry points remain the isolated deterministic adapter boundary.
   const workflowRouting = !matchedWorkflow
     ? 'none' as const
-    : input.channel === 'chat'
+    : isInteractiveTurnChannel(input.channel)
       ? 'model_hint' as const
       : 'isolated_adapter' as const;
   const specialWorkflow = workflowRouting === 'isolated_adapter' ? matchedWorkflow : null;

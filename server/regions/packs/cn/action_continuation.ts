@@ -16,3 +16,29 @@ export function matchesCnActionContinuation(text: string): boolean {
     || BACKGROUND_CONTINUATION_RE.test(text)
     || EXECUTION_PRESSURE_RE.test(text);
 }
+
+/** Retrospective questions read receipts; negated retries are not new work. */
+export function matchesCnTaskReceiptQuestion(text: string): boolean {
+  const clauses = text.split(/[，,。！？!?；;\n]/u).map(value => value.trim()).filter(Boolean);
+  const affirmative = clauses.filter(value => !/^(?:请)?(?:先|暂时)?(?:不要|别|不用|无需|禁止)/u.test(value));
+  if (affirmative.some(value => /^(?:请|然后|接着|现在|再)?(?:继续(?:做|执行|处理)?|重新执行|重试|新建|创建|修改|打开|把|将)/u.test(value)
+    && !/(?:了吗|了没|了没有|吗|是否)/u.test(value))) return false;
+  return affirmative.some(value => /(?:做到|执行到|进行到|进展到)哪(?:一)?步|(?:告诉我|列出|说说).{0,12}(?:已经|已).{0,12}(?:完成|执行|做).{0,12}(?:哪些|哪几|多少)|(?:刚才|之前|上次|到底).{0,20}(?:播放|保存|执行|运行|生成|导出|发送|打开)(?:成功|完成|好)?了?(?:吗|没|没有)/u.test(value));
+}
+
+/** Recognize an edit to a field already grounded in this file task. */
+export function matchesCnBoundArtifactEdit(text: string, taskText: string): boolean {
+  if (/[？?]|(?:怎么|如何|为什么|是否|了吗|改了没|不要|别再|禁止)/u.test(text)) return false;
+  if (/(?:另一个|另外|新建|新任务|重新开始|别的)(?:文件|任务|报表|表格)?/u.test(text)) return false;
+  const edit = /(?:改成|改为|修改为?|调整为?|换成)\s*[^，,。；;\n]+/u.test(text);
+  if (!edit) return false;
+  if (/(?:刚才|刚刚|上一(?:步|份)|这份|该).{0,16}(?:报表|表格|文件|文档|那张表)|(?:不是换文件|还是刚才那张表)/u.test(text)) return true;
+  const field = text.match(/(数量|单价|价格|金额|日期|标题|名称|姓名|地址|电话|税率|折扣|比例|长度|宽度|高度|颜色|字体|字号|[A-Z]+\d+)\s*(?:改成|改为|修改为?|调整为?|换成)/iu)?.[1];
+  return Boolean(field && taskText.toLocaleLowerCase().includes(field.toLocaleLowerCase()));
+}
+
+export function matchesCnExplicitPlaybackRetry(text: string): boolean {
+  return /(?:还没|没有|并未)(?:成功)?播放/u.test(text)
+    && /(?:^|[，,。；;\s])(?:请)?(?:继续|接着|重试)(?:播放|执行)?[。！!\s]*$/u.test(text)
+    && !/(?:不要|别|禁止).{0,8}(?:继续|播放|重试)/u.test(text);
+}

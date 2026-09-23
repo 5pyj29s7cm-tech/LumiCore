@@ -5,7 +5,8 @@ import {
   isImmediateAssistantRestatementRequest,
   normalizeActionIntent,
 } from './normalized_action_intent';
-import { matchesCnActionContinuation } from '../regions/packs/cn/action_continuation';
+import { matchesCnActionContinuation, matchesCnBoundArtifactEdit, matchesCnExplicitPlaybackRetry } from '../regions/packs/cn/action_continuation';
+import { hasExplicitNoMutationInstruction } from './tool_intent';
 import {
   CN_TASK_EXECUTION_MESSAGES,
   formatCnToolFailureDetail,
@@ -535,6 +536,7 @@ function isMediaPlaybackContinuationForTask(
   // operating mode or grant permissions, and an unrelated 'allow' has no task.
   // i18n-allow: Short acknowledgements for the same unfinished media request.
   if (/^(?:允许|可以|继续)[，,。.!！\s]*$/u.test(text)) return true;
+  if (matchesCnExplicitPlaybackRetry(text)) return true;
   const previousTarget = normalizeMediaTarget(requestedMediaPlayerTarget(durableState.goal));
   const currentTarget = normalizeMediaTarget(requestedMediaPlayerTarget(text));
   // i18n-allow: Restating the same named player after a failed attempt.
@@ -1015,8 +1017,10 @@ export function isTaskPreparationContinuation(text: string, state?: Conversation
  * A separately named save destination is not a replacement input. */
 export function isReferentialArtifactEdit(text: string, state?: ConversationActionContinuationState | null): boolean {
   if (!state?.goal || !state.unfinished) return false;
+  if (hasExplicitNoMutationInstruction(text)) return false;
   const hasFileTask = /\.(?:xlsx?|docx?|csv|txt|md)\b/i.test(state.goal)
     || state.sourcePaths.some(value => /\.(?:xlsx?|docx?|csv|txt|md)$/i.test(value));
+  if (hasFileTask && matchesCnBoundArtifactEdit(text, `${state.goal}\n${state.latestInstruction}\n${state.toolSummaries.join('\n')}`)) return true;
   return hasFileTask
     && /(?:\u521a\u624d|\u521a\u521a|\u4e0a\u4e00\u6b65|\u8fd9\u4efd|\u8be5).{0,16}(?:\u62a5\u8868|\u8868\u683c|\u6587\u4ef6|\u6587\u6863)|\b(?:that|previous|last)\s+(?:file|workbook|document|spreadsheet)\b/iu.test(text)
     && /(?:\u6539\u6210|\u6539\u4e3a|\u4fee\u6539|\u8c03\u6574)|\b(?:change|update|edit|modify)\b/iu.test(text);
@@ -1029,6 +1033,9 @@ export function classifyConversationActionFollowupIntent(
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(text, 500);
+  // Status must win before retry/target heuristics inspect the task's old goal.
+  const normalizedIntent = normalizeActionIntent(compactText);
+  if (normalizedIntent.kind === 'status_query') return 'status';
   // Never let a readiness acknowledgement reconstruct a one-time dangerous
   // confirmation that was lost across restart.
   if (
@@ -1044,7 +1051,6 @@ export function classifyConversationActionFollowupIntent(
   if (isTaskPreparationContinuation(compactText, durableState)) return 'execute';
   if (isReferentialArtifactEdit(text, durableState)) return 'execute';
   if (isExplicitUnfinishedTaskContinuation(compactText, durableState)) return 'execute';
-  const normalizedIntent = normalizeActionIntent(text);
   if (
     durableState?.unfinished
     && normalizedIntent.relation === 'correction'
@@ -1065,7 +1071,6 @@ export function classifyConversationActionFollowupIntent(
     || normalizedIntent.kind === 'work_task'
   ) return 'none';
   if (hasMixedStatusExecutionIntent(text)) return 'execute';
-  if (normalizedIntent.kind === 'status_query') return 'status';
   const direct = classifyRecentActionFollowupIntent(text);
   if (direct !== 'none') return direct;
   if (!durableState?.unfinished) return 'none';

@@ -12,7 +12,7 @@ describe('database health status', () => {
 
     expect(dbSource).toContain('lagMs >= 30_000');
     expect(dbSource).toContain('Boolean(lastPersistenceError)');
-    expect(routeSource).toContain('status: persistence.degraded ? "degraded" : "ok"');
+    expect(routeSource).toContain('status: persistence.degraded || schedulerHealth.degraded ? "degraded" : "ok"');
     expect(routeSource).not.toContain('status: isDbDirty() ? "degraded" : "ok"');
     expect(routeSource).toContain('persistence,');
   });

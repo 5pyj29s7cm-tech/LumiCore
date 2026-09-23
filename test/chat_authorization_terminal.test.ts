@@ -74,7 +74,6 @@ import { getOrCreateActiveConversation } from '../server/conversation/manager';
 import { createOrg, addMember, removeMember } from '../server/org/db';
 import { getChatExecution, waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';
 import { upsertUserPreferredLLM } from '../server/llm/user_preferences';
-import { INTENT_CLASSIFIER_MAX_TOKENS, INTENT_CLASSIFIER_TIMEOUT_MS } from '../server/cognition/intent_classifier';
 
 const marker = 'SYNTHETIC_ORG_TERMINAL_CONTENT';
 const outcome = (text = marker) => ({ text, toolCalls: [], usageRecords: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
@@ -282,19 +281,19 @@ it('settles a revoked cancel sidecar once without prematurely finalizing the hel
   expect(h.acknowledgements.filter(item => item.requestId === controlId)).toHaveLength(1);
 }, 10000);
 
-it('parent cancellation during optional classification never starts the main reply', async () => {
+it('parent cancellation stops the single reply path without a separate cloud classification', async () => {
   const h = await openChat(false);
   const classifierStarted = deferred();
   const classifierGate = deferred();
   unblock.push(classifierGate.resolve);
   let classifierSignal: AbortSignal | undefined;
   fixture.model.mockImplementation(async (...args: any[]) => {
-    if (args[2]?.source === 'chat_intent_classifier') {
+    if (args[2]?.source === 'chat') {
       classifierSignal = args[2].signal;
       classifierStarted.resolve();
-      // Model intentionally ignores abort, exercising the bounded wrapper.
+      // Model intentionally ignores abort; the transport must still cancel.
       await classifierGate.promise;
-      return outcome('{"category":"question","confidence":0.9,"entities":{}}');
+      return outcome('THIS_CANCELLED_REPLY_MUST_NOT_DELIVER');
     }
     return outcome('THIS_MAIN_REPLY_MUST_NOT_START');
   });
@@ -303,18 +302,21 @@ it('parent cancellation during optional classification never starts the main rep
   expect(await client.timeout(5000).emitWithAck('agent:abort_chat', {
     ...h.scope, requestId: h.requestId,
   })).toMatchObject({ ok: true });
+  classifierGate.resolve();
   await h.finished;
   await h.drain();
   expect(classifierSignal?.aborted).toBe(true);
   expect(fixture.model).toHaveBeenCalledOnce();
-  expect(fixture.model.mock.calls[0][2]).toMatchObject({ source: 'chat_intent_classifier', noImplicitFailover: true });
+  expect(fixture.model.mock.calls[0][2]).toMatchObject({ source: 'chat' });
   expect(h.errors).toEqual([]);
   expect(getChatExecution(h.scope, h.requestId)).toMatchObject({ terminal: true, status: 'cancelled' });
   expect(JSON.stringify(h.emitted)).not.toContain('THIS_MAIN_REPLY_MUST_NOT_START');
   classifierGate.resolve();
+  await h.drain();
+  expect(JSON.stringify(h.emitted)).not.toContain('THIS_CANCELLED_REPLY_MUST_NOT_DELIVER');
 }, 10000);
 
-it('a classifier deadline yields to the main reply without narrowing its configured fallback policy', async () => {
+it('ambiguous text goes straight to the shared model with its configured fallback policy', async () => {
   const h = await openChat(false);
   upsertUserPreferredLLM(h.userId, {
     provider: 'relay', model: 'aliyun/deepseek-v4-flash', selectionMode: 'ordered_fallback',
@@ -338,11 +340,9 @@ it('a classifier deadline yields to the main reply without narrowing its configu
   await h.send(h.requestId, '请计算 1234.5 × 3.6 - 75.6，只给结果。');
   await h.finished;
   await h.drain();
-  expect(classifierConfig).toMatchObject({
-    maxTokens: INTENT_CLASSIFIER_MAX_TOKENS, noImplicitFailover: true,
-    attemptTimeouts: { absoluteMs: INTENT_CLASSIFIER_TIMEOUT_MS }, fallbackCandidates: [],
-  });
-  expect(classifierSignal?.aborted).toBe(true);
+  expect(classifierConfig).toBeUndefined();
+  expect(classifierSignal).toBeUndefined();
+  expect(fixture.model.mock.calls.filter(args=>args[2]?.source==='chat')).toHaveLength(1);
   expect(mainConfig).toMatchObject({
     provider: 'relay', model: 'aliyun/deepseek-v4-flash', selectionMode: 'ordered_fallback',
     fallbackCandidates: [{ provider: 'deepseek', model: 'deepseek-v4-pro' }], allowCloudFallback: true,

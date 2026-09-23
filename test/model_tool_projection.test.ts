@@ -139,7 +139,6 @@ describe('model tool declaration projection', () => {
       expect(projection.toolNames).toEqual([
         'client_get_state',
         'client_action',
-        'client_capability_manifest',
       ]);
     },
   );

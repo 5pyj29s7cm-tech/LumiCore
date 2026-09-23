@@ -316,7 +316,7 @@ describe('unified execution pipeline', () => {
       'client_get_state',
       'client_action',
     ]));
-    expect(pipeline.execution.toolPolicy.allowedTools.length).toBeGreaterThan(2);
+    expect(pipeline.execution.toolPolicy.allowedTools).toEqual(['client_get_state', 'client_action']);
     expect(pipeline.execution.toolPolicy.forbiddenTools).not.toContain('client_action');
   });
 

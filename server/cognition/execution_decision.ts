@@ -10,7 +10,7 @@ import {
   routeToolsForTurn,
   type ToolRoute,
 } from './tool_router';
-import type { LumiTurnFlow } from './turn_flow';
+import { isInteractiveTurnChannel, type LumiTurnFlow } from './turn_flow';
 import {
   getRecoveredApplicationContinuationTarget,
   isRecoveredCurrentAppEditingContinuation,
@@ -164,7 +164,7 @@ function fallbackPolicy(
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolPolicy {
   const opModePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry, visibilityContext);
-  if (flow.channel === 'chat' && flow.modelToolAccess === 'manifest') {
+  if (isInteractiveTurnChannel(flow.channel) && flow.modelToolAccess === 'manifest') {
     if (!personalityToolPolicy) return opModePolicy;
     const hardAllowed = new Set(opModePolicy.allowedTools || []);
     const personalityAllowed = new Set(personalityToolPolicy.allowedTools || []);
@@ -520,7 +520,6 @@ function enhanceToolRouteForFlow(
 }
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
-  const modelOwnedMainChat = input.flow.channel === 'chat';
   const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(input.flow.routeText || input.text);
   const statusOnlyContinuation =
     /Recovered structured action state:[\s\S]{0,500}- followupIntent:\s*status\b/i.test(input.flow.routeText || input.text);
@@ -538,13 +537,12 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     || input.flow.modelToolAccess === 'manifest'
     || runtimeWorkIntent !== 'none'
   ) && !input.isSanctuary && !statusOnlyContinuation;
-  const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation && !modelOwnedMainChat
+  const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry, input.visibilityContext)
     : null;
   const clientActionToolPolicy = input.flow.clientActionOnlyTurn
     && reviewedExternalCapabilityMatches.length === 0
     && !statusOnlyContinuation
-    && !modelOwnedMainChat
     ? CLIENT_ACTION_TOOL_POLICY
     : null;
   const baseToolPolicy = input.isSanctuary || statusOnlyContinuation
@@ -562,7 +560,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         categories: ['reviewed_external_capability'],
         reasons: ['current user wording semantically matched an active reviewed external capability'],
         totalAvailable: input.toolDeclarations.length,
-        maxTools: input.flow.channel === 'voice' ? 24 : 32,
+        maxTools: 32,
         truncated: false,
       }
     : allowToolUse && (
@@ -573,7 +571,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         // full registry into every model turn. A narrow per-turn manifest
         // keeps context stable while preserving access to every tool through
         // routing on the turn that actually needs it.
-        maxTools: input.flow.channel === 'voice' ? 24 : 32,
+        maxTools: 32,
         capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy, { context: input.visibilityContext }),
         pendingAssistantOfferContext: input.pendingAssistantOfferContext,
         actionTaskState: input.actionTaskState,
@@ -619,9 +617,6 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   // independently bounded by the hard 8-per-response / 24-per-turn canonical
   // invocation budget, so a large planning limit cannot cause an unbounded
   // number of real tool actions.
-  const channelIterationCap = input.flow.channel === 'voice'
-    ? 12
-    : Number.MAX_SAFE_INTEGER;
   const taskIterationCap = recoveredCurrentAppEdit
     ? isRecoveredWpsCreateTask(input.flow.routeText || input.text)
       ? WPS_CURRENT_APP_MAX_ITERATIONS
@@ -629,7 +624,6 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     : Number.MAX_SAFE_INTEGER;
   const maxIterations = Math.max(0, Math.min(
     requestedMaxIterations,
-    channelIterationCap,
     taskIterationCap,
   ));
   const toolPolicy = {

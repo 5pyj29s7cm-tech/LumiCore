@@ -10,6 +10,7 @@ import {
   formatActionContractPrompt,
   requestsBlankAutoCadDocument,
   requiresVisibleAutoCadExecution,
+  requiresMediaPlaybackAction,
 } from './action_contract';
 import { isLegalEntryTurn } from './legal_entry';
 import {
@@ -526,7 +527,7 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (flow.workSurfaceRoute.directDesktop || routeHas(input, 'external_control')) {
+  if (flow.workSurfaceRoute.directDesktop || routeHas(input, 'external_control') || requiresMediaPlaybackAction(text)) {
     return {
       lane: 'desktop_control',
       primary: 'visible desktop/software control',

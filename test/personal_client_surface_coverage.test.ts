@@ -130,10 +130,10 @@ describe('complete personal-client surface contract', () => {
     ])).sort();
 
     expect([...PERSONAL_CLIENT_LAUNCHER_IDS].sort()).toEqual(renderedLauncherIds);
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toEqual(['business', 'tools', 'skills', 'personalization']);
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).toEqual(['business', 'tools', 'skills']);
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('command-center');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('runtime-log');
-    expect(quotedPropertyValues(desktopIcons, 'windowId')).toContain('personalization');
+    expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toContain('personalization');
     expect(quotedPropertyValues(desktopIcons, 'windowId')).not.toEqual(expect.arrayContaining(['avatar-studio', 'sound']));
     expect(reviewedExternalDesktopIcons).toContain(
       'canUseExternalCapabilities ? getDesktopExternalCapabilities(externalCapabilities) : []',
@@ -146,7 +146,7 @@ describe('complete personal-client surface contract', () => {
     expect(desktop).toContain(
       'void launchExternalCapability(def.externalLaunch.capability, def.externalLaunch.action);',
     );
-    expect(quotedPropertyValues(utilityIcons, 'id')).toContain('personalization');
+    expect(quotedPropertyValues(appIcons, 'id')).toContain('personalization');
     expect(quotedPropertyValues(appIcons, 'id')).not.toContain('chat');
     expect(desktop).toContain('const desktopIconColumns = 3');
     expect(desktop).toContain('onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}');
@@ -154,8 +154,10 @@ describe('complete personal-client surface contract', () => {
     expect(desktop).toContain('setMemoryAvatars(previous =>');
     const dock = sourceBlock(desktop, '{/* Bottom Taskbar / Dock */}', '{/* Main OS Content Layer (Personal Desktop Surface) */}');
     expect(dock).not.toContain('data-lumi-target="knowledge"');
-    expect(dock).not.toContain('data-lumi-target="personalization"');
-    expect(desktopIcons).toContain("id: 'personalization'");
+    expect(sourceBlock(desktop, 'const dockApps = [', 'const operationModeOptions')).toContain('...appIcons');
+    expect(dock).toContain('dockApps.map');
+    expect(dock).toContain('data-lumi-target={app.id}');
+    expect(desktopIcons).not.toContain("id: 'personalization'");
     expect(dock).not.toContain("setViewMode(viewMode === 'personal' ? 'world' : 'personal')");
     expect(dock).not.toContain('<Globe');
     expect(desktop).toContain('getPersonalClientSurfaceByAction(action)');
