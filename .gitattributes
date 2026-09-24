@@ -1,1 +1,5 @@
 *.mjs text eol=lf
+# Build tools rewrite these files with LF on every platform. Keep checkouts
+# identical so Windows CRLF conversion cannot change the build source identity.
+src-tauri/Cargo.toml text eol=lf
+docs/generated/capability-stats.md text eol=lf

@@ -7,6 +7,35 @@ import os from 'node:os';
 import path from 'node:path';
 
 describe('runtime source identity', () => {
+  it('preserves identity when build tools rewrite a fresh Windows checkout with LF', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-build-crlf-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    try {
+      fs.writeFileSync(path.join(root, '.gitattributes'), fs.readFileSync(new URL('../.gitattributes', import.meta.url)));
+      const files = ['src-tauri/Cargo.toml', 'docs/generated/capability-stats.md'];
+      for (const name of files) {
+        fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+        fs.writeFileSync(path.join(root, name), 'synthetic source\nsecond line\n');
+      }
+      git('init', '--quiet');
+      git('config', 'core.autocrlf', 'true');
+      git('add', '.');
+      git('-c', 'user.name=Build test', '-c', 'user.email=build-test@example.invalid', 'commit', '--quiet', '-m', 'fixture');
+      for (const name of files) fs.unlinkSync(path.join(root, name));
+      git('checkout', 'HEAD', '--', ...files);
+      const before = computeSourceIdentity(root);
+      expect(before.dirty).toBe(false);
+      for (const name of files) {
+        const content = fs.readFileSync(path.join(root, name), 'utf8');
+        expect(content).not.toContain('\r');
+        fs.writeFileSync(path.join(root, name), content.replaceAll('\r\n', '\n'));
+      }
+      expect(computeSourceIdentity(root)).toEqual(before);
+      fs.appendFileSync(path.join(root, files[0]), 'actual source change\n');
+      expect(computeSourceIdentity(root).fingerprint).not.toBe(before.fingerprint);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('keeps platform build outputs out of source identity while retaining real capabilities and installer hooks', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-build-schema-'));
     const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
