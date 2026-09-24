@@ -19,15 +19,15 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-mod local_bootstrap;
 mod backend_shutdown;
-mod desktop_command_supervisor;
 mod desktop_command_ipc;
+mod desktop_command_supervisor;
+mod local_bootstrap;
 use desktop_command_supervisor::{CommandExecution, CommandSupervisor};
 mod native_identity;
 mod window_activation;
-use local_bootstrap::bootstrap_local_identity;
 use backend_shutdown::{request_backend_save, ShutdownBarrier};
+use local_bootstrap::bootstrap_local_identity;
 use native_identity::get_native_client_identity;
 use window_activation::{execute_window_activation_steps, WindowActivationOps};
 
@@ -1278,16 +1278,28 @@ fn terminate_command_tree(child: &mut Child) {
     {
         // run_command creates a separate process group so descendants are
         // included instead of leaving a shell's child running after cancel.
-        let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())])
-            .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
     let _ = child.kill();
     let _ = child.wait();
 }
 
-
-fn run_command_blocking(command: String, cwd: Option<String>, timeout_ms: Option<u64>, execution: &CommandExecution) -> CommandResult {
-    if execution.is_cancelled() { return CommandResult { success: false, output: "Command cancelled before native dispatch.".into() }; }
+fn run_command_blocking(
+    command: String,
+    cwd: Option<String>,
+    timeout_ms: Option<u64>,
+    execution: &CommandExecution,
+) -> CommandResult {
+    if execution.is_cancelled() {
+        return CommandResult {
+            success: false,
+            output: "Command cancelled before native dispatch.".into(),
+        };
+    }
     let now = SystemTime::now();
     let truncated: String = if command.chars().count() > 500 {
         let head: String = command.chars().take(500).collect();
@@ -1382,7 +1394,13 @@ fn run_command_blocking(command: String, cwd: Option<String>, timeout_ms: Option
                     Ok(None) if execution.is_cancelled() => {
                         cancelled = true;
                         terminate_command_tree(&mut child);
-                        break child.try_wait().and_then(|status| status.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "[outcome_unknown] Cancellation could not confirm process exit")));
+                        break child.try_wait().and_then(|status| {
+                            status.ok_or_else(|| {
+                                std::io::Error::other(
+                                    "[outcome_unknown] Cancellation could not confirm process exit",
+                                )
+                            })
+                        });
                     }
                     Ok(None) if Instant::now() < deadline => {
                         std::thread::sleep(Duration::from_millis(50))
@@ -1401,7 +1419,9 @@ fn run_command_blocking(command: String, cwd: Option<String>, timeout_ms: Option
                     }
                     Err(error) => {
                         terminate_command_tree(&mut child);
-                        break Err(std::io::Error::new(std::io::ErrorKind::Other, format!("[outcome_unknown] Command exit could not be verified: {error}")));
+                        break Err(std::io::Error::other(format!(
+                            "[outcome_unknown] Command exit could not be verified: {error}"
+                        )));
                     }
                 }
             };
@@ -1423,7 +1443,9 @@ fn run_command_blocking(command: String, cwd: Option<String>, timeout_ms: Option
                     timeout.as_millis()
                 ));
             }
-            if cancelled { combined.push_str("\n[Command cancelled; native process exit confirmed]"); }
+            if cancelled {
+                combined.push_str("\n[Command cancelled; native process exit confirmed]");
+            }
             status.map(|status| (status.success() && !timed_out && !cancelled, combined))
         }
         Some(Err(error)) => Err(error),
@@ -1518,8 +1540,6 @@ fn spawn_hidden(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.stderr(std::process::Stdio::null());
     cmd.spawn()
 }
-
-
 
 #[cfg(target_os = "windows")]
 #[derive(Clone)]
@@ -2027,7 +2047,11 @@ mod app_query_tests {
     #[test]
     fn bilingual_search_finds_the_same_known_application_once() {
         let definitions = windows_app_definitions();
-        for query in ["计算器 Calculator", "计算器 / Calculator", "Calculator（计算器）"] {
+        for query in [
+            "计算器 Calculator",
+            "计算器 / Calculator",
+            "Calculator（计算器）",
+        ] {
             let matches = search_app_definitions(query, &definitions);
             assert_eq!(matches.len(), 1, "query: {query}");
             assert_eq!(matches[0].app_id, "calculator");
@@ -2077,7 +2101,10 @@ mod app_query_tests {
     fn empty_or_unrelated_search_terms_do_not_match_every_application() {
         let definitions = windows_app_definitions();
         for query in ["", "  ", " / | （） ", "c", "CalculatorHelper"] {
-            assert!(search_app_definitions(query, &definitions).is_empty(), "query: {query}");
+            assert!(
+                search_app_definitions(query, &definitions).is_empty(),
+                "query: {query}"
+            );
         }
     }
 }
@@ -2414,7 +2441,10 @@ fn search_app_definitions<'a>(
     let terms: Vec<_> = query
         .split(|ch: char| {
             ch.is_whitespace()
-                || matches!(ch, '/' | ',' | '，' | '、' | ';' | '；' | '|' | '(' | ')' | '（' | '）')
+                || matches!(
+                    ch,
+                    '/' | ',' | '，' | '、' | ';' | '；' | '|' | '(' | ')' | '（' | '）'
+                )
         })
         .filter(|term| !term.is_empty())
         .take(16)
@@ -2425,7 +2455,11 @@ fn search_app_definitions<'a>(
     // and target verification stay with the existing open/execute boundary.
     definitions
         .iter()
-        .filter(|def| terms.iter().any(|term| app_query_matches_definition(term, def)))
+        .filter(|def| {
+            terms
+                .iter()
+                .any(|term| app_query_matches_definition(term, def))
+        })
         .collect()
 }
 
@@ -3306,10 +3340,19 @@ fn is_web_url_target(target: &str) -> bool {
 mod web_target_identity_tests {
     #[test]
     fn website_targets_never_enter_application_or_desktop_file_search() {
-        for value in ["https://chat.deepseek.com/", "HTTP://www.douyin.com/", " https://example.com/a.txt "] {
+        for value in [
+            "https://chat.deepseek.com/",
+            "HTTP://www.douyin.com/",
+            " https://example.com/a.txt ",
+        ] {
             assert!(super::is_web_url_target(value));
         }
-        for value in ["deepseek.txt", "Google Chrome", r"C:\test\deepseek.txt", "https-not-a-url"] {
+        for value in [
+            "deepseek.txt",
+            "Google Chrome",
+            r"C:\test\deepseek.txt",
+            "https-not-a-url",
+        ] {
             assert!(!super::is_web_url_target(value));
         }
     }
@@ -3347,17 +3390,26 @@ fn open_item(
     let _ = application;
 
     #[cfg(target_os = "windows")]
-    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_windows_app_alias(&target)).flatten() {
+    if let Some(result) = (!is_web_url_target(&target))
+        .then(|| try_launch_windows_app_alias(&target))
+        .flatten()
+    {
         return result;
     }
 
     #[cfg(target_os = "windows")]
-    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_generic_windows_app(&target)).flatten() {
+    if let Some(result) = (!is_web_url_target(&target))
+        .then(|| try_launch_generic_windows_app(&target))
+        .flatten()
+    {
         return result;
     }
 
     #[cfg(target_os = "macos")]
-    if let Some(result) = (!is_web_url_target(&target)).then(|| try_launch_macos_app(&target)).flatten() {
+    if let Some(result) = (!is_web_url_target(&target))
+        .then(|| try_launch_macos_app(&target))
+        .flatten()
+    {
         if result.success {
             return result;
         }
@@ -3391,13 +3443,13 @@ fn open_item(
 
     #[cfg(target_os = "windows")]
     {
-        return match validate_windows_open_target(&target) {
+        match validate_windows_open_target(&target) {
             Ok(target) => shell_open_windows(&target, &[]),
             Err(error) => CommandResult {
                 success: false,
                 output: error,
             },
-        };
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -4143,7 +4195,8 @@ fn request_app_exit(app: &tauri::AppHandle) {
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || save_before_app_exit(&app))
-        .await.map_err(|error| error.to_string())?
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -5721,7 +5774,11 @@ fn capture_screen() -> CaptureResult {
     {
         // Write PNG to temp file (avoids stdout truncation for ~8 MB screenshots)
         static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-        let temp_path = std::env::temp_dir().join(format!("lumi_scr_{}_{}.png", std::process::id(), CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        let temp_path = std::env::temp_dir().join(format!(
+            "lumi_scr_{}_{}.png",
+            std::process::id(),
+            CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
         let temp_file = temp_path.to_string_lossy().replace('\\', "\\\\");
 
         let mut cmd = Command::new("powershell");
@@ -6087,11 +6144,15 @@ fn keyboard_press(key: String) -> Result<String, String> {
     let main_key = *parts.last().unwrap_or(&"");
     let key_enum = keyboard_key_from_name(main_key).map_err(|e| format!("[not_started] {}", e))?;
     for &part in &parts[..parts.len().saturating_sub(1)] {
-        if !matches!(part.to_ascii_lowercase().as_str(), "ctrl" | "control" | "shift" | "alt" | "meta" | "win" | "cmd" | "super") {
+        if !matches!(
+            part.to_ascii_lowercase().as_str(),
+            "ctrl" | "control" | "shift" | "alt" | "meta" | "win" | "cmd" | "super"
+        ) {
             return Err(format!("[not_started] Unknown modifier: {}", part));
         }
     }
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("[not_started] enigo init: {}", e))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("[not_started] enigo init: {}", e))?;
     // Parse modifiers first, then the main key
     for &part in &parts[..parts.len().saturating_sub(1)] {
         match part.to_ascii_lowercase().as_str() {
@@ -6153,8 +6214,12 @@ mod keyboard_key_mapping_tests {
         for alias in ["win", "meta", "cmd", "super"] {
             assert_eq!(keyboard_key_from_name(alias).unwrap(), Key::Meta);
         }
-        assert!(super::keyboard_press("ctrl+unsupported-key".to_string()).unwrap_err().starts_with("[not_started]"));
-        assert!(super::keyboard_press("unsupported-modifier+a".to_string()).unwrap_err().starts_with("[not_started]"));
+        assert!(super::keyboard_press("ctrl+unsupported-key".to_string())
+            .unwrap_err()
+            .starts_with("[not_started]"));
+        assert!(super::keyboard_press("unsupported-modifier+a".to_string())
+            .unwrap_err()
+            .starts_with("[not_started]"));
     }
 
     #[test]
@@ -6630,11 +6695,11 @@ pub fn run() {
                     request_app_exit(app);
                 }
             }
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                if !app.state::<ShutdownBarrier>().is_saved() {
-                    api.prevent_exit();
-                    request_app_exit(app);
-                }
+            tauri::RunEvent::ExitRequested { api, .. }
+                if !app.state::<ShutdownBarrier>().is_saved() =>
+            {
+                api.prevent_exit();
+                request_app_exit(app);
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {

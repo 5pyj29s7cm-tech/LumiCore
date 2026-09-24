@@ -24,6 +24,8 @@ server/mcp/config.json
 gpt-sovits-src/
 local-tts/
 src-tauri/target/
+# Tauri recreates these platform-dependent validation schemas during builds.
+src-tauri/gen/schemas/
 src-tauri/target-codex-check/
 src-tauri/target-codex-*/
 .claude/
