@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { computeSourceIdentity, fingerprintSourceSnapshot } from '../scripts/lib/source-identity.mjs';
+import { prepareWebViewLoader } from '../scripts/copy-webview2-dll.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 describe('runtime source identity', () => {
-  it('ignores regenerated Tauri schemas while retaining actual capability and source changes', () => {
+  it('keeps platform build outputs out of source identity while retaining real capabilities and installer hooks', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-build-schema-'));
     const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
     try {
       fs.writeFileSync(path.join(root, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url)));
       fs.mkdirSync(path.join(root, 'src-tauri/capabilities'), { recursive: true });
       fs.writeFileSync(path.join(root, 'src-tauri/capabilities/default.json'), '{"permissions":[]}');
+      const hook = fs.readFileSync(new URL('../src-tauri/includes/include-dll.nsh', import.meta.url), 'utf8');
+      fs.mkdirSync(path.join(root, 'src-tauri/includes'), { recursive: true });
+      const hookPath = path.join(root, 'src-tauri/includes/include-dll.nsh');
+      fs.writeFileSync(hookPath, hook);
       git('init', '--quiet');
       git('add', '.');
       git('-c', 'user.name=Build test', '-c', 'user.email=build-test@example.invalid', 'commit', '--quiet', '-m', 'fixture');
@@ -22,6 +27,21 @@ describe('runtime source identity', () => {
         fs.writeFileSync(path.join(root, 'src-tauri/gen/schemas', name), '{"generated":true}');
       }
       expect(computeSourceIdentity(root)).toEqual(before);
+      await prepareWebViewLoader(root, 'win32');
+      const loader = path.join(root, 'src-tauri/target/release/WebView2Loader.dll');
+      const resource = path.join(root, 'desktop-resources/WebView2Loader.dll');
+      fs.mkdirSync(path.dirname(loader), { recursive: true });
+      fs.writeFileSync(loader, 'synthetic optional loader');
+      await prepareWebViewLoader(root, 'win32');
+      expect(fs.readFileSync(resource, 'utf8')).toBe('synthetic optional loader');
+      fs.unlinkSync(loader);
+      await prepareWebViewLoader(root, 'win32');
+      expect(fs.existsSync(resource)).toBe(false);
+      expect(fs.readFileSync(hookPath, 'utf8')).toBe(hook);
+      expect(computeSourceIdentity(root)).toEqual(before);
+      fs.appendFileSync(hookPath, '\n; changed installer behavior\n');
+      expect(computeSourceIdentity(root).fingerprint).not.toBe(before.fingerprint);
+      fs.writeFileSync(hookPath, hook);
       fs.writeFileSync(path.join(root, 'src-tauri/capabilities/default.json'), '{"permissions":["changed"]}');
       expect(computeSourceIdentity(root).fingerprint).not.toBe(before.fingerprint);
       fs.writeFileSync(path.join(root, 'src-tauri/new-source.rs'), 'fn new_source() {}');
