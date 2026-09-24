@@ -24,6 +24,7 @@ import {
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, runWithTools, type LLMResult } from "../llm/adapter";
+import { createModelTurnState } from '../llm/model_turn_state';
 import { isModelConfigurationReadRequest } from '../cognition/model_configuration_intent';
 import {
   normalizeOperationMode,
@@ -157,7 +158,6 @@ import { getSensory } from "./shared";
 import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
 import {
   buildRecentActionContinuationBridge,
-  classifyConversationActionFollowupIntent,
   conversationActionRequiresFreshConfirmationReview,
   formatConversationActionTaskStatus,
   isUserObservedTaskCompletion,
@@ -230,6 +230,7 @@ import {
 import {
   formatActiveTaskRelationContext,
   resolveActiveTaskMessageRelation,
+  taskRelationFollowupIntent,
   bindPreparedTaskMessageRelation,
   type ActiveTaskMessageResolution,
 } from "../cognition/task_concurrency";
@@ -753,6 +754,9 @@ export function registerChatHandler(
     data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number; mediaRequest?: unknown },
     ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void,
   ) => {
+    const turnTimingStartedAt = performance.now();
+    const turnTiming: Record<string, number> = {};
+    const markTurnTiming = (phase: string) => { turnTiming[phase] = Math.round(performance.now() - turnTimingStartedAt); };
     console.log('[ChatHandler] agent:chat RECEIVED:', JSON.stringify({
       requestId: String(data?.requestId || '').slice(0, 120),
       source: String(data?.source || '').slice(0, 80),
@@ -862,11 +866,12 @@ export function registerChatHandler(
       { userId: uid, agentId: conversationAgentId, ...requestScope }, () => selectedConversationId,
     );
     const turnAuthorization = combineRequestAuthorizations(ownerAuthorization, conversationAuthorization);
+    const modelTurnState = createModelTurnState();
     const runAuthorizedTools = (...args: Parameters<typeof runWithTools>) => {
       turnAuthorization.assertCurrent();
       // Preserve the accepted conversation and transport provenance through
       // every execution/recovery path, including reusable workflow traces.
-      args[2] = { ...args[2], conversationId: selectedConversationId || args[2].conversationId, workflowSource: eventSource };
+      args[2] = { ...args[2], modelTurnState, conversationId: selectedConversationId || args[2].conversationId, workflowSource: eventSource };
       return runWithTools(...args);
     };
     const rejectRevokedRequest = () => {
@@ -1060,6 +1065,10 @@ export function registerChatHandler(
         return;
       }
       if (event === 'agent:response') {
+        if (process.env.LUMI_CHAT_LATENCY_DIAGNOSTICS === '1') {
+          markTurnTiming('responseReady');
+          console.log('[ChatTiming]', JSON.stringify({ requestId, ...turnTiming }));
+        }
         // The originating native client must receive the terminal frame even
         // if its room membership changed during reconnect or conversation
         // rollover. Other signed-in clients still receive the same terminal
@@ -1780,6 +1789,7 @@ export function registerChatHandler(
       pendingConfirmationPrompt = '';
     }
     if (rejectRevokedRequest()) return;
+    markTurnTiming('admissionStart');
     const chatAdmission = await admitAcceptedUserTurnDurably({
       persistAcceptedUserTurn: () => addMessageIdempotent({
         userId: uid,
@@ -1819,6 +1829,7 @@ export function registerChatHandler(
     if (!chatAdmission) {
       return;
     }
+    markTurnTiming('admissionEnd');
     const acceptedUserMessageId = chatAdmission.persisted;
     if (conversationTurn.rolledOver && conversationTurn.previousConversationId) {
       await runAfterAcceptedUserTurnAdmission(chatAdmission, () => (
@@ -2242,20 +2253,7 @@ export function registerChatHandler(
         );
       const acceptedFollowupIntent = runtimeStatusOwnsThisTurn
         ? 'none' as const
-        : resolvedTaskRelation.binding === 'active_task'
-          || resolvedTaskRelation.binding === 'previous_task'
-          ? resolvedTaskRelation.feedback === 'status'
-            ? 'status' as const
-            : ['continue', 'correction', 'accept', 'retry'].includes(resolvedTaskRelation.feedback)
-              ? 'execute' as const
-              : classifyConversationActionFollowupIntent(
-                  visibleUserText,
-                  conversation.actionContinuationState,
-                )
-          : classifyConversationActionFollowupIntent(
-              visibleUserText,
-              conversation.actionContinuationState,
-            );
+        : taskRelationFollowupIntent(resolvedTaskRelation);
       const acceptedNormalizedIntent = normalizeActionIntent(visibleUserText);
       const confirmationNeedsFreshReview = Boolean(
         acceptedFollowupIntent === 'status'
@@ -2597,6 +2595,7 @@ export function registerChatHandler(
         : { typeWeights: {}, perspectiveWeights: {} };
 
       // Vector semantic search with keyword fallback
+      markTurnTiming('memoryStart');
       const relevantMemories = await runRetrievalRequest(signal => queryMemoriesVector({
         userId: uid,
         query: text,
@@ -2613,6 +2612,7 @@ export function registerChatHandler(
         signal,
       }), abortController.signal);
       turnAuthorization.assertCurrent();
+      markTurnTiming('memoryEnd');
       console.log('[ChatHandler] relevantMemories (vector):', relevantMemories.length);
 
       // RAG: retrieve relevant knowledge chunks from agent-scoped and Lumi knowledge.
@@ -2637,6 +2637,7 @@ export function registerChatHandler(
         if (ragChunks.length >= 5) break;
       }
 
+      markTurnTiming('ragEnd');
       // Org: search company KB when in work domain
       let kbContext: string | undefined;
       if (resolvedDomain === 'work' && resolvedOrgId) {
@@ -2914,6 +2915,7 @@ export function registerChatHandler(
         registry: toolRegistry,
         personalityToolPolicy: personality.toolPolicy,
         actionTaskState: conversation?.actionContinuationState,
+        taskRelation: resolvedTaskRelation,
         persistedConversationHistory,
         pendingAssistantOfferContext,
         isSanctuary: isMemoryAvatar,
@@ -2936,7 +2938,7 @@ export function registerChatHandler(
         effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
         effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
       }
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      if (toolSecurityContext.executionBoundary !== 'remote_restricted' && executionPipeline.executionRequested) {
         effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
           userId: uid,
           text: turnFlow.routeText,
@@ -3114,7 +3116,7 @@ export function registerChatHandler(
         });
       };
 
-      const actionFollowupIntent = acceptedFollowupIntent;
+      const actionFollowupIntent = executionPipeline.actionFollowupIntent;
       const operationModeMetaText = buildOperationModeMetaResponse({
         text: visibleUserText,
         operationMode: turnFlow.operationMode,
@@ -3401,6 +3403,7 @@ export function registerChatHandler(
             requestId,
             userMessageId: acceptedUserMessageId,
             toolPolicy: modelCapabilityPolicy,
+            followupIntent: actionFollowupIntent,
             forceResume: true,
             preserveExistingTask: true,
           })
@@ -3412,6 +3415,7 @@ export function registerChatHandler(
               requestId,
               userMessageId: acceptedUserMessageId,
               toolPolicy: modelCapabilityPolicy,
+              followupIntent: actionFollowupIntent,
               forceResume: true,
               preserveExistingTask: true,
             })
@@ -3423,6 +3427,7 @@ export function registerChatHandler(
                 requestId,
                 userMessageId: acceptedUserMessageId,
                 toolPolicy: modelCapabilityPolicy,
+                followupIntent: actionFollowupIntent,
                 forceTask: true,
               })
             : { state: null, kind: 'conversation' as const };
@@ -3542,7 +3547,8 @@ export function registerChatHandler(
         coalesceToolExecutionRecords([...priorTaskRecords, ...records])
       );
       collectRequestTerminalRecords = () => withDesktopExecutionReceipt(requestToolRecords, desktopExecutionTracker);
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      const needsExecutionPrompt = toolSessionActive && toolSecurityContext.executionBoundary !== 'remote_restricted';
+      if (needsExecutionPrompt || (toolSecurityContext.executionBoundary !== 'remote_restricted' && turnFlow.conceptualCapabilityQuestion)) {
         effectiveSystemPrompt += '\n\n' + formatClientSelfPromptForTurn(uid, visibleUserText, { domain: resolvedDomain, orgId: resolvedOrgId });
       }
       console.log('[ChatHandler] tool gate:', executionDecision.allowToolUse ? 'authorized' : 'off', 'session:', toolSessionActive ? 'active' : 'conversation', 'operationMode:', operationMode, 'effective:', effectiveOperationMode, 'surface:', turnFlow.surface, 'clientActionOnly:', clientActionOnlyTurn, 'selfRepair:', selfRepairTurn, 'capabilityLane:', capabilitySelection.lane, 'trace:', intentTrace.summary, 'route:', toolRoute ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable} ${toolRoute.categories.join(',') || 'fallback'}` : 'none');
@@ -3587,27 +3593,27 @@ export function registerChatHandler(
       if (!remoteRestricted) {
         effectiveSystemPrompt += '\n\n' + buildInteractionModeOverlay(turnFlow);
       }
-      if (workSurfaceRoute.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      if (workSurfaceRoute.promptOverlay && needsExecutionPrompt) {
         effectiveSystemPrompt += '\n\n' + workSurfaceRoute.promptOverlay;
       }
       effectiveSystemPrompt += '\n\n' + executionBoundaryPromptOverlay(
         executionDecision.promptOverlay,
         toolSecurityContext.executionBoundary,
       );
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      if (needsExecutionPrompt) {
         effectiveSystemPrompt += '\n\n' + capabilitySelection.promptOverlay;
       }
-      if (desktopExecutionPolicy.promptOverlay && toolSecurityContext.executionBoundary !== 'remote_restricted') {
+      if (desktopExecutionPolicy.promptOverlay && needsExecutionPrompt) {
         effectiveSystemPrompt += '\n\n' + desktopExecutionPolicy.promptOverlay;
       }
       const visionRoutingOverlay = effectiveOperationMode !== 'meeting'
-        && toolSecurityContext.executionBoundary !== 'remote_restricted'
+        && needsExecutionPrompt
         ? buildVisionRoutingOverlay(uid, text)
         : '';
       if (visionRoutingOverlay) {
         effectiveSystemPrompt += '\n\n' + visionRoutingOverlay;
       }
-      if (!remoteRestricted) {
+      if (needsExecutionPrompt) {
         effectiveSystemPrompt += '\n\n' + buildLumiOperatingKernelPrompt({
           channel: 'chat',
           flow: turnFlow,
@@ -4342,6 +4348,7 @@ export function registerChatHandler(
         normalTurnMessages = messages;
 
         try {
+          markTurnTiming('modelStart');
           console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', toolSessionActive ? 'active' : 'conversation');
           const onChunk: StreamCallback = (chunk) => {
             if (!deferCompletionStream && !isExplicitMemoryRequest(text)) {
@@ -4364,6 +4371,7 @@ export function registerChatHandler(
               taskText: text,
             });
 
+            markTurnTiming('modelEnd');
             responseText = response.text;
             completionGuard = response.completionGuard;
             llmWasCalled = true;

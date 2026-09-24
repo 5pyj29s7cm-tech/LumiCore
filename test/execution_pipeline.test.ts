@@ -7,6 +7,7 @@ import { buildActionContract } from '../server/cognition/action_contract';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { hasExplicitNoToolInstruction } from '../server/cognition/tool_intent';
 import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
+import { resolveActiveTaskMessageRelation } from '../server/cognition/task_concurrency';
 
 beforeAll(async () => {
   const { initDatabase } = await import('../db_layer');
@@ -82,7 +83,8 @@ describe('unified execution pipeline', () => {
       appTarget: 'Google Chrome', sourcePaths: [], latestBlocker: '', evidenceTools: [], assistantState: '', toolSummaries: [], revision: 1, updatedAt: new Date().toISOString() } as const;
     const run = (taskId: string) => buildLumiExecutionPipeline({ dispatch: { userId: 'browser-confirm-user', channel, source: channel,
       operationMode: 'assistant', text: '确认', targetIsLumi: true, continuationContext: `- followupIntent: confirm\n- taskId: ${taskId}` },
-      actionTaskState: state as any, registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: ['browser_open_task'], forbiddenTools: ['send_email'], maxIterations: 10 } });
+      actionTaskState: state as any, taskRelation: resolveActiveTaskMessageRelation('确认', state as any, { controlTargetTaskId: taskId }),
+      registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: ['browser_open_task'], forbiddenTools: ['send_email'], maxIterations: 10 } });
     const result = run(state.taskId);
     expect(result.turnIntent.flow.routeText).toContain(goal);
     expect(result.capabilityPlan.promptOverlay).toContain('cookies/password store are separate');

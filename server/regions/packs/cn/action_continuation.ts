@@ -37,6 +37,13 @@ export function matchesCnBoundArtifactEdit(text: string, taskText: string): bool
   return Boolean(field && taskText.toLocaleLowerCase().includes(field.toLocaleLowerCase()));
 }
 
+/** Latency hint only: literal numeric edits, never an execution permission. */
+export function isCnLiteralTableFieldEdit(text: string): boolean {
+  if (!/(?:\.xlsx\b|\.csv\b|Excel|工作簿|表格|报表)/iu.test(text)) return false;
+  if (/(?:分析|推理|评估|审查|策略|建议|预测|比较|原因|方案)/u.test(text)) return false;
+  return /(?:数量|单价|价格|金额|税率|折扣|比例|[A-Z]+\d+)\s*(?:改成|改为|修改为?|调整为?|换成)\s*[+-]?\d+(?:\.\d+)?%?(?=[，,。；;\s]|$)/iu.test(text);
+}
+
 export function matchesCnExplicitPlaybackRetry(text: string): boolean {
   return /(?:还没|没有|并未)(?:成功)?播放/u.test(text)
     && /(?:^|[，,。；;\s])(?:请)?(?:继续|接着|重试)(?:播放|执行)?[。！!\s]*$/u.test(text)

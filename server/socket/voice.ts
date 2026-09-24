@@ -26,6 +26,7 @@ import {
   runWithTools,
 } from "../llm/adapter";
 import { runConversationTurn } from "../llm/conversation_turn";
+import { createModelTurnState } from '../llm/model_turn_state';
 import {
   buildDurableTaskDeterministicToolRecoveryCall,
 } from '../cognition/deterministic_tool_recovery';
@@ -221,7 +222,6 @@ import {
 } from "./voice_action_history";
 import {
   buildRecentActionContinuationBridge,
-  classifyConversationActionFollowupIntent,
   formatConversationActionTaskStatus,
   getRecoveredApplicationContinuationTarget,
   isUserObservedTaskCompletion,
@@ -1883,6 +1883,7 @@ async function processVoiceInput(
   );
   session.activeTurnProvenance = voiceTurnProvenance;
   const pipelineAbort = new AbortController();
+  const modelTurnState = createModelTurnState();
   let actionLeaseHeartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | null = null;
   const isCurrentTurn = () => turnAuthorization.isCurrent() && session.pipelineAbortController === pipelineAbort && !pipelineAbort.signal.aborted;
   let finalAgentResponseDelivered = false;
@@ -2416,10 +2417,7 @@ async function processVoiceInput(
     toolSecurityContext.executionBoundary,
   );
   const toolSessionActive = requestedToolSession;
-  const actionFollowupIntent = classifyConversationActionFollowupIntent(
-    actionIntentText,
-    conversationTurn.conversation.actionContinuationState,
-  );
+  const actionFollowupIntent = executionPipeline.actionFollowupIntent;
   const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
     || transcriptExecutionGuard.action === 'clarify'
     ? { state: null, kind: 'conversation' as const }
@@ -2435,6 +2433,7 @@ async function processVoiceInput(
         requestId,
         userMessageId: voiceUserMessageId,
         toolPolicy: routedToolPolicy,
+        followupIntent: actionFollowupIntent,
         forceTask: toolSessionActive,
         forceResume: Boolean(
           pendingConfirmation
@@ -3929,6 +3928,7 @@ async function processVoiceInput(
         {
           provider,
           model: voiceModel,
+          modelTurnState,
           userId: session.userId,
           domain: voiceScope.domain,
           orgId: voiceScope.orgId,
@@ -4670,6 +4670,7 @@ async function processVoiceInput(
     const recoveryConversationMessages = messages;
 
     const modelConfig: LLMConfig = {
+      modelTurnState,
       provider,
       model: effectiveModel,
       userId: session.userId,
@@ -4834,6 +4835,7 @@ async function processVoiceInput(
           {
             provider,
             model: effectiveModel,
+            modelTurnState,
             userId: session.userId,
             domain: voiceScope.domain,
             orgId: voiceScope.orgId,

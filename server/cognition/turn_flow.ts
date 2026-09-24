@@ -50,6 +50,8 @@ export interface LumiTurnFlowInput {
   text: string;
   /** Prior-turn detail used only to fill a genuinely underspecified action. */
   continuationContext?: string;
+  /** The shared pipeline already resolved the current turn against its task. */
+  actionFollowupIntent?: import('./action_continuation').RecentActionFollowupIntent;
   channel: LumiTurnChannel;
   source?: string;
   category?: string;
@@ -135,6 +137,21 @@ export function resolveTurnSurface(input: {
 }
 
 export function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverlay'>): string {
+  if (!flow.allowToolUseForTurn && flow.executionGovernance.capabilityLearningIntent === 'none') {
+    return [
+      '## Lumi Turn Flow',
+      `Channel: ${flow.channel}. Surface: ${flow.surface}. Tool access: chat-only.`,
+      'Lumi is the same personal core across text and voice. Answer the newest user message naturally; history supplies context, not additional pending requests.',
+      'Do not force a task/tool path or claim new actions. Discuss prior work only when relevant to the current question, using verified receipts for outcomes. Do not prepend a progress report when the user changes the subject.',
+      flow.conceptualCapabilityQuestion
+        ? 'Explain capabilities without treating this turn\'s tool exposure as the installed inventory. Lumi has no selectable operation modes.'
+        : '',
+      flow.source === 'command-center-chat'
+        ? 'The integrated text panel is Lumi\'s only text entry. The user is already there; do not redirect them to another chat screen.'
+        : '',
+      flow.workTakeover.shouldResumeTask ? flow.workTakeover.promptOverlay : '',
+    ].filter(Boolean).join('\n');
+  }
   const focus: string[] = [];
   if (flow.workflowHint || flow.specialWorkflow) {
     focus.push(`skill_workflow_hint=${(flow.workflowHint || flow.specialWorkflow)?.skillId}`);
@@ -333,8 +350,10 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const conceptualCapabilityQuestion = isCapabilityMetaQuestion(input.text);
   const continuationContext = String(input.continuationContext || '').trim();
   const hasContinuationContext = Boolean(continuationContext);
-  const directActionFollowupIntent = classifyRecentActionFollowupIntent(input.text);
-  const recoveredActionFollowupIntent = /(?:^|\n)- followupIntent:\s*status(?:\s|$)/i.test(continuationContext)
+  const directActionFollowupIntent = input.actionFollowupIntent ?? classifyRecentActionFollowupIntent(input.text);
+  const recoveredActionFollowupIntent = input.actionFollowupIntent !== undefined
+    ? input.actionFollowupIntent
+    : /(?:^|\n)- followupIntent:\s*status(?:\s|$)/i.test(continuationContext)
     ? 'status' as const
     : /(?:^|\n)- followupIntent:\s*execute(?:\s|$)/i.test(continuationContext)
       ? 'execute' as const
@@ -347,7 +366,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const immediateAssistantRestatement = actionFollowupIntent === 'repeat';
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const explicitContinuationConfirmation =
-    /^(?:确认|确定|允许|同意|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    (input.actionFollowupIntent === undefined || input.actionFollowupIntent === 'execute')
+    && /^(?:确认|确定|允许|同意|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const currentAcceptsContinuationContext = needsRecentActionContinuationContext(input.text)
     || explicitContinuationConfirmation
     || recoveredActionFollowupIntent !== 'none';

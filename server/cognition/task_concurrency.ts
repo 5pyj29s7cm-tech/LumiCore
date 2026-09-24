@@ -5,10 +5,12 @@ import {
   isTaskPreparationContinuation,
   isReferentialArtifactEdit,
   isExplicitUnfinishedTaskContinuation,
+  normalizeConversationActionState,
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
 import { normalizeActionIntent } from './normalized_action_intent';
+import { hasExplicitNoToolInstruction } from './tool_intent';
 import {
   resolvePendingRuntimeCleanupOffer,
   type PendingAssistantOfferContext,
@@ -192,6 +194,12 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = normalizeActionIntent(normalized);
+  const followup = classifyConversationActionFollowupIntent(normalized, state);
+  // One semantic answer owns queueing, planning and ledger preparation. A
+  // phrase about continuing later must not override a current status question.
+  if (followup === 'status' && normalizedIntent.target !== 'runtime_work') return 'status';
+  if (followup === 'repeat') return 'repeat';
+  if (hasExplicitNoToolInstruction(normalized)) return 'new_task';
   if (isReferentialArtifactEdit(normalized, state)) return 'correction';
   if (isTaskPreparationContinuation(normalized, state)) return 'continue';
   if (isExplicitUnfinishedTaskContinuation(normalized, state)) return 'continue';
@@ -205,7 +213,6 @@ function feedbackKind(
     && normalizedIntent.operation === 'status'
     && normalizedIntent.target === 'runtime_work'
   ) return 'new_task';
-  if (classifyConversationActionFollowupIntent(normalized, state) === 'status') return 'status';
   if (
     normalizedIntent.relation === 'correction'
     && normalizedIntent.kind !== 'none'
@@ -222,6 +229,7 @@ function feedbackKind(
     normalizedIntent.relation === 'new'
     && normalizedIntent.kind !== 'none'
     && normalizedIntent.operation !== 'status'
+    && followup !== 'execute'
   ) return 'new_task';
   if (RETRY_ONLY_RE.test(normalized)) return 'retry';
   if (ACCEPT_ONLY_RE.test(normalized)) {
@@ -230,7 +238,9 @@ function feedbackKind(
       acceptedCleanupOffer
       || (state?.unfinished && state.status === 'waiting_confirmation'),
     );
-    if (ORDINARY_ACK_ONLY_RE.test(normalized) && !hasPendingAcceptance) return 'new_task';
+    if (ORDINARY_ACK_ONLY_RE.test(normalized) && !hasPendingAcceptance) {
+      return followup === 'execute' ? 'continue' : 'new_task';
+    }
     return 'accept';
   }
   if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
@@ -248,11 +258,22 @@ function feedbackKind(
     || (state?.unfinished && TERSE_TARGET_CORRECTION_RE.test(normalized))
   ) return 'correction';
 
-  const followup = classifyConversationActionFollowupIntent(normalized, state);
   if (followup === 'status') return 'status';
   if (followup === 'execute') return 'continue';
-  if (followup === 'repeat') return 'repeat';
   return 'new_task';
+}
+
+/** Projection of the server-owned relation, never a second text classifier. */
+export function taskRelationFollowupIntent(
+  resolution: ActiveTaskMessageResolution,
+): import('./action_continuation').RecentActionFollowupIntent {
+  if (resolution.binding === 'stale') return 'none';
+  switch (resolution.feedback) {
+    case 'status': return 'status';
+    case 'repeat': return 'repeat';
+    case 'continue': case 'correction': case 'retry': case 'accept': return 'execute';
+    default: return 'none';
+  }
 }
 
 function queueRelation(feedback: ActiveTaskFeedbackKind): ActiveTaskMessageRelation {
@@ -310,7 +331,7 @@ export function resolveActiveTaskMessageRelation(
 ): ActiveTaskMessageResolution {
   const normalized = compact(text, 700);
   const feedback = normalized
-    ? feedbackKind(normalized, state, options.pendingAssistantOfferContext)
+    ? feedbackKind(normalized, normalizeConversationActionState(state), options.pendingAssistantOfferContext)
     : 'new_task';
   const acceptedRuntimeCleanupOffer = feedback === 'accept'
     ? resolvePendingRuntimeCleanupOffer(normalized, options.pendingAssistantOfferContext)

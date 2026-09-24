@@ -56,6 +56,9 @@ export interface ToolIntentDecisionTrace {
   };
 }
 const EXPLICIT_NO_TOOL_PATTERNS: RegExp[] = [
+  // i18n-allow: a complete current-turn "do not execute yet" clause, not a prohibition on one named operation.
+  /(?:^|[，,。！？!?；;\n])\s*(?:(?:但|但是|不过)\s*)?(?:请)?(?:先|暂时|现在)?(?:不要|别|不用|无需|禁止|请勿)\s*(?:再|继续)?(?:执行|动手|操作)(?:了)?\s*(?=$|[，,。！？!?；;\n])/u,
+  /(?:^|[.,;!?\n])\s*(?:please\s+)?(?:do\s+not|don't)\s+(?:execute|act|proceed|do\s+it)(?:\s+(?:yet|now))?\s*(?=$|[.,;!?\n])/iu,
   // i18n-allow: discussion-only planning requests, not user-facing copy.
   /(?:^|[。！？；;，,：:]|\s)(?:请)?(?:现在|这次|先)?(?:只|仅)(?:告诉我|说说|说明|解释)(?:你)?(?:准备|打算|计划)?(?:怎么做|如何做|怎样做|执行步骤|计划|方案)/u,
   /\b(?:first\s+)?(?:only|just)\s+(?:tell\s+me|explain|describe)\s+(?:how\s+you\s+(?:would|plan\s+to)|(?:the|your)\s+plan)\b/iu,

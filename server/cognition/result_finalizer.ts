@@ -1,4 +1,6 @@
 import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
+import { missingTaskInputResult } from './missing_task_input';
+import { withoutLocationLiterals } from './location_literals';
 import { isModelConfigurationReadRequest } from './model_configuration_intent';
 import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
 import fs from 'node:fs';
@@ -3037,7 +3039,8 @@ export function tryFinalizeVerifiedBoundedAction(
   // approve spreadsheet semantics it cannot inspect.
   const structuredDelivery = resolveArtifactDelivery(records, record => isVerifiedCurrentTurnRecord(scopedInput, record));
   const computed = structuredDelivery && parseReceiptObject(toolRecordTerminalPayload(structuredDelivery.producer))?.calculatedCells;
-  const additionalWork = /(?:运行|发送|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(task); // i18n-allow: additional semantic/action obligations.
+  const taskInstruction = withoutLocationLiterals(task);
+  const additionalWork = /(?:运行|发送|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(taskInstruction); // i18n-allow: additional semantic/action obligations.
   if (structuredDelivery && /\.xlsx$/iu.test(structuredDelivery.outputPath)
     && Array.isArray(computed) && computed.length > 0 && !additionalWork) {
     const result = formatGroundedArtifactResult(scopedInput);
@@ -3052,7 +3055,7 @@ export function tryFinalizeVerifiedBoundedAction(
     // Requested opening is already checked by the shared action contract.
     // Merely seeing "open" (including "do not open") cannot create another
     // obligation after the current saved/read version is fully verified.
-    const extraAction = /(?:运行|发送|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(task); // i18n-allow: Additional action requirements.
+    const extraAction = additionalWork;
     if (delivery?.readback && !extraAction) {
       const result = formatGroundedArtifactResult(scopedInput);
       if (result && !result.blocked) return result;
@@ -3095,6 +3098,9 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     )),
   };
   const actionText = resultTaskText(input);
+  const missingInput = missingTaskInputResult(actionText,
+    (input.toolRecords || []).filter(record => recordMatchesCurrentTurnIdentity(input, record)));
+  if (missingInput) return missingInput;
   const business = groundedBusinessAnalysis(input);
   if (business) return business;
   const windowObservation = groundedReadOnlyWindowObservation(input);

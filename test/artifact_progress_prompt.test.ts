@@ -1,8 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { buildArtifactProgressPrompt, resolveRequiredToolNamesForModel, resolveArtifactReadbackCall, resolveInteractiveToolTimeouts } from '../server/llm/adapter';
+import { buildArtifactProgressPrompt, resolveRequiredToolNamesForModel, resolveArtifactReadbackCall, resolveInteractiveToolTimeouts, resolveInteractiveToolConfig } from '../server/llm/adapter';
 import { requestedArtifactSaveAsPath, matchesRequestedArtifactOutput } from '../server/cognition/artifact_write_scope';
 
 describe('generated deliverable continuation', () => {
+  it('avoids hidden reasoning for explicit field edits, retaining analysis and local model settings', () => {
+    const config = { provider: 'relay', model: 'aliyun/deepseek-v4-pro' };
+    const task = '水杯数量改成4，其余不变，更新刚才生成的 Excel，保存后回读告诉我结果。';
+    expect(resolveInteractiveToolConfig(config, task)).toEqual({ ...config, thinkingMode: 'disabled' });
+    expect(config).not.toHaveProperty('thinkingMode');
+    for (const text of ['分析这份合同的法律风险。', '把刚才生成的 Excel 水杯数量改成4，并分析销售策略。',
+      '把刚才生成的 Excel 水杯数量改成你认为合理的数值。',
+      '把 D:/work/contract.docx 的金额改成4，保存。',
+      'Create D:/work/report.docx with a detailed analysis.', 'Explain a mathematical theorem.', '不要把水杯数量改成4。']) {
+      expect(resolveInteractiveToolConfig(config, text)).toBe(config);
+    }
+    const local = { provider: 'lmstudio', model: 'local-model' };
+    expect(resolveInteractiveToolConfig(local, task)).toBe(local);
+  });
   it('separates a correction source from its exact save-as destination', () => {
     const task='把刚才报表的 B类数量改成6，另存到 D:/work/updated.xlsx，告诉我总金额。';
     expect(requestedArtifactSaveAsPath(task)).toBe('D:/work/updated.xlsx');
@@ -14,6 +28,7 @@ describe('generated deliverable continuation', () => {
     const config: any = { provider: 'relay', model: 'primary', selectionMode: 'ordered_fallback', fallbackCandidates: [{provider:'relay', model:'backup'}] };
     const task='Create D:/work/meeting.docx with a meeting agenda.';
     expect(resolveInteractiveToolTimeouts(config,task)?.semanticContentMs).toBe(25000);
+    expect(resolveInteractiveToolTimeouts(config,'水杯数量改成4，其余不变，更新刚才生成的 Excel，保存后回读告诉我结果。')?.semanticContentMs).toBe(25000);
     expect(resolveInteractiveToolTimeouts({...config,selectionMode:'pinned'},task)).toBeUndefined();
     expect(resolveInteractiveToolTimeouts({...config,provider:'lmstudio'},task)).toBeUndefined();
     expect(resolveInteractiveToolTimeouts({...config,attemptTimeouts:{semanticContentMs:90000}},task)?.semanticContentMs).toBe(90000);

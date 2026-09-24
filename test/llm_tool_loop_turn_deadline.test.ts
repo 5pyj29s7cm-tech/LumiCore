@@ -13,6 +13,7 @@ vi.mock('../server/llm/providers', async () => {
 });
 
 import { runWithTools } from '../server/llm/adapter';
+import { createModelTurnState } from '../server/llm/model_turn_state';
 import { encodeToolResult } from '../server/tools/result_envelope';
 import { ToolRegistry } from '../server/tools/registry';
 import { withCloudResilience } from '../server/cloud/resilience';
@@ -84,6 +85,52 @@ afterEach(() => {
 });
 
 describe('bounded cumulative model-wait lifecycle', () => {
+  it('stops queued calls and model recovery at a missing required source, but permits a new attempt', async () => {
+    const { registry, late } = deadlineRegistry();
+    const read = vi.fn().mockRejectedValueOnce(new Error('XLSX file not found: D:/orders.xlsx'))
+      .mockResolvedValueOnce(encodeToolResult('source supplied', { ok: true, status: 'verified', verified: true }));
+    registry.register({ name: 'read_xlsx', description: 'Read the source workbook',
+      parameters: { type: 'object', properties: { filePath: { type: 'string' } }, required: ['filePath'] },
+      permission: 'public', securityLevel: 'safe', handler: read });
+    const call = { id: 'required-source', name: 'read_xlsx', arguments: { filePath: 'D:/orders.xlsx' } };
+    mocks.makeLLMCallStreaming.mockResolvedValueOnce({ text: '', toolCalls: [call, { id: 'late-write', name: 'late_tool', arguments: {} }] });
+    const messages = [{ role: 'user' as const, content: '把 D:/orders.xlsx 数量改成4，另存为 D:/result.xlsx。' }];
+    const config = { provider: 'deepseek', model: 'test-model' };
+    const result = await runWithTools(messages, registry, config, undefined, 5, ...getters, () => {});
+    expect(result.completionGuard).toMatchObject({ blocked: true, reason: 'required_input_file_missing' });
+    expect(result.text).toContain('D:/orders.xlsx');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(late).not.toHaveBeenCalled();
+    expect(mocks.makeLLMCallStreaming).toHaveBeenCalledTimes(1);
+    mocks.makeLLMCallStreaming.mockResolvedValueOnce({ text: '', toolCalls: [{ ...call, id: 'new-read' }] })
+      .mockResolvedValueOnce({ text: 'Source available, still needs saving.', toolCalls: null });
+    const next = await runWithTools(messages, registry, config, undefined, 2, ...getters, () => {},
+      { priorToolRecords: result.toolCalls });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(next.completionGuard?.reason).not.toBe('required_input_file_missing');
+  });
+
+  it('does not grant a fresh model-wait budget to a second recovery loop', async () => {
+    vi.useFakeTimers();
+    const { registry } = deadlineRegistry();
+    const state = createModelTurnState();
+    const config = { provider: 'deepseek', model: 'test-model', modelWaitBudgetMs: 40, modelTurnState: state };
+    mocks.makeLLMCallStreaming
+      .mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve({ text: 'Known context.', toolCalls: null }), 30)))
+      .mockImplementationOnce(() => new Promise(() => {}));
+    const first = runWithTools([{ role: 'user', content: 'Explain the context.' }], registry, config, undefined, 1, ...getters, () => {});
+    await vi.advanceTimersByTimeAsync(30);
+    await first;
+    expect(state.modelWaitMs).toBe(30);
+    const recovery = runWithTools([{ role: 'user', content: 'Explain the context.' }], registry, config, undefined, 1, ...getters, () => {});
+    const assertion = expect(recovery).rejects.toMatchObject({ name: 'ToolLoopModelBudgetError' });
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    expect(state.modelWaitMs).toBe(40);
+    const exhausted = runWithTools([{ role: 'user', content: 'Explain the context.' }], registry, config, undefined, 1, ...getters, () => {});
+    await expect(exhausted).rejects.toMatchObject({ name: 'ToolLoopModelBudgetError' });
+    expect(mocks.makeLLMCallStreaming).toHaveBeenCalledTimes(2);
+  });
   it('does not disable local inference when only the parent turn budget expires', async () => {
     vi.useFakeTimers();
     const { registry } = deadlineRegistry();

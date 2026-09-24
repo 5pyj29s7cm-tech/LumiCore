@@ -389,9 +389,9 @@ describe('Chat/task model failover continuity', () => {
     });
     expect(terminal.text).not.toMatch(/No successful current-turn tool execution|这一轮没有记录到成功|model routes unavailable|processing failed/i);
 
-    expect(primaryCreate).toHaveBeenCalledTimes(2);
+    expect(primaryCreate).toHaveBeenCalledTimes(1);
     expect(fallbackCreate).toHaveBeenCalledTimes(2);
-    expect(primaryPayloads).toHaveLength(2);
+    expect(primaryPayloads).toHaveLength(1);
     expect(fallbackPayloads).toHaveLength(2);
     expect(primaryPayloads.every(payload => payload.model === primaryModel)).toBe(true);
     expect(fallbackPayloads.every(payload => payload.model === fallbackModel)).toBe(true);
@@ -498,12 +498,8 @@ describe('Chat/task model failover continuity', () => {
       && receipt.requestedModel === primaryModel
       && receipt.selectedProvider === 'lmstudio'
       && receipt.selectedModel === fallbackModel
-      && receipt.fallbackReason === 'provider_unreachable'
       && receipt.attempts.length === 2
       && receipt.attempts[0].provider === 'deepseek'
-      && receipt.attempts[0].status === 'failed'
-      && receipt.attempts[0].reason === 'provider_unreachable'
-      && receipt.attempts[0].visibleOutputCommitted === false
       && receipt.attempts[1].provider === 'lmstudio'
       && receipt.attempts[1].status === 'succeeded'
     ))).toBe(true);
@@ -512,13 +508,22 @@ describe('Chat/task model failover continuity', () => {
     const finalReceipt = receipts.find(receipt => receipt.id !== toolRecord.modelRoutingReceiptId);
     expect(planningReceipt).toBeDefined();
     expect(finalReceipt).toBeDefined();
+    expect(planningReceipt).toMatchObject({ fallbackReason: 'provider_unreachable', attempts: [
+      { status: 'failed', reason: 'provider_unreachable', visibleOutputCommitted: false },
+      { status: 'succeeded' },
+    ] });
+    expect(finalReceipt).toMatchObject({ fallbackReason: 'failed_earlier_this_turn', attempts: [
+      { status: 'skipped', reason: 'failed_earlier_this_turn', durationMs: 0 },
+      { status: 'succeeded' },
+    ] });
+    expect(finalReceipt!.attempts[0].outboundMessagesEvidence).toBeUndefined();
+    expect(planningReceipt!.attempts[0].outboundMessagesEvidence?.messagesSha256)
+      .toBe(privateDigest({ system: null, messages: primaryPayloads[0].messages }));
+    expect(planningReceipt!.attempts[0].outboundMessagesEvidence?.toolDeclarationsSha256)
+      .toBe(privateDigest(primaryPayloads[0].tools || []));
+    expect(planningReceipt!.attempts[0].outboundMessagesEvidence?.toolDeclarationCount)
+      .toBe(primaryToolNames.length);
     for (const [receipt, index] of [[planningReceipt!, 0], [finalReceipt!, 1]] as const) {
-      expect(receipt.attempts[0].outboundMessagesEvidence?.messagesSha256)
-        .toBe(privateDigest({ system: null, messages: primaryPayloads[index].messages }));
-      expect(receipt.attempts[0].outboundMessagesEvidence?.toolDeclarationsSha256)
-        .toBe(privateDigest(primaryPayloads[index].tools || []));
-      expect(receipt.attempts[0].outboundMessagesEvidence?.toolDeclarationCount)
-        .toBe(primaryToolNames.length);
       expect(receipt.attempts[1].outboundMessagesEvidence?.messagesSha256)
         .toBe(privateDigest({ system: null, messages: fallbackPayloads[index].messages }));
       expect(receipt.attempts[1].outboundMessagesEvidence?.toolDeclarationsSha256)

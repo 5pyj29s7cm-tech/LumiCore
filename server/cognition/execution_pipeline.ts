@@ -2,7 +2,8 @@ import type { ToolPolicy } from '../personality/types';
 import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
-import { classifyConversationActionFollowupIntent, isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
+import { isCurrentContinuationTask, isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
+import { resolveActiveTaskMessageRelation, taskRelationFollowupIntent, formatActiveTaskRelationContext, type ActiveTaskMessageResolution } from './task_concurrency';
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
@@ -74,6 +75,7 @@ export interface LumiExecutionPipeline {
    */
   trustedActionContinuation: boolean;
   actionFollowupIntent: RecentActionFollowupIntent;
+  taskRelation: ActiveTaskMessageResolution;
   intentTrace: LumiIntentTrace;
   shadowComparison: LumiRoutingShadowComparison;
 }
@@ -92,6 +94,8 @@ export interface BuildLumiExecutionPipelineInput {
   registry: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
   actionTaskState?: ConversationActionContinuationState | null;
+  /** Already resolved by the accepted-turn/queue boundary, never client input. */
+  taskRelation?: ActiveTaskMessageResolution;
   isSanctuary?: boolean;
   /** Additional channel/role denies, applied after all semantic adapters. */
   additionalForbiddenTools?: string[];
@@ -244,20 +248,16 @@ function applyCurrentTurnNoMutationConstraint(
   };
 }
 
-function hasTrustedActionContinuation(input: BuildLumiExecutionPipelineInput): boolean {
+function hasTrustedActionContinuation(input: BuildLumiExecutionPipelineInput, relation: ActiveTaskMessageResolution): boolean {
   const state = input.actionTaskState;
-  const context = String(input.dispatch.continuationContext || '');
-  if (!state?.unfinished || !state.taskId || !context) return false;
-  const followup = context.match(/(?:^|\n)-\s*followupIntent:\s*([^\r\n]+)/i)?.[1]?.trim().toLowerCase();
-  const taskId = context.match(/(?:^|\n)-\s*taskId:\s*([^\r\n]+)/i)?.[1]?.trim();
-  // Corrections and retries are continuations of the same server-owned task,
-  // not new authorization requests.  Requiring the exact durable task id
-  // keeps this boundary fail-closed while allowing a voice-to-text handoff
-  // (whose classifier labels the turn `correction`) to retain the original
-  // capability envelope.  `status` remains observational and must never
-  // reacquire an execution lease.
-  const executionFollowups = new Set(['execute', 'correction', 'retry', 'accept', 'confirm']);
-  return executionFollowups.has(followup || '') && taskId === state.taskId;
+  // A formatted prompt is presentation, not authority. Only the server's
+  // accepted task binding may restore the existing execution envelope.
+  return Boolean(state?.unfinished && state.taskId
+    && relation.binding === 'active_task'
+    && relation.taskId === state.taskId
+    && relation.revision === state.revision
+    && taskRelationFollowupIntent(relation) === 'execute'
+    && isCurrentContinuationTask(input.dispatch.text, state));
 }
 
 function applySelectedWorkflowAdapterPolicy(
@@ -349,9 +349,23 @@ export function buildLumiExecutionPipeline(
   ].join('\n\n') : null;
   const acceptedPlan = mediaRequest ? null : resolveAcceptedFilePlan({ text: input.dispatch.text, history: input.persistedConversationHistory });
   const effectiveText = mediaDecisionText || acceptedPlan?.text || input.dispatch.text;
-  const dispatched = mediaDecisionText || acceptedPlan
-    ? buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText })
-    : input.prebuiltDispatch || buildLumiTurnDispatch(input.dispatch);
+  let taskRelation = acceptedPlan || mediaRequest
+    ? resolveActiveTaskMessageRelation(effectiveText, null)
+    : input.taskRelation || resolveActiveTaskMessageRelation(input.dispatch.text, input.actionTaskState, {
+        pendingAssistantOfferContext: input.pendingAssistantOfferContext,
+      });
+  if (taskRelation.taskId && (taskRelation.taskId !== input.actionTaskState?.taskId
+    || taskRelation.revision !== input.actionTaskState?.revision)) {
+    taskRelation = { ...taskRelation, binding: 'stale', operation: 'reject_stale', reason: 'planning_task_snapshot_changed' };
+  }
+  const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none' : taskRelationFollowupIntent(taskRelation);
+  const observationalFollowup = actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat';
+  const trustedActionContinuation = !acceptedPlan && !mediaRequest && hasTrustedActionContinuation(input, taskRelation);
+  const continuationContext = input.dispatch.continuationContext
+    || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
+  const dispatched = input.prebuiltDispatch && !input.actionTaskState && !input.taskRelation && !mediaRequest && !acceptedPlan
+    ? input.prebuiltDispatch
+    : buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText, continuationContext, actionFollowupIntent });
   const acceptedTaskTarget = resolveAcceptedTaskTarget({
     text: input.dispatch.text,
     persistedHistory: input.persistedConversationHistory,
@@ -366,10 +380,6 @@ export function buildLumiExecutionPipeline(
       : ''].filter(Boolean).join('\n'),
   };
   let decisionText = mediaDecisionText || (acceptedPlan ? turnIntent.flow.routeText : input.decisionText || turnIntent.flow.routeText);
-  const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none'
-    : classifyConversationActionFollowupIntent(input.dispatch.text, input.actionTaskState);
-  const observationalFollowup = actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat';
-  const trustedActionContinuation = !acceptedPlan && !observationalFollowup && hasTrustedActionContinuation(input);
   if (trustedActionContinuation) turnIntent.flow.rootTaskText = input.actionTaskState?.goal;
   // Bind the planning input as well as the ledger id. Detailed "continue the
   // unfinished task" messages can themselves resemble authoring requests;
@@ -387,7 +397,11 @@ export function buildLumiExecutionPipeline(
     : effectiveText;
   if (resumesExplicitGoal) {
     decisionText = actionText;
-    turnIntent.flow.routeText = [actionText, input.dispatch.continuationContext].filter(Boolean).join('\n\n');
+    // Prompt hints include historical errors and advice such as "do not
+    // restart/cancel". They describe state; they are not additional user
+    // operations or completion requirements. Route and verify only the
+    // durable goal plus the user's current instruction.
+    turnIntent.flow.routeText = actionText;
   }
   if (trustedActionContinuation && isTaskPreparationContinuation(input.dispatch.text, input.actionTaskState)) {
     turnIntent.flow.preparationRootText = input.actionTaskState?.goal;
@@ -447,7 +461,8 @@ export function buildLumiExecutionPipeline(
       resumesExplicitGoal && !preservedSourceOutputScope(actionText) ? effectiveText : actionText,
       visibilityContext,
     ),
-    observationalFollowup ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
+    observationalFollowup || taskRelation.binding === 'stale'
+      ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
   );
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,
@@ -562,5 +577,6 @@ export function buildLumiExecutionPipeline(
     intentTrace,
     shadowComparison,
     actionFollowupIntent,
+    taskRelation,
   };
 }

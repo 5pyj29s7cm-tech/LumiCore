@@ -6,6 +6,8 @@ import {
 import type { LLMConfig, LLMResult, LLMUsageRecord } from './adapter';
 import type { LLMGetters } from './dispatch';
 import type { NormalizedLLMResponse } from '../tools/types';
+import { resolveConversationModelConfig } from './conversation_profile';
+import { createModelTurnState } from './model_turn_state';
 import {
   getExplicitSentenceCountConstraint,
   sentenceCountCorrectionInstruction,
@@ -37,12 +39,16 @@ export interface ConversationTurnResult extends LLMResult {
  * This helper never authorizes or dispatches tools.
  */
 export async function runConversationTurn(input: ConversationTurnInput): Promise<ConversationTurnResult> {
-  const { config, getters } = input;
+  const { getters } = input;
   const usageRecords: LLMUsageRecord[] = [];
   const userContent = [...input.messages].reverse().find(message => message.role === 'user')?.content;
   const taskText = input.taskText ?? (Array.isArray(userContent)
     ? userContent.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n')
     : String(userContent || ''));
+  const config = resolveConversationModelConfig(taskText, {
+    ...input.config,
+    modelTurnState: input.config.modelTurnState ?? createModelTurnState(),
+  });
   const assertActive = () => {
     if (config.signal?.aborted || input.isCancelled?.()) {
       throw new DOMException('Conversation turn cancelled', 'AbortError');

@@ -1716,6 +1716,8 @@ export function prepareConversationActionExecution(input: {
   forceResume?: boolean;
   forceNewTask?: boolean;
   forceTask?: boolean;
+  /** Current-turn classification from the shared execution pipeline. */
+  followupIntent?: import('../cognition/action_continuation').RecentActionFollowupIntent;
   /** Preserve the current task while binding corrective/continuation feedback. */
   preserveExistingTask?: boolean;
 }): ConversationActionExecutionPreparation {
@@ -4219,7 +4221,15 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       || isGuardGeneratedAssistantText(m.response)
     );
   const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
-  const compactedMessage = compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT);
+  // Removing an ungrounded assistant reply while retaining its user question
+  // makes an already answered turn look pending to the next model. Preserve
+  // the reply boundary without replaying its unsupported outcome claims.
+  const suppressedReply = m.role === 'assistant'
+    && !evidenceNote
+    && isUnverifiedExecutionAssistantRecord(m);
+  const compactedMessage = suppressedReply
+    ? '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction. Refer to the original action receipts only when relevant to the newest user request.]'
+    : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT);
   const compactedResponse = legacyCombinedGuardResponse
     ? ''
     : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);

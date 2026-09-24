@@ -6,6 +6,13 @@ vi.mock('../server/llm/providers', () => ({ makeLLMCall: mocks.model }));
 vi.mock('../server/llm/adapter', () => ({ parseScreenshotBase64: (value: string) => ({ base64: JSON.parse(value).image_base64, mime: 'image/png' }) }));
 vi.mock('../server/llm/world_preferences', () => ({ getUserPreferredWorldModel: () => ({ provider: 'openai', model: 'vision-test' }) }));
 vi.mock('../server/llm/token_tracker', () => ({ recordTokenUsage: vi.fn() }));
+// These frames are deliberately synthetic strings, not PNG data. Real sharp
+// work races the fake clock under suite load and can finish in the next test.
+// Pixel cropping has its own real-image coverage in playback_crop.test.ts.
+vi.mock('../server/desktop/playback_crop', () => ({
+  cropPlaybackWindow: async (image: object, screen: object) => ({ ...image, screen }),
+  playbackControlDetail: async () => null,
+}));
 import { computerUseLoop } from '../server/agents/computer_use';
 import { validatePlaybackVerification } from '../server/cognition/playback_verification';
 

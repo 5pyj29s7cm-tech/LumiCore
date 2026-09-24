@@ -20,6 +20,7 @@ import {
   isRegisteredProviderLocal,
 } from '../extensions/registry';
 import { isCircuitClosed } from '../cloud/circuit_breaker';
+import { modelCandidateKey } from './model_turn_state';
 import { recentProviderProbeFailure } from './provider_health';
 import { buildModelExecutionAwareness } from '../cognition/vision_routing';
 import {
@@ -223,6 +224,9 @@ function candidateBlockReason(
   getters: LLMGetters,
   allowUnconfiguredPrimary = false,
 ): string {
+  if (config.modelTurnState?.failedCandidates.has(modelCandidateKey(candidate.provider, candidate.model))) {
+    return 'failed_earlier_this_turn';
+  }
   if (!allowUnconfiguredPrimary && providerClientConfigured(candidate.provider, getters, config.userId) === false) {
     return 'provider_not_configured';
   }

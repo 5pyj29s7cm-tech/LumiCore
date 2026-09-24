@@ -1,4 +1,5 @@
 import { ParsedToolCall, NormalizedLLMResponse } from '../tools/types';
+import { rememberFailedModelCandidates, type ModelTurnState } from './model_turn_state';
 import { withCloudResilience } from '../cloud/resilience';
 import { isProviderLocalOnly, isStrictPrivacy, requireLocalProvider, requireLocalEndpoint } from '../config/privacy';
 import {
@@ -77,6 +78,8 @@ export interface LLMCallConfig {
   signal?: AbortSignal;
   /** Provider-independent lifecycle deadlines for one model attempt. */
   attemptTimeouts?: Partial<ModelAttemptTimeouts>;
+  /** Shared only within the accepted user turn, including guarded recovery. */
+  modelTurnState?: ModelTurnState;
   /** Total input budget across system, history, current input, and tool schemas. */
   inputTokenBudget?: number;
   /** Server-selected schemas that the final provider budget must retain. */
@@ -1178,6 +1181,7 @@ function persistRoutingTrace(
   startedAtMs: number,
   outboundMessagesEvidence?: ProviderOutboundMessagesEvidence,
 ): string | undefined {
+  rememberFailedModelCandidates(config.modelTurnState, trace.attempts);
   try {
     const persistedTrace = traceWithProviderOutboundEvidence(
       trace,
@@ -1424,14 +1428,23 @@ export async function makeLLMCallDirect(
 
     const attemptTimeouts = resolveModelAttemptTimeouts(config.attemptTimeouts);
     const execute = () => withCloudResilience(
-        operationSignal => client.chat.completions.create(
-          params,
-          operationSignal ? { signal: operationSignal } : undefined,
-        ),
+        async operationSignal => {
+          const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
+          try {
+            return await supervisor.completion(Promise.resolve().then(() => client.chat.completions.create(
+              params, { signal: supervisor.signal },
+            )));
+          } catch (error) {
+            supervisor.abort(error instanceof Error ? error : new Error(String(error)));
+            throw error;
+          }
+        },
         {
           provider: config.provider,
           model: config.model,
-          maxRetries: isLocal ? 1 : undefined,
+          // Dispatch already owns candidate fallback. A non-stream recovery
+          // must not silently retry the same timed-out candidate three times.
+          maxRetries: 0,
           signal: config.signal,
           timeoutMs: attemptTimeouts.absoluteMs,
         },
@@ -1446,7 +1459,7 @@ export async function makeLLMCallDirect(
         if (extensionProvider) throw extensionProviderFailure(config.provider, error);
         throw error;
       }
-      return parseDeepSeekResponse(response);
+      return parseOpenAICompatibleResponse(response, toolDeclarations);
     }, preparedContext, (localRequest?.toolDeclarations || toolDeclarations)
       .map(declaration => declaration.function.name));
   }

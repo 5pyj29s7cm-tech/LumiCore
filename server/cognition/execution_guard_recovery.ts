@@ -1,4 +1,5 @@
 import type { ToolExecutionRecord } from '../tools/types';
+import { MISSING_TASK_INPUT_REASON } from './missing_task_input';
 import type { CompletionGuardResult } from '../work_product/completion_guard';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
 import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
@@ -283,6 +284,9 @@ export function decideExecutionGuardRecovery(input: ExecutionGuardRecoveryInput)
       ? classifyExecutionGuardIntent(input.task, records)
       : 'action_execution');
   if (!input.blocked && !missingFreshConfirmation) return { recoverable: false, reason: 'response_not_blocked', intent };
+  if (input.reason === MISSING_TASK_INPUT_REASON) {
+    return { recoverable: false, reason: MISSING_TASK_INPUT_REASON, intent };
+  }
   if (input.reason === DESKTOP_COMPLETION_REVIEW_REASON) {
     return { recoverable: false, reason: DESKTOP_COMPLETION_REVIEW_REASON, intent };
   }

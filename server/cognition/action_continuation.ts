@@ -200,7 +200,7 @@ function recordTimestamp(item: ActionContinuationHistoryItem): number | null {
 
 function explicitDurableTaskReference(text: string): boolean {
   // i18n-allow: Reviewed multilingual durable-task reference recognition; not user-visible copy.
-  return /(?:这个|那个|之前|昨天|上次|未完成|原来|刚才).{0,12}(?:任务|工作|操作)|(?:任务|工作).{0,12}(?:继续|执行|状态|进度)|AutoCAD|\bCAD\b|图纸|平面图|WPS|Word|Excel|PowerPoint|微信|WeChat/iu.test(text);
+  return /(?:这个|那个|之前|昨天|上次|上一个|上个|未完成|原来|原|刚才).{0,12}(?:任务|工作|操作)|(?:任务|工作).{0,12}(?:继续|执行|状态|进度)|AutoCAD|\bCAD\b|图纸|平面图|WPS|Word|Excel|PowerPoint|微信|WeChat/iu.test(text);
 }
 
 function compact(value: unknown, limit = 700): string {
@@ -968,7 +968,15 @@ export function pendingRuntimeCancellationRecheck(
 function explicitlyReferencesUnfinishedTask(text: string): boolean {
   const value = compact(text, 700);
   // i18n-allow: referential task resumption, not arbitrary continuation verbs.
-  return /^(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次)(?:的)?(?:未完成的|没完成的|剩余的)?|^(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value);
+  return /(?:^|[，,。；;！!？?])\s*(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次|上一个|上个|原)(?:的)?(?:未完成的|没完成的|剩余的)?(?:任务|工作|操作|流程|步骤)?|(?:^|[,.!?;])\s*(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|original|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value);
+}
+
+/** A vague retry cannot silently reattach to an expired task pointer. */
+export function isCurrentContinuationTask(text: string, state: ConversationActionContinuationState): boolean {
+  const updatedAt = new Date(state.updatedAt).getTime();
+  return !Number.isFinite(updatedAt)
+    || Date.now() - updatedAt <= REFERENTIAL_CONTEXT_MAX_AGE_MS
+    || explicitDurableTaskReference(text);
 }
 
 /** Explicitly referential resumption precedes the self-contained action gate. */
@@ -1206,12 +1214,14 @@ export function prepareConversationActionTaskState(
     forceNewTask?: boolean;
     /** Canonical capability planning determined that this turn needs a ledger. */
     forceTask?: boolean;
+    /** Resolved once by the shared pipeline; legacy callers may omit it. */
+    followupIntent?: RecentActionFollowupIntent;
     now?: string;
   },
 ): { state: ConversationActionContinuationState | null; kind: 'new' | 'resume' | 'status' | 'conversation' } {
   const userText = compact(input.userText, 700);
   const previous = normalizeConversationActionState(previousValue);
-  const followupIntent = classifyConversationActionFollowupIntent(userText, previous);
+  const followupIntent = input.followupIntent ?? classifyConversationActionFollowupIntent(userText, previous);
   const resume = !input.forceNewTask && Boolean(
     previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'),
   );

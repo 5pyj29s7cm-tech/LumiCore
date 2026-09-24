@@ -1603,6 +1603,42 @@ function run(sql: string, params: any[] = []): Promise<void> {
   });
 }
 
+/** Bound native binding memory while amortizing statement preparation. */
+async function insertSnapshotRows(sql: string, rows: any[][]): Promise<void> {
+  for (let offset = 0; offset < rows.length; offset += 512) {
+    await insertSnapshotBatch(sql, rows.slice(offset, offset + 512));
+  }
+}
+
+/** Reuse one prepared statement within the caller's atomic snapshot transaction. */
+function insertSnapshotBatch(sql: string, rows: any[][]): Promise<void> {
+  if (rows.length === 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const statement = db!.prepare(sql, prepareError => {
+      if (prepareError) {
+        statement.finalize(() => reject(prepareError));
+        return;
+      }
+      let firstError: Error | null = null;
+      // sqlite3 serializes operations on a Statement. Queue its rows together
+      // rather than re-preparing SQL and making a JS/native round trip for
+      // every row. Finalize waits for every queued callback before settling,
+      // so a rejected row still rolls back the whole surrounding transaction.
+      try {
+        for (const row of rows) {
+          statement.run(row, error => { if (error && !firstError) firstError = error; });
+        }
+      } catch (error) {
+        firstError ||= error instanceof Error ? error : new Error(String(error));
+      }
+      statement.finalize(error => {
+        if (firstError || error) reject(firstError || error);
+        else resolve();
+      });
+    });
+  });
+}
+
 function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   return new Promise((resolve, reject) => {
     db!.all(sql, params, (err, rows) => {
@@ -1691,6 +1727,10 @@ let dirtySinceMs = 0;
 let lastSuccessfulFlushAt = '';
 let lastPersistenceError = '';
 let persistenceTableDigests = new Map<string, string>();
+// These high-volume tables have stable text primary keys and no secondary
+// uniqueness rules. Keep committed row fingerprints, never speculative writes.
+const ROW_INCREMENTAL_TABLES = new Set(['interactions', 'memories', 'token_usage']);
+let persistenceRowDigests = new Map<string, Map<string, string>>();
 let lastFlushTables: string[] = [];
 let totalTableWrites = 0;
 let totalSkippedTableWrites = 0;
@@ -1945,6 +1985,7 @@ export function closeDatabase(): Promise<void> {
     lastSuccessfulFlushAt = '';
     lastPersistenceError = '';
     persistenceTableDigests = new Map();
+    persistenceRowDigests = new Map();
     lastFlushTables = [];
     totalTableWrites = 0;
     totalSkippedTableWrites = 0;
@@ -2467,19 +2508,38 @@ function digestPersistenceRows(rows: any[][]): string {
   return hash.digest('hex');
 }
 
+function keyedPersistenceRows(rows: any[][]): Map<string, string> | null {
+  const digests = new Map<string, string>();
+  for (const row of rows) {
+    const id = row[0];
+    // Preserve the old snapshot path for any legacy non-text/null key.
+    if (typeof id !== 'string' || !id) return null;
+    if (digests.has(id)) throw new Error('UNIQUE constraint failed in snapshot primary key');
+    digests.set(id, createHash('sha256').update(JSON.stringify(row)).digest('hex'));
+  }
+  return digests;
+}
+
 function seedPersistenceTableDigests(): void {
   const next = new Map<string, string>();
+  const rowDigests = new Map<string, Map<string, string>>();
   for (const spec of buildPersistenceTableSpecs()) {
-    next.set(spec.name, digestPersistenceRows(spec.rows()));
+    const rows = spec.rows();
+    next.set(spec.name, digestPersistenceRows(rows));
+    if (ROW_INCREMENTAL_TABLES.has(spec.name)) {
+      const keyed = keyedPersistenceRows(rows);
+      if (keyed) rowDigests.set(spec.name, keyed);
+    }
   }
   persistenceTableDigests = next;
+  persistenceRowDigests = rowDigests;
 }
 
 /**
  * Persist only tables whose exact serialized rows changed since the last
- * durable snapshot. The changed set is still replaced atomically in one
- * transaction, preserving the previous crash/rollback semantics without
- * rebuilding unrelated high-volume tables on every chat or scheduler write.
+ * durable snapshot. Hot keyed tables update only changed rows; other tables
+ * retain atomic replacement. All changes share the same transaction and
+ * publish their fingerprints only after COMMIT.
  */
 async function persistMemoryDB(): Promise<void> {
   const allSpecs = buildPersistenceTableSpecs();
@@ -2495,24 +2555,48 @@ async function persistMemoryDB(): Promise<void> {
     return;
   }
 
+  const rowChanges = new Map<string, { digests: Map<string, string>; upserts: any[][]; deletions: any[][]; sql: string }>();
+  for (const { spec, rows } of changed) {
+    if (!ROW_INCREMENTAL_TABLES.has(spec.name)) continue;
+    const before = persistenceRowDigests.get(spec.name);
+    const after = keyedPersistenceRows(rows);
+    const columns = spec.insertSQL.match(/\(([^)]+)\)\s+VALUES/i)?.[1].split(',').map(column => column.trim());
+    if (!before || !after || !columns || columns[0] !== 'id') continue;
+    const sql = spec.insertSQL.replace(`_temp_${spec.name}`, spec.name)
+      + ' ON CONFLICT(id) DO UPDATE SET '
+      + columns.slice(1).map(column => `${column}=excluded.${column}`).join(', ');
+    rowChanges.set(spec.name, {
+      digests: after,
+      upserts: rows.filter(row => before.get(row[0]) !== after.get(row[0])),
+      deletions: [...before.keys()].filter(id => !after.has(id)).map(id => [id]),
+      sql,
+    });
+  }
+
   await run('BEGIN IMMEDIATE TRANSACTION');
   try {
     // Phase 1: Create temp tables and populate them
     for (const { spec, rows } of changed) {
+      const delta = rowChanges.get(spec.name);
+      if (delta) {
+        await insertSnapshotRows(`DELETE FROM ${spec.name} WHERE id = ?`, delta.deletions);
+        await insertSnapshotRows(delta.sql, delta.upserts);
+        continue;
+      }
       await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
       await run(spec.createSQL);
-      for (const row of rows) {
-        await run(spec.insertSQL, row);
-      }
+      await insertSnapshotRows(spec.insertSQL, rows);
     }
 
     // Phase 2: Drop original tables
     for (const { spec } of changed) {
+      if (rowChanges.has(spec.name)) continue;
       await run(`DROP TABLE IF EXISTS ${spec.name}`);
     }
 
     // Phase 3: Rename temp tables to original names (atomic in SQLite within a transaction)
     for (const { spec } of changed) {
+      if (rowChanges.has(spec.name)) continue;
       await run(`ALTER TABLE _temp_${spec.name} RENAME TO ${spec.name}`);
     }
 
@@ -2523,7 +2607,14 @@ async function persistMemoryDB(): Promise<void> {
     }
 
     await run('COMMIT');
-    for (const { spec, digest } of changed) persistenceTableDigests.set(spec.name, digest);
+    for (const { spec, rows, digest } of changed) {
+      persistenceTableDigests.set(spec.name, digest);
+      if (ROW_INCREMENTAL_TABLES.has(spec.name)) {
+        const committed = rowChanges.get(spec.name)?.digests || keyedPersistenceRows(rows);
+        if (committed) persistenceRowDigests.set(spec.name, committed);
+        else persistenceRowDigests.delete(spec.name);
+      }
+    }
     lastFlushTables = changed.map(({ spec }) => spec.name);
     totalTableWrites += changed.length;
   } catch (err) {

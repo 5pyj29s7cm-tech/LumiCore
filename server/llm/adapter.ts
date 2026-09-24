@@ -1,4 +1,7 @@
 import fs from 'fs';
+import { createModelTurnState, type ModelTurnState } from './model_turn_state';
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import { isCnLiteralTableFieldEdit } from '../regions/packs/cn/action_continuation';
 import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } from '../regions/packs/cn/voice_fast_path_messages';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
@@ -32,6 +35,7 @@ import {
 } from '../cognition/action_contract';
 import { buildConfirmedStepContinuationNote } from '../cognition/task_execution_ledger';
 import { tryFinalizeVerifiedBoundedAction } from '../cognition/result_finalizer';
+import { missingTaskInputResult } from '../cognition/missing_task_input';
 import { guardCurrentAppToolCall } from '../cognition/current_app_execution';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import { executeToolCall } from '../tools/execution_engine';
@@ -85,6 +89,7 @@ export interface LLMConfig {
   protectedToolNames?: string[];
   /** Cumulative budget spent waiting on model providers; tool runtime is excluded. */
   modelWaitBudgetMs?: number;
+  modelTurnState?: ModelTurnState;
   /**
    * Maximum time allowed for one durable tool-lifecycle observer write. The
    * observer is an execution boundary, not UI telemetry: timing it out leaves
@@ -1447,8 +1452,23 @@ export function resolveInteractiveToolTimeouts(config: LLMConfig, task: string):
   // local and explicitly tuned semantic deadlines retain their own policy.
   if (config.provider !== 'relay' || config.selectionMode !== 'ordered_fallback'
     || !config.fallbackCandidates?.length || config.attemptTimeouts?.semanticContentMs !== undefined
-    || buildActionContract(task).kind !== 'artifact_work') return config.attemptTimeouts;
+    || (buildActionContract(task).kind !== 'artifact_work'
+      && normalizeActionIntent(task).rule !== 'explicit-artifact-edit')) return config.attemptTimeouts;
   return { ...config.attemptTimeouts, semanticContentMs: 25_000 };
+}
+
+export function resolveInteractiveToolConfig(config: LLMConfig, task: string): LLMConfig {
+  // An explicit field replacement already names the requested value. Keep the
+  // user's model and its full tool/verification contract, without spending a
+  // hidden reasoning pass deciding whether to apply that literal edit. General
+  // document creation, analysis and open-ended reasoning retain their settings.
+  if (config.thinkingMode === undefined
+    && (config.provider === 'relay' || config.provider === 'deepseek')
+    && normalizeActionIntent(task).rule === 'explicit-artifact-edit'
+    && isCnLiteralTableFieldEdit(task)) {
+    return { ...config, thinkingMode: 'disabled' };
+  }
+  return config;
 }
 
 interface ModelBudgetAttempt {
@@ -1467,9 +1487,10 @@ class ToolLoopModelBudget {
     timeoutMs: number,
     private readonly callerSignal?: AbortSignal,
     private readonly isCancelled?: () => boolean,
+    private readonly turnState: ModelTurnState = createModelTurnState(),
   ) {
     this.timeoutMs = timeoutMs;
-    this.remainingBudgetMs = timeoutMs;
+    this.remainingBudgetMs = Math.max(0, timeoutMs - turnState.modelWaitMs);
   }
 
   get acceptsEvents(): boolean {
@@ -1545,6 +1566,7 @@ class ToolLoopModelBudget {
       if (generation === this.generation) this.generation += 1;
       const elapsedMs = Math.max(0, Date.now() - startedAt);
       this.remainingBudgetMs = Math.max(0, this.remainingBudgetMs - elapsedMs);
+      this.turnState.modelWaitMs += elapsedMs;
     }
   }
 
@@ -1656,6 +1678,7 @@ export async function runWithTools(
   getGlm?: () => any,
   getRelay?: () => any,
 ): Promise<LLMResult> {
+  config = { ...config, modelTurnState: config.modelTurnState || createModelTurnState() };
   const priorToolRecords = (context?.priorToolRecords || [])
     .filter(record => Boolean(record?.name))
     .slice(-40);
@@ -1675,7 +1698,7 @@ export async function runWithTools(
     config.toolLifecycleObserverTimeoutMs,
     DEFAULT_TOOL_LIFECYCLE_OBSERVER_TIMEOUT_MS,
   );
-  const supervisor = new ToolLoopModelBudget(modelWaitBudgetMs, config.signal, context?.isCancelled);
+  const supervisor = new ToolLoopModelBudget(modelWaitBudgetMs, config.signal, context?.isCancelled, config.modelTurnState);
   const toolInvocationBudget = resolveToolInvocationBudget(context);
   const observedRecords: ToolExecutionRecord[] = [];
   const observedUsageRecords: LLMUsageRecord[] = [];
@@ -2001,6 +2024,8 @@ async function runWithToolsInternal(
   ];
   const primaryTask = String(context?.routedTaskText || '').trim()
     || getPrimaryUserText(messages);
+
+  config = resolveInteractiveToolConfig(config, context?.actionIntent || primaryTask);
 
   const acceptedFile = toolExecutionContext?.acceptedTaskTarget;
   if (toolSessionActive && acceptedFile?.source !== 'current_turn'
@@ -2663,6 +2688,12 @@ async function runWithToolsInternal(
       if (desktopControlPauseReason(context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
         return { text: buildDesktopControlPausedSummary(primaryTask), toolCalls: executionLog, usageRecords };
+      }
+
+      const missingInput = missingTaskInputResult(primaryTask, [record]);
+      if (missingInput) {
+        recordWorkflowIfToolsUsed(executionLog, messages, config);
+        return { text: missingInput.text, toolCalls: executionLog, usageRecords, completionGuard: missingInput };
       }
 
       // A failed paid generation ends this attempt, including queued calls in
