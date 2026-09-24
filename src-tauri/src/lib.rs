@@ -3331,6 +3331,7 @@ async fn list_native_apps(query: Option<String>, limit: Option<usize>) -> Vec<Na
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn is_web_url_target(target: &str) -> bool {
     let normalized = target.trim().to_ascii_lowercase();
     normalized.starts_with("https://") || normalized.starts_with("http://")
