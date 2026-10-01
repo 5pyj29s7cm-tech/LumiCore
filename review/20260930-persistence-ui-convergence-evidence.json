@@ -1,0 +1,218 @@
+{
+  "date": "2026-09-30",
+  "batch": "prune13; delta from working tree at turn start, not HEAD",
+  "before": {
+    "source": {
+      "files": 1082,
+      "lines": 369887
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158869
+    },
+    "total": {
+      "files": 1820,
+      "lines": 528756
+    }
+  },
+  "after": {
+    "source": {
+      "files": 1082,
+      "lines": 369830
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158873
+    },
+    "total": {
+      "files": 1820,
+      "lines": 528703
+    }
+  },
+  "files": [
+    {
+      "file": "db_layer.ts",
+      "before": 2636,
+      "after": 2614,
+      "delta": -22,
+      "beforeSha256": "b9b7a71650b5efad1009983d04f8128882cef9846f6ea057f82788eaa525b8e3",
+      "afterSha256": "ea8119dae8bcecb9495626cec63d3476b3f919b1fcff7368943b28a163a2ffa4"
+    },
+    {
+      "file": "src/contexts/AppContext.tsx",
+      "before": 935,
+      "after": 900,
+      "delta": -35,
+      "beforeSha256": "33af06bd598b7d35ea54eab962e8966d58b9592ae8e302832ec117d3e9e568d2",
+      "afterSha256": "574072af2a0f290cfcdbb6276fb30049ba4cd21d61d21162074f8e2a16148708"
+    },
+    {
+      "file": "test/db_indexes.test.ts",
+      "before": 353,
+      "after": 271,
+      "delta": -82,
+      "beforeSha256": "cea6891e45a1bb50017b6a6b29cf1fc755b58b64cb3252e731403e66bc6b223d",
+      "afterSha256": "823f3d4f5ded54de5b83b3b036991008a78972d5324725c35c367acfa4a3d7e2"
+    },
+    {
+      "file": "test/database_snapshot_batch.test.ts",
+      "before": 100,
+      "after": 137,
+      "delta": 37,
+      "beforeSha256": "dbcfc70635e0eae47ba044e2cfaf5feef39749cd692bcfa1cf49ed0b52a756ab",
+      "afterSha256": "d059aedb37164ee01efb9d0afad1ae224a3dd739e035ffdd5bfbf19ec2c4b220"
+    },
+    {
+      "file": "test/chat_recovery_auth_integration.test.ts",
+      "before": 154,
+      "after": 189,
+      "delta": 35,
+      "beforeSha256": "ef1eff8e670ddc92f4f3636cbc41558fd35075611dc26cc0bf51e8045612bf54",
+      "afterSha256": "56f520efa796af321eba3cdeb28327b99c4841566722e43211d5b3c4ef6a743d"
+    },
+    {
+      "file": "test/database_shutdown.test.ts",
+      "before": 79,
+      "after": 93,
+      "delta": 14,
+      "beforeSha256": "564b362a4c4d5bff46e26a69e6187de4b4e04defc5851eb4d9fd06103cb9c7e5",
+      "afterSha256": "1e11043f3b6b2f7f811505179446d8e59db804212c8b0b7b421434aec62c35c2"
+    }
+  ],
+  "tests": [
+    {
+      "file": ".codex-run/prune13-focused.json",
+      "passed": 44,
+      "failed": 0,
+      "pending": 0,
+      "success": true,
+      "files": [
+        {
+          "file": "test/chat_recovery_auth_integration.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/client_domain_ui_state.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/database_health_status.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_incremental_persistence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/database_migration_failure.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_query_contract.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/database_retention_policy.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_shutdown.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/database_snapshot_batch.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/db_indexes.test.ts",
+          "status": "passed",
+          "tests": 6
+        }
+      ]
+    },
+    {
+      "file": ".codex-run/prune13-partitions.json",
+      "passed": 63,
+      "failed": 0,
+      "pending": 0,
+      "success": true,
+      "files": [
+        {
+          "file": "test/action_receipt_restart_persistence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/completion_feedback_persistence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/http_fixture_database_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/llm_tool_lifecycle_persistence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/model_switching_stability.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/org_workspace_information_architecture.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/proactive_notification_center_only.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/unified_org_workspace.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_hot_switch.test.ts",
+          "status": "passed",
+          "tests": 19
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "lint": 0,
+    "frontends": 0,
+    "server": 0,
+    "whitespace": 0
+  },
+  "observations": {
+    "indexStatementsAvailable": 77,
+    "settingsOnlyFlushIndexStatements": 0,
+    "chatRowDeltaIndexStatements": 0,
+    "mixedConversationAndTurnReplacementIndexStatements": 7,
+    "indexFailureRollback": "real SQLite unique-index conflict restores earlier table changes and indexes; corrected retry succeeds",
+    "backgroundRetry": "real SQLite query_only failure automatically retries and persists a later write across restart",
+    "ui": "production switchDomain expression executed with network/storage/event collaborators; no live client acceptance"
+  },
+  "limits": [
+    "No latency benchmark performed; SQL work reduction is not measured end-user response improvement.",
+    "Snapshot construction and synchronous whole-table serialization remain.",
+    "No complete repository test suite or live client interaction.",
+    "No client restart, commit or push."
+  ]
+}

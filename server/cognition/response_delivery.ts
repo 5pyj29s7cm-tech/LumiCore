@@ -1,3 +1,5 @@
+import { finalizeLumiResponse, type LumiResultFinalizerInput, type LumiResultFinalizerResult } from './result_finalizer';
+import { finalizeExecutionForOutboundDelivery, type OutboundExecutionFinalizationInput } from './execution_guard_recovery';
 import { buildActionContract } from './action_contract';
 import { needsRecentActionContinuationContext } from './action_continuation';
 import type { LumiTurnFlow } from './turn_flow';
@@ -169,4 +171,33 @@ export function createPreFinalizationTextGate(): PreFinalizationTextGate {
       };
     },
   };
+}
+
+type LumiOutboundInput = OutboundExecutionFinalizationInput<LumiResultFinalizerResult>;
+export interface LumiResponseDeliveryInput extends Omit<LumiResultFinalizerInput, 'completionGuard'>,
+  Partial<Pick<LumiOutboundInput, 'allowToolUse' | 'attempt' | 'pendingConfirmation' | 'aborted' | 'isPendingConfirmation' | 'isAborted'>> {
+  initialFinalization?: LumiResultFinalizerResult;
+  refinalize?: LumiOutboundInput['finalize'];
+}
+
+/** Shared result verification and bounded recovery; each channel supplies its scoped receipts. */
+export function finalizeLumiResponseForDelivery(input: LumiResponseDeliveryInput) {
+  const toolRecords = input.toolRecords || [];
+  const finalize = (responseText: string, records: NonNullable<LumiResultFinalizerInput['toolRecords']>, source: string) => finalizeLumiResponse({
+    taskText: input.taskText, responseText, toolRecords: records, source,
+    flow: input.flow, taskId: input.taskId, requestId: input.requestId,
+  });
+  return finalizeExecutionForOutboundDelivery({
+    task: input.taskText,
+    responseText: input.responseText,
+    finalization: input.initialFinalization || finalize(input.responseText, toolRecords, input.source),
+    allowToolUse: input.allowToolUse === true,
+    pendingConfirmation: input.pendingConfirmation,
+    aborted: input.aborted,
+    isPendingConfirmation: input.isPendingConfirmation,
+    isAborted: input.isAborted,
+    toolRecords,
+    attempt: input.attempt,
+    finalize: input.refinalize || ((candidateText, records) => finalize(candidateText, records, `${input.source}_guard_recovery`)),
+  });
 }

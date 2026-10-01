@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Book, Code, Terminal, Shield, Globe, Zap, Search, Sparkles, Layers } from 'lucide-react';
-import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { useModuleData } from '@/hooks/useModuleData';
 import { LoadingSpinner, GlassCard, IconBox } from './SharedUI';

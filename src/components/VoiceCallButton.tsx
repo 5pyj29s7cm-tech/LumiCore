@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, Phone, Loader2, Volume2 } from 'lucide-react';
+import { Mic, Loader2, Volume2 } from 'lucide-react';
 import { CallState } from '../hooks/useVoiceCall';
 import { useT } from '../lib/useT';
 

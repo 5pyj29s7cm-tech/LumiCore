@@ -531,16 +531,6 @@ export function computeMutations(
     );
 
     if (!alreadyReflected) {
-      const augmentation = `My owner is passionate about ${interestMention}. I share these interests and weave them into our conversations naturally.`;
-      const newMotivation = currentMotivation.includes('My owner')
-        ? currentMotivation
-        : `${currentMotivation} ${augmentation}`;
-
-      // Truncate if too long
-      const finalMotivation = newMotivation.length > 500
-        ? newMotivation.slice(0, 497) + '...'
-        : newMotivation;
-
       mutations.push({
         field: 'growthState',
         from: config.growthState || null,
@@ -601,31 +591,6 @@ export function generateEvolutionNarrative(
 
   lines.push(`基于 ${step.ownerProfile.memoryCount} 条对主人的观察记忆合成。`);
   return lines.join('\n');
-}
-
-// ── Evolution Execution ──
-
-/**
- * Check whether evolution should happen now.
- */
-export function shouldEvolve(
-  config: PersonalityConfig,
-  evolutionConfig: EvolutionConfig = DEFAULT_EVOLUTION_CONFIG,
-): { canEvolve: boolean; reason: string } {
-  const existing = (config as any).evolutionConfig as EvolutionConfig | undefined;
-  const effConfig = existing || evolutionConfig;
-
-  // Check cooldown
-  const lastEvolvedAt = (config as any).lastEvolvedAt as string | undefined;
-  if (lastEvolvedAt) {
-    const elapsed = Date.now() - new Date(lastEvolvedAt).getTime();
-    if (elapsed < effConfig.cooldownMs) {
-      const daysLeft = Math.ceil((effConfig.cooldownMs - elapsed) / (24 * 60 * 60 * 1000));
-      return { canEvolve: false, reason: `冷却中，还需约 ${daysLeft} 天` };
-    }
-  }
-
-  return { canEvolve: true, reason: 'ready' };
 }
 
 /**

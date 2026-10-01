@@ -1,0 +1,307 @@
+{
+  "date": "2026-09-30",
+  "batch": "prune12; delta from working tree at turn start, not HEAD",
+  "before": {
+    "source": {
+      "files": 1083,
+      "lines": 370120
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158861
+    },
+    "total": {
+      "files": 1821,
+      "lines": 528981
+    }
+  },
+  "after": {
+    "source": {
+      "files": 1082,
+      "lines": 369887
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158869
+    },
+    "total": {
+      "files": 1820,
+      "lines": 528756
+    }
+  },
+  "files": [
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "deleted": false,
+      "before": 5182,
+      "after": 5173,
+      "delta": -9,
+      "beforeSha256": "68f097b93dfa77b09b96e9b8f1e016e5e214feb3cce5f81f5d168bace52c2c9a",
+      "afterSha256": "f3128df26ed743483241cf0befc9c7e92246c0ab93d1552f0b01f5c13f770973"
+    },
+    {
+      "file": "src/hooks/useRuntimeStatus.ts",
+      "deleted": false,
+      "before": 177,
+      "after": 100,
+      "delta": -77,
+      "beforeSha256": "1c52c384c6951b9ef74838eaf6515ceeb7dce21d31ebd85c52f44fcdf1abb8b7",
+      "afterSha256": "d32d2a140505cab1ef3edf3883ea07374185b7d011f6985f26bd9a36377bf635"
+    },
+    {
+      "file": "src/components/ActiveTaskWidget.tsx",
+      "deleted": false,
+      "before": 215,
+      "after": 193,
+      "delta": -22,
+      "beforeSha256": "cf862db4f700803bca2efd15982b6a4704eb975be9bd423e267f9f47a1dfb8a9",
+      "afterSha256": "086aec4fc0cc74e215efb09e12e41f357889ba80ddc11f138430be56b74993e3"
+    },
+    {
+      "file": "src/components/RuntimeEvidencePanel.tsx",
+      "deleted": false,
+      "before": 187,
+      "after": 186,
+      "delta": -1,
+      "beforeSha256": "b2f5876536f748f0af123f832658db16bd6031dae5859c6150887c6e22dd6b8a",
+      "afterSha256": "b035d822d2859b4e62fa02df017cb3acb071dbafb6f6938951e543b7d8eb7304"
+    },
+    {
+      "file": "src/hooks/useFocusThreads.ts",
+      "deleted": true,
+      "before": 123,
+      "after": 0,
+      "delta": -123,
+      "beforeSha256": "f0a21d02b3ee1f2b0a45d9e63ad2549782bbcd5b4c0cf350835be96911d2a1fa",
+      "afterSha256": null
+    },
+    {
+      "file": "server/monitor/runtime_status.ts",
+      "deleted": false,
+      "before": 292,
+      "after": 291,
+      "delta": -1,
+      "beforeSha256": "577b96274baaf67b82e559a8113ec73e1eca8e1e3c116825fcc0421f9125ca21",
+      "afterSha256": "e2ff49a3cdb5450944bbef01fec68a2751f9180e7e6d692980abc2e62e4fcc4a"
+    },
+    {
+      "file": "src/hooks/frontendScopeContracts.test.tsx",
+      "deleted": false,
+      "before": 82,
+      "after": 83,
+      "delta": 1,
+      "beforeSha256": "59cc17f386872e9c24a9b57a1e99a321aa47c4b17646a598286787dd6764523d",
+      "afterSha256": "6289ef4daf6fe87d9ebe7a6e9f8ea5c451c7d3424641fde8883d5fc5882b32bd"
+    },
+    {
+      "file": "test/active_task_widget.test.ts",
+      "deleted": false,
+      "before": 102,
+      "after": 104,
+      "delta": 2,
+      "beforeSha256": "67a3b0045ea494a234462e3eeefc657bbf74bdfdcfee4b3a9cb7a1434d622c1c",
+      "afterSha256": "4a070c20552519ead779f11babb7b6a03d6ab9d0d291f8b5362915f5686f1c50"
+    },
+    {
+      "file": "test/focus_client_projection.test.ts",
+      "deleted": false,
+      "before": 38,
+      "after": 38,
+      "delta": 0,
+      "beforeSha256": "0f2dc67c2dce1f51a1581de06cfaf24cccc86d4575e516da2e59c20792193819",
+      "afterSha256": "7e2052d9433182bc3e56214b7df5890c7d2ebd57fc2430468faae67f0f47f8dc"
+    },
+    {
+      "file": "test/command_center_customer_projection.test.tsx",
+      "deleted": false,
+      "before": 208,
+      "after": 207,
+      "delta": -1,
+      "beforeSha256": "953666c89e6091ab0dc89f1faf7bf24f6fc0cb87e8ad9a4f5af438b214ec49f5",
+      "afterSha256": "77a908856060f178d7f6aa19a221c0cbc99d565a7a6bfecd0c533d81baa2027b"
+    },
+    {
+      "file": "server/files/generated_archive.ts",
+      "deleted": false,
+      "before": 192,
+      "after": 192,
+      "delta": 0,
+      "beforeSha256": "e7680b0667eb7ffca4f02f5406d4422b0a348e4e203208636959c17f8815a3a5",
+      "afterSha256": "c6cd59fe5ed12607581005f0ece3b8423c06657efbe1d5446a523d7ac39f61e9"
+    },
+    {
+      "file": "routes/files.ts",
+      "deleted": false,
+      "before": 2880,
+      "after": 2880,
+      "delta": 0,
+      "beforeSha256": "b2a8dbdc1e45408e219f7a7e82e3df2dde45b4c05c2693a35f9a323483877af4",
+      "afterSha256": "53b3f6808acdd31cad909d216595b80b3dd508e1bd3ec52e244e761abf6ee427"
+    },
+    {
+      "file": "test/generated_library.test.ts",
+      "deleted": false,
+      "before": 151,
+      "after": 157,
+      "delta": 6,
+      "beforeSha256": "d09b4b10bcdec8333f140f236fcaacbcddfe763c903aa57a532616f85bd16c5f",
+      "afterSha256": "7fb85a1545e9eb4d2d7b4b43e6eb9bbba3afb550ca48d226057cb42420e63e86"
+    }
+  ],
+  "tests": {
+    "success": true,
+    "total": 53,
+    "passed": 53,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      {
+        "file": "test/active_task_widget.test.ts",
+        "status": "passed",
+        "tests": 9
+      },
+      {
+        "file": "test/command_center_customer_projection.test.tsx",
+        "status": "passed",
+        "tests": 7
+      },
+      {
+        "file": "test/command_center_navigation_contract.test.ts",
+        "status": "passed",
+        "tests": 5
+      },
+      {
+        "file": "test/conversation_focus_threads.test.ts",
+        "status": "passed",
+        "tests": 5
+      },
+      {
+        "file": "test/customer_output_projection_surfaces.test.ts",
+        "status": "passed",
+        "tests": 6
+      },
+      {
+        "file": "test/focus_client_projection.test.ts",
+        "status": "passed",
+        "tests": 2
+      },
+      {
+        "file": "test/generated_library.test.ts",
+        "status": "passed",
+        "tests": 9
+      },
+      {
+        "file": "test/structured_runtime_status.test.ts",
+        "status": "passed",
+        "tests": 5
+      },
+      {
+        "file": "src/hooks/frontendScopeContracts.test.tsx",
+        "status": "passed",
+        "tests": 5
+      }
+    ]
+  },
+  "benchmark": {
+    "scope": "Isolated CPU runtime-projection fixtures and real local archive lookup. Production source before/after; injected scope/provider-independent collaborators. 10 runs per size; not live client latency or complete DB flush.",
+    "runtime": [
+      {
+        "version": "before",
+        "tasks": 100,
+        "receipts": 1000,
+        "runs": 10,
+        "p95Ms": 12.139700000000005
+      },
+      {
+        "version": "after",
+        "tasks": 100,
+        "receipts": 1000,
+        "runs": 10,
+        "p95Ms": 5.283900000000017
+      },
+      {
+        "version": "before",
+        "tasks": 1000,
+        "receipts": 10000,
+        "runs": 10,
+        "p95Ms": 140.5842
+      },
+      {
+        "version": "after",
+        "tasks": 1000,
+        "receipts": 10000,
+        "runs": 10,
+        "p95Ms": 41.58320000000003
+      },
+      {
+        "version": "before",
+        "tasks": 3000,
+        "receipts": 30000,
+        "runs": 10,
+        "p95Ms": 901.2581
+      },
+      {
+        "version": "after",
+        "tasks": 3000,
+        "receipts": 30000,
+        "runs": 10,
+        "p95Ms": 121.5679999999993
+      }
+    ],
+    "archive": [
+      {
+        "version": "before",
+        "entries": 1000,
+        "runs": 10,
+        "fileExistenceProbes": 10000,
+        "p95Ms": 8.82720000000154
+      },
+      {
+        "version": "after",
+        "entries": 1000,
+        "runs": 10,
+        "fileExistenceProbes": 10,
+        "p95Ms": 1.2665999999990163
+      },
+      {
+        "version": "before",
+        "entries": 10000,
+        "runs": 10,
+        "fileExistenceProbes": 100000,
+        "p95Ms": 70.46639999999934
+      },
+      {
+        "version": "after",
+        "entries": 10000,
+        "runs": 10,
+        "fileExistenceProbes": 10,
+        "p95Ms": 9.014799999999013
+      },
+      {
+        "version": "before",
+        "entries": 30000,
+        "runs": 10,
+        "fileExistenceProbes": 300000,
+        "p95Ms": 205.450499999999
+      },
+      {
+        "version": "after",
+        "entries": 30000,
+        "runs": 10,
+        "fileExistenceProbes": 10,
+        "p95Ms": 33.125200000000405
+      }
+    ]
+  },
+  "checks": {
+    "lint": 0,
+    "frontendsBuild": 0,
+    "serverBuild": 0,
+    "diffCheck": 0
+  },
+  "fullSuite": false,
+  "liveAcceptance": false,
+  "committed": false,
+  "pushed": false,
+  "restarted": false
+}

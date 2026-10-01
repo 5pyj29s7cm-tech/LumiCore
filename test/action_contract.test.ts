@@ -297,7 +297,7 @@ describe('Lumi action contract', () => {
     expect(contract.preferredTools).toContain('computer_use');
   });
 
-  it('keeps the exact recovered-WPS create-and-type phrase on the strong desktop contract', () => {
+  it('keeps current-app editing but does not trust a WPS name embedded in prompt metadata', () => {
     const task = [
       '\u5728\u8fd9\u91cc\u9762\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767d\u6587\u6863\u5e76\u5199\u5165\uff1aLumi\u7aef\u5230\u7aef\u56de\u5f52\u6d4b\u8bd5\u3002',
       '## Recent action continuation context',
@@ -308,7 +308,7 @@ describe('Lumi action contract', () => {
 
     const contract = buildActionContract(task);
     expect(requiresCurrentAppUiMutation(task)).toBe(true);
-    expect(extractCurrentAppTarget(task)).toBe('WPS Office');
+    expect(extractCurrentAppTarget(task)).toBe('');
     expect(contract.kind).toBe('desktop_operation');
     expect(contract.preferredTools).toContain('desktop_ui_type');
     expect(contract.preferredTools).not.toContain('write_file');

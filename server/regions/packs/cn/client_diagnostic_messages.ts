@@ -15,10 +15,6 @@ export interface ClientDiagnosticFacts {
   processCount: number | null;
 }
 
-export const CN_CLIENT_DIAGNOSTIC_MESSAGES = {
-  checking: '我在检查客户端和运行链路，马上告诉你结果。',
-} as const;
-
 export function formatCnMissingClientDiagnosticReceipts(): string {
   return '本轮没有取得任何客户端自检结果，因此不能判断桌面、技能或运行时状态。';
 }

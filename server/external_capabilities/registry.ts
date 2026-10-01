@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { listExtensionRuntimeSnapshots } from '../extensions/registry';
@@ -446,7 +447,7 @@ function mergeActionArguments(
 ): Record<string, unknown> {
   const supplied = assertExternalCapabilityArguments(suppliedInput);
   const allowed = new Set(action.tool.userArgumentNames);
-  const fixed = structuredClone(action.tool.fixedArguments);
+  const fixed = cloneDatabaseValue(action.tool.fixedArguments);
   const userArguments: Record<string, unknown> = {};
   const unexpected: string[] = [];
   for (const [key, value] of Object.entries(supplied)) {
@@ -605,15 +606,15 @@ function createActionProxy(
       intents: [...pinnedManifest.intents],
       modes: [...pinnedManifest.modes],
       risk: pinnedManifest.risk,
-      sideEffects: structuredClone(pinnedManifest.sideEffects),
-      verification: structuredClone(pinnedManifest.verification),
-      fallbacks: structuredClone(pinnedManifest.fallbacks),
-      provenance: structuredClone(pinnedManifest.provenance),
-      ...(pinnedManifest.adapter ? { adapter: structuredClone(pinnedManifest.adapter) } : {}),
-      ...(pinnedManifest.reconciliation ? { reconciliation: structuredClone(pinnedManifest.reconciliation) } : {}),
+      sideEffects: cloneDatabaseValue(pinnedManifest.sideEffects),
+      verification: cloneDatabaseValue(pinnedManifest.verification),
+      fallbacks: cloneDatabaseValue(pinnedManifest.fallbacks),
+      provenance: cloneDatabaseValue(pinnedManifest.provenance),
+      ...(pinnedManifest.adapter ? { adapter: cloneDatabaseValue(pinnedManifest.adapter) } : {}),
+      ...(pinnedManifest.reconciliation ? { reconciliation: cloneDatabaseValue(pinnedManifest.reconciliation) } : {}),
       deprecated: pinnedManifest.deprecated,
       ...(pinnedManifest.replacedBy ? { replacedBy: pinnedManifest.replacedBy } : {}),
-      modeSecurity: structuredClone(pinnedManifest.modeSecurity),
+      modeSecurity: cloneDatabaseValue(pinnedManifest.modeSecurity),
       prerequisites: Array.from(new Set([
         ...pinnedManifest.prerequisites,
         `reviewed external package ${row.packageDigest}`,
@@ -621,7 +622,7 @@ function createActionProxy(
       ])),
     },
     evidence: pinnedTarget.evidence
-      ? structuredClone(pinnedTarget.evidence)
+      ? cloneDatabaseValue(pinnedTarget.evidence)
       : {
           capability: pinnedManifest.evidence?.capability || pinnedManifest.capabilityId,
           operation: pinnedManifest.operation === 'unknown' ? 'mutate' : pinnedManifest.operation,
@@ -863,9 +864,9 @@ function projectRow(
     stage,
     availability,
     ...(unavailableReason ? { unavailableReason } : {}),
-    presentation: structuredClone(proposal.presentation),
-    runtimeRefs: structuredClone(proposal.runtimeRefs),
-    guidance: structuredClone(proposal.guidance),
+    presentation: cloneDatabaseValue(proposal.presentation),
+    runtimeRefs: cloneDatabaseValue(proposal.runtimeRefs),
+    guidance: cloneDatabaseValue(proposal.guidance),
     actions: proposal.actions.map(action => {
       const resolved = currentByAction.get(action.id);
       const latest = latestByAction.get(action.id);
@@ -974,8 +975,8 @@ function snapshotExternalCapabilityStore(): {
 } {
   const store = arrays();
   return {
-    packages: structuredClone(store.packages),
-    receipts: structuredClone(store.receipts),
+    packages: cloneDatabaseValue(store.packages),
+    receipts: cloneDatabaseValue(store.receipts),
   };
 }
 
@@ -984,8 +985,8 @@ function restoreExternalCapabilityStore(snapshot: {
   receipts: ExternalCapabilityReceiptRow[];
 }): void {
   const db = readDB();
-  db.externalCapabilityPackages = structuredClone(snapshot.packages);
-  db.externalCapabilityReceipts = structuredClone(snapshot.receipts);
+  db.externalCapabilityPackages = cloneDatabaseValue(snapshot.packages);
+  db.externalCapabilityReceipts = cloneDatabaseValue(snapshot.receipts);
   writeDB(db);
 }
 
@@ -1081,14 +1082,14 @@ export async function reviewExternalCapabilityProposal(input: {
       name: proposal.name,
       description: proposal.description,
       actionCount: proposal.actions.length,
-      runtimeRefs: structuredClone(proposal.runtimeRefs),
+      runtimeRefs: cloneDatabaseValue(proposal.runtimeRefs),
       documents: proposal.documents.map(document => ({
         kind: document.kind,
         label: document.label,
         sha256: document.sha256,
       })),
       permissions: reviewPermissions(runtime.actions),
-      resolvedActions: structuredClone(runtime.actions),
+      resolvedActions: cloneDatabaseValue(runtime.actions),
       warnings: runtime.actions
         .filter(action => action.requiresConfirmation)
         .map(action => `Action '${action.actionId}' retains its underlying tool confirmation boundary.`),
@@ -1459,7 +1460,7 @@ export async function executeExternalCapabilityAction(input: {
       throw new Error('External capability idempotency key is already bound to different reviewed arguments.');
     }
     if (priorReceipt.persistenceState === 'pending') {
-      const pendingSnapshot = structuredClone(priorReceipt);
+      const pendingSnapshot = cloneDatabaseValue(priorReceipt);
       const canonical = priorReceipt.canonicalOutcome;
       if (!canonical) return pendingExecution(priorReceipt);
       priorReceipt.status = canonical.status;
@@ -1557,7 +1558,7 @@ export async function executeExternalCapabilityAction(input: {
       `External capability execution was stopped before the action started because its durable idempotency preclaim could not be stored: ${String((error as Error)?.message || error)}`,
     );
   }
-  const durablePreclaim = structuredClone(receipt);
+  const durablePreclaim = cloneDatabaseValue(receipt);
   const reviewedTargetEntries = ['url', 'target', 'path', 'filePath', 'applicationTarget', 'executable']
     .flatMap(key => typeof reviewedArguments[key] === 'string' && String(reviewedArguments[key]).trim()
       ? [{ key, value: String(reviewedArguments[key]).trim().slice(0, 1_000) }]
@@ -1620,7 +1621,7 @@ export async function executeExternalCapabilityAction(input: {
     terminalVerification: record.terminalVerification,
   };
   receipt.terminalVerification = record.terminalVerification ? { ...record.terminalVerification } : undefined;
-  receipt.envelope = record.envelope ? structuredClone(record.envelope) : undefined;
+  receipt.envelope = record.envelope ? cloneDatabaseValue(record.envelope) : undefined;
   if (record.error) {
     receipt.errorDigest = crypto.createHash('sha256').update(record.error).digest('hex');
   }
@@ -1676,8 +1677,8 @@ export async function executeExternalCapabilityAction(input: {
       status: record.envelope?.status || (record.error ? 'failed' : 'unknown_outcome'),
       toolName: record.name,
       underlyingToolName: action.tool.name,
-      arguments: structuredClone(record.arguments || {}),
-      evidence: record.evidence ? structuredClone(record.evidence) : undefined,
+      arguments: cloneDatabaseValue(record.arguments || {}),
+      evidence: record.evidence ? cloneDatabaseValue(record.evidence) : undefined,
       result: String(record.result || '').slice(0, 64 * 1024),
       error: record.error ? String(record.error).slice(0, 1_000) : undefined,
       terminalVerification: record.terminalVerification,

@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
+import { loadSourceModule } from './source_expression';
 import { act, renderHook } from '@testing-library/react';
 import * as React from 'react';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('../src/services/voiceService', () => ({
   uploadSamples: vi.fn(), cloneVoice: vi.fn(), getVoiceCloneStatus: vi.fn(),
@@ -20,22 +18,14 @@ import { useVoiceprint } from '../src/hooks/useVoiceprint';
 // Exercise the real hook with injected boundaries. This checkout deliberately
 // has no optional Picovoice package; the Qwen capture path does not require it.
 function loadWakeHook(): typeof import('../src/hooks/useWakeWord') {
-  const source = fs.readFileSync(path.join(process.cwd(), 'src/hooks/useWakeWord.ts'), 'utf8');
-  const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const module = { exports: {} };
-  const imports: Record<string, any> = {
+  return loadSourceModule('src/hooks/useWakeWord.ts', {
     react: React,
     '@/services/sensorPermissionService': sensors,
     '@/services/apiClient': { apiFetch: async () => ({ ok: true, json: async () => ({ QWEN_API_KEY: true }) }) },
     '@/i18n/runtime': { translate: (key: string) => key },
     '@/lib/audioContextLifecycle': { closeAudioContext: vi.fn() },
     '@/services/voiceService': { VOICE_PROVIDER_CHANGED_EVENT: 'lumi:voice-provider-changed' },
-  };
-  new Function('require', 'module', 'exports', js)((name: string) => {
-    if (!(name in imports)) throw new Error(`Unexpected hook dependency: ${name}`);
-    return imports[name];
-  }, module, module.exports);
-  return module.exports as typeof import('../src/hooks/useWakeWord');
+  });
 }
 const { useWakeWord } = loadWakeHook();
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });

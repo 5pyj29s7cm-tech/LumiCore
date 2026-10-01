@@ -83,36 +83,6 @@ export interface PendingConfirmationPersistenceAdapter {
   }): Promise<boolean>;
 }
 
-/** Stable across separate utterances on the same voice channel. */
-export function buildVoiceConfirmationChannelScope(input: {
-  domain?: string; orgId?: string; channelId?: string; taskId?: string; originRequestId?: string;
-}): PendingConfirmationScope {
-  const taskId = String(input.taskId || '').trim();
-  const originRequestId = String(input.originRequestId || '').trim();
-  return {
-    source: 'voice', domain: String(input.domain || ''), orgId: String(input.orgId || ''),
-    channelId: String(input.channelId || ''),
-    ...(taskId ? { taskId } : {}),
-    ...(originRequestId ? { originRequestId } : {}),
-  };
-}
-
-/** Stable across Socket.IO reconnects for one persisted conversation. */
-export function buildConversationConfirmationChannelScope(input: {
-  source?: string; domain?: string; orgId?: string; conversationId: string; taskId?: string; originRequestId?: string;
-}): PendingConfirmationScope {
-  const taskId = String(input.taskId || '').trim();
-  const originRequestId = String(input.originRequestId || '').trim();
-  return {
-    source: String(input.source || 'chat'),
-    domain: String(input.domain || ''),
-    orgId: String(input.orgId || ''),
-    channelId: `conversation:${String(input.conversationId || '').trim()}`,
-    ...(taskId ? { taskId } : {}),
-    ...(originRequestId ? { originRequestId } : {}),
-  };
-}
-
 /**
  * Conversation identity without a transport source. A voice proposal and a
  * typed confirmation can intentionally share this scope when both transports
@@ -505,21 +475,6 @@ export async function recordPendingConfirmationDurably(
   }
 }
 
-function validatesPendingConsumption(
-  userId: string,
-  pendingId: string,
-  toolName: string,
-  args: Record<string, any>,
-  scope?: PendingConfirmationScope,
-): PendingToolConfirmation | null {
-  if (revocationQuarantineIds.has(pendingId)) return null;
-  const pending = pendingById.get(pendingId);
-  if (!pending || pending.expiresAt <= Date.now()) return null;
-  if (pending.userId !== userId || !matchesScope(pending, scope)) return null;
-  if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return null;
-  return pending;
-}
-
 export async function consumePendingConfirmationDurably(
   userId: string,
   pendingId: string,
@@ -527,13 +482,15 @@ export async function consumePendingConfirmationDurably(
   args: Record<string, any>,
   scope?: PendingConfirmationScope,
 ): Promise<boolean> {
-  const pending = validatesPendingConsumption(userId, pendingId, toolName, args, scope);
-  if (!pending) {
-    if (revocationQuarantineIds.has(pendingId)) return false;
+  if (revocationQuarantineIds.has(pendingId)) return false;
+  const pending = pendingById.get(pendingId);
+  if (!pending || pending.expiresAt <= Date.now()) {
     pendingById.delete(pendingId);
     persistedRevisionById.delete(pendingId);
     return false;
   }
+  if (pending.userId !== userId || !matchesScope(pending, scope)) return false;
+  if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return false;
   const revision = persistedRevisionById.get(pendingId);
   if (persistenceAdapter && revision) {
     const claimed = await persistenceAdapter.consume({ id: pendingId, userId, revision });
@@ -636,70 +593,19 @@ export async function getPendingConfirmationDurably(
   return readFresh(userId, scope);
 }
 
-export function consumePendingConfirmation(
-  userId: string,
-  pendingId: string,
-  toolName: string,
-  args: Record<string, any>,
-  scope?: PendingConfirmationScope,
-): boolean {
-  const pending = pendingById.get(pendingId);
-  if (revocationQuarantineIds.has(pendingId)) return false;
-  if (!pending || pending.expiresAt <= Date.now()) {
-    if (pending) pendingById.delete(pendingId);
-    persistedRevisionById.delete(pendingId);
-    return false;
-  }
-  if (pending.userId !== userId || !matchesScope(pending, scope)) return false;
-  if (pending.toolName !== toolName || pending.argsHash !== argsHash(args)) return false;
-  pendingById.delete(pending.id);
-  persistedRevisionById.delete(pending.id);
-  return true;
-}
-
-export function clearPendingConfirmation(userId: string, scope?: PendingConfirmationScope): boolean {
-  let cleared = false;
-  for (const [id, pending] of pendingById.entries()) {
-    if (pending.userId === userId && matchesScope(pending, scope)) {
-      pendingById.delete(id);
-      persistedRevisionById.delete(id);
-      revocationQuarantineIds.delete(id);
-      cleared = true;
-    }
-  }
-  return cleared;
-}
-
+/** Shared task-control vocabulary. Recognition never grants authority: callers
+ * must still bind an unexpired, exact pending action before consuming it. */
 export function isExplicitConfirmationReply(text: string): boolean {
-  return /^(?:\u786e\u8ba4(?:\u4e86|\u6267\u884c)?|\u7ee7\u7eed\u6267\u884c|\u5141\u8bb8|\u540c\u610f|\u6388\u6743\u7ee7\u7eed|\u53ef\u4ee5\u6267\u884c|\u53ef\u4ee5|\u597d|\u597d\u7684|\u5f00\u59cb|yes|confirm|proceed|approve|go)[\u3002\uff01\uff1f.!?\s]*$/iu.test(String(text || '').trim());
+  return /^(?:(?:我)?(?:确认|确定|同意|允许|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧|开始|继续执行|授权继续|可以执行)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go(?:\s+ahead)?|looks\s+good|proceed))[。！？.!?\s]*$/iu.test(String(text || '').trim()); // i18n-allow: shared task confirmation recognition.
 }
 
 export function isConfirmationCancellation(text: string): boolean {
   const normalized = String(text || '').trim();
-  if (/^(?:\u4e0d\u8981\u6267\u884c|\u505c\u6b62\u6267\u884c|\u4e0d\u540c\u610f|\u62d2\u7edd|cancel|deny|reject|stop|terminate)[\u3002\uff01\uff1f.!?\s]*$/iu.test(normalized)) {
-    return true;
-  }
-  if (/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)[\u3002\uff01\uff1f.!?\s]*$/u.test(normalized)) return true;
-  // English users commonly name the exact pending scope without a trailing
-  // safety clause. Keep domain commands such as "terminate order ..." out of
-  // this lane by requiring an explicit task/operation/work noun.
-  if (/^(?:please\s+)?(?:cancel|stop|abort|terminate)\s+(?:this|that|the\s+current)\s+(?:task|operation|work)[.!?\s]*$/iu.test(normalized)) return true;
-  // A cancellation may explicitly restate the safety outcome (for example,
-  // "Cancel this task. Do not write any file"). Keep it on the deterministic
-  // cancellation lane instead of sending the second sentence to the model.
-  if (/^(?:please\s+)?(?:cancel|stop|abort|terminate)(?:\s+(?:this|that|the\s+current)\s+(?:task|operation|work))?[.!?\s]+(?:do\s+not|don['\u2019]?t|never)\s+(?:write|create|send|publish|execute|run|continue)\b[^\r\n]{0,180}[.!?\s]*$/iu.test(normalized)) {
-    return true;
-  }
-  if (/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)(?:\u8fd9\u4e2a|\u90a3\u4e2a|\u5f53\u524d)?(?:\u4efb\u52a1|\u64cd\u4f5c|\u5de5\u4f5c)?[\uff0c,\u3002.\s]+(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5)(?:\u518d|\u7ee7\u7eed)?(?:\u5199\u5165|\u521b\u5efa|\u53d1\u9001|\u53d1\u5e03|\u6267\u884c|\u7ee7\u7eed)[^\r\n]{0,180}$/u.test(normalized)) {
-    return true;
-  }
-  if (!/^(?:\u53d6\u6d88|\u505c\u6b62|\u7ec8\u6b62)/u.test(normalized)) return false;
-  // Natural cancellations often name the pending recipient/action and then
-  // ask Lumi to confirm that nothing was sent. Accept that full sentence as
-  // long as it explicitly refers to a confirmation/action boundary. Do not
-  // classify unrelated domain commands such as "取消订单" as confirmation
-  // cancellation.
-  return /(?:\u521a\u624d|\u521a\u521a|\u4e4b\u524d|\u4e0a\u4e00\u4e2a|\u5916\u53d1|\u53d1\u9001|\u63d0\u4ea4|\u53d1\u5e03|\u786e\u8ba4|\u64cd\u4f5c|\u4efb\u52a1)/u.test(normalized.slice(0, 180));
+  if (/^(?:(?:等一下|等等|先别急)[，,\s]*)?(?:你)?(?:先)?(?:取消|停止|停下|别做了|不要做了|不用做了|终止|不要执行|不同意|拒绝|任务取消)(?:这个|那个|当前)?(?:任务|操作|工作|执行)?(?:[，,。.\s]+(?:不要|别|无需|不必)(?:再|继续)?(?:写入|创建|发送|发布|执行|继续)[^\r\n]{0,180})?[。！？.!?]*$|^(?:(?:wait|hold\s+on)[,!\s]*)?(?:please\s+)?(?:cancel|stop|abort|terminate|deny|reject)(?:\s+(?:(?:this|that|the(?: current)?)\s+)?(?:task|operation|work|job))?(?:[.!?\s]+(?:do\s+not|don['’]?t|never)\s+(?:write|create|send|publish|execute|run|continue)\b[^\r\n]{0,180})?[.!?\s]*$/iu.test(normalized)) return true; // i18n-allow: shared task cancellation recognition.
+  // Preserve scoped natural cancellations, but not domain operations such as
+  // cancelling an order. Replacement instructions are resolved before this gate.
+  return /^(?:取消|停止|终止)/u.test(normalized) // i18n-allow: task cancellation recognition.
+    && /(?:刚才|刚刚|之前|上一个|外发|发送|提交|发布|确认|操作|任务)/u.test(normalized.slice(0, 180)); // i18n-allow: cancellation target recognition.
 }
 
 export function formatPendingConfirmationPrompt(pending: PendingToolConfirmation): string {

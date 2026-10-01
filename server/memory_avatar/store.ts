@@ -1,3 +1,5 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
+import { normalizeMemoryAvatarAppearance } from '../../shared/memory_avatar';
 ﻿import { createHash, randomUUID } from 'node:crypto';
 import { readDB, writeDB, flushDBOrThrow } from '../../db_layer';
 import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
@@ -34,7 +36,7 @@ function appearance(value: unknown): MemoryAvatarAppearance {
   for (const key of ['skinColor', 'hairColor', 'outfitColor', 'backgroundColor']) {
     if (typeof input[key] !== 'string' || !/^#[0-9a-f]{6}$/i.test(input[key])) bad(`${key} must be a six-digit hex color`);
   }
-  return { style: input.style, preset: input.preset, skinColor: input.skinColor, hairColor: input.hairColor, outfitColor: input.outfitColor, backgroundColor: input.backgroundColor };
+  return normalizeMemoryAvatarAppearance({ style: input.style, preset: input.preset, skinColor: input.skinColor, hairColor: input.hairColor, outfitColor: input.outfitColor, backgroundColor: input.backgroundColor });
 }
 function voice(value: unknown, userId: string): MemoryAvatarVoice {
   const input = object(value);
@@ -113,7 +115,7 @@ function normalize(row: any): MemoryAvatarRecord {
     seedMemoryIds: seeds.map((seed: any, index: number) => String(seed.id || `${row.id}:seed:${index}`)),
     narrative: typeof payload.narrative === 'string' ? payload.narrative : '',
     publicBrief: typeof payload.publicBrief === 'string' ? payload.publicBrief.slice(0, 4000) : '',
-    appearance: { ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...object(payload.appearance) }, voice: selectedVoice,
+    appearance: normalizeMemoryAvatarAppearance({ ...DEFAULT_MEMORY_AVATAR_APPEARANCE, ...object(payload.appearance) }), voice: selectedVoice,
     presentation: payload.presentation || { mode: 'human3d' },
     memoryCount: seeds.length + materialRows(payload).reduce((count, material) => count + chunks(material.text).length, 0),
     isFrozen: true, createdAt: row.createdAt, updatedAt: row.updatedAt || row.createdAt,
@@ -165,7 +167,7 @@ export function mutateMemoryAvatarPayload<T>(userId: string, id: string, change:
   return serial(async () => {
     const row = ownedRow(userId, id);
     if (revision !== undefined) checkRevision(row, revision);
-    const draft = structuredClone(row.payload);
+    const draft = cloneDatabaseValue(row.payload);
     const result = change(draft);
     if (result.changed !== false) {
       draft.revision = (Number(row.payload.revision) || 1) + 1;

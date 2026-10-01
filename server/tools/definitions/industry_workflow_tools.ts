@@ -6,7 +6,6 @@ import {
   getIndustryWorkflowTask,
   listIndustryWorkflowTasks,
   recordIndustryWorkflowExecution,
-  startIndustryWorkflow,
   startOrReuseIndustryWorkflow,
 } from '../../industry/workflow_service';
 import type { ToolContext } from '../types';
@@ -15,7 +14,6 @@ import {
   getActiveIndustryWorkspaceContext,
   listIndustryWorkspaceContexts,
   selectIndustryWorkspaceContext,
-  workflowWorkspaceContext,
 } from '../../industry/workspace_context';
 import { executeEcommerceTodaySnapshot } from '../../industry/ecommerce_today_snapshot';
 import { executeEcommerceStoreDataSnapshot } from '../../industry/ecommerce_store_data_snapshot';

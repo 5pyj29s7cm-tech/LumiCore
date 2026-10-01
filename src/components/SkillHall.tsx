@@ -1,4 +1,4 @@
-import React, { lazy, Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import type { SkillCenterTab } from './SkillCenter';
 
 const SkillCenter = lazy(() => import('./SkillCenter').then(m => ({ default: m.SkillCenter })));

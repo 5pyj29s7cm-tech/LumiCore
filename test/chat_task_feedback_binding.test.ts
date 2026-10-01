@@ -74,6 +74,9 @@ describe('chat task feedback binding integration', () => {
 
     expect(plannerContext).toBeGreaterThan(-1);
     expect(boundExecution).toBeGreaterThan(plannerContext);
+    const acceptedRelation = chat.indexOf('resolvedTaskRelation = executionPipeline.taskRelation;');
+    expect(acceptedRelation).toBeGreaterThan(plannerContext);
+    expect(boundExecution).toBeGreaterThan(acceptedRelation);
     expect(prepare).toBeGreaterThan(boundExecution);
     expect(chat.slice(boundExecution, prepare)).toContain("['continue', 'correction', 'accept', 'retry']");
     expect(chat).toContain('forceResume: true');

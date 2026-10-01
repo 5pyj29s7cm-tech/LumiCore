@@ -527,7 +527,7 @@ const CHINESE_DIGITS: Record<string, number> = {
   五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
 };
 
-function parseArticleNumber(value: string): number | null {
+export function parseArticleNumber(value: string): number | null {
   const raw = String(value || '').trim();
   if (!raw) return null;
   if (/^\d+$/.test(raw)) return Number(raw);

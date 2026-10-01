@@ -1,3 +1,4 @@
+import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import {
   isTerminalConversationTaskStatus,
   isDelegatedActionEvidenceArchive,
@@ -37,17 +38,6 @@ interface FocusTaskLike {
 
 function compact(value: unknown, limit = 600): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
-}
-
-function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    } catch {}
-  }
-  return {};
 }
 
 function normalizedDueAt(value: unknown): string {
@@ -139,7 +129,9 @@ export function updateConversationFocusThread(
     next.nextAction = '';
     next.waitingFor = '';
   }
-  task.context = JSON.stringify({ ...context, focusThread: next });
+  // Persist only task-specific annotations; identity/status/time come from the task row.
+  const { schemaVersion, evidenceTaskId, goal, status, updatedAt, ...annotations } = next;
+  task.context = JSON.stringify({ ...context, focusThread: annotations });
   task.updatedAt = now;
   task.revision = Math.max(1, Number(task.revision) || 1) + 1;
   return next;

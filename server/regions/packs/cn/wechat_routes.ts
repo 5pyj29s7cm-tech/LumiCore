@@ -1,7 +1,7 @@
 // WeChat ClawBot routes — QR login + status + config
 import { Router } from 'express';
 import { WeChatClawBotAdapter, type WeChatClawBotConfig } from '../../../messaging/wechat-clawbot';
-import { getMessagingConfig, updateMessagingConfig } from '../../../messaging/config';
+import { updateMessagingConfig } from '../../../messaging/config';
 import { requireAuth } from '../../../middleware/auth';
 import type { IncomingMessage } from '../../../messaging/types';
 import {
@@ -10,7 +10,6 @@ import {
   getBinding,
   listActiveBindingCodesForUser,
   listBindingsForUser,
-  parseMessagingBindingCommand,
 } from '../../../messaging/bindings';
 import { getMember } from '../../../org/db';
 import {
@@ -266,26 +265,6 @@ export function startWeChatPolling(
     // user's next message.
     return null;
   }).catch(err => console.error('[WeChat] Polling failed:', err?.message || err));
-}
-
-export function handleWeChatBindingCommand(msg: IncomingMessage): string | null {
-  const command = parseMessagingBindingCommand(msg.text);
-  if (!command) return null;
-  if (command.kind === 'status') {
-    const current = getBinding('wechat', msg.userId, msg.chatId, msg.chatType);
-    if (!current) {
-      return '微信 Bot 已连接，但当前微信身份尚未绑定到个人 Lumi。请在 Lumi 客户端生成绑定码后，原样发送“绑定 Lumi 绑定码”。';
-    }
-    return current.domain === 'personal'
-      ? '绑定状态已核验：当前微信身份已连接到你的个人 Lumi，后续消息会同步到个人聊天窗口。'
-      : '绑定状态已核验：当前微信身份已连接到 Lumi 组织工作域。';
-  }
-  if (command.kind === 'invalid') {
-    return '绑定命令格式不完整。请从 Lumi 客户端复制完整命令，并原样发送“绑定 Lumi 绑定码”。';
-  }
-  // One-time binding credentials are committed only inside the shared remote
-  // durability transaction. Returning null delegates the bind command to it.
-  return null;
 }
 
 function applyWeChatBinding(msg: IncomingMessage): IncomingMessage {

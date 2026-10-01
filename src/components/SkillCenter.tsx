@@ -1,12 +1,12 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, ShoppingBag, Cpu, Download, Trash2, Power, PowerOff, RefreshCw, Star, Wrench, CheckCircle, Globe, Search, Zap, Tag, Upload, Palette, Terminal, Monitor, Film, Key, ExternalLink, Github, AlertTriangle, X, ShieldCheck, Info, Mail, QrCode, Link, Image, FileText, CloudSun, Languages, Calculator, StickyNote, Timer, TrendingUp, Music, GraduationCap, BriefcaseBusiness, Stethoscope, Settings2 } from 'lucide-react';
+import { Sparkles, ShoppingBag, Cpu, Download, Trash2, Power, PowerOff, RefreshCw, Star, Wrench, CheckCircle, Globe, Search, Zap, Tag, Upload, Palette, Terminal, Monitor, Film, Key, ExternalLink, Github, AlertTriangle, X, ShieldCheck, Mail, QrCode, Link, Image, FileText, CloudSun, Languages, Calculator, StickyNote, Timer, TrendingUp, Music, GraduationCap, BriefcaseBusiness, Stethoscope, Settings2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { getSavedKeyStatus } from '@/services/settingsKeys';
-import { apiFetch } from '@/services/apiClient';
+import { apiFetch, apiJson } from '@/services/apiClient';
 import { WORK_RECOMMENDATION_RULES } from '../i18n/locales/skillRecommendations';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { getSkillSettingsTarget } from '../../shared/model_service_settings';
@@ -44,34 +44,12 @@ const ICON_CLASSES: Record<string, string> = {
   Film: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
 };
 
-const ICON_COMPONENTS: Record<string, React.ReactNode> = {
-  Calculator: <Calculator size={18} />,
-  CloudSun: <CloudSun size={18} />,
-  FileText: <FileText size={18} />,
-  Globe: <Globe size={18} />,
-  Image: <Image size={18} />,
-  Languages: <Languages size={18} />,
-  Link: <Link size={18} />,
-  Mail: <Mail size={18} />,
-  Music: <Music size={18} />,
-  QrCode: <QrCode size={18} />,
-  ShieldCheck: <ShieldCheck size={18} />,
-  Sparkles: <Sparkles size={18} />,
-  ShoppingBag: <ShoppingBag size={18} />,
-  GraduationCap: <GraduationCap size={18} />,
-  BriefcaseBusiness: <BriefcaseBusiness size={18} />,
-  Stethoscope: <Stethoscope size={18} />,
-  StickyNote: <StickyNote size={18} />,
-  Terminal: <Terminal size={18} />,
-  Timer: <Timer size={18} />,
-  TrendingUp: <TrendingUp size={18} />,
-  Monitor: <Monitor size={18} />,
-  Search: <Search size={18} />,
-  Palette: <Palette size={18} />,
-  Film: <Film size={18} />,
-  Wrench: <Wrench size={18} />,
-  Zap: <Zap size={18} />,
-};
+const ICON_COMPONENTS: Record<string, React.ReactNode> = Object.fromEntries(Object.entries({
+  Calculator, CloudSun, FileText, Globe, Image, Languages, Link,
+  Mail, Music, QrCode, ShieldCheck, Sparkles, ShoppingBag, GraduationCap,
+  BriefcaseBusiness, Stethoscope, StickyNote, Terminal, Timer, TrendingUp, Monitor,
+  Search, Palette, Film, Wrench, Zap,
+}).map(([name, Icon]) => [name, <Icon size={18} />]));
 
 interface MarketplaceSkill {
   id: string; name: string; description: string; author: string;
@@ -178,80 +156,6 @@ function getApiKeyConfigurationDetail(
     }, locale);
   }
   return formatUiMessage(fallbackMessage, { value0: skill.apiKeyEnv || '' }, locale);
-}
-
-function getSkillAvailability(
-  skill: MarketplaceSkill,
-  installedSkills: InstalledSkill[],
-  savedKeys: Record<string, boolean>,
-  lang: 'en' | 'zh',
-): SkillAvailability {
-  if (skill.officialIdentityStatus === 'conflict') {
-    return {
-      label: 'Local identity conflict',
-      detail: skill.conflictReason || 'A same-name local package or configuration does not match this official Skill.',
-      tone: 'red',
-    };
-  }
-  if (skill.runtimeInstallable === false) {
-    return {
-      label: 'Reviewed external MCP required',
-      detail: 'This entry depends on an external executable that is not bound to the official Skill runtime.',
-      tone: 'amber',
-    };
-  }
-  const installedSkill = findInstalledSkillForMarket(skill, installedSkills);
-  if (installedSkill?.broken) {
-    return {
-      label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.local-package-is-incomplete-and.071c55d928', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'red',
-      installedSkill,
-    };
-  }
-  if (installedSkill?.startupError || (installedSkill?.enabled && !installedSkill.usable)) {
-    return {
-      label: uiMessage('skill-center.needs-connection.a5cb6b78b7', (lang === 'zh') ? 'zh' : 'en'),
-      detail: installedSkill.startupError || (uiMessage('skill-center.installed-but-its-mcp-server.9f5145472b', (lang === 'zh') ? 'zh' : 'en')),
-      tone: 'amber',
-      installedSkill,
-    };
-  }
-  if (installedSkill?.usable) {
-    return {
-      label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.connected-to-lumi-and-available.410a87e979', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'green',
-      installedSkill,
-    };
-  }
-  if (installedSkill && !installedSkill.enabled) {
-    return {
-      label: uiMessage('skill-center.installed-disabled.46156ea2d0', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.the-skill-exists-locally-but.197bdb9ca7', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'white',
-      installedSkill,
-    };
-  }
-  if (skill.requiresApiKey && skill.apiKeyEnv && !savedKeys[skill.apiKeyEnv]) {
-    return {
-      label: uiMessage('skill-center.needs-api-key.2e4a04bc58', (lang === 'zh') ? 'zh' : 'en'),
-      detail: getApiKeyConfigurationDetail(skill, lang, 'skill-center.configure-value0-after-install-before.18059ad8fc'),
-      tone: 'amber',
-    };
-  }
-  if (skill.requiresSetup) {
-    return {
-      label: uiMessage('skill-center.needs-setup.e1bc0e20e1', (lang === 'zh') ? 'zh' : 'en'),
-      detail: skill.setupNote || (uiMessage('skill-center.requires-local-dependencies-before-use.f9734c5f1c', (lang === 'zh') ? 'zh' : 'en')),
-      tone: 'amber',
-    };
-  }
-  return {
-    label: uiMessage('skill-center.ready-after-install.9ccfaed578', (lang === 'zh') ? 'zh' : 'en'),
-    detail: uiMessage('skill-center.official-bundled-skill-install-and.c28c0f16b6', (lang === 'zh') ? 'zh' : 'en'),
-    tone: 'green',
-  };
 }
 
 function getDisplayAvailability(
@@ -455,6 +359,40 @@ const PROFESSION_RECOMMENDATION_MAP: Record<string, string[]> = {
   estimator: ['skill-construction-tender-cost', 'skill-finance-office'],
 };
 
+// Each query owns its data and latest request; unrelated lists never invalidate one another.
+function useSkillQuery<T>(key: string | null, initial: T, load: (signal: AbortSignal) => Promise<T>, delay = 0) {
+  const [state, setState] = useState({ key, data: initial, loading: Boolean(key), error: '' });
+  const owner = useRef(key); owner.current = key;
+  const loader = useRef(load); loader.current = load;
+  const empty = useRef(initial); empty.current = initial;
+  const request = useRef<AbortController | null>(null);
+  const refresh = useCallback(async () => {
+    const key = owner.current;
+    if (!key) return;
+    request.current?.abort();
+    const controller = new AbortController(); request.current = controller;
+    const current = () => owner.current === key && request.current === controller && !controller.signal.aborted;
+    setState(previous => ({ key, data: previous.key === key ? previous.data : empty.current, loading: true, error: '' }));
+    try {
+      // Coalesce events in one tick, but a later mutation still starts a fresh read.
+      await Promise.resolve();
+      if (!current()) return;
+      const data = await loader.current(controller.signal);
+      if (current()) setState({ key, data, loading: false, error: '' });
+    } catch (error: any) {
+      if (current()) setState(previous => ({ ...previous, loading: false, error: error?.message || 'Request failed' }));
+    }
+  }, []);
+  useEffect(() => {
+    owner.current = key;
+    if (!key) setState({ key, data: empty.current, loading: false, error: '' });
+    const timer = delay ? setTimeout(() => void refresh(), delay) : undefined;
+    if (!delay) void refresh();
+    return () => { owner.current = null; clearTimeout(timer); request.current?.abort(); };
+  }, [key, delay, refresh]);
+  return { ...(state.key === key ? state : { data: initial, loading: Boolean(key), error: '' }), refresh };
+}
+
 export function SkillCenter({
   t,
   lang,
@@ -469,10 +407,6 @@ export function SkillCenter({
   canReviewExternalCapabilities?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(initialTab);
-  const [marketSkills, setMarketSkills] = useState<MarketplaceSkill[]>([]);
-  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState<string | null>(null);
   const [repairing, setRepairing] = useState<string | null>(null);
   const [cleaningBroken, setCleaningBroken] = useState(false);
@@ -483,20 +417,9 @@ export function SkillCenter({
   const [generating, setGenerating] = useState(false);
   const [generatedDraft, setGeneratedDraft] = useState<GeneratedSkillDraft | null>(null);
   const [installingGeneratedDraft, setInstallingGeneratedDraft] = useState(false);
-  const [npmResults, setNpmResults] = useState<ExternalResult[]>([]);
-  const [githubResults, setGithubResults] = useState<ExternalResult[]>([]);
-  const [searchingExternal, setSearchingExternal] = useState(false);
-  const [externalError, setExternalError] = useState('');
-  const [loadError, setLoadError] = useState('');
   const [installProgress, setInstallProgress] = useState<{ skillId: string; stage: string } | null>(null);
-  const [detailSkill, setDetailSkill] = useState<MarketplaceSkill | InstalledSkill | null>(null);
-  const [savedKeys, setSavedKeys] = useState<Record<string, boolean>>({});
-  const [professionProfiles, setProfessionProfiles] = useState<ProfessionProfile[]>([]);
-  const [workSignalText, setWorkSignalText] = useState('');
-  const [recommendationError, setRecommendationError] = useState('');
-  const [externalCapabilities, setExternalCapabilities] = useState<ExternalCapabilityProjection[]>([]);
-  const [externalCapabilitiesLoading, setExternalCapabilitiesLoading] = useState(true);
-  const [externalCapabilitiesError, setExternalCapabilitiesError] = useState('');
+  const [detailSelection, setDetailSelection] = useState<Pick<MarketplaceSkill, 'id'> | Pick<InstalledSkill, 'name'> | null>(null);
+  const setDetailSkill = (skill: MarketplaceSkill | InstalledSkill | null) => setDetailSelection(skill && ('id' in skill ? { id: skill.id } : { name: skill.name }));
   const [externalCapabilityIntakeOpen, setExternalCapabilityIntakeOpen] = useState(false);
   const socket = useSocket();
 
@@ -506,129 +429,47 @@ export function SkillCenter({
     setActiveTab(initialTab);
   }, [initialTab]);
 
-  const fetchMarketplace = useCallback(async () => {
-    try {
-      const res = await apiFetch(`/api/marketplace/skills?lang=${lang}`);
-      if (!res.ok) throw new Error(`Marketplace failed (${res.status})`);
-      setMarketSkills(await res.json());
-    } catch (err: any) {
-      setLoadError(err.message || 'Marketplace failed to load');
-    }
-  }, [lang]);
-
-  const fetchInstalled = useCallback(async () => {
-    try {
-      const res = await apiFetch('/api/skills');
-      if (!res.ok) throw new Error(`Installed skills failed (${res.status})`);
-      const data = await res.json();
-      setInstalledSkills(data.skills || []);
-    } catch (err: any) {
-      setLoadError(err.message || 'Installed skills failed to load');
-    }
-    setLoading(false);
-  }, []);
-
-  const fetchCategories = useCallback(async () => {
-    try {
-      const res = await apiFetch(`/api/marketplace/categories?lang=${lang}`);
-      if (!res.ok) throw new Error(`Categories failed (${res.status})`);
-      setCategories((await res.json()).map((c: any) => c.name));
-    } catch (err: any) {
-      setLoadError(err.message || 'Categories failed to load');
-    }
-  }, [lang]);
-
-  // External search (npm + GitHub) — debounced
-  const fetchExternal = useCallback(async (q: string) => {
-    if (!q || q.length < 2) { setNpmResults([]); setGithubResults([]); return; }
-    setSearchingExternal(true);
-    setExternalError('');
-    const qClean = encodeURIComponent(q);
-    try {
-      const [npmRes, ghRes] = await Promise.allSettled([
-        apiFetch(`/api/marketplace/discover/npm?q=${qClean}`).then(async r => {
-          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `npm search failed (${r.status})`);
-          return r.json();
-        }),
-        apiFetch(`/api/marketplace/discover/github?topic=${qClean}`).then(async r => {
-          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `GitHub search failed (${r.status})`);
-          return r.json();
-        }),
-      ]);
-      setNpmResults((npmRes.status === 'fulfilled' ? npmRes.value?.results || [] : []).slice(0, 6));
-      setGithubResults((ghRes.status === 'fulfilled' ? ghRes.value?.results || [] : []).slice(0, 6));
-      const errors = [npmRes, ghRes]
-        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-        .map(r => r.reason?.message)
-        .filter(Boolean);
-      if (errors.length) setExternalError(errors.join(' / '));
-    } catch (err: any) {
-      setExternalError(err.message || 'External search failed');
-    }
-    setSearchingExternal(false);
-  }, []);
-
-  const fetchSavedKeys = useCallback(async () => {
-    try {
-      setSavedKeys(await getSavedKeyStatus());
-    } catch {}
-  }, []);
-
-  const fetchReviewedExternalCapabilities = useCallback(async () => {
-    if (!canUseExternalCapabilities) {
-      setExternalCapabilities([]);
-      setExternalCapabilitiesError('');
-      setExternalCapabilitiesLoading(false);
-      return;
-    }
-    setExternalCapabilitiesLoading(true);
-    setExternalCapabilitiesError('');
-    try {
-      setExternalCapabilities(await fetchExternalCapabilities());
-    } catch (err: any) {
-      setExternalCapabilitiesError(err?.message || externalCapabilityCopy(lang).loadFailed);
-    } finally {
-      setExternalCapabilitiesLoading(false);
-    }
-  }, [canUseExternalCapabilities, lang]);
-
-  const fetchRecommendationSignals = useCallback(async () => {
-    setRecommendationError('');
-    try {
-      const [profileRes, interactionsRes] = await Promise.allSettled([
-        apiFetch('/api/explore/profession'),
-        apiFetch('/api/interactions?limit=80'),
-      ]);
-
-      if (profileRes.status === 'fulfilled' && profileRes.value.ok) {
-        const data = await profileRes.value.json().catch(() => ({}));
-        setProfessionProfiles(Array.isArray(data.profiles) ? data.profiles : []);
-      }
-
-      if (interactionsRes.status === 'fulfilled' && interactionsRes.value.ok) {
-        const data = await interactionsRes.value.json().catch(() => []);
-        const items = Array.isArray(data) ? data : [];
-        const text = items
-          .flatMap((item: any) => [item?.content, item?.message, item?.prompt, item?.response, item?.summary, item?.title, item?.description])
-          .filter(Boolean)
-          .map(value => (typeof value === 'string' ? value : JSON.stringify(value)))
-          .join('\n')
-          .slice(0, 50000);
-        setWorkSignalText(text);
-      }
-    } catch (err: any) {
-      setRecommendationError(err?.message || 'Recommendation signals failed to load');
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchMarketplace();
-    fetchInstalled();
-    fetchCategories();
-    fetchSavedKeys();
-    fetchRecommendationSignals();
-    void fetchReviewedExternalCapabilities();
-  }, [fetchMarketplace, fetchInstalled, fetchCategories, fetchSavedKeys, fetchRecommendationSignals, fetchReviewedExternalCapabilities]);
+  const { data: marketSkills, error: marketError, refresh: fetchMarketplace } = useSkillQuery<MarketplaceSkill[]>(
+    `market:${lang}`, [], async signal => {
+      const data = await apiJson(`/api/marketplace/skills?lang=${lang}`, { signal });
+      if (!Array.isArray(data)) throw new Error('Invalid skill catalog');
+      return data;
+    });
+  const { data: installedSkills, loading, error: installedError, refresh: fetchInstalled } = useSkillQuery<InstalledSkill[]>(
+    'installed', [], async signal => (await apiJson('/api/skills', { signal })).skills || []);
+  const { data: categories, error: categoryError, refresh: fetchCategories } = useSkillQuery<string[]>(
+    `categories:${lang}`, [], async signal => (await apiJson(`/api/marketplace/categories?lang=${lang}`, { signal })).map((c: any) => c.name));
+  const loadError = [marketError, installedError, categoryError].filter(Boolean).join(' / ');
+  const { data: savedKeys } = useSkillQuery<Record<string, boolean>>('keys', {}, () => getSavedKeyStatus());
+  const { data: externalCapabilities, loading: externalCapabilitiesLoading, error: externalCapabilitiesError,
+    refresh: fetchReviewedExternalCapabilities } = useSkillQuery<ExternalCapabilityProjection[]>(
+    canUseExternalCapabilities ? 'capabilities' : null, [], () => fetchExternalCapabilities());
+  const { data: professionProfiles, error: profileError, refresh: fetchProfiles } = useSkillQuery<ProfessionProfile[]>(
+    'profiles', [], async signal => {
+      const data = await apiJson('/api/explore/profession', { signal });
+      return Array.isArray(data.profiles) ? data.profiles : [];
+    });
+  const { data: workSignalText, error: interactionsError, refresh: fetchInteractions } = useSkillQuery('interactions', '', async signal => {
+    const data = await apiJson('/api/interactions?limit=80', { signal });
+    return (Array.isArray(data) ? data : [])
+      .flatMap((item: any) => [item?.content, item?.message, item?.prompt, item?.response, item?.summary, item?.title, item?.description])
+      .filter(Boolean).map(value => typeof value === 'string' ? value : JSON.stringify(value)).join('\n').slice(0, 50000);
+  });
+  const recommendationError = [profileError, interactionsError].filter(Boolean).join(' / ');
+  const fetchRecommendationSignals = () => { void fetchProfiles(); void fetchInteractions(); };
+  const query = search.length >= 2 ? encodeURIComponent(search) : null;
+  const npm = useSkillQuery<ExternalResult[]>(query && `npm:${query}`, [], async signal =>
+    (await apiJson(`/api/marketplace/discover/npm?q=${query}`, { signal })).results?.slice(0, 6) || [], 400);
+  const github = useSkillQuery<ExternalResult[]>(query && `github:${query}`, [], async signal =>
+    (await apiJson(`/api/marketplace/discover/github?topic=${query}`, { signal })).results?.slice(0, 6) || [], 400);
+  const searchingExternal = npm.loading || github.loading;
+  const externalError = [npm.error, github.error].filter(Boolean).join(' / ');
+  const refreshSkills = useCallback(() => Promise.all([fetchInstalled(), fetchMarketplace()]), [fetchInstalled, fetchMarketplace]);
+  const refreshAll = () => { void refreshSkills(); void fetchCategories(); fetchRecommendationSignals(); };
+  const detailSkill = detailSelection && ('id' in detailSelection
+    ? marketSkills.find(skill => skill.id === detailSelection.id)
+    : installedSkills.find(skill => skill.name === detailSelection.name));
+  useEffect(() => { if (detailSelection && !detailSkill) setDetailSelection(null); }, [detailSelection, detailSkill]);
 
   useEffect(() => {
     if (!canUseExternalCapabilities) return undefined;
@@ -636,12 +477,6 @@ export function SkillCenter({
     window.addEventListener('lumi:external-capabilities-changed', refresh);
     return () => window.removeEventListener('lumi:external-capabilities-changed', refresh);
   }, [canUseExternalCapabilities, fetchReviewedExternalCapabilities]);
-
-  // Debounced external search
-  useEffect(() => {
-    const timer = setTimeout(() => fetchExternal(search), 400);
-    return () => clearTimeout(timer);
-  }, [search, fetchExternal]);
 
   // Translate on first Chinese load, then re-fetch to show translated data
   useEffect(() => {
@@ -657,27 +492,23 @@ export function SkillCenter({
   // Socket events for real-time updates
   useEffect(() => {
     if (!socket) return;
-    const refresh = () => { fetchInstalled(); fetchMarketplace(); };
     const onInstalling = (data: { skillId: string; name: string; stage: string }) => {
       setInstallProgress({ skillId: data.skillId, stage: data.stage });
     };
     const onInstalled = () => {
       setInstallProgress(null);
-      refresh();
+      void refreshSkills();
     };
     socket.on('skill:installing', onInstalling);
     socket.on('skill:installed', onInstalled);
-    socket.on('skill:uninstalled', refresh);
-    socket.on('skill:updated', refresh);
-    socket.on('mcp:health_update', refresh);
+    const refreshEvents = ['skill:uninstalled', 'skill:updated', 'mcp:health_update'];
+    for (const event of refreshEvents) socket.on(event, refreshSkills);
     return () => {
       socket.off('skill:installing', onInstalling);
       socket.off('skill:installed', onInstalled);
-      socket.off('skill:uninstalled', refresh);
-      socket.off('skill:updated', refresh);
-      socket.off('mcp:health_update', refresh);
+      for (const event of refreshEvents) socket.off(event, refreshSkills);
     };
-  }, [socket, fetchInstalled, fetchMarketplace]);
+  }, [socket, refreshSkills]);
 
   const handleInstall = async (skill: MarketplaceSkill) => {
     if ('installed' in skill && skill.installed) return;
@@ -698,17 +529,15 @@ export function SkillCenter({
     setInstalling(skill.id);
     try {
       const body = { skillId: skill.id, skillName: skill.name, installSource: skill.installSource };
-      const res = await apiFetch('/api/marketplace/skills/acquire', {
+      const data = await apiJson('/api/marketplace/skills/acquire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         credentials: 'include',
       });
-      const data = await res.json();
       if (data.success) {
         toast.success(data.message || `"${skill.name}" ${t.skillInstalledToast}`);
-        if (socket) socket.emit('skill:installed', { skillId: skill.id, name: skill.name });
-        fetchInstalled(); fetchMarketplace();
+        void refreshSkills();
       } else toast.error(data.error || 'Install failed');
     } catch (err: any) { toast.error(err.message); }
     finally { setInstalling(null); }
@@ -716,15 +545,9 @@ export function SkillCenter({
 
   const handleUninstall = async (name: string) => {
     try {
-      const res = await apiFetch(`/api/skills/${name}`, { method: 'DELETE' });
-      if (res.ok) {
-        toast.success(`"${name}" ${t.skillUninstalledToast}`);
-        if (socket) socket.emit('skill:uninstalled', { name });
-        fetchInstalled(); fetchMarketplace();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || 'Uninstall failed');
-      }
+      await apiJson(`/api/skills/${name}`, { method: 'DELETE' });
+      toast.success(`"${name}" ${t.skillUninstalledToast}`);
+      void refreshSkills();
     } catch (err: any) { toast.error(err.message); }
   };
 
@@ -735,9 +558,8 @@ export function SkillCenter({
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) throw new Error(data.reason || data.error || 'Repair failed');
       toast.success(formatUiMessage('skill-center.value0-repaired.46dd6808b8', { value0: name }, (lang === 'zh') ? 'zh' : 'en'));
-      if (socket) socket.emit('skill:updated', { name });
-      if (detailSkill && 'name' in detailSkill && detailSkill.name === name) setDetailSkill(null);
-      fetchInstalled(); fetchMarketplace();
+      if (detailSkill?.name === name) setDetailSkill(null);
+      void refreshSkills();
     } catch (err: any) {
       toast.error(err.message || 'Repair failed');
     } finally {
@@ -748,12 +570,10 @@ export function SkillCenter({
   const handleCleanupBroken = async () => {
     setCleaningBroken(true);
     try {
-      const res = await apiFetch('/api/skills/broken', { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Cleanup failed');
+      const data = await apiJson('/api/skills/broken', { method: 'DELETE' });
       const removed = Array.isArray(data.removed) ? data.removed.length : 0;
       toast.success(formatUiMessage('skill-center.cleaned-value0-broken-skills.8180ac8311', { value0: removed }, (lang === 'zh') ? 'zh' : 'en'));
-      fetchInstalled(); fetchMarketplace();
+      void refreshSkills();
     } catch (err: any) {
       toast.error(err.message || 'Cleanup failed');
     } finally {
@@ -763,11 +583,7 @@ export function SkillCenter({
 
   const handleToggle = async (name: string, enabled: boolean) => {
     try {
-      const res = await apiFetch(`/api/skills/${name}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Toggle failed');
-      }
+      await apiJson(`/api/skills/${name}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
       toast.success(`${enabled ? t.skillEnabledToast : t.skillDisabledToast} ${name}`);
       fetchInstalled();
     } catch (err: any) {
@@ -779,14 +595,13 @@ export function SkillCenter({
     if (!genDescription.trim()) return;
     setGenerating(true);
     try {
-      const res = await apiFetch('/api/skills/generate', {
+      const data = await apiJson('/api/skills/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: genDescription }),
         credentials: 'include',
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+      if (!data.success) throw new Error(data.error || 'Generation failed');
       setGeneratedDraft(data as GeneratedSkillDraft);
       toast.success(uiMessage('skill-center.generated-draft-created.20260901', lang));
     } catch (err: any) { toast.error(err.message); }
@@ -797,7 +612,7 @@ export function SkillCenter({
     if (!generatedDraft) return;
     setInstallingGeneratedDraft(true);
     try {
-      const res = await apiFetch('/api/skills/install', {
+      const data = await apiJson('/api/skills/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -810,14 +625,13 @@ export function SkillCenter({
           approvalNonce: generatedDraft.approvalNonce,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success !== true || data.usable !== true) {
+      if (data.success !== true || data.usable !== true) {
         throw new Error(data.error || 'Skill activation failed');
       }
       toast.success(uiMessage('skill-center.generated-skill-activated.20260901', lang));
       setGeneratedDraft(null);
       setGenDescription('');
-      await Promise.all([fetchInstalled(), fetchMarketplace()]);
+      await refreshSkills();
       if (socket) socket.emit('skill:updated', { name: data.skillName || data.name });
     } catch (err: any) {
       toast.error(err.message || 'Skill activation failed');
@@ -830,7 +644,7 @@ export function SkillCenter({
     try {
       const installed = installedSkills.find(s => s.name === skillName);
       if (!installed) return;
-      const res = await apiFetch('/api/marketplace/publish', {
+      await apiJson('/api/marketplace/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -841,21 +655,20 @@ export function SkillCenter({
           toolCount: installed.toolCount,
         }),
       });
-      if (res.ok) toast.success(`Published "${skillName}" to community!`);
+      toast.success(`Published "${skillName}" to community!`);
     } catch {}
   };
 
   // Filter and sort installable LumiCore skills.
-  const skillHallMarketSkills = marketSkills;
-  const skillHallCategories = categories.filter(cat => skillHallMarketSkills.some(s => s.category === cat));
+  const skillHallCategories = categories.filter(cat => marketSkills.some(s => s.category === cat));
   const installedSkillRows = useMemo(() => (
     installedSkills
       .map(skill => ({
         skill,
-        marketSkill: skillHallMarketSkills.find(marketSkill => findInstalledSkillForMarket(marketSkill, [skill])),
+        marketSkill: marketSkills.find(marketSkill => findInstalledSkillForMarket(marketSkill, [skill])),
       }))
       .sort((a, b) => Number(b.skill.connected) - Number(a.skill.connected) || Number(b.skill.enabled) - Number(a.skill.enabled) || a.skill.name.localeCompare(b.skill.name))
-  ), [installedSkills, skillHallMarketSkills]);
+  ), [installedSkills, marketSkills]);
   const matchedWorkSignals = useMemo(() => (
     WORK_RECOMMENDATION_RULES
       .filter(rule => rule.pattern.test(workSignalText))
@@ -863,7 +676,7 @@ export function SkillCenter({
   ), [workSignalText]);
   const recommendedSkills = useMemo<SkillRecommendation[]>(() => {
     const byId = new Map<string, MarketplaceSkill>();
-    for (const skill of skillHallMarketSkills) byId.set(skill.id, skill);
+    for (const skill of marketSkills) byId.set(skill.id, skill);
     const scored = new Map<string, { skill: MarketplaceSkill; score: number; reasons: string[] }>();
     const add = (skillId: string, score: number, reason: string) => {
       const skill = byId.get(skillId);
@@ -885,9 +698,7 @@ export function SkillCenter({
         add(
           skillId,
           55 * confidence,
-          lang === 'zh'
-            ? `Work profile: ${profile.profession} ${Math.round(confidence * 100)}%`
-            : `Work profile: ${profile.profession} ${Math.round(confidence * 100)}%`,
+          `Work profile: ${profile.profession} ${Math.round(confidence * 100)}%`,
         );
       }
     }
@@ -910,15 +721,15 @@ export function SkillCenter({
       add(
         marketSkill.id,
         skill.connected ? 18 : 10,
-        lang === 'zh' ? 'Already installed locally' : 'Already installed locally',
+        'Already installed locally',
       );
     }
 
     return Array.from(scored.values())
       .sort((a, b) => b.score - a.score || b.skill.downloads - a.skill.downloads)
       .slice(0, 8);
-  }, [installedSkillRows, lang, professionProfiles, skillHallMarketSkills, workSignalText]);
-  const filteredMarket = skillHallMarketSkills.filter(s => {
+  }, [installedSkillRows, lang, professionProfiles, marketSkills, workSignalText]);
+  const filteredMarket = marketSkills.filter(s => {
     if (search && !s.name.toLowerCase().includes(search.toLowerCase()) && !s.description.toLowerCase().includes(search.toLowerCase())) return false;
     if (activeCategory && s.category !== activeCategory) return false;
     return true;
@@ -991,7 +802,7 @@ export function SkillCenter({
           )}
           <span className="text-xs text-white/45 font-mono">{sortedMarket.length} {t.available || 'available'}</span>
           <button
-            onClick={() => { setLoadError(''); fetchMarketplace(); fetchInstalled(); fetchCategories(); fetchRecommendationSignals(); }}
+            onClick={refreshAll}
             className="lumi-icon-button h-8 w-8"
             title={t.refresh || 'Refresh'}
           >
@@ -1011,7 +822,7 @@ export function SkillCenter({
             {formatUiMessage('skill-center.skill-center-load-issue-value0.c32306f8d7', { value0: loadError }, (lang === 'zh') ? 'zh' : 'en')}
           </span>
           <button
-            onClick={() => { setLoadError(''); fetchMarketplace(); fetchInstalled(); fetchCategories(); fetchRecommendationSignals(); }}
+            onClick={refreshAll}
             className="rounded-lg bg-amber-300/10 px-3 py-1.5 font-semibold text-amber-200 hover:bg-amber-300/18"
           >
             {uiMessage('skill-center.retry.563171cfe4', (lang === 'zh') ? 'zh' : 'en')}
@@ -1432,7 +1243,6 @@ export function SkillCenter({
             )}
 
             {/* External search results: npm + GitHub */}
-            <AnimatePresence>
               {searchingExternal && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-2 text-xs text-white/45 py-2">
                   <RefreshCw size={12} className="animate-spin" /> Searching npm & GitHub...
@@ -1446,14 +1256,14 @@ export function SkillCenter({
               )}
 
               {/* npm registry results */}
-              {npmResults.length > 0 && (
+              {npm.data.length > 0 && (
                 <motion.div key="npm-section" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-2">
                   <div className="flex items-center gap-2 px-1">
                     <span className="text-xs font-bold uppercase text-red-400 tracking-wider">npm Registry</span>
-                    <span className="text-[12px] text-white/45 font-mono">{npmResults.length} found</span>
+                    <span className="text-[12px] text-white/45 font-mono">{npm.data.length} found</span>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {npmResults.map(skill => {
+                    {npm.data.map(skill => {
                       return (
                         <div key={skill.id}
                           className="p-4 bg-red-500/5 rounded-2xl border border-red-500/10 hover:border-red-500/20 transition-all flex items-center gap-3">
@@ -1480,15 +1290,15 @@ export function SkillCenter({
               )}
 
               {/* GitHub results */}
-              {githubResults.length > 0 && (
+              {github.data.length > 0 && (
                 <motion.div key="github-section" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-2">
                   <div className="flex items-center gap-2 px-1">
                     <Globe size={11} className="text-purple-400" />
                     <span className="text-xs font-bold uppercase text-purple-400 tracking-wider">GitHub</span>
-                    <span className="text-[12px] text-white/45 font-mono">{githubResults.length} repos</span>
+                    <span className="text-[12px] text-white/45 font-mono">{github.data.length} repos</span>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {githubResults.map(repo => {
+                    {github.data.map(repo => {
                       return (
                         <div key={repo.id}
                           className="p-4 bg-purple-500/5 rounded-2xl border border-purple-500/10 hover:border-purple-500/20 transition-all flex items-center gap-3">
@@ -1515,7 +1325,6 @@ export function SkillCenter({
                   </div>
                 </motion.div>
               )}
-            </AnimatePresence>
           </motion.div>
         )}
 
@@ -1564,7 +1373,7 @@ export function SkillCenter({
                 </button>
               </div>
             )}
-            {loading ? (
+            {loading && installedSkills.length === 0 ? (
               <div className="lumi-panel p-16 text-center">
                 <p className="text-white/40 text-sm">{t.loading || 'Loading...'}</p>
               </div>
@@ -1791,7 +1600,7 @@ export function SkillCenter({
       </AnimatePresence>
       <AnimatePresence>
         {detailSkill && (
-          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={skillHallMarketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
+          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={marketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
         )}
       </AnimatePresence>
       {canUseExternalCapabilities && canReviewExternalCapabilities && (

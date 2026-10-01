@@ -110,16 +110,8 @@ export function changeMemberRole(orgId: string, changedBy: string, userId: strin
   return m;
 }
 
-export function getOrgMember(orgId: string, userId: string) {
-  return EDB.getMember(orgId, userId);
-}
-
 export function listOrgMembers(orgId: string) {
   return EDB.listMembers(orgId);
-}
-
-export function suspendMember(orgId: string, suspendedBy: string, userId: string) {
-  return EDB.setMemberStatus(orgId, userId, 'suspended');
 }
 
 // ── Departments ──────────────────────────────────────────────────────────

@@ -2,7 +2,6 @@ import { readDB, writeDB } from '../../db_layer';
 import type {
   VoiceprintTemplate,
   FaceTemplate,
-  TripleLockConfig,
   BiometricStore,
 } from './types';
 
@@ -62,20 +61,6 @@ export function getVoiceprints(uid: string): VoiceprintTemplate[] {
   return readStore(uid).voiceprints;
 }
 
-export function getAllVoiceprints(): VoiceprintTemplate[] {
-  const db = readDB();
-  const all: VoiceprintTemplate[] = [];
-  for (const row of (db.settings || [])) {
-    if (typeof row.key === 'string' && row.key.startsWith('biometric_')) {
-      try {
-        const store: BiometricStore = JSON.parse(row.value);
-        all.push(...store.voiceprints);
-      } catch {}
-    }
-  }
-  return all;
-}
-
 export function deleteVoiceprint(uid: string, voiceprintId: string): boolean {
   const store = readStore(uid);
   const idx = store.voiceprints.findIndex(v => v.voiceprintId === voiceprintId);
@@ -109,20 +94,6 @@ export function getFaces(uid: string): FaceTemplate[] {
   return readStore(uid).faces;
 }
 
-export function getAllFaces(): FaceTemplate[] {
-  const db = readDB();
-  const all: FaceTemplate[] = [];
-  for (const row of (db.settings || [])) {
-    if (typeof row.key === 'string' && row.key.startsWith('biometric_')) {
-      try {
-        const store: BiometricStore = JSON.parse(row.value);
-        all.push(...store.faces);
-      } catch {}
-    }
-  }
-  return all;
-}
-
 export function deleteFace(uid: string, faceId: string): boolean {
   const store = readStore(uid);
   const idx = store.faces.findIndex(f => f.faceId === faceId);
@@ -130,25 +101,4 @@ export function deleteFace(uid: string, faceId: string): boolean {
   store.faces.splice(idx, 1);
   writeStore(uid, store);
   return true;
-}
-
-export function touchFace(uid: string, faceId: string): void {
-  const store = readStore(uid);
-  const face = store.faces.find(f => f.faceId === faceId);
-  if (face) {
-    face.lastMatchedAt = new Date().toISOString();
-    writeStore(uid, store);
-  }
-}
-
-// ── Triple Lock ──
-
-export function getTripleLockConfig(uid: string): TripleLockConfig | null {
-  return readStore(uid).tripleLock;
-}
-
-export function saveTripleLockConfig(uid: string, config: TripleLockConfig): void {
-  const store = readStore(uid);
-  store.tripleLock = config;
-  writeStore(uid, store);
 }

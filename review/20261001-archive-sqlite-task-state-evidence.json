@@ -1,0 +1,349 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune21",
+  "baseline": "turn-start dirty worktree, not HEAD",
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1082,
+        "lines": 367928
+      },
+      "tests": {
+        "files": 738,
+        "lines": 158754
+      },
+      "total": {
+        "files": 1820,
+        "lines": 526682
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1082,
+        "lines": 367837
+      },
+      "tests": {
+        "files": 738,
+        "lines": 158830
+      },
+      "total": {
+        "files": 1820,
+        "lines": 526667
+      }
+    }
+  },
+  "files": [
+    {
+      "file": "server/db/migrations.ts",
+      "before": 266,
+      "after": 277,
+      "delta": 11,
+      "beforeSha256": "28166cce5eb096b9e2d491ec3c536867e6f3b9ced28430fb3385a645b21e2bab",
+      "afterSha256": "1ecaa310d2b5cb35548ddb2685081f2b6df5aa81df18917a9ae95b52a1e9f23c"
+    },
+    {
+      "file": "server/files/generated_archive.ts",
+      "before": 207,
+      "after": 221,
+      "delta": 14,
+      "beforeSha256": "1a523ce6de30bbc05270eca7f52e2cc0a537e7616acdf2987dfa909bc12bc692",
+      "afterSha256": "c5ebd4408cf4eb6bc8ed0b4adf8245b98038ab41c0faac6143c9a6897c1118de"
+    },
+    {
+      "file": "src/components/AutonomousFeed.tsx",
+      "before": 487,
+      "after": 465,
+      "delta": -22,
+      "beforeSha256": "b1a783b054ee36643c720530d2426fd6d2ad9477ea47d66e7a8f609dcf72fc87",
+      "afterSha256": "33557825ee9514c6e74358a9e163095eaccdeda4f37059d11b1e44dfdbc72edc"
+    },
+    {
+      "file": "test/generated_library.test.ts",
+      "before": 245,
+      "after": 290,
+      "delta": 45,
+      "beforeSha256": "e1c14250ae4f11ab33e7ec4437e077c1593cb4112116bb6262b4b980260a6080",
+      "afterSha256": "e6ecce7fe36f98d8c49512a80b71c54acb4eeec1a7d8a344c710b03bb369a2f6"
+    },
+    {
+      "file": "test/autonomous_output_closure.test.ts",
+      "before": 369,
+      "after": 400,
+      "delta": 31,
+      "beforeSha256": "550aec086c6e5a42785556b6d8bae7a27e45d948c78a15504792c44134a594ef",
+      "afterSha256": "94abbd69235d883ccf8624701d24dd88405ed3fe14db533eb1a4fb8af02e1cbb"
+    },
+    {
+      "file": "src/components/PersonalityEditor.tsx",
+      "before": 308,
+      "after": 254,
+      "delta": -54,
+      "beforeSha256": "1cbd08c4963b6c52e1e08d554b853fec022f0f4c6585c093ab6550930d577b24",
+      "afterSha256": "caf9018df677bb4e07b660a427967a6a805f2d663d33be42aeed2e593d8ab868"
+    },
+    {
+      "file": "src/components/PersonalityEvolution.tsx",
+      "before": 515,
+      "after": 475,
+      "delta": -40,
+      "beforeSha256": "02b3e93e6a4c150de2796b164059fcb657d7aca41b69008c0fa2b01da39eeb37",
+      "afterSha256": "39fbd1693f2588c3a346ab8dc56dd120092cca1187f1eb9d189091be66b14171"
+    },
+    {
+      "file": "src/components/ChatSongWorkbench.test.tsx",
+      "before": 137,
+      "after": 137,
+      "delta": 0,
+      "beforeSha256": "7c70d50a340b8b0a18181187687a37a912076101e1eb98a2bf665b75ad863973",
+      "afterSha256": "0a5665ab71de7babb3ec3fa6f6295fc7a259692af5d8de3ebaa1ba7d27adbf1b"
+    }
+  ],
+  "changes": [
+    "Archive JSON writer and repeated whole-index reads replaced with indexed SQLite rows under the existing DB write lock. Legacy JSON imported once with an atomic scope marker; old source remains unchanged.",
+    "Archive rows are outside memoryDB snapshots. File lookup/rename/deletion/source-dedup use scope indexes. Large lists parse individual row payloads with a yield every 256 rows; JSON parsing is bounded, not eliminated.",
+    "One canonical autonomous task list replaces tasks/queue/history. Request sequence and local revisions prevent stale refresh/cancel responses and scope changes from reverting event state.",
+    "Frontend task/personality/evolution type duplicates now reuse existing backend contracts through type-only imports."
+  ],
+  "tests": {
+    "files": 729,
+    "passed": 6546,
+    "failed": 0,
+    "pending": 0,
+    "exit": {
+      "startedAt": "2026-10-01T06:13:12.270Z",
+      "finishedAt": "2026-10-01T06:15:28.878Z",
+      "status": 0,
+      "signal": null
+    },
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/autonomous_output_closure.test.ts::remaining output bypass closure preserves terminal events over in-flight refreshes and rejects older refreshes and scopes",
+        1
+      ],
+      [
+        "D:/lumiOS/test/generated_library.test.ts::Generated libraries across conversations imports legacy rows once, retains tombstones, and survives snapshot flush and restart",
+        1
+      ]
+    ]
+  },
+  "firstRun": {
+    "passed": 6545,
+    "failed": 1,
+    "failures": [
+      {
+        "file": "D:/lumiOS/src/components/ChatSongWorkbench.test.tsx",
+        "ancestorTitles": [],
+        "fullName": "keeps image preparation available but requires a confirmed song before video generation",
+        "status": "failed",
+        "title": "keeps image preparation available but requires a confirmed song before video generation",
+        "duration": 204.05610000000024,
+        "failureMessages": [
+          "TestingLibraryElementError: Unable to find an accessible element with the role \"button\" and name \"Generate image (Lumi Official API)\"\n\nHere are the accessible roles:\n\n  region:\n\n  Name \"Chat-song workbench\":\n  \u001b[36m<section\u001b[39m\n    \u001b[33maria-label\u001b[39m=\u001b[32m\"Chat-song workbench\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"absolute inset-0 z-[216] flex flex-col overflow-hidden bg-[#0b1017] text-white\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  banner:\n\n  Name \"\":\n  \u001b[36m<header\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  heading:\n\n  Name \"Chat-song workbench Trial\":\n  \u001b[36m<h2\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"flex items-center gap-2 text-lg font-bold\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Generate video visuals\":\n  \u001b[36m<h3\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"flex items-center gap-2 font-semibold text-amber-100\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Optional video clip\":\n  \u001b[36m<h3\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm font-semibold\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Images (can be prepared earlier)\":\n  \u001b[36m<h3\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"font-semibold\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  paragraph:\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"mt-1 max-w-2xl text-xs leading-5 text-white/50\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"hidden py-2 text-[10px] uppercase tracking-widest text-white/40 md:block\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm leading-6 text-white/60\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"text-xs leading-6 text-white/60\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"text-xs text-amber-100\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"\":\n  \u001b[36m<p\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"text-xs text-white/40\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  button:\n\n  Name \"Save\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35 !border-amber-200/30 !bg-amber-200 !text-slate-950 hover:!bg-amber-100\"\u001b[39m\n    \u001b[33mdisabled\u001b[39m=\u001b[32m\"\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Back to AI Creation\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"New episode\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35 !border-amber-200/30 !bg-amber-200 !text-slate-950 hover:!bg-amber-100\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Episode 2026-09-16\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-32 rounded-xl border px-3 py-3 text-left text-xs border-amber-200/25 bg-amber-200/10 text-amber-100\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Confirm the song first\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Use asset\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35\"\u001b[39m\n    \u001b[33mdisabled\u001b[39m=\u001b[32m\"\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Generate video (Lumi Official API)\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35 !border-amber-200/30 !bg-amber-200 !text-slate-950 hover:!bg-amber-100\"\u001b[39m\n    \u001b[33mdisabled\u001b[39m=\u001b[32m\"\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Refresh library\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  complementary:\n\n  Name \"\":\n  \u001b[36m<aside\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"flex shrink-0 gap-2 overflow-auto border-b border-white/10 p-3 md:w-52 md:flex-col md:border-b-0 md:border-r\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  tablist:\n\n  Name \"\":\n  \u001b[36m<nav\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"flex shrink-0 gap-1 overflow-x-auto border-b border-white/10 p-2\"\u001b[39m\n    \u001b[33mrole\u001b[39m=\u001b[32m\"tablist\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  tab:\n\n  Name \"1 · Dialogue\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33maria-selected\u001b[39m=\u001b[32m\"false\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"whitespace-nowrap rounded-lg px-4 py-2 text-xs text-white/45\"\u001b[39m\n    \u001b[33mrole\u001b[39m=\u001b[32m\"tab\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"2 · Generate song\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33maria-selected\u001b[39m=\u001b[32m\"false\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"whitespace-nowrap rounded-lg px-4 py-2 text-xs text-white/45\"\u001b[39m\n    \u001b[33mrole\u001b[39m=\u001b[32m\"tab\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"3 · Video & images\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33maria-selected\u001b[39m=\u001b[32m\"true\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"whitespace-nowrap rounded-lg px-4 py-2 text-xs bg-white/10 text-amber-100\"\u001b[39m\n    \u001b[33mrole\u001b[39m=\u001b[32m\"tab\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"4 · Compose & export\":\n  \u001b[36m<button\u001b[39m\n    \u001b[33maria-selected\u001b[39m=\u001b[32m\"false\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"whitespace-nowrap rounded-lg px-4 py-2 text-xs text-white/45\"\u001b[39m\n    \u001b[33mrole\u001b[39m=\u001b[32m\"tab\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  combobox:\n\n  Name \"Dialogue for this clip\":\n  \u001b[36m<select\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-amber-300/60 mt-2\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Optional video clip\":\n  \u001b[36m<select\u001b[39m\n    \u001b[33maria-label\u001b[39m=\u001b[32m\"Optional video clip\"\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-amber-300/60\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  option:\n\n  Name \"01 · Where?\":\n  \u001b[36m<option\u001b[39m\n    \u001b[33mvalue\u001b[39m=\u001b[32m\"01\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"02 · At home.\":\n  \u001b[36m<option\u001b[39m\n    \u001b[33mvalue\u001b[39m=\u001b[32m\"02\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  Name \"Choose from library\":\n  \u001b[36m<option\u001b[39m\n    \u001b[33mvalue\u001b[39m=\u001b[32m\"\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n  article:\n\n  Name \"\":\n  \u001b[36m<article\u001b[39m\n    \u001b[33mclass\u001b[39m=\u001b[32m\"space-y-3 rounded-2xl border border-white/10 bg-white/[0.025] p-4\"\u001b[39m\n  \u001b[36m/>\u001b[39m\n\n  --------------------------------------------------\n\nIgnored nodes: comments, script, style\n\u001b[36m<body>\u001b[39m\n  \u001b[36m<div>\u001b[39m\n    \u001b[36m<section\u001b[39m\n      \u001b[33maria-label\u001b[39m=\u001b[32m\"Chat-song workbench\"\u001b[39m\n      \u001b[33mclass\u001b[39m=\u001b[32m\"absolute inset-0 z-[216] flex flex-col overflow-hidden bg-[#0b1017] text-white\"\u001b[39m\n    \u001b[36m>\u001b[39m\n      \u001b[36m<header\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<div>\u001b[39m\n          \u001b[36m<h2\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"flex items-center gap-2 text-lg font-bold\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<svg\u001b[39m\n              \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"lucide lucide-film text-amber-200\"\u001b[39m\n              \u001b[33mfill\u001b[39m=\u001b[32m\"none\"\u001b[39m\n              \u001b[33mheight\u001b[39m=\u001b[32m\"20\"\u001b[39m\n              \u001b[33mstroke\u001b[39m=\u001b[32m\"currentColor\"\u001b[39m\n              \u001b[33mstroke-linecap\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-linejoin\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-width\u001b[39m=\u001b[32m\"2\"\u001b[39m\n              \u001b[33mviewBox\u001b[39m=\u001b[32m\"0 0 24 24\"\u001b[39m\n              \u001b[33mwidth\u001b[39m=\u001b[32m\"20\"\u001b[39m\n              \u001b[33mxmlns\u001b[39m=\u001b[32m\"http://www.w3.org/2000/svg\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[36m<rect\u001b[39m\n                \u001b[33mheight\u001b[39m=\u001b[32m\"18\"\u001b[39m\n                \u001b[33mrx\u001b[39m=\u001b[32m\"2\"\u001b[39m\n                \u001b[33mwidth\u001b[39m=\u001b[32m\"18\"\u001b[39m\n                \u001b[33mx\u001b[39m=\u001b[32m\"3\"\u001b[39m\n                \u001b[33my\u001b[39m=\u001b[32m\"3\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M7 3v18\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M3 7.5h4\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M3 12h18\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M3 16.5h4\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M17 3v18\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M17 7.5h4\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M17 16.5h4\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n            \u001b[36m</svg>\u001b[39m\n            \u001b[0mChat-song workbench\u001b[0m\n            \u001b[36m<span\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"rounded-md bg-amber-200/10 px-2 py-1 text-[10px] text-amber-200\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mTrial\u001b[0m\n            \u001b[36m</span>\u001b[39m\n          \u001b[36m</h2>\u001b[39m\n          \u001b[36m<p\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"mt-1 max-w-2xl text-xs leading-5 text-white/50\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[0mFinalize dialogue and confirm the song, generate video visuals, then time the edit to the actual singing.\u001b[0m\n          \u001b[36m</p>\u001b[39m\n        \u001b[36m</div>\u001b[39m\n        \u001b[36m<div\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex items-center gap-2\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<span\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"text-xs text-white/45\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[0mSaved\u001b[0m\n          \u001b[36m</span>\u001b[39m\n          \u001b[36m<button\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35 !border-amber-200/30 !bg-amber-200 !text-slate-950 hover:!bg-amber-100\"\u001b[39m\n            \u001b[33mdisabled\u001b[39m=\u001b[32m\"\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<svg\u001b[39m\n              \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"lucide lucide-save\"\u001b[39m\n              \u001b[33mfill\u001b[39m=\u001b[32m\"none\"\u001b[39m\n              \u001b[33mheight\u001b[39m=\u001b[32m\"14\"\u001b[39m\n              \u001b[33mstroke\u001b[39m=\u001b[32m\"currentColor\"\u001b[39m\n              \u001b[33mstroke-linecap\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-linejoin\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-width\u001b[39m=\u001b[32m\"2\"\u001b[39m\n              \u001b[33mviewBox\u001b[39m=\u001b[32m\"0 0 24 24\"\u001b[39m\n              \u001b[33mwidth\u001b[39m=\u001b[32m\"14\"\u001b[39m\n              \u001b[33mxmlns\u001b[39m=\u001b[32m\"http://www.w3.org/2000/svg\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M7 3v4a1 1 0 0 0 1 1h7\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n            \u001b[36m</svg>\u001b[39m\n            \u001b[0mSave\u001b[0m\n          \u001b[36m</button>\u001b[39m\n          \u001b[36m<button\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<svg\u001b[39m\n              \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"lucide lucide-arrow-left\"\u001b[39m\n              \u001b[33mfill\u001b[39m=\u001b[32m\"none\"\u001b[39m\n              \u001b[33mheight\u001b[39m=\u001b[32m\"14\"\u001b[39m\n              \u001b[33mstroke\u001b[39m=\u001b[32m\"currentColor\"\u001b[39m\n              \u001b[33mstroke-linecap\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-linejoin\u001b[39m=\u001b[32m\"round\"\u001b[39m\n              \u001b[33mstroke-width\u001b[39m=\u001b[32m\"2\"\u001b[39m\n              \u001b[33mviewBox\u001b[39m=\u001b[32m\"0 0 24 24\"\u001b[39m\n              \u001b[33mwidth\u001b[39m=\u001b[32m\"14\"\u001b[39m\n              \u001b[33mxmlns\u001b[39m=\u001b[32m\"http://www.w3.org/2000/svg\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"m12 19-7-7 7-7\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n              \u001b[36m<path\u001b[39m\n                \u001b[33md\u001b[39m=\u001b[32m\"M19 12H5\"\u001b[39m\n              \u001b[36m/>\u001b[39m\n            \u001b[36m</svg>\u001b[39m\n            \u001b[0mBack to AI Creation\u001b[0m\n          \u001b[36m</button>\u001b[39m\n        \u001b[36m</div>\u001b[39m\n      \u001b[36m</header>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-0 flex-1 flex-col md:flex-row\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<aside\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex shrink-0 gap-2 overflow-auto border-b border-white/10 p-3 md:w-52 md:flex-col md:border-b-0 md:border-r\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<button\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex shrink-0 whitespace-nowrap min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35 !border-amber-200/30 !bg-amber-200 !text-slate-950 hover:!bg-amber-100\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<svg\u001b[39m\n              \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"lucide lucide-plus\"\u001b[39m\n              \u001b[33mfill\u001b[39...\n    at Object.getElementError (D:\\lumiOS\\node_modules\\@testing-library\\dom\\dist\\config.js:37:19)\n    at D:\\lumiOS\\node_modules\\@testing-library\\dom\\dist\\query-helpers.js:76:38\n    at D:\\lumiOS\\node_modules\\@testing-library\\dom\\dist\\query-helpers.js:52:17\n    at D:\\lumiOS\\node_modules\\@testing-library\\dom\\dist\\query-helpers.js:95:19\n    at D:/lumiOS/src/components/ChatSongWorkbench.test.tsx:88:18\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        ],
+        "meta": {},
+        "tags": []
+      }
+    ],
+    "resolution": "ChatSongWorkbench.test.tsx now awaits the asynchronously loaded image-generation button before asserting enabled state. Assertion and timeout were not weakened; a fresh full suite passed."
+  },
+  "builds": [
+    {
+      "label": "build-frontends",
+      "start": "2026-10-01T06:12:39.175Z",
+      "end": "2026-10-01T06:12:47.196Z",
+      "exitCode": 0
+    },
+    {
+      "label": "build-desktop-ui",
+      "start": "2026-10-01T06:12:47.196Z",
+      "end": "2026-10-01T06:12:55.106Z",
+      "exitCode": 0
+    },
+    {
+      "label": "check-compact-layout-build",
+      "start": "2026-10-01T06:12:55.106Z",
+      "end": "2026-10-01T06:12:55.453Z",
+      "exitCode": 0
+    },
+    {
+      "label": "build-server",
+      "start": "2026-10-01T06:12:55.453Z",
+      "end": "2026-10-01T06:12:59.337Z",
+      "exitCode": 0
+    }
+  ],
+  "lint": {
+    "label": "lint",
+    "start": "2026-10-01T06:12:09.206Z",
+    "end": "2026-10-01T06:12:39.174Z",
+    "exitCode": 0
+  },
+  "benchmarks": [
+    {
+      "label": "before",
+      "size": 30000,
+      "firstReadMs": 69.73469999999998,
+      "lookup": {
+        "medianMs": 43.63129999999995,
+        "samples": [
+          48.239799999999946,
+          42.58999999999992,
+          42.587299999999914,
+          43.56389999999999,
+          44.230500000000006,
+          46.62780000000009,
+          45.50740000000019,
+          42.95790000000011,
+          44.6552999999999,
+          43.07469999999989,
+          43.16129999999998,
+          44.057000000000016,
+          43.37799999999993,
+          42.994899999999916,
+          43.22280000000001,
+          45.622299999999996,
+          43.69869999999992,
+          44.706699999999955,
+          42.77970000000005,
+          44.53919999999994
+        ]
+      },
+      "list": {
+        "medianMs": 54.650300000000016,
+        "samples": [
+          53.88440000000037,
+          54.61070000000018,
+          52.89980000000014,
+          56.72389999999996,
+          59.59009999999989,
+          54.68989999999985
+        ]
+      },
+      "denseList": {
+        "medianMs": 56.66255000000001,
+        "samples": [
+          56.71520000000055,
+          53.95269999999982,
+          56.6215000000002,
+          56.703599999999824,
+          59.298499999999876,
+          54.88520000000062
+        ],
+        "maxGapMedianMs": 48.86469999999963,
+        "gaps": [
+          48.66229999999996,
+          45.14539999999943,
+          49.0670999999993,
+          49.204499999999825,
+          51.6887999999999,
+          47.33799999999974
+        ]
+      },
+      "rename": {
+        "medianMs": 104.35425000000055,
+        "samples": [
+          106.87379999999985,
+          102.35989999999993,
+          106.53549999999996,
+          99.57549999999992,
+          102.87490000000025,
+          105.83360000000084
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    },
+    {
+      "label": "after",
+      "size": 30000,
+      "firstReadMs": 692.6102000000001,
+      "lookup": {
+        "medianMs": 0.8933500000000549,
+        "samples": [
+          0.597400000000107,
+          0.9869999999998527,
+          0.6019999999998618,
+          0.8995000000002165,
+          1.2549999999998818,
+          0.5060000000000855,
+          0.9312999999999647,
+          0.6177999999999884,
+          0.9111000000000331,
+          0.9380999999998494,
+          0.6639000000000124,
+          0.8871999999998934,
+          0.5329999999999018,
+          1.2717000000000098,
+          0.6664000000000669,
+          0.9679000000000997,
+          0.9635000000000673,
+          0.5751000000000204,
+          1.0548000000001139,
+          0.6570999999999003
+        ]
+      },
+      "list": {
+        "medianMs": 100.50860000000011,
+        "samples": [
+          101.08050000000003,
+          101.44090000000006,
+          99.63950000000023,
+          104.1590000000001,
+          97.78580000000011,
+          99.9367000000002
+        ]
+      },
+      "denseList": {
+        "medianMs": 102.19075000000021,
+        "samples": [
+          101.78589999999986,
+          100.8135000000002,
+          105.16859999999997,
+          102.59560000000056,
+          100.72029999999995,
+          105.16610000000037
+        ],
+        "maxGapMedianMs": 16.168950000000223,
+        "gaps": [
+          15.924700000000485,
+          15.412100000000464,
+          19.63090000000011,
+          18.927099999999882,
+          15.841400000000249,
+          16.41319999999996
+        ]
+      },
+      "rename": {
+        "medianMs": 8.70900000000006,
+        "samples": [
+          9.494200000000092,
+          8.869300000000294,
+          8.891200000000026,
+          8.107700000000023,
+          8.548699999999826,
+          8.263600000000224
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    }
+  ],
+  "boundaries": {
+    "dbLayerByteIdentical": true,
+    "coreDatabaseFullScansRemain": true,
+    "archiveFirstLegacyImportParsesWholeJson": true,
+    "denseListTotalLatencyRegressed": true,
+    "denseListEventLoopBlockingReduced": true,
+    "remainingComplexUIStatesNotFullyAudited": true,
+    "realUserDataMigrated": false,
+    "backendRestarted": false,
+    "commit": false,
+    "push": false,
+    "cleanup": "No policy-denied directory deletion retried. Two reusable synthetic benchmark roots remain."
+  }
+}

@@ -1170,13 +1170,3 @@ export function listOrganizationWorkHandoffs(orgId: string, workItemId?: string)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(item => ({ ...item, from: { ...item.from }, to: { ...item.to } }));
 }
-
-export function resolveMentionedOrganizationMemberIds(input: {
-  orgId: string;
-  candidateUserIds?: string[];
-}): string[] {
-  const active = new Set(listMembers(input.orgId)
-    .filter(member => member.status === 'active' && member.role !== 'viewer')
-    .map(member => member.userId));
-  return normalizeIds(input.candidateUserIds).filter(userId => active.has(userId));
-}

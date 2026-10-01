@@ -183,7 +183,6 @@ describe('frontend dynamic output path audit', () => {
   it('gates every non-desktop response consumer in scope', () => {
     const displayGated = [
       'src/components/AgentChatPage.tsx',
-      'src/components/ChatPanel.tsx',
       'src/components/org/CentralLumiChat.tsx',
       'src/components/ProactiveNotifications.tsx',
       'src/hooks/useVoiceCall.ts',
@@ -192,7 +191,6 @@ describe('frontend dynamic output path audit', () => {
       expect(read(relativePath), relativePath).toContain('shouldDisplayAgentResponse');
     }
 
-    expect(read('src/components/HolographicOverlay.tsx')).toContain('isUnverifiedActionClaim');
   });
 
   it('gates ordinary proactive output and limits the reminder exception to server-verified receipts', () => {
@@ -231,7 +229,6 @@ describe('frontend dynamic output path audit', () => {
   it('does not keep a browser system-voice fallback in chat surfaces', () => {
     for (const relativePath of [
       'src/components/AgentChatPage.tsx',
-      'src/components/ChatPanel.tsx',
     ]) {
       const source = read(relativePath);
       expect(source, relativePath).not.toContain('useTTS');
@@ -249,12 +246,5 @@ describe('frontend dynamic output path audit', () => {
     expect(idleBranch).toContain("setWorkflowStatus('idle')");
     expect(idleBranch).not.toContain("setWorkflowStatus('done')");
     expect(idleBranch).not.toContain('workflowResponseReady');
-
-    const chatPanel = read('src/components/ChatPanel.tsx');
-    const panelIdleStart = chatPanel.indexOf("if (data.status === 'idle') {");
-    const panelIdleEnd = chatPanel.indexOf('finishChatProgress(', panelIdleStart);
-    const panelIdleBranch = chatPanel.slice(panelIdleStart, panelIdleEnd);
-    expect(panelIdleBranch).toContain('clearChatProgress()');
-    expect(panelIdleBranch).not.toContain('describeTurnCompletionProgress');
   });
 });

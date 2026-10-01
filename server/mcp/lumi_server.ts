@@ -1,3 +1,14 @@
+import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
+import { mergeToolExecutionRecords } from '../cognition/task_execution_ledger';
+import { randomUUID } from 'node:crypto';
+import { flushDBOrThrow } from '../../db_layer';
+import { buildLumiExecutionPipeline } from '../cognition/execution_pipeline';
+import { createModelTurnState } from '../llm/model_turn_state';
+import { getConversationForScope, startIsolatedConversation, getMessages, addMessageIdempotent, prepareConversationActionExecution, startConversationActionExecutionHeartbeat } from '../conversation/manager';
+import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from '../conversation/lifecycle';
+import { captureChatAuthorization } from '../socket/chat_authorization';
+import { isExplicitMemoryRequest, persistTurnMemory } from '../memory/turn_memory';
+import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 /**
  * Lumi as an MCP Server — exposes Lumi's capabilities as MCP tools
  * so remote devices can connect and invoke Lumi via the MCP protocol.
@@ -15,9 +26,6 @@ import { personalityRegistry } from '../personality';
 import { deviceRegistry } from '../devices';
 import { canOutputHolographic, textToHolographicOutput } from '../output/holographic';
 import { synthesizeSpeech, getActiveProvider } from '../tts/adapter';
-import os from 'os';
-import fs from 'fs';
-import path from 'path';
 import { logger } from '../../logger';
 import type { Request, Response } from 'express';
 import { finalizeLumiResponse } from '../cognition/result_finalizer';
@@ -48,25 +56,6 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 const transports: Map<string, { transport: SSEServerTransport; scope: McpCallerScope }> = new Map();
 
 type ToolRecordEvent = Omit<ToolExecutionRecord, 'result'> & { result?: string };
-
-function upsertCompletedToolRecord(records: ToolExecutionRecord[], record: ToolRecordEvent): void {
-  if (record.result === undefined && record.error === undefined) return;
-  const completed: ToolExecutionRecord = {
-    id: record.id,
-    name: record.name,
-    arguments: record.arguments || {},
-    result: record.result || '',
-    error: record.error,
-  };
-  const existingIndex = record.id
-    ? records.findIndex(item => item.id === record.id)
-    : -1;
-  if (existingIndex >= 0) {
-    records[existingIndex] = completed;
-  } else {
-    records.push(completed);
-  }
-}
 
 function mcpToolFailure(operation: string, error: unknown) {
   logger.error(`[MCP Tool] ${operation} failed: ${sanitizeMcpLogValue((error as any)?.message || error)}`);
@@ -153,18 +142,6 @@ export function createLumiMcpServer(llmGetters?: {
     content: [{ type: 'text' as const, text: 'This organization role has read-only MCP access.' }],
     isError: true,
   });
-  const matchesScopedRecord = (record: any, allowUnownedPersonal = false): boolean => {
-    if (!record || typeof record !== 'object') return false;
-    if (scope.domain === 'work') {
-      if (record.domain !== 'work' || String(record.orgId || '') !== scope.orgId) return false;
-      if (!isWorkViewer) return true;
-      const ownerId = String(record.ownerUid || record.userId || '');
-      return Boolean(ownerId) && ownerId === scope.userId;
-    }
-    if (record.domain === 'work' || String(record.orgId || '')) return false;
-    const ownerId = String(record.ownerUid || record.userId || '');
-    return ownerId === scope.userId || (allowUnownedPersonal && !ownerId);
-  };
   const resolveMcpLLM = () => {
     const preferred = getScopedPreferredLLM(scope.userId, {
       domain: scope.domain,
@@ -193,6 +170,8 @@ export function createLumiMcpServer(llmGetters?: {
   });
   if (lifecycle) attachMcpCallLifecycle(mcp, lifecycle);
 
+  const chatConversations = new Map<string, string>();
+
   // Tool: send a chat message to Lumi
   mcp.registerTool(
     'lumi_chat',
@@ -201,14 +180,34 @@ export function createLumiMcpServer(llmGetters?: {
       inputSchema: {
         message: z.string().describe('The message to send to Lumi'),
         personalityId: z.string().optional().describe('Personality to use (default: "lumi")'),
+        conversationId: z.string().optional().describe('Resume an owned conversation returned by lumi_chat.'),
       },
     },
-    async ({ message, personalityId }) => {
+    async ({ message, personalityId, conversationId: requestedConversationId }) => {
+      const requestId = randomUUID();
+      const pid = personalityId || 'lumi';
+      let conversationId = '';
+      const emit = (event: string, data: any) => bc(event, { ...data, requestId, conversationId, source: 'mcp_chat' });
       try {
+        const priorId = requestedConversationId || chatConversations.get(pid);
+        const candidate = priorId ? getConversationForScope(priorId, scope.userId, scope.domain, scope.orgId) : null;
+        const prior = candidate?.agentId === pid ? candidate : null;
+        if (requestedConversationId && !prior) throw new Error('Conversation is unavailable in this scope');
+        conversationId = prior?.id || startIsolatedConversation(scope.userId, pid, scope.domain, scope.orgId).id;
+        chatConversations.set(pid, conversationId);
+        const authorization = combineRequestAuthorizations(captureChatAuthorization(scope.userId, scope),
+          captureConversationAuthorization({ ...scope, agentId: pid }, () => conversationId));
+        authorization.assertCurrent();
+        const identity = { userId: scope.userId, agentId: pid, conversationId, requestId, domain: scope.domain, orgId: scope.orgId, source: 'mcp_chat', channel: 'chat' };
+        const modelTurnState = createModelTurnState();
+        const explicitMemory = !isWorkViewer && isExplicitMemoryRequest(message);
+        let taskId: string | undefined;
+        let receiptObserver: ReturnType<typeof createConversationReceiptObserver> | undefined;
+        const controller = new AbortController();
+        let pipeline: ReturnType<typeof buildLumiExecutionPipeline>;
         const chatLLM = resolveMcpLLM();
-        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received' });
-        bc('agent:status', { status: 'thinking', agentName: 'Lumi' });
-        const pid = personalityId || 'lumi';
+        emit('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received' });
+        emit('agent:status', { status: 'thinking', agentName: 'Lumi' });
         const personality = personalityRegistry.get(pid) || personalityRegistry.get('lumi')!;
         const ds = deviceRegistry.getSensoryContext(scope.userId, {
           domain: scope.domain,
@@ -225,35 +224,22 @@ export function createLumiMcpServer(llmGetters?: {
         };
         const { systemPrompt } = personalityRegistry.buildSystemPrompt(pid, { mode: 'task', sensory });
 
-        const memories = queryMemories({
-          ...memoryScope,
-          limit: personality.memoryPolicy.retrieveLimit,
-          minConfidence: personality.memoryPolicy.minConfidence,
-        });
-        const memoryContext = memories.length > 0
-          ? memories.map(m => `[${m.type}] ${m.content}`).join('\n')
-          : '';
-
-        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-          // Network MCP callers receive neither the native host capability
-          // inventory nor active LAP peer/session projections.
-          { role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') + (memoryContext ? `\n\n## User context (memories):\n${memoryContext}` : '') },
-          { role: 'user', content: message },
-        ];
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
         const MCP_TIMEOUT_MS = 25000;
         const mcpToolRecords: ToolExecutionRecord[] = [];
         const bufferedChunks: string[] = [];
 
         const recordMcpChatTool = (record: ToolRecordEvent) => {
-            upsertCompletedToolRecord(mcpToolRecords, record);
-            const cid = `${record.name}-${Date.now()}`;
-            bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'started' });
+            if (record.result === undefined && record.error === undefined) return;
+            mcpToolRecords.splice(0, mcpToolRecords.length, ...mergeToolExecutionRecords(mcpToolRecords, [{ ...record, result: record.result || '' }]));
+            const cid = record.id || randomUUID();
+            emit('agent:tool_call', { correlationId: cid, name: record.name, status: 'started' });
             if (record.error) {
               logger.warn(`[MCP Tool] ${record.name} returned an error: ${sanitizeMcpLogValue(record.error)}`);
-              bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'failed', error: 'Tool execution failed.' });
+              emit('agent:tool_call', { correlationId: cid, name: record.name, status: 'failed', error: 'Tool execution failed.' });
             } else {
-              bc('agent:tool_call', { correlationId: cid, name: record.name, status: 'completed', result: 'completed' });
+              emit('agent:tool_call', { correlationId: cid, name: record.name, status: 'completed', result: 'completed' });
             }
         };
         const runMcpChatTurn = (
@@ -267,9 +253,12 @@ export function createLumiMcpServer(llmGetters?: {
           {
             ...chatLLM,
             maxTokens: 2048,
+            modelTurnState,
+            requestId, conversationId,
+            signal: controller.signal,
           },
           onToolRecord,
-          Math.min(4, personality.toolPolicy.maxIterations),
+          Math.min(4, pipeline.authorizationPolicy.maxIterations),
           g.getDeepSeek || (() => null),
           g.getGemini || (() => null),
           g.getOpenAI || (() => null),
@@ -280,10 +269,13 @@ export function createLumiMcpServer(llmGetters?: {
             userId: scope.userId,
             domain: scope.domain,
             orgId: scope.orgId,
-            toolPolicy: restrictToolPolicyForExecutionBoundary(
-              personality.toolPolicy,
-              'remote_restricted',
-            ),
+            toolPolicy: pipeline.authorizationPolicy,
+            requestId, conversationId, taskId, turnId: requestId,
+            currentTurnExecutionRequested: pipeline.executionRequested,
+            modelToolProjection: pipeline.modelToolProjection,
+            onToolRecord: record => receiptObserver?.onToolRecord(record),
+            isCancelled: () => controller.signal.aborted || !authorization.isCurrent(),
+            executionSignal: controller.signal,
             source,
             ...mcpToolSecurityContext,
           } as any,
@@ -295,53 +287,18 @@ export function createLumiMcpServer(llmGetters?: {
           g.getGlm,
           g.getRelay,
         );
-        const responsePromise = runMcpChatTurn(
-          messages,
-          recordMcpChatTool,
-          chunk => bufferedChunks.push(chunk),
-        );
-
-        const queueMemoryExtraction = (assistantResponse: string) => {
-          if (!personality.memoryPolicy.autoExtract) return;
-          const existingContents = memories.map(m => m.content);
-          const gDeep = g.getDeepSeek || (() => null);
-          const gGem = g.getGemini || (() => null);
-          const gOAI = g.getOpenAI || (() => null);
-          const gAnt = g.getAnthropic || (() => null);
-          const gQw = g.getQwen || (() => null);
-          const extraction = (async () => {
-            try {
-              const { extractMemories } = await import('../memory/extractor');
-              const result = await extractMemories(
-                { userMessage: message, assistantResponse, existingMemories: existingContents, ...chatLLM },
-                gDeep, gGem, gOAI, gAnt, gQw,
-              );
-              for (const mem of result.memories) {
-                addMemory(
-                  { userId: scope.userId, type: mem.type, content: mem.content, keywords: mem.keywords, confidence: mem.confidence, sourceInteractionId: 'mcp_lumi_chat' },
-                  { domain: scope.domain, orgId: scope.orgId },
-                );
-              }
-            } catch { /* best-effort */ }
-          })();
-          lifecycle?.track(extraction);
-        };
-
         const deliverFinalizedChatResponse = async (
-          response: Awaited<typeof responsePromise>,
+          response: Awaited<ReturnType<typeof runWithTools>>,
           background: boolean,
         ) => {
-          const toolRecords = [...mcpToolRecords];
-          for (const record of response.toolCalls || []) {
-            upsertCompletedToolRecord(toolRecords, record);
-          }
+          const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || []);
           const candidateText = String(response.text || bufferedChunks.join('') || 'No response.').trim();
           const outbound = await finalizeMcpResponseForDelivery({
             taskText: message,
             responseText: candidateText,
             toolRecords,
             source: background ? 'mcp_chat_background' : 'mcp_chat',
-            allowToolUse: true,
+            allowToolUse: pipeline.executionRequested && !explicitMemory,
             attempt: async ({ instruction, recordTool }) => {
               const recovery = await runMcpChatTurn(
                 [
@@ -372,9 +329,21 @@ export function createLumiMcpServer(llmGetters?: {
               };
             },
           });
-          const finalized = outbound.finalization;
+          let finalized = outbound.finalization;
           toolRecords.splice(0, toolRecords.length, ...outbound.toolRecords);
-          queueMemoryExtraction(finalized.text);
+          authorization.assertCurrent();
+          if ((explicitMemory || personality.memoryPolicy.autoExtract) && !isWorkViewer) {
+            const extraction = runAuthorizedEnrichment(authorization, signal => persistTurnMemory({ ...identity, channel: 'chat', userText: message, authorization, signal,
+              llmGetters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null) } }));
+            if (explicitMemory) {
+              const receipt = await extraction;
+              finalized = { ...finalized, text: receipt.text || publicMcpToolFailure(), blocked: receipt.status === 'failed' || receipt.status === 'skipped', reason: `memory_${receipt.status}` };
+            } else lifecycle?.track(extraction);
+          }
+          authorization.assertCurrent();
+          addMessageIdempotent({ ...identity, role: 'assistant', content: finalized.text, toolCalls: toolRecords, cognitiveIntent: finalized.reason || 'mcp_chat' });
+          await flushDBOrThrow();
+          authorization.assertCurrent();
 
           const metadata = {
             finalized: true,
@@ -384,7 +353,7 @@ export function createLumiMcpServer(llmGetters?: {
           const holo = canOutputHolographic(sensory)
             ? textToHolographicOutput(finalized.text)
             : undefined;
-          bc('mcp:activity', {
+          emit('mcp:activity', {
             device: 'xiaozhi',
             action: 'chat',
             status: finalized.blocked ? 'blocked' : 'responded',
@@ -394,21 +363,21 @@ export function createLumiMcpServer(llmGetters?: {
           });
           // Raw model chunks stay buffered. Only grounded final text can reach
           // either the MCP chunk stream or the shared response channel.
-          bc('mcp:chunk', {
+          emit('mcp:chunk', {
             device: 'xiaozhi',
             text: finalized.text,
             finalized: true,
             blocked: finalized.blocked,
             reason: finalized.reason || '',
           });
-          bc('agent:response', {
+          emit('agent:response', {
             text: finalized.text,
             agentName: 'Lumi',
             finalized: true,
             blocked: finalized.blocked,
             reason: finalized.reason || '',
           });
-          bc('agent:status', { status: 'idle', agentName: 'Lumi' });
+          emit('agent:status', { status: 'idle', agentName: 'Lumi' });
           console.log('[MCP lumi_chat] Finalized response length:', finalized.text.length, 'chars, toolCalls:', toolRecords.length, 'blocked:', finalized.blocked);
 
           let audioBase64: string | undefined;
@@ -419,13 +388,15 @@ export function createLumiMcpServer(llmGetters?: {
             const ttsResult = await synthesizeSpeech(finalized.text, { provider, voiceId });
             audioBase64 = ttsResult.audioBuffer.toString('base64');
             audioFormat = ttsResult.format;
-            bc('mcp:activity', { device: 'xiaozhi', action: 'tts', status: 'synthesized', bytes: ttsResult.audioBuffer.length, ...metadata });
+            authorization.assertCurrent();
+            emit('mcp:activity', { device: 'xiaozhi', action: 'tts', status: 'synthesized', bytes: ttsResult.audioBuffer.length, ...metadata });
           } catch (ttsErr: any) {
             console.error('[MCP TTS] Synthesis failed:', ttsErr.message);
           }
 
+          authorization.assertCurrent();
           if (background) {
-            bc('mcp:proactive', {
+            emit('mcp:proactive', {
               device: 'xiaozhi',
               text: finalized.text,
               ...(audioBase64 && { audio: audioBase64, format: audioFormat }),
@@ -436,54 +407,96 @@ export function createLumiMcpServer(llmGetters?: {
           return { finalized, holo, audioBase64, audioFormat };
         };
 
+        let background = false;
+        const responsePromise = runSerializedMutation('mcp-chat:' + conversationId, async () => {
+          authorization.assertCurrent();
+          // Read memory after prior queued turns have durably completed.
+          const memories = queryMemories({
+            ...memoryScope,
+            limit: personality.memoryPolicy.retrieveLimit,
+            minConfidence: personality.memoryPolicy.minConfidence,
+          });
+          const memoryContext = memories.length > 0
+            ? memories.map(m => `[${m.type}] ${m.content}`).join('\n')
+            : '';
+
+          messages.push({ role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') + (memoryContext ? `\n\n## User context (memories):${memoryContext}` : '') });
+          messages.push(...getMessages(conversationId, 30).filter(row => row.role === 'user' || row.role === 'assistant')
+            .map(row => ({ role: row.role as 'user' | 'assistant', content: row.message })));
+          messages.push({ role: 'user', content: message });
+          pipeline = buildLumiExecutionPipeline({ dispatch: { userId: scope.userId, text: message, channel: 'chat', source: 'mcp_chat', domain: scope.domain, orgId: scope.orgId },
+            registry: tr, personalityToolPolicy: personality.toolPolicy, executionBoundary: 'remote_restricted',
+            actionTaskState: getConversationForScope(conversationId, scope.userId, scope.domain, scope.orgId)?.actionContinuationState });
+          const userMessageId = addMessageIdempotent({ ...identity, role: 'user', content: message, deferActionPreparation: true });
+          const prepared = prepareConversationActionExecution({ ...identity, userText: message, userMessageId,
+            toolPolicy: pipeline.authorizationPolicy, forceTask: pipeline.executionRequested, followupIntent: pipeline.actionFollowupIntent });
+          if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
+          taskId = prepared.state?.taskId;
+          receiptObserver = createConversationReceiptObserver({ ...identity, taskId }, authorization.isCurrent);
+          await flushDBOrThrow();
+          const stopWatch = authorization.watch(controller);
+          const heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
+          try {
+            const response = explicitMemory ? { text: '', toolCalls: [], usageRecords: [] }
+              : await runMcpChatTurn(messages, recordMcpChatTool, chunk => bufferedChunks.push(chunk));
+            return await deliverFinalizedChatResponse(response, background);
+          } catch (error) {
+            if (authorization.isCurrent()) {
+              addMessageIdempotent({ ...identity, role: 'assistant', content: publicMcpToolFailure(), toolCalls: mcpToolRecords, cognitiveIntent: 'mcp_operation_failed' });
+              await flushDBOrThrow();
+            }
+            throw error;
+          } finally { heartbeat.stop(); stopWatch(); }
+        });
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(() => reject(new Error('MCP_TIMEOUT')), MCP_TIMEOUT_MS);
           timeoutHandle.unref?.();
         });
 
-        let response: Awaited<typeof responsePromise>;
+        let delivered: Awaited<typeof responsePromise>;
         try {
-          response = await Promise.race([responsePromise, timeoutPromise]);
+          delivered = await Promise.race([responsePromise, timeoutPromise]);
           if (timeoutHandle) clearTimeout(timeoutHandle);
         } catch (e: any) {
           if (e.message === 'MCP_TIMEOUT') {
+            background = true;
             console.log('[MCP lumi_chat] Timeout — continuing in background');
-            bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'timeout' });
-            bc('agent:status', { status: 'idle', agentName: 'Lumi' });
-            const background = responsePromise
-              .then(backgroundResponse => deliverFinalizedChatResponse(backgroundResponse, true))
+            emit('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'timeout' });
+            emit('agent:status', { status: 'idle', agentName: 'Lumi' });
+            const backgroundWork = responsePromise
               .catch((backgroundErr: any) => {
                 logger.error(`[MCP Tool] background chat failed: ${sanitizeMcpLogValue(backgroundErr?.message || backgroundErr)}`);
                 const publicFailure = publicMcpToolFailure();
-                bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
-                bc('agent:response', {
+                emit('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
+                emit('agent:response', {
                   text: publicFailure,
                   agentName: 'Lumi',
                   finalized: true,
                   blocked: true,
                   reason: 'mcp_operation_failed',
                 });
-                bc('agent:status', { status: 'error', agentName: 'Lumi' });
+                emit('agent:status', { status: 'error', agentName: 'Lumi' });
               });
-            lifecycle?.track(background);
+            lifecycle?.track(backgroundWork);
             return {
               content: [{ type: 'text' as const, text: '正在处理中，稍等片刻...' }],
               finalized: false,
               blocked: false,
               reason: 'background_processing',
+              requestId, conversationId,
             };
           }
           if (timeoutHandle) clearTimeout(timeoutHandle);
           throw e;
         }
 
-        const delivered = await deliverFinalizedChatResponse(response, false);
 
         return {
           content: [{ type: 'text' as const, text: delivered.finalized.text }],
           ...(delivered.holo && { holographic: delivered.holo }),
           ...(delivered.audioBase64 && { audio: delivered.audioBase64, audioFormat: delivered.audioFormat }),
+          requestId, conversationId,
           finalized: true,
           blocked: delivered.finalized.blocked,
           reason: delivered.finalized.reason || '',
@@ -491,9 +504,9 @@ export function createLumiMcpServer(llmGetters?: {
       } catch (err: any) {
         logger.error(`[MCP Tool] chat failed: ${sanitizeMcpLogValue(err?.message || err)}`);
         const publicFailure = publicMcpToolFailure();
-        bc('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
-        bc('agent:error', { message: publicFailure, reason: 'mcp_operation_failed' });
-        bc('agent:status', { status: 'error', agentName: 'Lumi' });
+        emit('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'failed', reason: 'mcp_operation_failed' });
+        emit('agent:error', { message: publicFailure, reason: 'mcp_operation_failed' });
+        emit('agent:status', { status: 'error', agentName: 'Lumi' });
         return {
           content: [{ type: 'text' as const, text: publicFailure }],
           isError: true,

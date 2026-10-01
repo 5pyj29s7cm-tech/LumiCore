@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Bell, Clock, CheckCircle2, Trash2, Plus, Calendar, AlertCircle, Loader2 } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Bell, Clock, CheckCircle2, Trash2, Plus, Calendar, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { uiMessage } from '../i18n/uiMessages';
 
@@ -17,7 +17,6 @@ interface Reminder {
 
 export function ReminderPanel({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
-  const ui = useCallback((zh: string, en: string) => isZh ? zh : en, [isZh]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
   const [newContent, setNewContent] = useState('');
@@ -39,7 +38,7 @@ export function ReminderPanel({ t }: { t?: any }) {
     } finally {
       setLoading(false);
     }
-  }, [ui]);
+  }, []);
 
   useEffect(() => { fetchReminders(); }, [fetchReminders]);
 

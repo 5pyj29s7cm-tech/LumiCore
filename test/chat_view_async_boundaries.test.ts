@@ -1,7 +1,4 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import ts from 'typescript';
+import { extractSourceExpression } from './source_expression';
 import { describe, expect, it } from 'vitest';
 import { shouldReloadPersistedConversation } from '../src/lib/conversationSync';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
@@ -11,24 +8,7 @@ import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_
 
 // Run the actual mounted page callbacks against delayed transport responses.
 // No backend, desktop application, or real user profile is involved.
-const source = fs.readFileSync(path.resolve('src/components/AgentChatPage.tsx'), 'utf8');
-const ast = ts.createSourceFile('AgentChatPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function callback(name: string, deps: Record<string, unknown>) {
-  let expression: ts.Expression | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name && node.initializer) {
-      expression = ts.isCallExpression(node.initializer) && node.initializer.expression.getText(ast) === 'useCallback'
-        ? node.initializer.arguments[0] : node.initializer;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(ast);
-  if (!expression) throw new Error(`Current callback missing: ${name}`);
-  const js = ts.transpileModule(`(${expression.getText(ast)})`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText;
-  return vm.runInNewContext(js, deps);
-}
+const callback = extractSourceExpression.bind(null, 'src/components/AgentChatPage.tsx');
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(r => { resolve = r; });
@@ -160,10 +140,12 @@ describe('chat uploads stay attached to their originating view', () => {
     const pending = registry.begin();
     const current = { current: 'conversation-a' };
     const previews: unknown[] = [];
-    const bind = callback('bindAttachmentContextToConversation', {
+    const onConversationChange = callback('resetAttachmentConversationView', {
+      invalidateChatViewWork: () => registry.invalidate(), setPreviewFile: (value: unknown) => previews.push(value),
+    });
+    const bind = extractSourceExpression('src/hooks/useConversationAttachments.ts', 'bindAttachmentContextToConversation', {
       attachmentConversationIdRef: current,
-      invalidateChatViewWork: () => registry.invalidate(),
-      setPreviewFile: (value: unknown) => previews.push(value),
+      onConversationChange,
       attachmentContextStoragePrefix: 'synthetic-user:lumi:personal',
       setAttachmentContextStorageKey: noop, conversationAttachmentsRef: { current: [] },
       setConversationAttachments: noop, localStorage: { getItem: () => null, removeItem: noop },

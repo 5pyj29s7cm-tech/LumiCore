@@ -79,28 +79,3 @@ export function fuseContext(
     lastUpdate: now,
   };
 }
-
-/**
- * Generate a text summary for the system prompt from a fused context.
- * This is what ends up in the "Sensory Context" block of the system prompt.
- */
-export function formatContextForPrompt(ctx: FusedContext): string {
-  const lines: string[] = [];
-  lines.push(`Devices: ${ctx.sensory.activeDeviceTypes.join(', ') || 'none'} (${ctx.sensory.deviceCount} active)`);
-
-  const senses: string[] = [];
-  if (ctx.sensory.audio) senses.push('hearing');
-  if (ctx.sensory.visual) senses.push('sight');
-  if (ctx.sensory.spatial) senses.push('spatial awareness');
-  if (ctx.sensory.haptic) senses.push('touch feedback');
-  if (ctx.sensory.holographic) senses.push('holographic output');
-  if (senses.length > 0) lines.push(`Senses: ${senses.join(', ')}`);
-
-  if (ctx.sensory.locationTag) lines.push(`Location: ${ctx.sensory.locationTag}`);
-
-  if (ctx.sceneDescription && ctx.sceneDescription !== 'No multimodal input') {
-    lines.push(`Scene: ${ctx.sceneDescription}`);
-  }
-
-  return lines.join('\n');
-}

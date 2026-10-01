@@ -60,6 +60,7 @@ import {
   addMessageIdempotent,
   cancelConversationActionExecution,
   getConversationActionStatus,
+  getConversationForScope,
   getMessagesByTokenBudget,
   getMessagesThroughExternalMessage,
   getOrCreateActiveConversation,
@@ -70,6 +71,8 @@ import {
   startConversationActionExecutionHeartbeat,
 } from '../../../conversation/manager';
 import { CN_TASK_EXECUTION_MESSAGES } from './voice_fast_path_messages';
+import { createConversationReceiptObserver } from '../../../conversation/execution_receipt_archive';
+import type { DesktopRelay, DesktopRelayOptions } from '../../../socket/desktop_relay';
 import { acceptMessageOnce, completeMessageDelivery, releaseMessageDelivery } from '../../../messaging/delivery_ledger';
 import {
   getMessagingJournalEntry,
@@ -96,10 +99,7 @@ import {
   getConversationExecutionFacts,
   isConversationExecutionFactQuestion,
 } from '../../../conversation/execution_facts';
-import {
-  finalizeExecutionForOutboundDelivery,
-  type ExecutionGuardRecoveryRunInput,
-} from '../../../cognition/execution_guard_recovery';
+import { finalizeLumiResponseForDelivery, type LumiResponseDeliveryInput } from '../../../cognition/response_delivery';
 import { recordTokenUsage } from '../../../llm/token_tracker';
 import type { ToolPolicy } from '../../../personality/types';
 import {
@@ -111,7 +111,6 @@ import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
-import type { LumiTurnFlow } from '../../../cognition/turn_flow';
 import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
 import { buildDesktopExecutionStabilityPolicy } from '../../../cognition/desktop_execution_stability';
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from '../../../desktop/execution_runtime';
@@ -123,7 +122,7 @@ import { formatClientSelfPromptForTurn } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
 import { classifyConversationActionFollowupIntent } from '../../../cognition/action_continuation';
-import { coalesceToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
+import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
 import {
   persistExplicitRemoteRelationshipMemories,
   persistRemotePostTurnLearning,
@@ -255,55 +254,16 @@ function withCurrentMessagingDesktopExecutionReceipt(
   ));
 }
 
-export async function finalizeMessagingResponseForDelivery(input: {
-  taskText: string;
-  responseText: string;
+export async function finalizeMessagingResponseForDelivery(input: LumiResponseDeliveryInput & {
   toolRecords: ToolExecutionRecord[];
-  source: string;
-  taskId?: string;
   requestId: string;
-  flow?: LumiTurnFlow;
-  initialFinalization?: MessagingFinalization;
-  allowToolUse?: boolean;
-  pendingConfirmation?: boolean;
-  aborted?: boolean;
-  isPendingConfirmation?: () => boolean;
-  isAborted?: () => boolean;
-  attempt?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['attempt'];
-  refinalize?: ExecutionGuardRecoveryRunInput<MessagingFinalization>['finalize'];
 }) {
-  const currentToolRecords = currentMessagingFinalizationRecords(input);
-  const finalization = input.initialFinalization || finalizeLumiResponse({
-    taskText: input.taskText,
-    responseText: input.responseText,
-    toolRecords: currentToolRecords,
-    source: input.source,
-    flow: input.flow,
-    taskId: input.taskId,
-    requestId: input.requestId,
-  });
-  return finalizeExecutionForOutboundDelivery({
-    task: input.taskText,
-    responseText: input.responseText,
-    finalization,
-    allowToolUse: input.allowToolUse === true,
-    pendingConfirmation: input.pendingConfirmation,
-    aborted: input.aborted,
-    isPendingConfirmation: input.isPendingConfirmation,
-    isAborted: input.isAborted,
-    toolRecords: currentToolRecords,
-    attempt: input.attempt,
-    finalize: input.refinalize || ((candidateText, records) => finalizeLumiResponse({
-        taskText: input.taskText,
-        responseText: candidateText,
-        toolRecords: records,
-        source: `${input.source}_guard_recovery`,
-        flow: input.flow,
-        taskId: input.taskId,
-        requestId: input.requestId,
-      })),
-  });
+  return finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });
 }
+
+type MessagingDesktopLifecycle = Pick<DesktopRelayOptions, 'taskId' | 'requestId' | 'signal' | 'onLateResult'>;
+type MessagingDesktopRelay = ((toolName: string, args: Record<string, any>) => Promise<string>)
+  & Partial<Pick<DesktopRelay, 'releaseControlLease'>>;
 
 export interface MessagingRouteOptions {
   onMessage?: MessageHandler;
@@ -320,8 +280,9 @@ export interface MessagingRouteOptions {
     source: string,
     domain: 'personal' | 'work',
     orgId: string,
-  ) => (toolName: string, args: Record<string, any>) => Promise<string>;
-  createPersonalDesktopRelay?: (userId: string, source: string) => (toolName: string, args: Record<string, any>) => Promise<string>;
+    lifecycle?: MessagingDesktopLifecycle,
+  ) => MessagingDesktopRelay;
+  createPersonalDesktopRelay?: (userId: string, source: string, lifecycle?: MessagingDesktopLifecycle) => MessagingDesktopRelay;
 }
 
 export interface MessagingConversationUpdate {
@@ -707,18 +668,34 @@ export function persistBoundMessagingExchange(
   return persistBoundMessagingMessage(message, 'assistant', reply, onConversationUpdated);
 }
 
+function conversationForMessagingTurn(message: IncomingMessage) {
+  if (!message.boundUserId) return null;
+  const domain = message.boundOrgId ? 'work' as const : 'personal' as const;
+  const orgId = message.boundOrgId || '';
+  const requestId = `${message.platform}_bot:${message.messageId}`;
+  const accepted = (readDB().interactions || []).find((row: any) => row.role === 'user'
+    && row.userId === message.boundUserId && (row.domain || 'personal') === domain && (row.orgId || '') === orgId
+    && row.requestId === requestId);
+  // A new active chat must not take ownership of an already accepted remote turn.
+  return accepted
+    ? getConversationForScope(accepted.conversationId, message.boundUserId, domain, orgId)
+    : getOrCreateActiveConversation(message.boundUserId, messagingConversationAgentId(message), domain, orgId);
+}
+
 export function persistBoundMessagingMessage(
   message: IncomingMessage,
   role: 'user' | 'assistant',
   content: string,
   onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'],
   toolCalls?: any[],
+  terminalTaskDisposition?: Parameters<typeof addMessageIdempotent>[0]['terminalTaskDisposition'],
 ): MessagingConversationUpdate | null {
   if (!message.boundUserId) return null;
   const agentId = messagingConversationAgentId(message);
   const domain = message.boundOrgId ? 'work' as const : 'personal' as const;
   const orgId = message.boundOrgId || '';
-  const conversation = getOrCreateActiveConversation(message.boundUserId, agentId, domain, orgId);
+  const conversation = conversationForMessagingTurn(message);
+  if (!conversation) return null;
   const source = `${message.platform}_bot`;
   const requestId = `${source}:${message.messageId}`;
   const messageId = addMessageIdempotent({
@@ -736,6 +713,7 @@ export function persistBoundMessagingMessage(
     receivedAt: message.receivedAt,
     requestId,
     toolCalls: toolCalls?.length ? toolCalls : undefined,
+    terminalTaskDisposition,
     // Remote ingress persists before routing so attachment download/queueing
     // cannot lose the accepted turn. The shared executor creates the real task
     // with its final policy and request lease; never create a placeholder task
@@ -2375,10 +2353,7 @@ export async function processWithPersonality(
   const flushTerminalReply = async (): Promise<void> => {
     if (isIdentityBound) await flushMessagingStateOrThrow('terminal_reply');
   };
-  const conversationAgentId = messagingConversationAgentId(msg);
-  let conversation = isIdentityBound
-    ? getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId)
-    : null;
+  let conversation = isIdentityBound ? conversationForMessagingTurn(msg) : null;
   let acceptedTurnAdmission: AcceptedUserTurnAdmission<string> | null =
     preacceptedAdmission?.persisted === msg.userMessageId ? preacceptedAdmission : null;
   if (isIdentityBound && (!msg.userMessagePersisted || !msg.userMessageId)) {
@@ -2393,8 +2368,9 @@ export async function processWithPersonality(
       userMessagePersisted: Boolean(persistedUserMessage?.messageId),
       userMessageId: persistedUserMessage?.messageId,
     };
-    conversation = getOrCreateActiveConversation(effectiveUserId, conversationAgentId, domain, orgId);
+    conversation = conversationForMessagingTurn(msg);
   }
+  if (isIdentityBound && !conversation) throw new Error('Accepted remote conversation is no longer available in its original scope.');
   if (isIdentityBound && !acceptedTurnAdmission) {
     let admissionFailure: unknown;
     acceptedTurnAdmission = await admitAcceptedUserTurnDurably({
@@ -2519,12 +2495,6 @@ export async function processWithPersonality(
     canWriteOrganization,
     pendingAssistantOfferContext,
   });
-  const desktopRelay = isIdentityBound
-    ? options?.createScopedDesktopRelay?.(effectiveUserId, source, domain, orgId)
-    : undefined;
-  const personalDesktopRelay = isIdentityBound
-    ? options?.createPersonalDesktopRelay?.(effectiveUserId, source)
-    : undefined;
   const priorMessages = conversation
     ? getMessagesByTokenBudget(conversation.id, 6000, 8, msg.messageId)
     : [];
@@ -2659,6 +2629,15 @@ export async function processWithPersonality(
     return correlated.text;
   }
   const actionAbortController = new AbortController();
+  const receiptObserver = conversation && actionTaskExecution.state?.taskId
+    ? createConversationReceiptObserver({
+        userId: effectiveUserId, conversationId: conversation.id,
+        taskId: actionTaskExecution.state.taskId, requestId, domain, orgId,
+      // Closing ingress stops new execution, not evidence for work already begun.
+      }, () => isAcceptedMessagingAuthorizationCurrent(msg))
+    : undefined;
+  let desktopRelay: MessagingDesktopRelay | undefined;
+  let personalDesktopRelay: MessagingDesktopRelay | undefined;
   let organizationWorkExecution: OrganizationWorkExecution | null = null;
   const releaseActiveMessageRouteController = registerActiveMessageRouteController(
     msg,
@@ -2687,6 +2666,14 @@ export async function processWithPersonality(
     throw error;
   };
   try {
+  if (isIdentityBound) {
+    const lifecycle: MessagingDesktopLifecycle = {
+      taskId: actionTaskExecution.state?.taskId, requestId,
+      signal: actionAbortController.signal, onLateResult: receiptObserver?.onDesktopLateResult,
+    };
+    desktopRelay = options?.createScopedDesktopRelay?.(effectiveUserId, source, domain, orgId, lifecycle);
+    personalDesktopRelay = options?.createPersonalDesktopRelay?.(effectiveUserId, source, lifecycle);
+  }
   if (conversation && actionTaskExecution.state?.taskId) {
     executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
       executionPlan.executionPlan,
@@ -2981,6 +2968,13 @@ export async function processWithPersonality(
     return true;
   };
   let toolRecords: ToolExecutionRecord[] = [];
+  const collectToolRecord = (record: ToolExecutionRecord) => {
+    toolRecords = mergeToolExecutionRecords(toolRecords, [record]);
+  };
+  const observeToolRecord = (record: ToolExecutionRecord) => {
+    receiptObserver?.onToolRecord(record);
+    collectToolRecord(record);
+  };
 
   try {
     const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
@@ -3038,11 +3032,12 @@ export async function processWithPersonality(
           desktopExecutionTracker,
           isCancelled: actionWasCancelled,
           executionSignal: actionAbortController.signal,
+          onToolRecord: observeToolRecord,
           requestConfirmation: requestToolConfirmation,
         },
       });
       throwIfActionLeaseWasLost();
-      toolRecords.push(modeRecord);
+      collectToolRecord(modeRecord);
       const modeSynced = !modeRecord.error && desktopRelayReportedSuccess(modeRecord.result);
       if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
 
@@ -3163,7 +3158,7 @@ export async function processWithPersonality(
       turnMessages,
       toolRegistry,
       userLLMPrefs,
-      onToolRecord,
+      record => { collectToolRecord(record); onToolRecord?.(record); },
       modelToolPolicy.maxIterations || executionDecision.maxIterations,
       llm?.getDeepSeek,
       llm?.getGemini,
@@ -3191,6 +3186,7 @@ export async function processWithPersonality(
         desktopExecutionTracker,
         isCancelled: actionWasCancelled,
         executionSignal: actionAbortController.signal,
+        onToolRecord: observeToolRecord,
         requestConfirmation: requestToolConfirmation,
       },
       llm?.getOllama,
@@ -3228,7 +3224,7 @@ export async function processWithPersonality(
     } else if (!entryHandled) {
       const result = await runMessagingToolTurn(messages);
       responseText = result.text || '';
-      toolRecords.push(...(result.toolCalls || []));
+      toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || []);
       for (const usage of result.usageRecords || []) {
         recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, usageInteractionId, 'chat');
       }
@@ -3459,7 +3455,9 @@ export async function processWithPersonality(
     if (isMessagingReplyDurabilityError(err)) throw err;
     if (await settleTransferredExecution(toolRecords)) return '';
     console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
-    const fallback = '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
+    const fallback = toolRecords.length
+      ? '当前语言模型暂时不可用，后续处理没有完成。本次已有的执行记录已保留，请稍后继续。'
+      : '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
     const correlated = correlateMessagingReply(msg, fallback);
     if (correlated.superseded) {
       if (organizationWorkRoute) {
@@ -3477,7 +3475,10 @@ export async function processWithPersonality(
       return '';
     }
     if (isIdentityBound) {
-      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
+      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords,
+        actionTaskExecution.state?.taskId ? {
+          outcome: 'blocked', taskId: actionTaskExecution.state.taskId, requestId, reason: fallback,
+        } : undefined);
     }
     if (organizationWorkRoute) {
       setOrganizationWorkItemExecutionStatus({
@@ -3489,11 +3490,14 @@ export async function processWithPersonality(
         blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
       });
     }
-    settleRemoteTask(err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.');
+    // The assistant write closes this request with an explicit blocked outcome;
+    // do not recompute completion from an earlier successful substep afterward.
     await flushTerminalReply();
     return correlated.text;
   }
   } finally {
+    desktopRelay?.releaseControlLease?.();
+    personalDesktopRelay?.releaseControlLease?.();
     organizationWorkExecution?.release();
     actionLeaseHeartbeat?.stop();
     releaseActiveMessageRouteController();

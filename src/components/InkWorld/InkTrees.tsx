@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { terrainHeight } from './InkTerrain';
@@ -24,12 +24,10 @@ export function InkTrees() {
     cones.push(new THREE.ConeGeometry(0.2, 0.5, 6));
 
     // Merge into one geometry
-    const merger = new THREE.BufferGeometry();
     const trunkPos = trunk.attributes.position;
     const trunkIdx = trunk.index;
 
     // Simple merge: combine trunk + 3 cones using BufferGeometryUtils equivalent
-    const allGeos = [trunk, ...cones];
     const positions: number[] = [];
     const normals: number[] = [];
     const indices: number[] = [];

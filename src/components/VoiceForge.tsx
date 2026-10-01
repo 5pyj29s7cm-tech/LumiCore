@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Phone, Loader2, Volume2, Trash2, Plus, Sparkles, CheckCircle2, XCircle, History, Play, Pause, Cpu, Upload, FileAudio } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Mic, MicOff, Loader2, Volume2, Trash2, Sparkles, CheckCircle2, XCircle, History, Play, Pause, Cpu, Upload } from 'lucide-react';
 import { useVoiceCloning } from '../hooks/useVoiceCloning';
 import { deleteVoice } from '../services/voiceService';
 import { useVoicePreview } from '../hooks/useVoicePreview';

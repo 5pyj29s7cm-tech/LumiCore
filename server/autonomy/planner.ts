@@ -263,10 +263,6 @@ export function deletePlan(id: string, scope: PlanScope): boolean {
   return true;
 }
 
-export function getActivePlanCount(scope: PlanScope): number {
-  return listPlans(scope, { status: "active" }).length;
-}
-
 export function getTodayPlanSummary(scope: PlanScope): string {
   const active = listPlans(scope, { status: "active" });
   const doneToday = listPlans(scope, { status: "completed" }).filter(p => {

@@ -27,15 +27,10 @@ describe('voice provider prompt contract', () => {
     expect(source).toContain('pendingConfirmationOverlay');
   });
 
-  it('uses the minimal required schema subset and buffers action candidates', () => {
-    const adapter = fs.readFileSync(path.join(process.cwd(), 'server/llm/adapter.ts'), 'utf8');
+  it('delegates tool projection to the shared adapter', () => {
     expect(source).toContain('runWithTools(');
     expect(source).toContain('modelToolProjection');
     expect(source).not.toContain('resolveRequiredToolNamesForModel(');
-    expect(adapter).toContain('resolveRequiredToolNamesForModel(');
-    expect(adapter).toContain('protectedToolNames: resolveRequiredToolNamesForModel(');
-    expect(adapter).toContain('localRequiredToolNames: resolveRequiredToolNamesForModel(');
-    expect(adapter).toContain('bufferStreamUntilCandidateSuccess: toolSessionActive');
     expect(source).not.toContain('protectedToolNames: toolDeclarations.map');
     expect(source).not.toContain('localRequiredToolNames: toolDeclarations.map');
   });

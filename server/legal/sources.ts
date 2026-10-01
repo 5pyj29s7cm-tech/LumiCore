@@ -477,18 +477,6 @@ export interface JudgmentResult {
   url: string;
 }
 
-export async function searchWenshu(params: JudgmentSearchParams): Promise<JudgmentResult[]> {
-  const ck = cacheKey('wenshu', JSON.stringify(params));
-  const cached = readCache(ck, 6 * 60 * 60 * 1000); // 6-hour TTL
-  if (cached) return cached;
-
-  const results: JudgmentResult[] = [];
-  // 中国裁判文书网当前按授权网页登录协作处理，不作为平台数据 API 接入。
-  // 律师确认后的下载文件或摘录由 legal_import_materials_to_kb 入库。
-  writeCache(ck, results);
-  return results;
-}
-
 // ── 国家法律法规数据库 (flk.npc.gov.cn) ───────────────────────────────
 
 export interface StatuteSearchResult {

@@ -11,7 +11,7 @@ import { getDataRoot } from "../config/data_path";
 import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
 import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
-import { loadKeys, saveKeys, getKey, getAllKeyNames, isPersistableKeyName } from "../config/keys";
+import { loadKeys, saveKeys, getAllKeyNames, isPersistableKeyName } from "../config/keys";
 import { parseDoubaoSpeechCredentials } from "../config/doubao_speech";
 import { optionalAuth, requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
 import { isLoopbackAddress } from "../config/local_identity";

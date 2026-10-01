@@ -1,0 +1,224 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune31",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "test/large_ui_state.test.tsx",
+      "beforeLines": 119,
+      "afterLines": 245,
+      "delta": 126,
+      "beforeSha256": "8a16395842840f292e1c0381207622258615d8b6bf6fb510e780b81ff1936fb8",
+      "afterSha256": "088360796f99f106245f5b4be25846eb24bc231ba58345ba1de3b9bb864f187c"
+    },
+    {
+      "file": "src/components/SkillCenter.tsx",
+      "beforeLines": 1982,
+      "afterLines": 1885,
+      "delta": -97,
+      "beforeSha256": "f944e11c20a3574963c71cc14c5ffe8b0947bfbbfa776692d542e1486a5a4b35",
+      "afterSha256": "046559f33338db58faf6b3f02481e63003990dc1728f07200adef78e3e78f072"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1085,
+        "lines": 367425
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159497
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526922
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1085,
+        "lines": 367328
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159623
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526951
+      }
+    }
+  },
+  "tests": {
+    "files": 731,
+    "passed": 6598,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::discards a late previous-language catalog without reloading unrelated skill data",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::coalesces same-tick skill events and keeps the newest installed result when an older read fails",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::invalidates search results immediately, keeps partial success, and aborts work on unmount",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::does not restore external capabilities from a request whose permission was revoked",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::refreshes after confirmed install and uninstall, while a rejected deletion keeps the skill",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::reports malformed catalog data and recovers through the retry button",
+        1
+      ]
+    ],
+    "removed": [],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "test/large_ui_state.test.tsx": "088360796f99f106245f5b4be25846eb24bc231ba58345ba1de3b9bb864f187c",
+        "src/components/SkillCenter.tsx": "046559f33338db58faf6b3f02481e63003990dc1728f07200adef78e3e78f072"
+      },
+      "startedAt": "2026-10-01T15:11:25.492Z",
+      "finishedAt": "2026-10-01T15:18:11.606Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 1,
+    "passed": 13
+  },
+  "reproduced": [
+    {
+      "name": "discards a late previous-language catalog without reloading unrelated skill data",
+      "reason": "AssertionError: expected <h4 …(1)></h4> to be null"
+    },
+    {
+      "name": "coalesces same-tick skill events and keeps the newest installed result when an older read fails",
+      "reason": "AssertionError: expected [ { promise: Promise{…}, …(2) }, …(3) ] to have a length of 2 but got 4"
+    },
+    {
+      "name": "invalidates search results immediately, keeps partial success, and aborts work on unmount",
+      "reason": "AssertionError: expected <div …(2)></div> to be null"
+    },
+    {
+      "name": "does not restore external capabilities from a request whose permission was revoked",
+      "reason": "AssertionError: expected <output></output> to be null"
+    }
+  ],
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T15:10:24.984Z",
+      "end": "2026-10-01T15:11:01.222Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T15:11:01.223Z",
+      "end": "2026-10-01T15:11:10.763Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T15:11:10.764Z",
+      "end": "2026-10-01T15:11:20.190Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T15:11:20.190Z",
+      "end": "2026-10-01T15:11:20.572Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T15:11:20.572Z",
+      "end": "2026-10-01T15:11:25.444Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T15:10:24.939Z",
+      "end": "2026-10-01T15:11:25.452Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T15:11:25.454Z",
+      "end": "2026-10-01T15:18:11.614Z",
+      "status": 0
+    }
+  ],
+  "supersededFullRun": {
+    "passed": 6597,
+    "failed": 0,
+    "skipped": 0,
+    "receipt": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "test/large_ui_state.test.tsx": "0d1949ff08da10f64610674d5bd6a9f48b46072ed7846be68452daaed5a17fa8",
+        "src/components/SkillCenter.tsx": "8fe2f57dae8a8cbbedc6f36df9cdf2db816d422d725ea721bd547149dd88434e"
+      },
+      "startedAt": "2026-10-01T14:53:57.278Z",
+      "finishedAt": "2026-10-01T15:00:45.092Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "scope": {
+    "reads": [
+      "One local query hook replaces repeated fetch/loading/error and request ownership logic in SkillCenter.",
+      "Marketplace, installed skills, categories, key status, reviewed capabilities, profiles, interactions, npm and GitHub retain separate query state.",
+      "Same-tick refresh bursts collapse before network dispatch; later mutations cancel and replace older reads.",
+      "Late success, failure and JSON completion cannot overwrite a newer key or request, including after permission revocation and unmount.",
+      "Language changes only reload localized catalog/category data; profile and installed queries remain stable.",
+      "Stable refresh callbacks read the active key, so an older completed mutation refreshes the current locale; callbacks after unmount do not start reads.",
+      "Malformed catalog payloads become a visible retryable error instead of entering list state."
+    ],
+    "search": [
+      "Keep 400ms debounce and six results per source; npm/GitHub resolve independently with visible partial failures.",
+      "Query changes and short/empty input hide prior results and errors immediately; removed the exit wrapper retaining obsolete search rows."
+    ],
+    "mutations": [
+      "Reuse existing apiJson for standard read/write response validation; preserve explicit repair reason handling.",
+      "Manual, mutation and socket refresh paths share refreshSkills; header and retry share refreshAll.",
+      "Removed client install/uninstall/repair broadcasts already emitted by the server; retained generated-skill broadcast because that route does not emit it.",
+      "Keep installed cards visible while a background refresh is pending; rejected writes do not advance local success."
+    ]
+  },
+  "intermediateCorrections": [
+    "Strict type check found two old setLoadError calls in refresh buttons; both now use refreshAll and the button is exercised in the event-coalescing test.",
+    "The installed-tab mutation test now waits for the existing page exit transition before asserting exactly one skill heading; assertions and timeouts were not weakened.",
+    "Follow-up review added unmount liveness, catalog-shape validation and current-key refresh callbacks; the earlier passing full run was superseded and final verification rerun."
+  ],
+  "boundaries": {
+    "newBusinessFiles": [],
+    "commit": false,
+    "push": false,
+    "backendRestarted": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "officialModelApiTested": false,
+    "realSkillsInstalledOrRemoved": false,
+    "performanceSpeedupMeasured": false,
+    "wholeProjectSimplificationComplete": false
+  },
+  "limitations": [
+    "Mounted component tests use simulated API responses; no live server or native client acceptance was performed.",
+    "AbortSignal is passed to direct API reads. Existing key-status/capability service helpers ignore cancellation, but their late results are discarded.",
+    "Requests from separate later events may still start again; the reduction in duplicate requests is limited to same-tick bursts, not an arbitrary debounce of mutations."
+  ]
+}

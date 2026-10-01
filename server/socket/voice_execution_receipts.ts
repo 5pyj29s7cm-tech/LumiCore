@@ -10,7 +10,6 @@ export function createVoiceExecutionReceiptCollector(requestId: string) {
   const pending = new Map<string, { call: StartedCall; promise: Promise<void>; resolve: () => void }>();
   const unresolved = new Map<string, StartedCall>();
   let cancellation: Promise<boolean> | undefined;
-  let lateRecord: ((record: ToolExecutionRecord) => void) | undefined;
   const key = (call: { id?: string; name: string }) => call.id || call.name;
   const snapshot = () => {
     const unknown = new Map([...unresolved, ...[...pending].map(([id, entry]) => [id, entry.call] as const)]);
@@ -19,7 +18,7 @@ export function createVoiceExecutionReceiptCollector(requestId: string) {
       records: [...records.values(), ...[...unknown.values()].map(call => ({
         id: call.id, name: call.name, arguments: call.arguments,
         taskId, requestId, turnId: requestId, result: '',
-        error: 'The started tool has no settled canonical receipt; its outcome requires reconciliation.',
+        error: 'outcome_unknown: The started tool has no settled canonical receipt; its outcome requires reconciliation.',
         terminalVerification: { status: 'unverified' as const, strategy: 'terminal_receipt' as const, reason: 'tool_settlement_unknown' },
       }))],
       pendingCount: unknown.size,
@@ -42,7 +41,6 @@ export function createVoiceExecutionReceiptCollector(requestId: string) {
         || (taskId && record.taskId !== taskId)) return;
       records.set(key(record), record);
       unresolved.delete(key(record));
-      lateRecord?.(record);
     },
     onToolFinished(call: { id?: string; name: string; recorded: boolean }) {
       const entry = pending.get(key(call));
@@ -52,7 +50,6 @@ export function createVoiceExecutionReceiptCollector(requestId: string) {
       entry.resolve();
     },
     snapshot,
-    retainLateRecords(handler: (record: ToolExecutionRecord) => void) { lateRecord = handler; },
     async settle(timeoutMs = 5_000) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

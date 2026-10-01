@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Battery, FileText } from 'lucide-react';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';

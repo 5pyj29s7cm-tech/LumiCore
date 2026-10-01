@@ -4,8 +4,6 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import type {
-  CalendarCreateInput,
-  CalendarModifyInput,
   ProductivityAdapter,
 } from './productivity_contract';
 

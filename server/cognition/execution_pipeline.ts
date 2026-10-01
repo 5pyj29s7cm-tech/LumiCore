@@ -1,8 +1,9 @@
+import { restrictToolPolicyForExecutionBoundary, restrictVisibleToolRouteForExecutionBoundary } from '../tools/remote_policy';
 import type { ToolPolicy } from '../personality/types';
 import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
-import { isCurrentContinuationTask, isExplicitUnfinishedTaskContinuation, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
+import { isCurrentContinuationTask, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
 import { resolveActiveTaskMessageRelation, taskRelationFollowupIntent, formatActiveTaskRelationContext, type ActiveTaskMessageResolution } from './task_concurrency';
 import {
   isExplicitArtifactCreationText,
@@ -97,6 +98,7 @@ export interface BuildLumiExecutionPipelineInput {
   /** Already resolved by the accepted-turn/queue boundary, never client input. */
   taskRelation?: ActiveTaskMessageResolution;
   isSanctuary?: boolean;
+  executionBoundary?: ToolContext['executionBoundary'];
   /** Additional channel/role denies, applied after all semantic adapters. */
   additionalForbiddenTools?: string[];
   decisionText?: string;
@@ -358,6 +360,8 @@ export function buildLumiExecutionPipeline(
     || taskRelation.revision !== input.actionTaskState?.revision)) {
     taskRelation = { ...taskRelation, binding: 'stale', operation: 'reject_stale', reason: 'planning_task_snapshot_changed' };
   }
+  const boundTaskState = taskRelation.taskId === input.actionTaskState?.taskId
+    && (taskRelation.binding === 'active_task' || taskRelation.binding === 'previous_task') ? input.actionTaskState : undefined;
   const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none' : taskRelationFollowupIntent(taskRelation);
   const observationalFollowup = actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat';
   const trustedActionContinuation = !acceptedPlan && !mediaRequest && hasTrustedActionContinuation(input, taskRelation);
@@ -365,11 +369,14 @@ export function buildLumiExecutionPipeline(
     || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
   const dispatched = input.prebuiltDispatch && !input.actionTaskState && !input.taskRelation && !mediaRequest && !acceptedPlan
     ? input.prebuiltDispatch
-    : buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText, continuationContext, actionFollowupIntent });
+    : buildLumiTurnDispatch({ ...input.dispatch, text: effectiveText, continuationContext, actionFollowupIntent,
+      continuationAppTarget: !mediaRequest && !acceptedPlan && taskRelation.binding !== 'stale'
+        && input.actionTaskState && isCurrentContinuationTask(input.dispatch.text, input.actionTaskState)
+        ? input.actionTaskState.appTarget : undefined });
   const acceptedTaskTarget = resolveAcceptedTaskTarget({
     text: input.dispatch.text,
     persistedHistory: input.persistedConversationHistory,
-    previousTask: input.actionTaskState?.taskCapsule,
+    previousTask: boundTaskState?.taskCapsule,
   });
   const turnIntent = {
     ...dispatched,
@@ -388,14 +395,10 @@ export function buildLumiExecutionPipeline(
   // A short confirmation has no standalone capability semantics. Route the
   // exact bound root goal while the tool executor still consumes only the
   // approved call; further side effects retain their ordinary confirmation gate.
-  const confirmsBoundGoal = trustedActionContinuation
-    && /^(?:确认|确定|同意|好的?|可以|继续|yes|ok(?:ay)?|confirm)[。.!！\s]*$/iu.test(input.dispatch.text.trim()); // i18n-allow: confirmation-only continuation.
-  const resumesExplicitGoal = trustedActionContinuation
-    && (actionFollowupIntent === 'execute' || confirmsBoundGoal || isExplicitUnfinishedTaskContinuation(input.dispatch.text, input.actionTaskState));
-  const actionText = resumesExplicitGoal
+  const actionText = trustedActionContinuation
     ? [input.actionTaskState!.goal, effectiveText].join('\n\n')
     : effectiveText;
-  if (resumesExplicitGoal) {
+  if (trustedActionContinuation) {
     decisionText = actionText;
     // Prompt hints include historical errors and advice such as "do not
     // restart/cancel". They describe state; they are not additional user
@@ -415,13 +418,15 @@ export function buildLumiExecutionPipeline(
   if (requestedArtifact && currentIntent.operation === 'create') {
     currentIntent.target = requestedArtifact.path;
   }
-  const priorIntent = normalizeActionIntent(input.actionTaskState?.goal || '');
-  const resumesMediaGoal = trustedActionContinuation && currentIntent.kind === 'none' && priorIntent.kind === 'media_generation';
-  const normalizedIntent = resumesMediaGoal ? priorIntent : currentIntent;
+  const priorIntent = trustedActionContinuation && currentIntent.kind === 'none'
+    ? normalizeActionIntent(input.actionTaskState?.goal || '') : undefined;
+  const resumesMediaGoal = priorIntent?.kind === 'media_generation';
+  const normalizedIntent = resumesMediaGoal ? priorIntent! : currentIntent;
   if (resumesMediaGoal && input.actionTaskState?.goal) {
     turnIntent.flow.routeText = [input.actionTaskState.goal, turnIntent.flow.routeText].join('\n\n');
   }
   const visibilityContext = {
+    executionBoundary: input.executionBoundary,
     userId: input.dispatch.userId,
     domain: input.dispatch.domain === 'work' ? 'work' as const : 'personal' as const,
     orgId: input.dispatch.orgId,
@@ -458,12 +463,18 @@ export function buildLumiExecutionPipeline(
         visibilityContext,
       ),
       input.registry,
-      resumesExplicitGoal && !preservedSourceOutputScope(actionText) ? effectiveText : actionText,
+      trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText,
       visibilityContext,
     ),
     observationalFollowup || taskRelation.binding === 'stale'
       ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,
   );
+  // Resolve the entry ceiling before publishing any capability, plan or schema.
+  // Consumers use this same policy/projection; the registry still enforces it.
+  const authorizationPolicy = restrictToolPolicyForExecutionBoundary(buildModelCapabilityPolicy(execution), input.executionBoundary);
+  execution.toolRoute = restrictVisibleToolRouteForExecutionBoundary(execution.toolRoute, input.executionBoundary);
+  execution.baseToolPolicy = execution.toolPolicy = authorizationPolicy;
+  execution.maxIterations = authorizationPolicy.maxIterations;
   const selection = buildLumiCapabilitySelection({
     dispatch: turnIntent,
     execution,
@@ -480,7 +491,6 @@ export function buildLumiExecutionPipeline(
       .map(toolName => manifest.find(entry => entry.toolName === toolName)?.capabilityId)
       .filter(Boolean) as string[],
   ));
-  const authorizationPolicy = buildModelCapabilityPolicy(execution);
   const pinnedContinuationTools = trustedContinuationEvidenceTools({
     actionTaskState: input.actionTaskState,
     trustedActionContinuation,
@@ -535,14 +545,15 @@ export function buildLumiExecutionPipeline(
     capabilityPlan,
     execution,
     manifest,
-    taskId: input.taskId || (acceptedPlan ? undefined : input.actionTaskState?.taskId),
-    sourcePaths: input.actionTaskState?.sourcePaths,
+    taskId: input.taskId || boundTaskState?.taskId,
+    sourcePaths: boundTaskState?.sourcePaths,
   });
   capabilityPlan.promptOverlay = [
     capabilityPlan.promptOverlay,
     formatCapabilityExecutionPlanPrompt(executionPlan),
   ].filter(Boolean).join('\n\n');
   const intentTrace = buildLumiIntentTrace({
+    normalizedActionIntent: normalizedIntent,
     dispatch: turnIntent,
     execution,
     text: input.traceText || decisionText,

@@ -788,3 +788,26 @@ describe('unified acceptance and evidence state', () => {
 
   });
 });
+
+it('indexes receipts once across scoped tasks while preserving complete verification and unrelated evidence', () => {
+  const tasks = Array.from({ length: 200 }, (_, i) => ({ id: 'indexed-' + i, userId: 'owner', domain: 'work', orgId: 'org-a',
+    status: 'completed', goal: 'Check result', context: '{}', updatedAt: '2026-10-01T00:00:00Z' }));
+  let reads = 0;
+  const receipts = tasks.flatMap(task => Array.from({ length: 10 }, (_, i) => ({
+    ...actionReceipt('controlled_probe', 'verified_success', 'verified', '2026-10-01T00:00:00Z', 'terminal_verification', task.id),
+    id: task.id + ':' + i, get taskId() { reads++; return task.id; },
+  })));
+  const foreign = { ...tasks[0], id: 'foreign', userId: 'other' };
+  const delegated = { ...tasks[0], id: 'delegated', context: { executionOwner: 'work_takeover', ownerTaskId: 'delegated' } };
+  const db = { conversationActionTasks: [...tasks, foreign, delegated], conversationActionReceipts: [...receipts,
+    { taskId: 'foreign', get envelope() { throw Error('Unrelated envelope was read'); } },
+    { taskId: 'delegated', get envelope() { throw Error('Delegated envelope was read'); } },
+  ] };
+  const results = buildTaskAcceptanceProjections(db, { userId: 'owner', domain: 'work', orgId: 'org-a' });
+  expect(results).toHaveLength(200);
+  expect(results.every(task => task.accepted && task.terminalVerification === 'verified' && task.continuity.receiptLedgerPreserved)).toBe(true);
+  expect(reads).toBeLessThan(4 * receipts.length); // Bound growth without a hardware-dependent timing threshold.
+  expect(db.conversationActionReceipts).toHaveLength(2002);
+  expect(db.conversationActionReceipts[0]).toBe(receipts[0]);
+  expect(buildTaskAcceptanceProjections(db, { userId: 'owner', domain: 'work', orgId: 'org-b' })).toEqual([]);
+});

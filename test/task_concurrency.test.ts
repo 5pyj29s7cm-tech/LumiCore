@@ -6,6 +6,8 @@ import {
   bindPreparedTaskMessageRelation,
 } from '../server/cognition/task_concurrency';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { isConfirmationCancellation, isExplicitConfirmationReply } from '../server/tools/pending_confirmation';
+import { classifyVoiceWorkInterruption } from '../server/socket/voice_turn_state';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
 
 const activeState: ConversationActionContinuationState = {
@@ -27,6 +29,26 @@ const activeState: ConversationActionContinuationState = {
 };
 
 describe('active task message relation', () => {
+  it.each(['停止执行', '拒绝', '不同意', '不要执行', '取消', '停止', '不用做了', 'cancel the task'])('cancels the exact active task across control entrances: %s', text => {
+    expect(isConfirmationCancellation(text)).toBe(true);
+    expect(classifyVoiceWorkInterruption(text)).toBe('cancel_work');
+    expect(resolveActiveTaskMessageRelation(text, activeState)).toMatchObject({
+      taskRelation: 'cancel', taskId: activeState.taskId, revision: activeState.revision,
+    });
+    expect(resolveActiveTaskMessageRelation(text, activeState, { controlTargetRevision: 1 })).toMatchObject({ binding: 'stale', operation: 'reject_stale' });
+  });
+  it.each(['ok', 'okay', '行', '没问题', '开始吧', '确认', '好的'])('uses one confirmation vocabulary without inventing a grant: %s', text => {
+    expect(isExplicitConfirmationReply(text)).toBe(true);
+    expect(resolveActiveTaskMessageRelation(text, { ...activeState, status: 'waiting_confirmation' })).toMatchObject({
+      taskRelation: 'confirm', taskId: activeState.taskId,
+    });
+    expect(resolveActiveTaskMessageRelation(text, null).binding).not.toBe('active_task');
+    expect(resolveActiveTaskMessageRelation(text, { ...activeState, status: 'completed', unfinished: false }).binding).not.toBe('active_task');
+  });
+  it.each(['不要停止执行', '我拒绝的原因是什么', '取消订单', '好的，另外给小王发消息', 'stop speaking'])('does not turn domain commands or discussion into a task-control grant: %s', text => {
+    expect(isExplicitConfirmationReply(text)).toBe(false);
+    expect(isConfirmationCancellation(text)).toBe(false);
+  });
   it('retries the identical unfinished goal without allocating an independent task', () => {
     const goal = '生成 D:/work/result.xlsx 采购报表，金额使用公式并回读。';
     const state = { ...activeState, goal, latestInstruction: goal, activeRequestId: undefined, status: 'blocked' as const };

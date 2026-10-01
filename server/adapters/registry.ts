@@ -6,7 +6,6 @@ import {
   PERSONAL_CLIENT_SURFACES,
   PERSONAL_CLIENT_SURFACE_ACTIONS,
 } from '../../shared/client_surfaces';
-import { LUMI_OPERATION_MODE_IDS } from '../../shared/operation_modes';
 import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
 import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { toolRegistry } from '../tools/registry';
@@ -766,11 +765,6 @@ function actionsForAdapterFromManifest(
   return Array.from(new Set(selected.map(entry => entry.toolName))).sort((left, right) => (
     left.localeCompare(right)
   ));
-}
-
-export function getAdapterById(id: string, options: AdapterRegistryOptions = {}): AdapterCapability | null {
-  const report = getAdapterRegistry(options);
-  return report.adapters.find(adapter => adapter.id === id) || null;
 }
 
 export function summarizeAdapters(adapters: AdapterCapability[]): AdapterRegistrySummary {

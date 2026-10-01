@@ -1,23 +1,10 @@
-/**
- * Cloud API Core — Central orchestration for all cloud-dependent operations.
- *
- * Provides:
- * 1. Unified retry + exponential backoff for all cloud calls
- * 2. Provider fallback chains (primary → secondary → fallback)
- * 3. Circuit breaker pattern (fail-fast when provider is down)
- * 4. Health check endpoint for monitoring provider status
- * 5. Error classification
- *
- * Every cloud-dependent module (LLM, STT, TTS, Messaging, Weather)
- * routes through this core for consistent error handling.
- */
+/** Shared retry, circuit health, provider readiness and error classification. */
 
 import { withRetry, isCloudRetryable, withTimeout } from './retry';
-export { withRetry, isCloudRetryable, withTimeout, withFallback, isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
+export { withRetry, isCloudRetryable, withTimeout, isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY };
 export type { RetryOptions } from './retry';
 
-import { withFallback, getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY } from './fallback';
-export type { FallbackResult, FallbackAttempt, FallbackChainOptions } from './fallback';
+import { getAvailableLLMProviders, getAvailableSTTProviders, getAvailableTTSProviders, LLM_PRIORITY, STT_PRIORITY, TTS_PRIORITY } from './fallback';
 
 import { isCircuitClosed, isCircuitHealthy, recordSuccess, recordFailure, resetCircuit, getCircuitStatus, setCircuitBreakerConfig } from './circuit_breaker';
 export type { CircuitState } from './circuit_breaker';

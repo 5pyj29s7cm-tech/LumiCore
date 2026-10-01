@@ -1,0 +1,273 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune25",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "beforeLines": 5131,
+      "afterLines": 5095,
+      "delta": -36,
+      "beforeSha256": "640f9dc49d511a2e804dcf9e85e3720775810b1522755c45a9684b69014b4ce7",
+      "afterSha256": "e42db6dd9c13fd8ae319834b71dd8e4eb211d21befd1a882809ef62f06045cad"
+    },
+    {
+      "file": "src/hooks/useRuntimeStatus.ts",
+      "beforeLines": 100,
+      "afterLines": 73,
+      "delta": -27,
+      "beforeSha256": "d32d2a140505cab1ef3edf3883ea07374185b7d011f6985f26bd9a36377bf635",
+      "afterSha256": "e3611d945f5840069144bc3d69df64991c063b31ee4337763b2b4b1105cf0b1a"
+    },
+    {
+      "file": "server/monitor/runtime_status.ts",
+      "beforeLines": 291,
+      "afterLines": 283,
+      "delta": -8,
+      "beforeSha256": "e2ff49a3cdb5450944bbef01fec68a2751f9180e7e6d692980abc2e62e4fcc4a",
+      "afterSha256": "1fc5e25207a759df1d91d4e8af856a75f382065c52f0dec940c76d5a4717cb55"
+    },
+    {
+      "file": "test/chat_execution_recovery.test.ts",
+      "beforeLines": 157,
+      "afterLines": 157,
+      "delta": 0,
+      "beforeSha256": "32bd66b1b08fa0d4f10e5083acc5fe119a0ba087b6fa17ae25dffa38c1c4936b",
+      "afterSha256": "698206de753b8dd21008b9289eb29f75f49cd67284b2a8c5fb80f1632e41349d"
+    },
+    {
+      "file": "test/media_recovery_gallery.test.ts",
+      "beforeLines": 68,
+      "afterLines": 69,
+      "delta": 1,
+      "beforeSha256": "f116301e854e28a194d2a29e01523850cc6373627953afe24a12b83d5ff3b840",
+      "afterSha256": "2d6db7ca4691fa647b48bb76eccdf6f6f21e7f5a1d22ea3c99c90d39a302d2bc"
+    },
+    {
+      "file": "test/memory_avatar_entry_lifecycle.test.tsx",
+      "beforeLines": 156,
+      "afterLines": 143,
+      "delta": -13,
+      "beforeSha256": "ccf41683184fd76c385ec78fdcf8a47abb4adf8774bbb3f83be922efe46dfed7",
+      "afterSha256": "6545ce40ebdd20f33837396c9f65b839d7b7fabab0a219cd5a70cdb2065e94b6"
+    },
+    {
+      "file": "test/voice_meeting_authorization.test.ts",
+      "beforeLines": 460,
+      "afterLines": 449,
+      "delta": -11,
+      "beforeSha256": "a50579e53dad7a0e61c15da9915057b73af2c5d1eea6a8230cd29b40dc679496",
+      "afterSha256": "888ba80bb113ebe521bbe90df338ccfaf6ec05ff3ac2758bbbe2193a38e09388"
+    },
+    {
+      "file": "test/proactive_voice_delivery.test.tsx",
+      "beforeLines": 392,
+      "afterLines": 385,
+      "delta": -7,
+      "beforeSha256": "67963cc1bb91939c1652a648afb956b26a43f55a5308ccbd8c46bd8cbbb0b897",
+      "afterSha256": "e649d7905520d855547c0cbf26cd4174c2d35a1c69371a878e1b7e88b4f2293d"
+    },
+    {
+      "file": "src/hooks/frontendScopeContracts.test.tsx",
+      "beforeLines": 105,
+      "afterLines": 139,
+      "delta": 34,
+      "beforeSha256": "fcd3a2ee1d68ac715d90f5f5e28de4e9e841f2355fea28fdddcfee02ab3e6878",
+      "afterSha256": "de4fb5e3edd8a1f8ddf8e1ce226820297d087dedc0dbdc332c736a115b695788"
+    },
+    {
+      "file": "test/structured_runtime_status.test.ts",
+      "beforeLines": 161,
+      "afterLines": 191,
+      "delta": 30,
+      "beforeSha256": "e1037d6c4ea3c39e522d4f2b1f66af901a001cd0128648d5c12a68f855f426fa",
+      "afterSha256": "631c521d2d18e2d1cf95d9901372fdd60ec7fbeae944265c242c9d0afb82f2c7"
+    },
+    {
+      "file": "src/components/DesktopUI.tsx",
+      "beforeLines": 6232,
+      "afterLines": 6216,
+      "delta": -16,
+      "beforeSha256": "13db846ba7817e45e4d2ccb48d9f0080fadedb6db1966c856a3080995bba4501",
+      "afterSha256": "e39ed10e1ef77faa4041922cb19312e101632d60d3ece7304546ae650d3367db"
+    },
+    {
+      "file": "test/desktop_foreground_ownership.test.ts",
+      "beforeLines": 52,
+      "afterLines": 75,
+      "delta": 23,
+      "beforeSha256": "009f704922bb5368c6d662dbdba30542733056105ae00a262c087e4ac1882c32",
+      "afterSha256": "902008a1c3ca6330f4ca157618cccb98ce798547288d930839b04a0ba7faf10f"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 368091
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159086
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527177
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 368004
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159143
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527147
+      }
+    }
+  },
+  "tests": {
+    "files": 730,
+    "passed": 6566,
+    "failed": 0,
+    "skipped": 0,
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/desktop_foreground_ownership.test.ts::keeps one window order across reopen, minimize, close, and returning home",
+        1
+      ],
+      [
+        "D:/lumiOS/test/structured_runtime_status.test.ts::structured runtime status counts autonomous blockers beyond the visible list and changes identity when hidden totals change",
+        1
+      ],
+      [
+        "D:/lumiOS/test/structured_runtime_status.test.ts::structured runtime status includes hidden receipt totals in snapshot identity without mutating persisted tasks or receipts",
+        1
+      ],
+      [
+        "D:/lumiOS/src/hooks/frontendScopeContracts.test.tsx::task snapshots belong to their current owner rejects retained runtime refreshes after switch without invalidating the new request",
+        1
+      ],
+      [
+        "D:/lumiOS/src/hooks/frontendScopeContracts.test.tsx::task snapshots belong to their current owner rejects retained runtime refreshes after disable without invalidating the new request",
+        1
+      ],
+      [
+        "D:/lumiOS/src/hooks/frontendScopeContracts.test.tsx::task snapshots belong to their current owner rejects retained runtime refreshes after unmount without invalidating the new request",
+        1
+      ],
+      [
+        "D:/lumiOS/src/hooks/frontendScopeContracts.test.tsx::task snapshots belong to their current owner keeps the newest runtime success when an older refresh fails and retries a current failure",
+        1
+      ]
+    ],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "src/components/AgentChatPage.tsx": "e42db6dd9c13fd8ae319834b71dd8e4eb211d21befd1a882809ef62f06045cad",
+        "src/hooks/useRuntimeStatus.ts": "e3611d945f5840069144bc3d69df64991c063b31ee4337763b2b4b1105cf0b1a",
+        "server/monitor/runtime_status.ts": "1fc5e25207a759df1d91d4e8af856a75f382065c52f0dec940c76d5a4717cb55",
+        "test/chat_execution_recovery.test.ts": "698206de753b8dd21008b9289eb29f75f49cd67284b2a8c5fb80f1632e41349d",
+        "test/media_recovery_gallery.test.ts": "2d6db7ca4691fa647b48bb76eccdf6f6f21e7f5a1d22ea3c99c90d39a302d2bc",
+        "test/memory_avatar_entry_lifecycle.test.tsx": "6545ce40ebdd20f33837396c9f65b839d7b7fabab0a219cd5a70cdb2065e94b6",
+        "test/voice_meeting_authorization.test.ts": "888ba80bb113ebe521bbe90df338ccfaf6ec05ff3ac2758bbbe2193a38e09388",
+        "test/proactive_voice_delivery.test.tsx": "e649d7905520d855547c0cbf26cd4174c2d35a1c69371a878e1b7e88b4f2293d",
+        "src/hooks/frontendScopeContracts.test.tsx": "de4fb5e3edd8a1f8ddf8e1ce226820297d087dedc0dbdc332c736a115b695788",
+        "test/structured_runtime_status.test.ts": "631c521d2d18e2d1cf95d9901372fdd60ec7fbeae944265c242c9d0afb82f2c7",
+        "src/components/DesktopUI.tsx": "e39ed10e1ef77faa4041922cb19312e101632d60d3ece7304546ae650d3367db",
+        "test/desktop_foreground_ownership.test.ts": "902008a1c3ca6330f4ca157618cccb98ce798547288d930839b04a0ba7faf10f"
+      },
+      "startedAt": "2026-10-01T11:30:46.701Z",
+      "finishedAt": "2026-10-01T11:37:18.083Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 12,
+    "passed": 122
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T11:29:46.503Z",
+      "end": "2026-10-01T11:30:21.854Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T11:30:21.855Z",
+      "end": "2026-10-01T11:30:31.823Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T11:30:31.823Z",
+      "end": "2026-10-01T11:30:41.172Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T11:30:41.172Z",
+      "end": "2026-10-01T11:30:41.573Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T11:30:41.574Z",
+      "end": "2026-10-01T11:30:46.644Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T11:29:46.459Z",
+      "end": "2026-10-01T11:30:46.653Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T11:30:46.655Z",
+      "end": "2026-10-01T11:37:18.099Z",
+      "status": 0
+    }
+  ],
+  "scope": {
+    "largeUI": [
+      "DesktopUI window membership/stacking",
+      "AgentChatPage media status/detail"
+    ],
+    "runtime": [
+      "atomic scoped frontend snapshot",
+      "count all autonomous blockers",
+      "include hidden totals in structural identity"
+    ],
+    "testReuse": [
+      "memory avatar shell callbacks",
+      "meeting shell callbacks",
+      "proactive return callback",
+      "desktop AST cache"
+    ]
+  },
+  "intermediateTestFailure": {
+    "reason": "The new disabled/re-enabled hook fixture retained an unused mockReturnValueOnce for organization B. Re-enabling organization A consumed B and correctly rejected the mismatched scope.",
+    "resolution": "Reset only the fixture response queue before enabling A again. Production scope checks, expectations and timeouts were not weakened."
+  },
+  "boundaries": {
+    "backendRestarted": false,
+    "commit": false,
+    "push": false,
+    "realUserDataModified": false,
+    "nativeDesktopTested": false,
+    "performanceSpeedupMeasured": false,
+    "newBusinessModules": 0,
+    "storedTaskOrReceiptRowsRemoved": false,
+    "completeProjectSimplificationClaimed": false
+  }
+}

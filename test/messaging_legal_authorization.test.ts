@@ -5,7 +5,7 @@ import { addMember, createOrg } from '../server/org/db';
 import * as bindings from '../server/messaging/bindings';
 import { captureMessagingBinding } from '../server/messaging/turn_authorization';
 import { toolRegistry } from '../server/tools/registry';
-import { handleRemoteLegalNoticeIntake } from '../server/messaging/legal_notice_intake';
+import { handleRemoteLegalNoticeIntake } from '../server/regions/packs/cn/legal_notice_intake';
 import type { IncomingMessage } from '../server/messaging/types';
 
 const execution = vi.hoisted(() => ({ call: vi.fn() }));

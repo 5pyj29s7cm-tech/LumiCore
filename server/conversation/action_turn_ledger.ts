@@ -321,16 +321,6 @@ function terminalStateIsIdempotent(
   return !messageId || !turn.terminalMessageId || turn.terminalMessageId === messageId;
 }
 
-export function getConversationActionTurnProcessEpoch(): string {
-  return PROCESS_EPOCH;
-}
-
-export function isConversationActionTurnTerminalStatus(
-  status: ConversationActionTurnStatus,
-): status is ConversationActionTurnTerminalStatus {
-  return isTerminalStatus(status);
-}
-
 export function acceptConversationActionTurn(
   input: AcceptConversationActionTurnInput,
 ): AcceptConversationActionTurnResult {

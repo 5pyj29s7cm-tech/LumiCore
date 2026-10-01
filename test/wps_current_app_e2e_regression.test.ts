@@ -101,6 +101,7 @@ function buildScenario(
     userId: 'wps_current_app_e2e_regression',
     text: taskText,
     continuationContext,
+    continuationAppTarget: extractRecentActionContinuationState(history).appTarget,
     channel: 'chat',
     source: 'chat',
     operationMode: 'assistant',
@@ -259,6 +260,7 @@ describe('WPS current-app end-to-end regression', () => {
 
     const routed = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: WPS_CREATE_DOCUMENT_TOOL,
       arguments: { text: CONTENT.slice(0, -1) },
       toolRecords: [],
@@ -375,12 +377,14 @@ describe('WPS current-app end-to-end regression', () => {
     expect(hasConfirmedCurrentAppEditor(templateLedger, dispatch.flow.routeText)).toBe(false);
     expect(guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: 'computer_use',
       arguments: { task: '\u7ee7\u7eed\u65b0\u5efa' },
       toolRecords: templateLedger,
     }).allowed).toBe(false);
     const prematureType = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: 'desktop_ui_type',
       arguments: { text: CONTENT },
       toolRecords: templateLedger,
@@ -395,6 +399,7 @@ describe('WPS current-app end-to-end regression', () => {
     };
     expect(guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: blankInvoke.name,
       arguments: blankInvoke.arguments,
       toolRecords: templateLedger,
@@ -425,6 +430,7 @@ describe('WPS current-app end-to-end regression', () => {
     expect(hasConfirmedCurrentAppEditor(editorLedger, dispatch.flow.routeText)).toBe(true);
     expect(guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: 'desktop_ui_type',
       arguments: {
         controlType: 'Document',
@@ -435,6 +441,7 @@ describe('WPS current-app end-to-end regression', () => {
     }).allowed).toBe(true);
     const repeatedBlank = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: blankInvoke.name,
       arguments: blankInvoke.arguments,
       toolRecords: editorLedger,
@@ -477,6 +484,7 @@ describe('WPS current-app end-to-end regression', () => {
 
     const shortcut = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: 'keyboard_press',
       arguments: { key: 'ctrl+n' },
       toolRecords: cefLedger,
@@ -488,6 +496,7 @@ describe('WPS current-app end-to-end regression', () => {
     const { dispatch } = buildScenario();
     const exact = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: WPS_CREATE_DOCUMENT_TOOL,
       arguments: { text: CONTENT },
       toolRecords: [],
@@ -497,6 +506,7 @@ describe('WPS current-app end-to-end regression', () => {
 
     const reconstructedPayload = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: WPS_CREATE_DOCUMENT_TOOL,
       arguments: { text: 'different text' },
       toolRecords: [],
@@ -507,6 +517,7 @@ describe('WPS current-app end-to-end regression', () => {
     const completedLedger = [verifiedWpsComRecord()];
     const duplicate = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: WPS_CREATE_DOCUMENT_TOOL,
       arguments: { text: CONTENT },
       toolRecords: completedLedger,
@@ -516,6 +527,7 @@ describe('WPS current-app end-to-end regression', () => {
 
     const postCompletionNavigation = guardCurrentAppToolCall({
       taskText: dispatch.flow.routeText,
+      currentAppTarget: dispatch.flow.currentAppEditTarget,
       toolName: 'keyboard_press',
       arguments: { key: 'ctrl+n' },
       toolRecords: completedLedger,

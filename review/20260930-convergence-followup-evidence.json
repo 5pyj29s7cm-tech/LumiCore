@@ -1,0 +1,273 @@
+{
+  "date": "2026-09-30",
+  "scope": "prune11; working-tree baseline at turn start, not Git HEAD",
+  "before": {
+    "source": {
+      "files": 1083,
+      "lines": 370158
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158849
+    },
+    "total": {
+      "files": 1821,
+      "lines": 529007
+    }
+  },
+  "after": {
+    "source": {
+      "files": 1083,
+      "lines": 370120
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158861
+    },
+    "total": {
+      "files": 1821,
+      "lines": 528981
+    }
+  },
+  "files": [
+    {
+      "file": "server/conversation/action_ledger.ts",
+      "before": 2412,
+      "after": 2404,
+      "delta": -8,
+      "beforeSha256": "87b0e3cd087fe5fa6907406020e3b88849b54b0869836ef58e3750e078084fb0",
+      "afterSha256": "fb1034bc1a5b5de498c0d3eeaf17841f4e1ab007b9f3b9ffc9b335c6ea6a51d5"
+    },
+    {
+      "file": "server/conversation/focus_threads.ts",
+      "before": 163,
+      "after": 165,
+      "delta": 2,
+      "beforeSha256": "c38a8128352d74f56f8cde4544cfae859cee3e7c3807c8245342480612c83394",
+      "afterSha256": "68837cd41dbdf07c888ef5a765897f69a6eddd8b484ea77551293593366befb9"
+    },
+    {
+      "file": "server/conversation/execution_facts.ts",
+      "before": 758,
+      "after": 745,
+      "delta": -13,
+      "beforeSha256": "56ca8bf2b623de40d01ce5bb8a5c797b05338b0b1d594ca78cf1808c3a0f217d",
+      "afterSha256": "79359857e85b744c5f65ba364f829f6398857ce1685b541c0d26384dec7e5c77"
+    },
+    {
+      "file": "test/conversation_focus_threads.test.ts",
+      "before": 118,
+      "after": 130,
+      "delta": 12,
+      "beforeSha256": "d3d3ce1646f48cd7e7fd3309e6d8ade8aad862433ad1933dfa18b13f49d1a72b",
+      "afterSha256": "73a315b49d971133b945c516c3d73b7b6794f44ac4344d52c8f2d7828c24456b"
+    },
+    {
+      "file": "server/files/generated_archive.ts",
+      "before": 184,
+      "after": 192,
+      "delta": 8,
+      "beforeSha256": "e665e24960ffe5e841e6984d4915ecec4c7bbcc6500af57eb776f34a58758ad0",
+      "afterSha256": "e7680b0667eb7ffca4f02f5406d4422b0a348e4e203208636959c17f8815a3a5"
+    },
+    {
+      "file": "src/hooks/useFocusThreads.ts",
+      "before": 150,
+      "after": 123,
+      "delta": -27,
+      "beforeSha256": "a0358f6e9a4b6c90541f90dc94960d769dcf05b9694c9b505961598443a248d4",
+      "afterSha256": "f0a21d02b3ee1f2b0a45d9e63ad2549782bbcd5b4c0cf350835be96911d2a1fa"
+    }
+  ],
+  "testRuns": [
+    {
+      "name": "focused",
+      "success": true,
+      "total": 119,
+      "passed": 119,
+      "failed": 0,
+      "skipped": 0,
+      "files": [
+        {
+          "name": "test/active_task_widget.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "name": "test/conversation_action_continuation_state.test.ts",
+          "status": "passed",
+          "tests": 32
+        },
+        {
+          "name": "test/conversation_action_request_supersession.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "name": "test/conversation_action_turn_manager.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "name": "test/conversation_execution_facts.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "name": "test/conversation_focus_threads.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "name": "test/conversation_receipt_archive.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "name": "test/focus_client_projection.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "name": "test/generated_library.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "name": "test/structured_runtime_status.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "name": "test/task_cancel_durability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "name": "test/task_regression_stale_receipt_evidence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "name": "test/task_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "name": "src/hooks/frontendScopeContracts.test.tsx",
+          "status": "passed",
+          "tests": 5
+        }
+      ]
+    },
+    {
+      "name": "archive-final",
+      "success": true,
+      "total": 9,
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "files": [
+        {
+          "name": "test/generated_library.test.ts",
+          "status": "passed",
+          "tests": 9
+        }
+      ]
+    }
+  ],
+  "benchmark": {
+    "scope": "Isolated local files; real archive source before/after, VM-injected scope and artifact discovery. No test/build intentionally running in parallel; not production DB flush or full archive acceptance. 20 batches at each size.",
+    "results": [
+      {
+        "version": "before",
+        "initialEntries": 1000,
+        "indexBytes": 480805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 12.7269,
+        "batchP95Ms": 14.726100000000002,
+        "eventLoopP95Ms": 7.647231,
+        "eventLoopMaxMs": 9.265151,
+        "indexFsyncP95Ms": 2.655000000000001
+      },
+      {
+        "version": "before",
+        "initialEntries": 10000,
+        "indexBytes": 4827805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 66.71659999999997,
+        "batchP95Ms": 78.68809999999985,
+        "eventLoopP95Ms": 40.534015,
+        "eventLoopMaxMs": 49.283071,
+        "indexFsyncP95Ms": 6.4524000000000115
+      },
+      {
+        "version": "before",
+        "initialEntries": 30000,
+        "indexBytes": 14527805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 184.6914999999999,
+        "batchP95Ms": 216.15009999999984,
+        "eventLoopP95Ms": 110.952447,
+        "eventLoopMaxMs": 141.688831,
+        "indexFsyncP95Ms": 5.974100000000362
+      },
+      {
+        "version": "after",
+        "initialEntries": 1000,
+        "indexBytes": 480805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 9.793700000000172,
+        "batchP95Ms": 10.788699999999153,
+        "eventLoopP95Ms": 7.487487,
+        "eventLoopMaxMs": 8.339455,
+        "indexFsyncP95Ms": 2.6192000000000917
+      },
+      {
+        "version": "after",
+        "initialEntries": 10000,
+        "indexBytes": 4827805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 50.35480000000007,
+        "batchP95Ms": 53.77530000000024,
+        "eventLoopP95Ms": 5.877759,
+        "eventLoopMaxMs": 34.832383,
+        "indexFsyncP95Ms": 3.8080999999992855
+      },
+      {
+        "version": "after",
+        "initialEntries": 30000,
+        "indexBytes": 14527805,
+        "batches": 20,
+        "outputsPerBatch": 3,
+        "fsyncs": 20,
+        "batchP50Ms": 142.52480000000105,
+        "batchP95Ms": 165.90049999999974,
+        "eventLoopP95Ms": 5.279743,
+        "eventLoopMaxMs": 101.253119,
+        "indexFsyncP95Ms": 9.216099999999642
+      }
+    ]
+  },
+  "checks": {
+    "lint": 0,
+    "frontendsBuild": 0,
+    "serverBuild": 0,
+    "diffCheck": 0
+  },
+  "fullSuiteRun": false,
+  "liveAcceptance": false,
+  "restarted": false,
+  "committed": false,
+  "pushed": false
+}

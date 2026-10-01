@@ -124,35 +124,19 @@ describe('external work versus Lumi client actions', () => {
     }
   });
 
-  it('keeps legacy direct-tool hints read-only for both multi-step and single-step turns', async () => {
-    const { processInput } = await import('../server/cognition');
+  it.each(['chat', 'voice', 'task'] as const)('shared %s planning never executes tools on its own', async channel => {
+    const { buildLumiExecutionPipeline } = await import('../server/cognition/execution_pipeline');
     const { toolRegistry } = await import('../server/tools/registry');
-    const execute = vi.spyOn(toolRegistry, 'execute').mockResolvedValue(
-      JSON.stringify([{ name: 'example.txt', path: 'C:\\Users\\example\\Desktop\\example.txt' }]),
-    );
-    const context = {
-      userId: 'single_core_cognition_user',
-      personalityId: 'lumi',
-      personalityName: 'Lumi',
-      llmProvider: 'deepseek',
-      llmModel: 'deepseek-v4-flash',
-      isLLMAvailable: true,
-    };
-
+    const execute = vi.spyOn(toolRegistry, 'execute');
     try {
-      const multiStepResult = await processInput(MULTI_STEP_DESKTOP_TASK, context);
-      expect(multiStepResult.intent.directToolCall?.name).toBe('desktop_list_files');
-      expect(multiStepResult.directToolExecuted).toBe(false);
+      for (const text of [MULTI_STEP_DESKTOP_TASK, SINGLE_DESKTOP_TASK]) {
+        buildLumiExecutionPipeline({
+          dispatch: { text, channel, userId: 'planner-only', source: channel, operationMode: 'assistant', targetIsLumi: true },
+          registry: toolRegistry,
+        });
+      }
       expect(execute).not.toHaveBeenCalled();
-
-      const singleResult = await processInput(SINGLE_DESKTOP_TASK, context);
-      expect(singleResult.intent.directToolCall?.name).toBe('desktop_list_files');
-      expect(singleResult.directToolExecuted).toBe(false);
-      expect(singleResult.toolRecord).toBeUndefined();
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      execute.mockRestore();
-    }
+    } finally { execute.mockRestore(); }
   });
 
 });

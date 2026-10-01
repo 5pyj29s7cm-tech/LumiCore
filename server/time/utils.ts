@@ -87,10 +87,6 @@ export function isWeekend(userId: string): boolean {
   return day === 0 || day === 6;
 }
 
-export function getCurrentYear(userId: string): number {
-  return getUserNow(userId).getFullYear();
-}
-
 // ── Time intervals ──
 
 export function hoursSince(isoString: string): number {
@@ -118,12 +114,6 @@ export function formatDuration(hours: number): string {
   const months = Math.floor(days / 30);
   if (months < 12) return `${months}个月前`;
   return `${Math.floor(months / 12)}年前`;
-}
-
-export function formatMinutesAgo(minutes: number): string {
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${Math.round(minutes)}分钟前`;
-  return formatDuration(minutes / 60);
 }
 
 export function getTimeOfDay(userId: string): 'morning' | 'afternoon' | 'evening' | 'night' {
@@ -264,49 +254,4 @@ export function getNearbyHoliday(userId: string): HolidayResult | null {
   }
 
   return best;
-}
-
-export function getHolidayForDate(date: Date): HolidayResult | null {
-  const year = date.getFullYear();
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
-
-  const allHolidays: HolidayEntry[] = [
-    ...GREGORIAN_HOLIDAYS,
-    ...(LUNAR_HOLIDAYS_BY_YEAR[year] || []),
-  ];
-
-  for (const h of allHolidays) {
-    if (h.month === month && h.day === day) {
-      return {
-        name: h.name,
-        nameCN: h.nameCN,
-        mood: h.mood,
-        daysUntil: 0,
-        isToday: true,
-      };
-    }
-  }
-
-  return null;
-}
-
-// ── Same-month-day helper (for "this day in history" queries) ──
-
-export function getMonthDayFromISO(isoString: string): string {
-  const d = new Date(isoString);
-  return `${d.getMonth() + 1}-${d.getDate()}`;
-}
-
-export function getSameMonthDayPast(userId: string): { after: string; before: string; label: string } {
-  const now = getUserNow(userId);
-  const month = now.getMonth() + 1;
-  const day = now.getDate();
-  const year = now.getFullYear();
-
-  const pastYear = year - 1;
-  const after = `${pastYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00.000Z`;
-  const before = `${pastYear}-${String(month).padStart(2, '0')}-${String(day + 1).padStart(2, '0')}T00:00:00.000Z`;
-
-  return { after, before, label: `${pastYear}年${month}月${day}日` };
 }

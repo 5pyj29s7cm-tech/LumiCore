@@ -26,10 +26,13 @@ vi.mock('../server/tools/pending_confirmation', async original => {
     await probe.consume?.(); return result;
   } };
 });
-vi.mock('../server/cognition', async original => ({
-  ...await original<typeof import('../server/cognition')>(),
-  processInput: (...args: any[]) => probe.process(...args),
-}));
+vi.mock('../server/llm/adapter', async original => {
+  const actual = await original<typeof import('../server/llm/adapter')>();
+  return { ...actual, runWithTools: async (...args: Parameters<typeof actual.runWithTools>) => {
+    await probe.process();
+    return actual.runWithTools(...args);
+  } };
+});
 vi.mock('../server/llm/providers', async original => ({
   ...await original<typeof import('../server/llm/providers')>(),
   makeLLMCall: (...args: any[]) => probe.model(...args),
@@ -129,10 +132,10 @@ async function setup(options: { confirmation?: boolean; response?: boolean; befo
     await recordPendingConfirmationDurably(uid, 'web_search', { query: 'Synthetic fixture' }, 'task', { ...scope, actionIntent: userText });
     probe.consume = async () => { entered(); await held; };
   } else if (options.response) {
-    probe.process.mockResolvedValue({ responseText: '', intent: { category: 'conversation', confidence: 1, entities: {}, needsLLM: true }, llmWasCalled: false, directToolExecuted: false, isFallback: false });
+    probe.process.mockResolvedValue(undefined);
     probe.model.mockResolvedValue({ text: 'A synthetic explanation with no external actions.', toolCalls: [] });
     entered();
-  } else probe.process.mockImplementationOnce(async () => { entered(); await held; throw new Error('Synthetic cognition stopped at test boundary'); });
+  } else probe.process.mockImplementationOnce(async () => { entered(); await held; throw new Error('Synthetic task stopped before model invocation'); });
   const responses: any[] = [];
   client.on('agent:response', payload => { if (payload.requestId === requestId) responses.push(payload); });
   options.beforeSend?.({ uid, requestId, conversationId });

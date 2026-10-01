@@ -31,7 +31,6 @@ export function layoutTree3D(
   files: FileEntry[],
 ): { nodes: TreeNode3D[]; curves: BranchCurve3D[] } {
   const memNodes = new Map<string, TreeNode3D>();
-  const roots: TreeNode3D[] = [];
   const childrenMap = new Map<string, string[]>();
 
   for (const m of memories) {
@@ -45,8 +44,7 @@ export function layoutTree3D(
       radius: m.nodeType === 'branch' ? 0.06 : 0.05,
     };
     memNodes.set(m.id, node);
-    if (!m.parentId) roots.push(node);
-    else {
+    if (m.parentId) {
       if (!childrenMap.has(m.parentId)) childrenMap.set(m.parentId, []);
       childrenMap.get(m.parentId)!.push(m.id);
     }
@@ -95,8 +93,6 @@ export function layoutTree3D(
     fileNodes[i].position.set(Math.cos(angle) * r, y, Math.sin(angle) * r * 0.6);
   }
 
-  const seedNodes = buildSeedNodes();
-
   // Build connector curves (thin arcs between nodes of same tier, for visual connection)
   const curves: BranchCurve3D[] = [];
   const byTier = new Map<string, TreeNode3D[]>();
@@ -105,7 +101,7 @@ export function layoutTree3D(
     if (!byTier.has(t)) byTier.set(t, []);
     byTier.get(t)!.push(n);
   }
-  for (const [tier, group] of byTier) {
+  for (const group of byTier.values()) {
     if (group.length < 2) continue;
     // Sort by y (time)
     group.sort((a, b) => a.position.y - b.position.y);
@@ -122,15 +118,14 @@ export function layoutTree3D(
     }
   }
 
-  const allNodes: TreeNode3D[] = [...seedNodes.nodes, ...memNodes.values(), ...fileNodes];
-  return { nodes: allNodes, curves: [...seedNodes.curves, ...curves] };
+  const allNodes: TreeNode3D[] = [...buildSeedNodes(), ...memNodes.values(), ...fileNodes];
+  return { nodes: allNodes, curves };
 }
 
 // ── Seed (no data) ──
 
-function buildSeedNodes(): { nodes: TreeNode3D[]; curves: BranchCurve3D[] } {
+function buildSeedNodes(): TreeNode3D[] {
   const nodes: TreeNode3D[] = [];
-  const curves: BranchCurve3D[] = [];
   const tierDefs = [
     { tier: 'core_identity', count: 8, label: 'Core' },
     { tier: 'growth', count: 15, label: 'Growth' },
@@ -160,5 +155,5 @@ function buildSeedNodes(): { nodes: TreeNode3D[]; curves: BranchCurve3D[] } {
     }
   }
 
-  return { nodes, curves };
+  return nodes;
 }

@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../../db/snapshot_changes';
 import { ToolRegistry } from '../registry';
 import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../../runtime/shutdown_work';
 import { createHash } from 'crypto';
@@ -421,7 +422,7 @@ function scheduleWorkflowWorker(args: Record<string, any>, context: any, runId: 
   args = { ...args, inputs };
   if (JSON.stringify(inputs).length <= 1_000_000) {
     if (workflowEphemeralInputs.size >= 100 && !workflowEphemeralInputs.has(runId)) workflowEphemeralInputs.delete(workflowEphemeralInputs.keys().next().value!);
-    workflowEphemeralInputs.set(runId, { userId, expires: Date.now() + 30 * 60_000, inputs: structuredClone(inputs) });
+    workflowEphemeralInputs.set(runId, { userId, expires: Date.now() + 30 * 60_000, inputs: cloneDatabaseValue(inputs) });
   }
   const generationKey = `${runId}:${leaseId}`;
   if (activeWorkflowWorkers.has(generationKey)) return;
@@ -722,7 +723,6 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       });
       continue;
     }
-    const currentManifest = context.toolRegistry.getCapabilityManifestEntry(capabilityId, context.toolPolicy, context);
     const currentDefinition = context.toolRegistry.get(capabilityId);
     const currentHandler = currentDefinition?.handler;
     const capabilityContractBlocker = `Workflow step '${step.stepId}' no longer matches its reviewed capability contract. Publish a reviewed workflow version before execution.`;

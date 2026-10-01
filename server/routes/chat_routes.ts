@@ -9,25 +9,21 @@ import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCallOrThrow } from "../tools/execution_engine";
+import { createToolReceiptObserver } from '../tools/receipt_observer';
+import { flushDBOrThrow } from '../../db_layer';
+import { captureOrganizationMembershipAuthorization, watchOrganizationMembershipAuthorization } from '../org/membership_authorization';
 import { recordLatency } from "../monitor/latency_store";
 import { optionalAuth, requireAuth, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
-import { finalizeLumiResponse } from "../cognition/result_finalizer";
-import {
-  finalizeExecutionForOutboundDelivery,
-  type ExecutionGuardRecoveryRunInput,
-} from "../cognition/execution_guard_recovery";
-import { buildLumiTurnDispatch } from "../cognition/turn_dispatch";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import {
+  finalizeLumiResponseForDelivery as finalizeRestChatResponse,
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
 } from "../cognition/response_delivery";
-import type { LumiTurnFlow } from "../cognition/turn_flow";
 import type { ToolExecutionRecord } from "../tools/types";
-import { restrictToolPolicyForExecutionBoundary } from "../tools/remote_policy";
 import { isLoopbackAddress } from "../config/local_identity";
 import {
   DESKTOP_SESSION_HEADER,
@@ -42,22 +38,17 @@ import {
 const REST_CHAT_BASE_SYSTEM_INSTRUCTION =
   'You are Lumi, the local core intelligence. Be professional, thoughtful, forward-looking, concise, and useful. Follow the user-facing response-language instruction while keeping internal protocols, tool names, state fields, and execution policy in canonical English.';
 
-function buildRestChatRouteText(messages: unknown, prompt: unknown): string {
-  if (Array.isArray(messages)) {
-    return messages
-      .map((item: any) => String(item?.content || item?.message || item?.text || '').trim())
-      .filter(Boolean)
-      .join('\n')
-      .slice(-12000);
-  }
-  return String(prompt || '').trim().slice(-12000);
+function buildRestConversationMessages(messages: unknown, prompt: unknown) {
+  const history = Array.isArray(messages) ? messages.filter(item => item
+    && (item.role === 'user' || item.role === 'assistant' || item.role == null)) : [];
+  return (history.length ? history : [{ role: 'user', content: prompt }]).map(item => ({
+    role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
+    content: String(item.content ?? item.message ?? item.text ?? ''),
+  }));
 }
 
 function buildRestProviderMessages(messages: unknown, prompt: unknown, systemInstruction: string): any[] {
-  const rawMessages = Array.isArray(messages) && messages.length > 0
-    ? messages
-    : [{ role: 'user', content: String(prompt || '') }];
-  const existingSystem = rawMessages
+  const existingSystem = (Array.isArray(messages) ? messages : [])
     .filter((item: any) => item?.role === 'system')
     .map((item: any) => String(item?.content || '').trim())
     .filter(Boolean)
@@ -65,25 +56,8 @@ function buildRestProviderMessages(messages: unknown, prompt: unknown, systemIns
   const systemContent = [systemInstruction, existingSystem].filter(Boolean).join('\n\n');
   return [
     { role: 'system', content: systemContent },
-    ...rawMessages
-      .filter((item: any) => item?.role !== 'system')
-      .map((item: any) => ({
-        role: item?.role === 'assistant' ? 'assistant' : 'user',
-        content: String(item?.content || item?.message || item?.text || ''),
-      })),
+    ...buildRestConversationMessages(messages, prompt),
   ];
-}
-
-function buildRestAnthropicMessages(messages: unknown, prompt: unknown): any[] {
-  const rawMessages = Array.isArray(messages) && messages.length > 0
-    ? messages
-    : [{ role: 'user', content: String(prompt || '') }];
-  return rawMessages
-    .filter((item: any) => item?.role !== 'system')
-    .map((item: any) => ({
-      role: item?.role === 'assistant' ? 'assistant' : 'user',
-      content: String(item?.content || item?.message || item?.text || ''),
-    }));
 }
 
 function buildRestChatSystemInstruction(input: {
@@ -100,48 +74,6 @@ function buildRestChatSystemInstruction(input: {
     source: input.source,
   });
   return [REST_CHAT_BASE_SYSTEM_INSTRUCTION, legalOverlay].filter(Boolean).join('\n\n');
-}
-
-type RestChatFinalization = ReturnType<typeof finalizeLumiResponse>;
-
-async function finalizeRestChatResponse(input: {
-  taskText: string;
-  responseText: string;
-  toolRecords?: ToolExecutionRecord[];
-  source: string;
-  flow?: LumiTurnFlow;
-  allowToolUse?: boolean;
-  attempt?: ExecutionGuardRecoveryRunInput<RestChatFinalization>['attempt'];
-  taskId?: string;
-  requestId?: string;
-}) {
-  const toolRecords = input.toolRecords || [];
-  const finalization = finalizeLumiResponse({
-    taskText: input.taskText,
-    responseText: input.responseText,
-    toolRecords,
-    source: input.source,
-    flow: input.flow,
-    taskId: input.taskId,
-    requestId: input.requestId,
-  });
-  return finalizeExecutionForOutboundDelivery({
-    task: input.taskText,
-    responseText: input.responseText,
-    finalization,
-    allowToolUse: input.allowToolUse === true,
-    toolRecords,
-    attempt: input.attempt,
-    finalize: (candidateText, records) => finalizeLumiResponse({
-      taskText: input.taskText,
-      responseText: candidateText,
-      toolRecords: records,
-      source: `${input.source}_guard_recovery`,
-      flow: input.flow,
-      taskId: input.taskId,
-      requestId: input.requestId,
-    }),
-  });
 }
 
 function dateLikeToIso(value: unknown, fallback = Date.now()): string {
@@ -315,6 +247,11 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const businessTaskId = String(req.body?.industryWorkflowTaskId || '').trim();
     const businessTask = businessTaskId ? getIndustryWorkflowTask({ userId, domain, orgId }, businessTaskId) : null;
     if (businessTaskId && (!businessTask || !trustedLocalExecution || isBYOK)) return res.status(403).json({ error: 'A scoped native business task is required' });
+    let businessAuthority: ReturnType<typeof captureOrganizationMembershipAuthorization> | undefined;
+    if (businessTask && domain === 'work') {
+      try { businessAuthority = captureOrganizationMembershipAuthorization(orgId, userId); }
+      catch { return res.status(403).json({ error: 'Active organization authority is required for business execution' }); }
+    }
     let businessSource = '';
     if (businessTask) {
       try { businessSource = validateIndustryWorkflowSourceInput(businessTask, req.body.industryWorkflowSourceInput); }
@@ -322,38 +259,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       if (!businessSource) return res.status(400).json({ error: 'The original business source is required' });
     }
     const businessMetadata = businessTask?.metadata?.industryWorkflow;
-    const routeText = businessSource || buildRestChatRouteText(messages, prompt);
-    const restTurnDispatch = buildLumiTurnDispatch({
-      userId,
-      text: routeText,
-      channel: 'chat',
-      source: 'rest_chat',
-      category: 'command',
-      domain,
-      orgId,
-      operationMode: 'assistant',
-      targetIsLumi: true,
-    });
-    const restBoundaryToolPolicy = restrictToolPolicyForExecutionBoundary({
-      allowedTools: ['*'],
-      requireConfirmation: [],
-      forbiddenTools: [],
-      maxIterations: 80,
-    }, executionBoundary);
-    const restBoundaryAllowedToolNames = new Set(restBoundaryToolPolicy.allowedTools || []);
-    const restBoundaryForbiddenTools = executionBoundary === 'remote_restricted'
-      ? toolRegistry.getToolDeclarations({
-          context: {
-            userId,
-            domain,
-            orgId,
-            source: 'rest_chat',
-            autonomous: false,
-          },
-        })
-          .map(declaration => declaration.function.name)
-          .filter(name => !restBoundaryAllowedToolNames.has('*') && !restBoundaryAllowedToolNames.has(name))
-      : [];
+    const conversationMessages = buildRestConversationMessages(messages, prompt);
+    // History informs interpretation; only the latest user message authorizes work.
+    const routeText = businessSource || (conversationMessages.slice().reverse().find(item => item.role === 'user')?.content || '').trim().slice(-12000);
     const restExecutionPipeline = buildLumiExecutionPipeline({
       dispatch: {
         userId,
@@ -366,12 +274,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         operationMode: 'assistant',
         targetIsLumi: true,
       },
-      prebuiltDispatch: restTurnDispatch,
       registry: toolRegistry,
-      personalityToolPolicy: restBoundaryToolPolicy,
-      additionalForbiddenTools: restBoundaryForbiddenTools,
+      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
+      executionBoundary,
       isSanctuary: !req.user,
     });
+    const restTurnDispatch = restExecutionPipeline.turnIntent;
     const restModelToolPolicy = restExecutionPipeline.authorizationPolicy;
     const restModelToolProjection = restExecutionPipeline.modelToolProjection;
     const restToolSessionActive = restExecutionPipeline.executionRequested;
@@ -415,8 +323,19 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     }
 
     const request = createRequestAbortController(req, res);
-    try {
+    const membershipWatcher = businessAuthority
+      ? watchOrganizationMembershipAuthorization(businessAuthority, orgId, userId, request.abort)
+      : undefined;
+    const isBusinessAuthorized = () => !membershipWatcher || membershipWatcher.isAuthorized();
+    const assertRequestActive = () => {
       request.signal.throwIfAborted();
+      if (!isBusinessAuthorized()) throw new Error('Business execution authorization was revoked');
+    };
+    const receiptObserver = businessTask ? createToolReceiptObserver(async record => {
+      if (isBusinessAuthorized()) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
+    }) : undefined;
+    try {
+      assertRequestActive();
       let responseText = '';
 
       if (isBYOK) {
@@ -425,9 +344,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         if (provider === "gemini") {
           const client = new GoogleGenerativeAI(userKey);
           const modelInstance = client.getGenerativeModel({ model: model || "gemini-2.0-flash", systemInstruction });
-          const contents = messages
-            ? messages.map((m: any) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }))
-            : [{ role: 'user', parts: [{ text: prompt }] }];
+          const contents = conversationMessages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
           responseText = (await modelInstance.generateContent({ contents }, { signal: request.signal })).response.text();
         } else if (provider === "anthropic") {
           const client = new Anthropic({ apiKey: userKey });
@@ -435,7 +352,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             model: model || "claude-sonnet-4-6",
             max_tokens: 1024,
             system: systemInstruction,
-            messages: buildRestAnthropicMessages(messages, prompt),
+            messages: conversationMessages,
           }, { signal: request.signal });
           responseText = response.content[0].type === 'text' ? response.content[0].text : '';
         } else {
@@ -467,10 +384,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       } else {
         const normalizedMessages: any[] = [
           { role: 'system', content: systemInstruction },
-          ...(messages || [{ role: 'user', content: prompt }]).map((m: any) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content || ''
-          }))
+          ...conversationMessages,
         ];
 
         const runRestToolTurn = (
@@ -483,7 +397,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           toolRegistry,
           { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
           async record => {
-            if (businessTask) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
+            assertRequestActive();
+            await receiptObserver?.persist(record);
             await onToolRecord?.(record);
           },
           restModelToolPolicy.maxIterations || 3,
@@ -493,7 +408,8 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           llm.getAnthropic,
           llm.getQwen,
           onChunk,
-          { ...toolContext, source, executionSignal: request.signal, isCancelled: () => request.signal.aborted },
+          { ...toolContext, source, executionSignal: request.signal,
+            isCancelled: () => request.signal.aborted || !isBusinessAuthorized(), onToolRecord: receiptObserver?.onToolRecord },
           llm.getOllama,
           llm.getLmStudio,
           llm.getArk,
@@ -508,7 +424,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           result: Awaited<ReturnType<typeof runRestToolTurn>>,
           source: string,
         ) => {
-          request.signal.throwIfAborted();
+          assertRequestActive();
           const usageRecords = [...(result.usageRecords || [])];
           const outbound = await finalizeRestChatResponse({
             taskText: routeText,
@@ -539,10 +455,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
               };
             },
           });
-          request.signal.throwIfAborted();
+          assertRequestActive();
           const industryWorkflow = businessTask ? recordIndustryWorkflowExecution({
             userId, domain, orgId, taskId: businessTask.id, resultText: outbound.finalization.text, toolRecords: outbound.toolRecords, source,
           }) : undefined;
+          if (industryWorkflow) await flushDBOrThrow();
+          assertRequestActive();
           return { outbound, usageRecords, industryWorkflow };
         };
 
@@ -554,51 +472,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           });
-          const restTextGate = createPreFinalizationTextGate();
-
-          const result = await runRestToolTurn(
-            normalizedMessages,
-            undefined,
-            (chunk) => {
-              if (request.signal.aborted) return;
-              if (!deferRestStream) {
-                const safeText = restTextGate.push(chunk);
-                if (safeText) {
-                  res.write(`data: ${JSON.stringify({ chunk: safeText })}\n\n`);
-                }
-              }
-            },
-          );
-          restTextGate.finish();
-
-          responseText = result.text || '';
-          const delivery = await finalizeRestToolResult(responseText, result, 'rest_chat_stream');
-          const finalized = delivery.outbound.finalization;
-          responseText = finalized.text;
-          for (const u of delivery.usageRecords) {
-            recordTokenUsage(userId, u.provider, u.model, {
-              promptTokens: u.promptTokens,
-              completionTokens: u.completionTokens,
-              totalTokens: u.totalTokens,
-            }, `rest_chat_${Date.now()}`, 'chat');
-          }
-          res.write(`data: ${JSON.stringify({
-            done: true,
-            text: responseText,
-            toolCalls: delivery.outbound.toolRecords.length,
-            industryWorkflow: delivery.industryWorkflow ? { taskId: businessTask!.id, status: delivery.industryWorkflow.task.status, verification: delivery.industryWorkflow.verification } : undefined,
-            finalized: true,
-            blocked: finalized.blocked,
-            reason: finalized.reason,
-            notification: finalized.notification,
-          })}\n\n`);
-          return res.end();
         }
-
-        const result = await runRestToolTurn(normalizedMessages);
-
-        responseText = result.text || '';
-        const delivery = await finalizeRestToolResult(responseText, result, 'rest_chat');
+        const restTextGate = createPreFinalizationTextGate();
+        const result = await runRestToolTurn(normalizedMessages, undefined, stream ? chunk => {
+          if (request.signal.aborted || deferRestStream) return;
+          const safeText = restTextGate.push(chunk);
+          if (safeText) res.write(`data: ${JSON.stringify({ chunk: safeText })}\n\n`);
+        } : undefined);
+        restTextGate.finish();
+        const delivery = await finalizeRestToolResult(result.text || '', result, stream ? 'rest_chat_stream' : 'rest_chat');
         const finalized = delivery.outbound.finalization;
         responseText = finalized.text;
         for (const u of delivery.usageRecords) {
@@ -612,37 +494,33 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
           totalTokens: delivery.usageRecords.reduce((sum, item) => sum + item.totalTokens, 0),
           records: delivery.usageRecords.length,
         };
-        return res.json({
+        const payload = {
           text: responseText,
           usage,
           toolCalls: delivery.outbound.toolRecords.length,
+          industryWorkflow: delivery.industryWorkflow ? { taskId: businessTask!.id, status: delivery.industryWorkflow.task.status, verification: delivery.industryWorkflow.verification } : undefined,
           finalized: true,
           blocked: finalized.blocked,
           reason: finalized.reason,
           notification: finalized.notification,
-        });
+        };
+        if (stream) {
+          res.write(`data: ${JSON.stringify({ ...payload, done: true })}\n\n`);
+          return res.end();
+        }
+        return res.json(payload);
       }
-
-      const outbound = await finalizeRestChatResponse({
-        taskText: routeText,
-        responseText,
-        source: 'rest_chat',
-        flow: restTurnDispatch.flow,
-      });
-      const finalized = outbound.finalization;
-      res.json({
-        text: finalized.text,
-        finalized: true,
-        blocked: finalized.blocked,
-        reason: finalized.reason,
-        notification: finalized.notification,
-      });
     } catch (error: any) {
-      if (businessTask) interruptIndustryWorkflow({ userId, domain, orgId }, businessTask.id, request.signal.aborted, request.signal.aborted ? 'Business execution was cancelled; previous receipts retained.' : 'Business execution stopped before verified delivery.');
-      if (request.signal.aborted) return;
+      if (businessTask) {
+        interruptIndustryWorkflow({ userId, domain, orgId }, businessTask.id, request.signal.aborted, request.signal.aborted ? 'Business execution was cancelled; previous receipts retained.' : 'Business execution stopped before verified delivery.');
+        try { await flushDBOrThrow(); }
+        catch (persistenceError) { error = persistenceError; }
+      }
+      const authorizationRevoked = !isBusinessAuthorized();
+      if (request.signal.aborted && (!authorizationRevoked || res.destroyed)) return;
       console.error("AI Proxy Error:", error);
       const publicError = sanitizeChatAgentErrorPayload({
-        code: chatPublicErrorCodeForException(error),
+        code: authorizationRevoked ? 'CHAT_CONVERSATION_REFRESH_FAILED' : chatPublicErrorCodeForException(error),
       });
       if (res.headersSent) {
         if (!res.destroyed && !res.writableEnded) {
@@ -651,11 +529,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         }
         return;
       }
-      res.status(publicError.code === 'CHAT_PRIVACY_RESTRICTED' ? 403 : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
+      res.status(authorizationRevoked || publicError.code === 'CHAT_PRIVACY_RESTRICTED' ? 403 : publicError.code === 'CHAT_MODEL_ROUTES_UNAVAILABLE' ? 503 : 500).json({
         error: publicError.message,
         code: publicError.code,
       });
     } finally {
+      membershipWatcher?.dispose();
       request.dispose();
     }
   });

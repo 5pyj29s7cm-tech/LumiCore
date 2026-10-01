@@ -35,6 +35,7 @@ import { resetRealtimeUserActivityForTests, setRealtimeVoiceSessionActive } from
 import { executeToolCall, toolExecutionInputDigests } from '../server/tools/execution_engine';
 import { resetExternalCommitRuntimeCacheForTests, ToolRegistry, toolRegistry } from '../server/tools/registry';
 import type { ToolContext } from '../server/tools/types';
+import { acquireDesktopControlLease, getDesktopControlQueueLength, resetDesktopControlLeasesForTests } from '../server/desktop/control_lease';
 
 const owner = 'durable-lifecycle-synthetic-user';
 function task() {
@@ -85,9 +86,31 @@ afterEach(() => {
   resetAutonomousTaskQueueForTest({ clearPersisted: true, markHydrated: true });
   toolRegistry.unregister('write_file');
   resetRealtimeUserActivityForTests();
+  resetDesktopControlLeasesForTests();
 });
 
 describe('autonomous durable action lifecycle', () => {
+  it('withdraws cancelled autonomous work from the desktop queue before foreground control is released', async () => {
+    const foreground = await acquireDesktopControlLease({ userId: owner, taskId: 'foreground-owner', source: 'task' });
+    const queued = enqueue({ userId: owner, title: 'Create local report', description: 'Create a local text report.', source: 'user_request', priority: 5, mode: 'desktop' })!;
+    const fetchSockets = vi.fn(async () => []);
+    const io = { to: () => ({ emit: vi.fn() }), in: () => ({ fetchSockets }), sockets: { sockets: new Map() } } as any;
+    toolRegistry.register({ name: 'write_file', description: 'Write a local text report', permission: 'public', securityLevel: 'safe',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+      handler: async (_args, context) => context!.desktopRelay!('desktop_write_text_file', { path: 'synthetic.txt', content: 'text' }) });
+    mocks.model.mockResolvedValue({ text: '', toolCalls: [{ id: 'queued-report', name: 'write_file', arguments: { path: 'synthetic.txt', content: 'text' } }] });
+    const parent = new AbortController();
+    const pending = executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner, { signal: parent.signal });
+    try {
+      await vi.waitFor(() => expect(getDesktopControlQueueLength(owner)).toBe(1));
+      parent.abort(new Error('Stop before desktop ownership'));
+      await vi.waitFor(() => expect(getDesktopControlQueueLength(owner)).toBe(0));
+      await pending;
+      expect(fetchSockets).not.toHaveBeenCalled();
+      expect(getTaskHistory(50, 0, owner).find(item => item.id === queued.id)?.status).toBe('cancelled');
+    } finally { foreground.release(); await pending; }
+  });
+
   it('runs two distinct writes through the actual autonomous executor and persists separate action keys', async () => {
     const handler = vi.fn(async (args: Record<string, any>) => `File written: ${args.path} (${args.content.length} bytes)`);
     toolRegistry.register({ name: 'write_file', description: 'Write a local text report', permission: 'public', securityLevel: 'safe',

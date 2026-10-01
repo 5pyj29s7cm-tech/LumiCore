@@ -251,22 +251,6 @@
     "en": "Language Model Providers",
     "zh": "语言模型服务商"
   },
-  "settings.vision-capable-providers.40ab375ce2": {
-    "en": "Vision-Capable Providers",
-    "zh": "视觉模型服务商"
-  },
-  "settings.vision-provider-description.77b9f301aa": {
-    "en": "Configure vision-capable model catalogs and local runtimes here. Choose which one is active under Model Roles.",
-    "zh": "在这里配置视觉模型目录和本地运行时；实际使用哪个模型在“模型分工”中选择。"
-  },
-  "settings.speech-model-providers.99e68f2051": {
-    "en": "Speech Model Providers",
-    "zh": "语音模型服务商"
-  },
-  "settings.speech-provider-description.ea8bf84041": {
-    "en": "Configure cloud speech credentials here. Speech recognition and synthesis roles are selected under Model Roles.",
-    "zh": "在这里配置云端语音凭据；语音识别与合成的实际分工在“模型分工”中选择。"
-  },
   "settings.reasoning.6a171d96b4": {
     "en": "Reasoning",
     "zh": "推理"
@@ -490,14 +474,6 @@
   "settings.save-desktop-action-model.1fb3f1157c": {
     "en": "Save action model",
     "zh": "保存行动模型"
-  },
-  "settings.generation-model-providers.b4f1c95162": {
-    "en": "Generation Model Providers",
-    "zh": "生成模型服务商"
-  },
-  "settings.generation-model-providers-description.a548399017": {
-    "en": "Credentials for model services used by generative roles and installed generation skills. Data sources and tool runtimes are configured elsewhere.",
-    "zh": "管理生成模型角色和已安装生成技能使用的模型服务商凭据。数据源与工具运行服务在其他分类中配置。"
   },
   "settings.minimax-generation-provider-hint.2c939bd0f7": {
     "en": "Enables installed MiniMax model tools for image, video, music, speech, and voice generation.",
@@ -6307,10 +6283,6 @@
     "en": "Connected via environment",
     "zh": "已通过环境变量连接"
   },
-  "settings.connected.4f18b17c87": {
-    "en": "CONNECTED",
-    "zh": "已连接"
-  },
   "settings.controls-whether-the-desktop-client.0b21f43460": {
     "en": "Controls whether the desktop client starts with the system and stays alive after closing the window.",
     "zh": "控制桌面客户端是否随系统启动，以及关闭窗口后是否继续留在后台。"
@@ -6390,10 +6362,6 @@
   "settings.enter-ark-api-key.9f82bf67e1": {
     "en": "Enter Ark API key...",
     "zh": "输入 Ark API Key..."
-  },
-  "settings.enter-gemini-api-key.4295b94e77": {
-    "en": "Enter Gemini API key...",
-    "zh": "输入 Gemini API Key..."
   },
   "settings.enter-glm-api-key.d9e86fca17": {
     "en": "Enter GLM API key...",
@@ -6527,10 +6495,6 @@
     "en": "Local TTS: Local CosyVoice / GPT-SoVITS; cloud: DashScope CosyVoice / Doubao.",
     "zh": "本地 TTS：Local CosyVoice / GPT-SoVITS；云端：DashScope CosyVoice / Doubao。"
   },
-  "settings.local-vision-processes-screenshots-and.94552138f2": {
-    "en": "Local vision processes screenshots and images on your machine. The selected model must support image input, otherwise vision tasks will fail explicitly.",
-    "zh": "本地视觉只在你的电脑上处理截图和图片。模型需要支持图像输入，否则视觉任务会失败并明确报错。"
-  },
   "settings.local-whisper-openai-whisper-doubao.ff3da59708": {
     "en": "Local Whisper, OpenAI Whisper, Doubao, and Qwen ASR are available.",
     "zh": "本地 Whisper、OpenAI Whisper、豆包和 Qwen ASR 可用。"
@@ -6610,10 +6574,6 @@
   "settings.please-enable-access-in-system.3fa8966e6c": {
     "en": "Please enable access in system permissions.",
     "zh": "璇峰湪绯荤粺鏉冮檺涓墦寮€璁块棶"
-  },
-  "settings.powers-qwen-asr-and-dashscope.519f4cb3da": {
-    "en": "Powers Qwen ASR and DashScope CosyVoice cloud TTS. Get your key at dashscope.aliyun.com",
-    "zh": "用于 Qwen ASR 和 DashScope CosyVoice 云端 TTS。可在 dashscope.aliyun.com 获取密钥。"
   },
   "settings.primary-reasoning-brain.5bdd279d51": {
     "en": "Primary Reasoning Brain",
@@ -6743,33 +6703,13 @@
     "en": "Unavailable",
     "zh": "不可用"
   },
-  "settings.use-as-vision.adf03f9489": {
-    "en": "Use as Vision",
-    "zh": "设为视觉"
-  },
   "settings.use-gpu-for-neural-core.de372afa5c": {
     "en": "Use GPU for neural core inference.",
     "zh": "使用 GPU 加速核心推理。"
   },
-  "settings.use-this-for-vllm-sglang.6ba52812bd": {
-    "en": "Use this for vLLM, SGLang, Xinference, or any local OpenAI-compatible vision endpoint.",
-    "zh": "用于 vLLM、SGLang、Xinference 或其他兼容 OpenAI Chat Completions 的本地视觉服务。"
-  },
   "settings.use.1ec0c92474": {
     "en": "Use",
     "zh": "设为主模型"
-  },
-  "settings.use.998b2bc522": {
-    "en": "Use",
-    "zh": "设为视觉"
-  },
-  "settings.vision-call-failed.adf12eb156": {
-    "en": "Vision call failed",
-    "zh": "视觉实调失败"
-  },
-  "settings.vision-call-passed-value0-ms.c80d92a068": {
-    "en": "Vision call passed · {value0} ms",
-    "zh": "视觉实调成功 · {value0} ms"
   },
   "settings.vision-is-used-only-for.9a9cf081fd": {
     "en": "Visual perception reads images, screenshots, OCR, and interfaces inside the World Model. It does not replace the primary reasoning or voice roles.",
@@ -7015,10 +6955,6 @@
     "en": "Configure {value0} before real calls can run.",
     "zh": "需要配置 {value0} 后才能真实调用。"
   },
-  "skill-center.connected-to-lumi-and-available.410a87e979": {
-    "en": "Connected to Lumi and available to chat, run logs, and tool routing.",
-    "zh": "已连接到 Lumi，聊天、运行日志和工具调度可使用。"
-  },
   "skill-center.connected-to-lumi-and-available.e7eedbc8db": {
     "en": "Connected to Lumi and available for chat, orchestration, and tool calls.",
     "zh": "已连接到 Lumi，可以在聊天、调度和工具调用中使用。"
@@ -7042,10 +6978,6 @@
   "skill-center.installed-but-its-local-service.0372816817": {
     "en": "Installed, but its local service is not connected to Lumi yet.",
     "zh": "已安装，但本地服务还没有连上 Lumi。"
-  },
-  "skill-center.installed-but-its-mcp-server.9f5145472b": {
-    "en": "Installed but its MCP server is not connected yet.",
-    "zh": "已安装但 MCP 进程尚未连接。"
   },
   "skill-center.installed-disabled.46156ea2d0": {
     "en": "Installed, disabled",
@@ -7075,17 +7007,9 @@
     "en": "Needs configuration",
     "zh": "需配置"
   },
-  "skill-center.needs-connection.a5cb6b78b7": {
-    "en": "Needs connection",
-    "zh": "待连接"
-  },
   "skill-center.needs-repair.53833da009": {
     "en": "Needs repair",
     "zh": "需修复"
-  },
-  "skill-center.needs-setup.e1bc0e20e1": {
-    "en": "Needs setup",
-    "zh": "需本机环境"
   },
   "skill-center.no-installed-skills-yet.48c5eca957": {
     "en": "No installed skills yet.",
@@ -7102,14 +7026,6 @@
   "skill-center.not-enough-work-signals-yet.c81ce5b488": {
     "en": "Not enough work signals yet, so recommendations stay conservative.",
     "zh": "暂时还没有足够的职业或工作信号，推荐会先保持保守。"
-  },
-  "skill-center.official-bundled-skill-install-and.c28c0f16b6": {
-    "en": "Official bundled skill. Install and connect it to call it.",
-    "zh": "官方内置技能，安装并连接后可直接调用。"
-  },
-  "skill-center.ready-after-install.9ccfaed578": {
-    "en": "Ready after install",
-    "zh": "安装后可用"
   },
   "skill-center.recommended-for-your-work.be5baee372": {
     "en": "Recommended for your work",
@@ -7134,10 +7050,6 @@
   "skill-center.repair.c5b19788e4": {
     "en": "Repair",
     "zh": "修复"
-  },
-  "skill-center.requires-local-dependencies-before-use.f9734c5f1c": {
-    "en": "Requires local dependencies before use.",
-    "zh": "需要先完成本机依赖安装。"
   },
   "skill-center.requires-local-dependencies-or-account.87aec9deaa": {
     "en": "Requires local dependencies or account setup before use.",
@@ -7718,26 +7630,6 @@
   "token-dashboard.total-tokens.45e4cbe764": {
     "en": "Total Tokens",
     "zh": "Token 总量"
-  },
-  "user-switch-prompt.confidence.dc2fc3df56": {
-    "en": "Confidence",
-    "zh": "置信度"
-  },
-  "user-switch-prompt.detected.7548e82813": {
-    "en": "Detected",
-    "zh": "检测到"
-  },
-  "user-switch-prompt.ignore.9330c23b1e": {
-    "en": "Ignore",
-    "zh": "忽略"
-  },
-  "user-switch-prompt.switch.5a77f0584c": {
-    "en": "Switch",
-    "zh": "切换"
-  },
-  "user-switch-prompt.switching.c197a0b742": {
-    "en": "Switching...",
-    "zh": "切换中..."
   },
   "voice-forge.clone-your-digital-essence-or.30ff243ebc": {
     "en": "Clone your digital essence or select from neural presets.",

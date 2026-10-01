@@ -4,6 +4,7 @@ import path from 'path';
 import { getDataPath } from '../config/data_path';
 import {
   listStatuteVerificationCatalog,
+  parseArticleNumber,
   type StatuteVerificationCatalogEntry,
 } from './kb';
 import {
@@ -57,45 +58,11 @@ export interface StatuteAuthorityRefreshResult extends StatuteAuthorityRefreshRu
   archivePath?: string;
 }
 
-const CHINESE_DIGITS: Record<string, number> = {
-  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
-  五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
-};
-
 function normalizeTitle(value: unknown): string {
   return String(value || '')
     .replace(/<[^>]+>/g, '')
     .replace(/\s+/g, '')
     .trim();
-}
-
-function parseChineseNumber(value: string): number | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  if (/^\d+$/.test(raw)) return Number(raw);
-  const units: Record<string, number> = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
-  let total = 0;
-  let section = 0;
-  let number = 0;
-  let sawNumber = false;
-  for (const char of raw) {
-    if (char in CHINESE_DIGITS) {
-      number = number * 10 + CHINESE_DIGITS[char];
-      sawNumber = true;
-      continue;
-    }
-    const unit = units[char];
-    if (!unit) return null;
-    sawNumber = true;
-    if (unit === 10000) {
-      total += (section + number) * unit;
-      section = 0;
-    } else {
-      section += (number || 1) * unit;
-    }
-    number = 0;
-  }
-  return sawNumber ? total + section + number : null;
 }
 
 export function extractOfficialArticleMax(content: unknown): number | null {
@@ -108,7 +75,7 @@ export function extractOfficialArticleMax(content: unknown): number | null {
     }
     const match = String(node.title || '').trim().match(/^第([零〇一二两三四五六七八九十百千万\d]+)条(?:\s|$)/);
     if (match) {
-      const parsed = parseChineseNumber(match[1]);
+      const parsed = parseArticleNumber(match[1]);
       if (parsed && parsed > maximum) maximum = parsed;
     }
     if (Array.isArray(node.children)) node.children.forEach(visit);

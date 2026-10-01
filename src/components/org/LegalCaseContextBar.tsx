@@ -1,4 +1,3 @@
-import React from 'react';
 import { CheckCircle2, FolderOpen, Loader2, Link2, MinusCircle } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
@@ -16,8 +15,6 @@ export function LegalCaseContextBar({
   detail?: string;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const title = caseFile?.title || caseFile?.party || caseFile?.caseNumber || uiMessage('legal-case-context-bar.untitled-case.796e2578d9');
   const stageLabel = caseFile ? ({
     consultation: uiMessage('legal-case-context-bar.consultation.af6082a2f4'),

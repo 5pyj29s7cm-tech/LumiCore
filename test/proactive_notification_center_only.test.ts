@@ -62,24 +62,9 @@ describe('notification center-only delivery', () => {
   it('keeps socket and load failures inline instead of duplicating them as toasts', () => {
     const chat = source('src/components/AgentChatPage.tsx');
     const chatError = between(chat, 'const onError = (data:', '// conversation_updated:');
-    const knowledge = source('src/components/KnowledgeBase.tsx');
-    const knowledgeLoadError = between(knowledge, 'const reportLoadError', 'const scopedMemoryUrl');
 
     expect(chatError).toContain('setMessages(prev =>');
     expect(chatError).not.toContain('toast.');
-    expect(knowledgeLoadError).toContain('setLoadError(message)');
-    expect(knowledgeLoadError).not.toContain('toast.');
-  });
-
-  it('moves autonomous completion and failure alerts into the notification center', () => {
-    const feed = source('src/components/AutonomousFeed.tsx');
-    const failedHandler = between(feed, 'const recordFailedTask', 'const onCompleted');
-    const completedHandler = between(feed, 'const onCompleted', 'const onFailed');
-
-    expect(failedHandler).toContain('addNotification({');
-    expect(failedHandler).not.toContain('toast.error');
-    expect(completedHandler).toContain('addNotification({');
-    expect(completedHandler).not.toContain('toast.success');
   });
 
   it('preserves unread count, notification list access, and click-through viewing', () => {

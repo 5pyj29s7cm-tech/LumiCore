@@ -1,3 +1,4 @@
+import { extractSourceExpression } from './source_expression';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -59,6 +60,33 @@ See [Spec](docs/spec.md) and #rag.
   });
 });
 
+describe('knowledge file memory associations', () => {
+  const group = extractSourceExpression('routes/files.ts', 'groupExistingFileMemories', { path });
+  it('preserves aliases, Unicode, legacy prefix ambiguity, order and scope without duplicate references', () => {
+    const base = { type: 'knowledge', userId: 'owner', agentId: 'lumi', domain: 'personal' };
+    const rows = [
+      { id: 'path', sourceInteractionId: 'D:/vault/REPORT.TXT', keywords: ['source:report.txt'] },
+      { id: 'keyword', keywords: ['SOURCE:CAFE\u0301.TXT'] },
+      { id: 'header', content: '[cafe\u0301.txt #1] body' },
+      { id: 'ambiguous', content: '[has # fragment.txt #2] body' },
+      { id: 'wrong-case', content: '[Header.txt #1] body' },
+      { id: 'private', userId: 'other', sourceInteractionId: 'Report.txt' },
+      { id: 'work', domain: 'work', orgId: 'org-a', userId: 'other', sourceInteractionId: 'Report.txt' },
+      { id: 'other-org', domain: 'work', orgId: 'org-b', sourceInteractionId: 'Report.txt' },
+      { id: 'other-agent', agentId: 'other', sourceInteractionId: 'Report.txt' },
+      { id: 'non-knowledge', type: 'episodic', sourceInteractionId: 'Report.txt' },
+    ].map(row => ({ ...base, ...row }));
+    const files = ['Report.txt', 'report.txt', 'café.txt', 'cafe\u0301.txt', 'has', 'has # fragment.txt', 'header.txt'];
+    const personal = group({ memories: rows }, files, { domain: 'personal' }, { userId: 'owner', agentId: 'lumi' });
+    expect(Object.fromEntries([...personal].map(([name, memories]: any) => [name, memories.map((m: any) => m.id)]))).toEqual({
+      'Report.txt': ['path'], 'report.txt': ['path'], 'café.txt': ['keyword', 'header'],
+      'cafe\u0301.txt': ['keyword'], 'has': ['ambiguous'], 'has # fragment.txt': ['ambiguous'],
+    });
+    expect(group({ memories: rows }, files, { domain: 'work', orgId: 'org-a' }).get('Report.txt').map((m: any) => m.id)).toEqual(['work']);
+    expect(group({ memories: rows }, [], { domain: 'personal' }).size).toBe(0);
+  });
+});
+
 describe('RAG markdown source metadata', () => {
   beforeAll(async () => {
     const app = await makeApp();
@@ -104,6 +132,18 @@ describe('RAG markdown source metadata', () => {
       headers: { Cookie: orgCookie },
     });
     expect(mixedScope.status).toBe(403);
+    const { readDB } = await import('../db_layer');
+    const db = readDB();
+    for (const suffix of ['a', 'b']) db.memories.push({ id: 'vault-association-' + suffix, type: 'knowledge', domain: 'personal',
+      userId: 'vault-user-' + suffix, agentId: 'agent-' + suffix, sourceInteractionId: 'private-note.txt', content: 'Synthetic note',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } as any);
+    for (const [cookie, agent] of [[cookieA, 'agent-a'], [cookieB, 'agent-b']]) {
+      const response = await fetch(testUrl + '/api/files/list?domain=personal', { headers: { Cookie: cookie } });
+      const listed = (await response.json()).files.find((file: any) => file.id === 'private-note.txt');
+      expect(listed.agentIds).toContain(agent);
+      expect(listed.agentIds).not.toContain(agent === 'agent-a' ? 'agent-b' : 'agent-a');
+      expect(listed.status).toBe('indexed');
+    }
   });
 
   it('stores tags, aliases, and links as retrievable memory keywords', async () => {

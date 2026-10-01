@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, Camera, Shield, CheckCircle2, Loader2, Trash2, RefreshCw } from 'lucide-react';
+import { Mic, Camera, Shield, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
 import { useVoiceprint } from '../../hooks/useVoiceprint';
 import { useFaceRecognition } from '../../hooks/useFaceRecognition';
 import { useT } from '../../lib/useT';
@@ -9,8 +9,6 @@ import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 export function BiometricsEnrollPanel() {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const voiceprint = useVoiceprint();
   // Enrollment opens its own short-lived camera stream on demand.
   const faceRecognition = useFaceRecognition({ enabled: false });
@@ -80,7 +78,7 @@ export function BiometricsEnrollPanel() {
       setVoiceStatus('idle');
       toast.error(uiMessage('biometrics-enroll-panel.voiceprint-enrollment-failed-move-closer.b1d5ff9891'));
     }
-  }, [voiceStatus, voiceLabel, voiceprint, loadEnrolled, notifyBiometricsUpdated, ui]);
+  }, [voiceStatus, voiceLabel, voiceprint, loadEnrolled, notifyBiometricsUpdated]);
 
   // ── Face enrollment ──
   const handleFaceEnroll = useCallback(async () => {
@@ -97,7 +95,7 @@ export function BiometricsEnrollPanel() {
       setFaceStatus('idle');
       toast.error(uiMessage('biometrics-enroll-panel.face-enrollment-failed-look-at.ccc08993ab'));
     }
-  }, [faceStatus, faceRecognition, loadEnrolled, notifyBiometricsUpdated, ui]);
+  }, [faceStatus, faceRecognition, loadEnrolled, notifyBiometricsUpdated]);
 
   // ── Delete ──
   const handleDelete = useCallback(async (type: string, id: string) => {
@@ -111,7 +109,7 @@ export function BiometricsEnrollPanel() {
     } catch {
       toast.error(uiMessage('biometrics-enroll-panel.delete-failed.eea779ae78'));
     }
-  }, [loadEnrolled, notifyBiometricsUpdated, ui]);
+  }, [loadEnrolled, notifyBiometricsUpdated]);
 
   return (
     <div className="space-y-8">

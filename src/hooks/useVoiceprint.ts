@@ -226,7 +226,6 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
     source: 'none',
   });
   const [enrolledCount, setEnrolledCount] = useState(0);
-  const [templateFrameCount, setTemplateFrameCount] = useState(0);
   const [usableTemplateCount, setUsableTemplateCount] = useState(0);
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
 
@@ -276,7 +275,6 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       if (!res.ok) {
         templatesRef.current = [];
         setEnrolledCount(0);
-        setTemplateFrameCount(0);
         setUsableTemplateCount(0);
         return;
       }
@@ -290,12 +288,10 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
       }));
       templatesRef.current = templates;
       setEnrolledCount(templates.length);
-      setTemplateFrameCount(templates.reduce((sum: number, tpl: VoiceprintTemplate) => sum + tpl.mfccFrames.length, 0));
       setUsableTemplateCount(templates.filter((tpl: VoiceprintTemplate) => tpl.hasEmbedding || tpl.mfccFrames.length > 0).length);
     } catch {
       templatesRef.current = [];
       setEnrolledCount(0);
-      setTemplateFrameCount(0);
       setUsableTemplateCount(0);
     } finally {
       setTemplatesLoaded(true);
@@ -650,7 +646,6 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
           hasEmbedding: data.voiceprint.embeddingReady === true,
         });
         setEnrolledCount(templatesRef.current.length);
-        setTemplateFrameCount(prev => prev + frames.length);
         setUsableTemplateCount(templatesRef.current.filter(tpl => tpl.hasEmbedding || tpl.mfccFrames.length > 0).length);
         return { success: true, voiceprintId: data.voiceprint.id };
       }

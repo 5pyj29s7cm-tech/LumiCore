@@ -21,67 +21,6 @@ type ProactivePayload = {
   reason?: string;
 };
 
-type ToolCallPayload = {
-  name: string;
-  arguments: Record<string, any>;
-  result?: string;
-  error?: string;
-};
-
-export type ToolNotificationState = 'running' | 'failed' | 'blocked' | 'verified' | 'result';
-
-export function classifyToolNotification(data: ToolCallPayload): {
-  state: ToolNotificationState;
-  detail: string;
-} {
-  if (data.error) return { state: 'failed', detail: data.error };
-  if (data.result === undefined) return { state: 'running', detail: '' };
-
-  const detail = String(data.result || '').trim();
-  let parsed: unknown = detail;
-  for (let attempt = 0; attempt < 3 && typeof parsed === 'string' && parsed; attempt += 1) {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      parsed = null;
-    }
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { state: 'result', detail };
-  }
-
-  const payload = parsed as Record<string, unknown>;
-  const status = typeof payload.status === 'string' ? payload.status.trim().toLowerCase() : '';
-  if (
-    payload.ok === false
-    || payload.success === false
-    || ['error', 'failed'].includes(status)
-    || (typeof payload.error === 'string' && payload.error.trim())
-  ) {
-    return {
-      state: 'failed',
-      detail: typeof payload.error === 'string' && payload.error.trim() ? payload.error : detail,
-    };
-  }
-  if (
-    payload.verified === false
-    || payload.completed === false
-    || ['blocked', 'cancelled', 'canceled', 'partial', 'pending', 'queued', 'timeout', 'timed_out', 'unverified'].includes(status)
-  ) {
-    return { state: 'blocked', detail };
-  }
-  if (
-    payload.ok === true
-    || payload.success === true
-    || payload.verified === true
-    || payload.completed === true
-    || ['completed', 'done', 'ok', 'success', 'succeeded', 'verified'].includes(status)
-  ) {
-    return { state: 'verified', detail };
-  }
-  return { state: 'result', detail };
-}
-
 /**
  * Bridge between backend socket events and the persistent notification center.
  * It intentionally never opens transient popups; users review notifications from the bell.

@@ -5,10 +5,6 @@ export function getContacts(userId: string): Contact[] {
   return (readDB().contacts || []).filter((c: Contact) => c.userId === userId);
 }
 
-export function getContactById(id: string, userId: string): Contact | undefined {
-  return (readDB().contacts || []).find((c: Contact) => c.id === id && c.userId === userId);
-}
-
 export function searchContacts(userId: string, query: string): Contact[] {
   const q = query.toLowerCase();
   return (readDB().contacts || []).filter((c: Contact) =>

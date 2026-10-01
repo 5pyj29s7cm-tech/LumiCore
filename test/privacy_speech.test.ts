@@ -36,7 +36,6 @@ import * as arkTts from '../server/tts/providers/ark';
 import * as relayTts from '../server/tts/providers/relay';
 import * as localCosyvoice from '../server/tts/providers/local_cosyvoice';
 import * as gptsovits from '../server/tts/providers/gptsovits';
-import { escalateIfUncertain, verifyFaceCloud, verifyVoiceprintCloud } from '../server/biometrics/cloud_verify';
 import { resetCircuit } from '../server/cloud/circuit_breaker';
 
 beforeEach(() => {
@@ -110,7 +109,7 @@ describe('strict speech transport boundaries', () => {
     expect(mocks.runtime).not.toHaveBeenCalled();
   });
 
-  it('blocks direct cloud synthesis, cloning, design and biometric fallback', async () => {
+  it('blocks direct cloud synthesis, cloning and design', async () => {
     for (const provider of [cosyvoice, arkTts, relayTts]) {
       await expect(provider.synthesizeSpeech('private reply')).rejects.toThrow('[Privacy]');
     }
@@ -122,11 +121,6 @@ describe('strict speech transport boundaries', () => {
     await expect(tts.cloneVoice(sample, 'cosyvoice')).rejects.toThrow('[Privacy]');
     await expect(tts.designVoice('private prompt', 'synthetic')).rejects.toThrow('[Privacy]');
     await expect(tts.getVoiceCloneStatus('private-speaker-id', 'ark')).rejects.toThrow('[Privacy]');
-    await expect(verifyFaceCloud('synthetic-face', 'synthetic-face')).rejects.toThrow('[Privacy]');
-    await expect(verifyVoiceprintCloud('synthetic-audio', 'synthetic-id')).rejects.toThrow('[Privacy]');
-    const escalation = vi.fn();
-    await expect(escalateIfUncertain(0.6, 0.8, escalation)).resolves.toEqual({ matched: true, confidence: 0.6, source: 'local' });
-    expect(escalation).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 

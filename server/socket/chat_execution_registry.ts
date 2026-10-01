@@ -1,3 +1,4 @@
+import { parseStoredObject as parsePayload } from '../tools/receipt_payload';
 import { ensureDatabaseInitialized, querySQL, runSQL } from '../../db_layer';
 import { normalizeCompletionFeedbackForPersistence } from '../conversation/completion_feedback';
 import { sanitizeMediaArtifactReceipt } from './media_artifact_receipt';
@@ -159,21 +160,6 @@ function compactString(value: unknown, limit: number): string {
   return typeof value === 'string'
     ? value.replace(/\0/g, '').trim().slice(0, limit)
     : '';
-}
-
-function parsePayload(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, any>;
-  }
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, any>
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 function finiteRevision(value: unknown): number | undefined {

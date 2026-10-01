@@ -93,7 +93,7 @@ describe('conversation focus threads', () => {
     expect(updateConversationFocusThread(db, { taskId: 'task-org-b', userId: 'user-1', domain: 'work', orgId: 'org-a', nextAction: 'leak' })).toBeNull();
   });
 
-  it('adds the focus projection during normal action-ledger synchronization', () => {
+  it('projects focus after reload without persisting a second lifecycle during ledger synchronization', () => {
     const db: any = { conversationActionTasks: [], conversationActionReceipts: [] };
     const row = syncConversationActionTaskLedger(db, {
       conversation: { id: 'conv-1', userId: 'user-1', domain: 'personal' },
@@ -113,6 +113,18 @@ describe('conversation focus threads', () => {
       } as any,
     });
     const context = JSON.parse(String(row?.context || '{}'));
-    expect(context.focusThread).toMatchObject({ taskId: 'task-sync', evidenceTaskId: 'task-sync', status: 'executing' });
+    expect(context.focusThread).toBeUndefined();
+    const reloaded = JSON.parse(JSON.stringify(row));
+    expect(readConversationFocusThread(reloaded)).toMatchObject({ taskId: 'task-sync', evidenceTaskId: 'task-sync', status: 'executing' });
+    db.conversationActionTasks = [reloaded];
+    updateConversationFocusThread(db, { taskId: 'task-sync', userId: 'user-1', resumePoint: 'Verify the exported file', nextAction: 'Check output' });
+    const annotations = JSON.parse(reloaded.context).focusThread;
+    expect(annotations).not.toHaveProperty('status');
+    expect(annotations).not.toHaveProperty('goal');
+    expect(annotations.resumePoint).toBe('Verify the exported file');
+    reloaded.status = 'cancelled';
+    expect(readConversationFocusThread(reloaded)).toMatchObject({ status: 'cancelled', nextAction: '', resumePoint: 'Verify the exported file' });
+    reloaded.context = JSON.stringify({ focusThread: { ...annotations, status: 'executing', goal: 'Stale goal', evidenceTaskId: 'wrong-task' } });
+    expect(readConversationFocusThread(reloaded)).toMatchObject({ status: 'cancelled', goal: reloaded.goal, evidenceTaskId: 'task-sync', nextAction: '' });
   });
 });

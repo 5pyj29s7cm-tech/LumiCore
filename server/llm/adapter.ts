@@ -5,7 +5,7 @@ import { isCnLiteralTableFieldEdit } from '../regions/packs/cn/action_continuati
 import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } from '../regions/packs/cn/voice_fast_path_messages';
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
-import { ToolExecutionRecord, ToolContext, LLMUsage, type NormalizedLLMResponse } from '../tools/types';
+import { ToolExecutionRecord, ToolContext, type NormalizedLLMResponse } from '../tools/types';
 import { classifySkillAuthoringIntent, executionBeforeWorkflowSave, skillAuthoringTools } from '../skills/authoring_intent';
 import {
   NormalizedMessage,
@@ -17,7 +17,7 @@ import {
   type ModelAttemptTimeouts,
 } from './providers';
 import { recordTokenUsage } from './token_tracker';
-import { recordWorkflow, WorkflowStep, isWorkflowBusinessTool } from '../skills/worklog';
+import { recordWorkflow, isWorkflowBusinessTool } from '../skills/worklog';
 import { recordLatency } from '../monitor/latency_store';
 import { guardCompletionClaims, needsCompletionEvidence, type CompletionGuardResult } from '../work_product/completion_guard';
 import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from '../cognition/desktop_completion_review';
@@ -26,12 +26,8 @@ import {
   buildActionContract,
   formatActionContractPrompt,
   hasCoreActionEvidence,
-  hasVisibleAutoCadExecutionEvidence,
   resolveVerifiedCurrentAuthoringDocumentEvidence,
-  requiresVisibleAutoCadExecution,
   requiresArtifactOpen,
-  hasRequestedDesktopOpenEvidence,
-  requiresArtifactPostWriteReadback,
 } from '../cognition/action_contract';
 import { buildConfirmedStepContinuationNote } from '../cognition/task_execution_ledger';
 import { tryFinalizeVerifiedBoundedAction } from '../cognition/result_finalizer';
@@ -1067,18 +1063,6 @@ function compactMessagesForModel(messages: NormalizedMessage[]): NormalizedMessa
   return compactToolLoopMessagesForModel(messages);
 }
 
-function collectArtifactRefs(text: string): string[] {
-  const refs = new Set<string>();
-  const patterns = [
-    /[A-Za-z]:\\[^\n\r"'<>|]+?\.(?:dxf|dwg|svg|pdf|docx|xlsx|pptx|md|txt|json|csv|png|jpe?g|webp|html)/gi,
-    /https?:\/\/[^\s"'<>]+/gi,
-  ];
-  for (const re of patterns) {
-    for (const match of text.match(re) || []) refs.add(match.trim());
-  }
-  return Array.from(refs).slice(0, 8);
-}
-
 function getPrimaryUserText(messages: NormalizedMessage[]): string {
   const rawContent = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   if (typeof rawContent === 'string') return rawContent;
@@ -2049,11 +2033,6 @@ async function runWithToolsInternal(
       completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON } };
   }
 
-  // Auto-detect hybrid mode: if provider is 'auto' and Ollama is available, use local→cloud dispatch
-  const effectiveProvider = config.provider === 'auto' && getOllama?.()
-    ? 'auto'  // Keep as 'auto' for the dispatch logic below
-    : config.provider;
-
   // The routed iteration count is the ordinary planning budget. A model that
   // tries to finish after a verified mutation can discover, at finalization
   // time, that the action contract still lacks independent evidence. Keep the
@@ -2155,23 +2134,14 @@ async function runWithToolsInternal(
       ? 'The execution part of this same root task is verified complete. Only saving its workflow remains. Prefer capture_recent_workflow to reuse the verified trace and its calculation code. Do not repeat completed file actions. Return the saved draft receipt; publication remains separate.'
       : 'Complete the current execution part of this same root task first. Calculation must consume the complete reader result and include executable parsing. Workflow authoring tools become available after the requested output is verified; do not search for them now.' });
     const invokeModel = async (attempt: ModelBudgetAttempt) => {
+      const requiredToolNames = resolveRequiredToolNamesForModel(toolExecutionContext, primaryTask, toolDeclarations, executionLog);
       const attemptConfig: LLMConfig = {
         ...config,
         signal: attempt.signal,
         attemptTimeouts: attempt.attemptTimeouts,
         bufferStreamUntilCandidateSuccess: toolSessionActive,
-        protectedToolNames: resolveRequiredToolNamesForModel(
-          toolExecutionContext,
-          primaryTask,
-          toolDeclarations,
-          executionLog,
-        ),
-        localRequiredToolNames: resolveRequiredToolNamesForModel(
-          toolExecutionContext,
-          primaryTask,
-          toolDeclarations,
-          executionLog,
-        ),
+        protectedToolNames: requiredToolNames,
+        localRequiredToolNames: requiredToolNames,
       };
       return attempt.onChunk
         ? makeLLMCallStreaming(
@@ -2628,6 +2598,7 @@ async function runWithToolsInternal(
         arguments: tc.arguments || {},
         toolRecords: executionLog,
         acceptedTaskTarget: toolExecutionContext?.acceptedTaskTarget,
+        currentAppTarget: toolExecutionContext?.currentAppTarget,
         isolatedCalculation: tc.name === 'code_execution'
           && callCapability?.source === 'builtin'
           && callCapability?.capabilityId === 'code.javascript.sandbox.execute'

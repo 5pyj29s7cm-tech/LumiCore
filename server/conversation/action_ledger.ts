@@ -8,6 +8,7 @@ import {
 import { hasMixedStatusExecutionIntent, normalizeActionIntent, type NormalizedActionIntent } from '../cognition/normalized_action_intent';
 import { buildActionEvidenceContract } from '../cognition/action_contract';
 import {
+  groupTaskReceipts,
   mergeTaskReceipts,
   taskCompletionFromReceipts,
   taskReceiptsToRecords,
@@ -25,7 +26,6 @@ import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
 import { CN_ACTION_LEDGER_MESSAGES } from '../regions/packs/cn/action_ledger_messages';
 import { detectLanguage } from '../utils/language';
-import { reconcileConversationFocusThread } from './focus_threads';
 
 export interface ConversationActionTaskRow {
   id: string;
@@ -97,6 +97,15 @@ export interface PersistedCapabilityExecutionPlan {
   decisionAuthority: 'semantic_planner';
   scriptAuthority: 'adapter_only';
   persistedAt: string;
+}
+
+/** Keep the current plan once; history contains only prior revisions. */
+function contextWithExecutionPlan(context: Record<string, any>, plan: PersistedCapabilityExecutionPlan) {
+  const history = new Map<string, PersistedCapabilityExecutionPlan>();
+  for (const prior of [...(Array.isArray(context.executionPlans) ? context.executionPlans : []), context.executionPlan]) {
+    if (prior?.planId && prior.planId !== plan.planId) history.set(prior.planId, prior);
+  }
+  return { ...context, executionPlan: plan, executionPlans: [...history.values()].slice(-11) };
 }
 
 function stableValue(value: unknown, depth = 0): unknown {
@@ -560,13 +569,6 @@ export function syncConversationActionTaskLedger(
     existing: task?.rootUserMessageId,
     candidate: input.rootUserMessageId,
   });
-  context.focusThread = reconcileConversationFocusThread(currentContext.focusThread, {
-    id: state.taskId,
-    goal: redactGoal(state.goal, intent),
-    status: taskStatus,
-    blocker: state.latestBlocker || '',
-    updatedAt: now,
-  }, now);
   const correctedTarget = currentTaskCorrectionTarget(state);
   const durableTarget = durableTaskCapsuleTarget(state);
   // Status/recheck turns may add evidence to an existing mutation task, but
@@ -1118,17 +1120,29 @@ export function appendConversationActionReceipts(
       requestId: input.requestId,
       completedAt: now,
     });
-    const duplicate = receipts.some(candidate => (
+    const duplicate = receipts.find(candidate => (
       candidate.taskId === input.task.id
       && candidate.idempotencyKey === envelope.idempotencyKey
       && candidate.toolName === record.name
       && candidate.outcome === envelope.status
     ));
-    if (duplicate) return;
+    if (duplicate) {
+      const previous = parseObject(duplicate.envelope);
+      // Legacy unknown placeholders occupied the same SQLite unique key as a
+      // real failure. Reconcile only that exact request's nonterminal slot;
+      // never rewrite an actual terminal or another request's receipt.
+      const unresolvedPlaceholder = duplicate.outcome === 'failed'
+        && duplicate.requestId === envelope.requestId
+        && previous.requestId === envelope.requestId
+        && previous.verification?.status === 'unverified'
+        && previous.verification?.reason === 'tool_settlement_unknown'
+        && envelope.verification.status === 'failed';
+      if (!unresolvedPlaceholder) return;
+    }
     const requestedReceiptId = String(record.id || `receipt_${crypto.randomUUID()}_${index}`);
-    const receiptId = receipts.some(candidate => candidate.id === requestedReceiptId)
+    const receiptId = duplicate?.id || (receipts.some(candidate => candidate.id === requestedReceiptId)
       ? `receipt_${crypto.randomUUID()}_${index}`
-      : requestedReceiptId;
+      : requestedReceiptId);
     const row: ConversationActionReceiptRow = {
       id: receiptId,
       taskId: input.task.id,
@@ -1147,7 +1161,8 @@ export function appendConversationActionReceipts(
       outcome: envelope.status,
       createdAt: now,
     };
-    receipts.push(row);
+    if (duplicate) Object.assign(duplicate, row);
+    else receipts.push(row);
     appended.push(row);
   });
   return appended;
@@ -1478,12 +1493,7 @@ export function compactLegacyScheduledCapabilityExecutions(db: any): {
   ensureTables(db);
   const tasks = db.conversationActionTasks as ConversationActionTaskRow[];
   const receipts = db.conversationActionReceipts as ConversationActionReceiptRow[];
-  const receiptsByTask = new Map<string, ConversationActionReceiptRow[]>();
-  for (const receipt of receipts) {
-    const related = receiptsByTask.get(receipt.taskId) || [];
-    related.push(receipt);
-    receiptsByTask.set(receipt.taskId, related);
-  }
+  const receiptsByTask = groupTaskReceipts(tasks, receipts);
   let tasksRemoved = 0;
   let receiptsRemoved = 0;
   let summariesUpdated = 0;
@@ -1613,16 +1623,9 @@ export function persistScheduledCapabilityExecution(
   const persistedPlan = sanitizeCapabilityExecutionPlan(input.plan, now);
   const existingContext = parseObject(task?.context);
   const context = {
-    ...existingContext,
+    ...contextWithExecutionPlan(existingContext, persistedPlan),
     source: 'scheduler',
     scheduledTaskId: input.scheduledTaskId,
-    executionPlan: persistedPlan,
-    executionPlans: [
-      ...(Array.isArray(existingContext.executionPlans)
-        ? existingContext.executionPlans.filter((candidate: any) => candidate?.planId !== persistedPlan.planId)
-        : []),
-      persistedPlan,
-    ].slice(-12),
   };
   const status = existingCompleted ? 'completed' : input.status;
   const values: ConversationActionTaskRow = {
@@ -1686,15 +1689,7 @@ export function attachConversationExecutionPlan(
   const now = input.now || new Date().toISOString();
   const context = parseObject(task.context);
   const persisted = sanitizeCapabilityExecutionPlan(input.plan, now);
-  const history = (Array.isArray(context.executionPlans) ? context.executionPlans : [])
-    .filter((candidate: any) => candidate?.planId !== persisted.planId)
-    .slice(-11);
-  history.push(persisted);
-  task.context = JSON.stringify({
-    ...context,
-    executionPlan: persisted,
-    executionPlans: history,
-  });
+  task.context = JSON.stringify(contextWithExecutionPlan(context, persisted));
   task.updatedAt = now;
   return task;
 }

@@ -28,10 +28,6 @@ export function getQwenDesignTargetModel(): string {
   return process.env.QWEN_VOICE_DESIGN_TARGET_MODEL || DEFAULT_QWEN_DESIGN_TARGET_MODEL;
 }
 
-export function defaultInstalledCloneMode(): 'data-url' {
-  return 'data-url';
-}
-
 function getApiKey(): string {
   const key = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || getKey('DASHSCOPE_API_KEY') || getKey('QWEN_API_KEY');
   if (!key) throw new Error('DASHSCOPE_API_KEY is not configured. Add it in Settings > Voice Services.');

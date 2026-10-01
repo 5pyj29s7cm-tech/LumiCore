@@ -1235,14 +1235,6 @@ export function recolorPet(pet: PetConfig, palette: PetPalette): PetConfig {
 // Simple color math
 function darken(hex: string): string { return shiftColor(hex, -25); }
 function lighten(hex: string): string { return shiftColor(hex, 25); }
-function hexToRgba(hex: string, alpha: number): string {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const r = (num >> 16) & 0xFF;
-  const g = (num >> 8) & 0xFF;
-  const b = num & 0xFF;
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
 function shiftColor(hex: string, amount: number): string {
   const num = parseInt(hex.replace('#', ''), 16);
   const r = Math.min(255, Math.max(0, ((num >> 16) & 0xFF) + amount));

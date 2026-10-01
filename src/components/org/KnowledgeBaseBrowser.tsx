@@ -171,7 +171,6 @@ function makeFallbackStats(articles: Article[]): KnowledgeStats {
 export function KnowledgeBaseBrowser() {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = useCallback((zh: string, en: string) => (isZh ? zh : en), [isZh]);
 
   const [articles, setArticles] = useState<Article[]>([]);
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
@@ -220,7 +219,7 @@ export function KnowledgeBaseBrowser() {
     } finally {
       setLoading(false);
     }
-  }, [ui]);
+  }, []);
 
   useEffect(() => {
     loadKnowledgeBase();
@@ -267,7 +266,7 @@ export function KnowledgeBaseBrowser() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [categoryFilter, searchQuery, statusFilter, ui]);
+  }, [categoryFilter, searchQuery, statusFilter]);
 
   const effectiveStats = useMemo(() => stats || makeFallbackStats(articles), [articles, stats]);
   const healthById = useMemo(

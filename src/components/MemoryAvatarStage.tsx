@@ -1,10 +1,10 @@
+import { normalizeMemoryAvatarAppearance } from '../../shared/memory_avatar';
 import { Component, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { MemoryAvatarAppearance, MemoryAvatarPresentation } from '../../shared/memory_avatar';
 import { MemoryAvatarAnimatedPortrait } from './MemoryAvatarAnimatedPortrait';
 import { memoryTerritoryCopy } from '../i18n/locales/memoryTerritory';
-import { LumiCompanionModel } from './LumiCompanionModel';
 import { LumiLayeredCharacter } from './LumiLayeredCharacter';
 import { LumiHomeScene, LumiHomeCamera } from './LumiHomeScene';
 
@@ -250,8 +250,7 @@ function ContextLossGuard({ onLost }: { onLost: () => void }) {
 
 export default function MemoryAvatarStage({ appearance, outputLevelRef, state, name, locale, active = true, avatarId, presentation }: MemoryAvatarStageProps) {
   // Legacy records use the supported 2D character; the retired VRM is not loaded.
-  const portrait = appearance.style === 'lumi2d' || appearance.style === 'lumivrm';
-  const lumi = appearance.style === 'lumi3d' || portrait;
+  const portrait = normalizeMemoryAvatarAppearance(appearance).style === 'lumi2d';
   const [available, setAvailable] = useState<boolean | null>(null);
   const [lost, setLost] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -282,14 +281,14 @@ export default function MemoryAvatarStage({ appearance, outputLevelRef, state, n
   if (available === false || lost) return fallback;
   return <div role="figure" aria-label={name} data-state={state} style={{ width: '100%', height: '100%', minHeight: 320, position: 'relative' }}>
     {available && <PortraitBoundary fallback={fallback}>
-      <Canvas dpr={[1, 1.5]} shadows={lumi ? {type:THREE.PCFShadowMap} : false} camera={{ position: [0, lumi ? 0.35 : 0.21, lumi ? 7.7 : 6.0], fov: 34, near: 0.1, far: lumi ? 260 : 30 }}
+      <Canvas dpr={[1, 1.5]} shadows={portrait ? {type:THREE.PCFShadowMap} : false} camera={{ position: [0, portrait ? 0.35 : 0.21, portrait ? 7.7 : 6.0], fov: 34, near: 0.1, far: portrait ? 260 : 30 }}
         gl={{ alpha: true, antialias: true, powerPreference: 'low-power', toneMapping: THREE.ACESFilmicToneMapping }}
         style={{ background: 'transparent' }} fallback={fallback} onCreated={({ gl }) => { gl.setClearColor(0x000000, 0); gl.toneMappingExposure = 1.04; }}>
         <ContextLossGuard onLost={() => setLost(true)} />
-        {lumi ? <>
-          <LumiHomeScene tint={safeColor(appearance.backgroundColor, '#d5d6c5')} reducedMotion={reducedMotion} seated={portrait} />
-          <LumiHomeCamera reducedMotion={reducedMotion || portrait} fullBody={portrait && framing === 'full'} portraitCloseUp={portrait && framing === 'conversation'} />
-          {portrait ? <LumiLayeredCharacter outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} state={state} /> : <LumiCompanionModel outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} accent={safeColor(appearance.outfitColor, '#6bbaa8')} shellColor={safeColor(appearance.skinColor, '#f1eee2')} visorColor={safeColor(appearance.hairColor, '#183534')} />}
+        {portrait ? <>
+          <LumiHomeScene tint={safeColor(appearance.backgroundColor, '#d5d6c5')} reducedMotion={reducedMotion} />
+          <LumiHomeCamera fullBody={framing === 'full'} />
+          <LumiLayeredCharacter outputLevelRef={outputLevelRef} reducedMotion={reducedMotion} state={state} />
         </> : <>
         <ambientLight intensity={0.65} color="#eee4d8" />
         <hemisphereLight args={['#fff0dc', '#7b7589', 1.15]} />

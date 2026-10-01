@@ -87,10 +87,10 @@ export function inferChatAttachmentKind(
   mimeType?: string,
   kind?: string,
 ): ChatAttachmentKind {
-  if (kind === 'image' || mimeType?.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(fileName)) {
+  if (kind === 'image' || isImageFileName(fileName, mimeType)) {
     return 'image';
   }
-  if (kind === 'audio' || mimeType?.startsWith('audio/') || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(fileName)) {
+  if (kind === 'audio' || isAudioFileName(fileName, mimeType)) {
     return 'audio';
   }
   return 'file';
@@ -220,3 +220,46 @@ export function parseChatAttachmentContext(value?: string | null, now = Date.now
     return [];
   }
 }
+
+export function isImageFileName(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(name || '');
+}
+
+export function isAudioFileName(name: string, mimeType?: string): boolean {
+  return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
+}
+
+export function extractAudioTranscript(value?: string | null): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const marker = 'transcript:';
+  const index = raw.toLowerCase().indexOf(marker);
+  const transcript = index >= 0 ? raw.slice(index + marker.length).trim() : raw;
+  return transcript || null;
+}
+
+export function serializeChatAttachment(item: ChatAttachmentReference): ChatAttachmentReference {
+  return {
+    id: item.id,
+    fileName: item.fileName,
+    path: item.path,
+    content: item.content || null,
+    preview: item.preview || null,
+    mimeType: item.mimeType || '',
+    size: item.size || 0,
+    kind: item.kind,
+    fileId: item.fileId || '',
+    downloadUrl: item.downloadUrl,
+    transcript: item.transcript || null,
+    transcriptionStatus: item.transcriptionStatus || '',
+    transcriptionError: item.transcriptionError || null,
+    transcriptionProvider: item.transcriptionProvider || '',
+    transcriptionModel: item.transcriptionModel || '',
+  };
+}
+
+export const CHAT_ATTACHMENT_ACCEPT = [
+  '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
+  '.mp3,.mpeg,.wav,.m4a,.ogg,.oga,.flac,.aac,.wma,.webm',
+  '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
+].join(',');

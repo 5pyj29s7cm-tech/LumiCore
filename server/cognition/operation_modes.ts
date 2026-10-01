@@ -2,9 +2,7 @@ import { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
 import {
-  LUMI_CLIENT_MODE_IDS,
   LUMI_MEETING_CAPTURE_SURFACE,
-  LUMI_OPERATION_MODE_IDS,
   normalizeLumiClientMode,
   type LumiClientMode,
 } from '../../shared/operation_modes';

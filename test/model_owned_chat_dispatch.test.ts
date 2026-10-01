@@ -3,15 +3,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
-import {
-  LEGACY_INTENT_CLASSIFIER_AUTHORITY,
-  legacyIntentCanOwnNaturalLanguageDecision,
-} from '../server/cognition/intent';
-import { handleLLMFailure, processInput } from '../server/cognition';
-import {
-  getNormalizedIntentRuntimeRole,
-  normalizeActionIntent,
-} from '../server/cognition/normalized_action_intent';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
 import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
 import { buildQuickCommandToolPolicy } from '../server/cognition/quick_commands';
@@ -29,38 +20,6 @@ import {
 describe('model-owned main chat architecture', () => {
   beforeAll(async () => {
     await initDatabase();
-  });
-
-  it.each([
-    '你好 Lumi',
-    '你是谁，能做什么？',
-    '打开记事本',
-    '创建一个文本文件并核验内容',
-    '刚才为什么失败？请继续解决',
-  ])('keeps legacy intent classification advisory for natural language: %s', async (text) => {
-    const result = await processInput(text, {
-      userId: 'model_owned_chat_user',
-      personalityId: 'lumi',
-      personalityName: 'Lumi',
-      llmProvider: 'test',
-      llmModel: 'test',
-      isLLMAvailable: true,
-    });
-
-    expect(LEGACY_INTENT_CLASSIFIER_AUTHORITY).toBe('advisory');
-    expect(legacyIntentCanOwnNaturalLanguageDecision()).toBe(false);
-    expect(result.directToolExecuted).toBe(false);
-    expect(result.responseText).toBe('');
-  });
-
-  it('keeps text-derived client navigation advisory and reserves deterministic ownership for structured events', () => {
-    const navigation = normalizeActionIntent('打开技能大厅');
-    expect(getNormalizedIntentRuntimeRole(navigation)).toBe('advisory');
-    expect(getNormalizedIntentRuntimeRole(navigation, 'natural_language')).toBe('advisory');
-    expect(getNormalizedIntentRuntimeRole(navigation, 'model_selected_capability')).toBe('advisory');
-    expect(getNormalizedIntentRuntimeRole(navigation, 'structured_client_event')).toBe('native_client_event');
-    expect(getNormalizedIntentRuntimeRole(normalizeActionIntent('打开记事本'))).toBe('advisory');
-    expect(getNormalizedIntentRuntimeRole(normalizeActionIntent('给阿陆发一条微信'))).toBe('advisory');
   });
 
   it('keeps a chat workflow match as a model hint instead of an executable dispatch owner', () => {
@@ -273,7 +232,7 @@ describe('model-owned main chat architecture', () => {
 
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
     expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
-    expect(rest).toContain('additionalForbiddenTools: restBoundaryForbiddenTools');
+    expect(rest).toContain('executionBoundary,');
     expect(rest).not.toContain('buildModelToolProjection');
     expect(rest).not.toMatch(/restExecutionDecision\.(?:baseToolPolicy|toolPolicy|maxIterations|toolRoute)\s*=/);
     expect(rest).toContain("'remote_restricted'");
@@ -308,21 +267,5 @@ describe('model-owned main chat architecture', () => {
     expect(result.blocked).toBe(false);
     expect(result.text).toBe(responseText);
     expect(result.reason).not.toContain('Model-authored wording preserved');
-  });
-
-  it('keeps the exhausted-model response transport-safe instead of impersonating Lumi with canned intent replies', () => {
-    const intent = {
-      category: 'command' as const,
-      confidence: 0.99,
-      entities: {},
-      needsLLM: false,
-      directToolCall: { name: 'desktop_open', args: { app: 'notepad' } },
-    };
-    const result = handleLLMFailure(intent, new Error('secret provider detail'));
-    expect(result.isFallback).toBe(true);
-    expect(result.directToolExecuted).toBe(false);
-    expect(result.responseText).not.toContain('secret provider detail');
-    expect(result.responseText).not.toContain('打开记事本');
-    expect(result.responseText).not.toContain('核心功能还在');
   });
 });

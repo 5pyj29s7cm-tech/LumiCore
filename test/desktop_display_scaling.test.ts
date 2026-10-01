@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  getCompactClientWindowMetrics,
   getDesktopDockPositionClassName,
   getDesktopChromeMetrics,
   getDesktopDensity,
@@ -47,36 +46,6 @@ describe('desktop display scaling layout', () => {
       expect(bounds.left).toBeGreaterThanOrEqual(chrome.safeInset);
       expect(bounds.left + bounds.width).toBeLessThanOrEqual(viewport.width - chrome.safeInset);
     }
-  });
-
-  it.each<ViewportSize>([
-    { width: 1366, height: 728 },
-    { width: 1920, height: 1040 },
-    { width: 2560, height: 1400 },
-  ])('fits the compact client preset inside a $width x $height work area', workArea => {
-    const compact = getCompactClientWindowMetrics(workArea);
-
-    expect(compact.width).toBeGreaterThanOrEqual(compact.minWidth);
-    expect(compact.height).toBeGreaterThanOrEqual(compact.minHeight);
-    expect(compact.width).toBeLessThanOrEqual(1280);
-    expect(compact.height).toBeLessThanOrEqual(820);
-    expect(compact.width + compact.margin * 2).toBeLessThanOrEqual(workArea.width);
-    expect(compact.height + compact.margin * 2).toBeLessThanOrEqual(workArea.height);
-  });
-
-  it('keeps the compact preset stable across equivalent DPI-scaled work areas', () => {
-    expect(getCompactClientWindowMetrics({ width: 1920, height: 1040 })).toEqual(
-      getCompactClientWindowMetrics({ width: 2880 / 1.5, height: 1560 / 1.5 }),
-    );
-  });
-
-  it('uses a roomier default preset without raising the manual resize floor', () => {
-    expect(getCompactClientWindowMetrics({ width: 1920, height: 1040 })).toMatchObject({
-      width: 1280,
-      height: 820,
-      minWidth: 520,
-      minHeight: 460,
-    });
   });
 
   it.each([

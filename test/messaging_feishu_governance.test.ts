@@ -31,6 +31,24 @@ import { resetVolatileExternalCommitJournalForTests } from '../server/tools/exte
 let cleanup = () => {};
 let baseUrl = '';
 
+it('bounds private ingress history without evicting an active limit and reclaims expired buckets', () => {
+  resetMessagingIngressPolicyForTest();
+  const first = incoming({ chatType: 'private', chatId: 'bounded-0' });
+  for (let i = 0; i < 20; i++) expect(evaluateMessagingIngress(first, 1000).allowed).toBe(true);
+  for (let i = 1; i < 4096; i++) expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: `bounded-${i}` }), 1000).allowed).toBe(true);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'overflow' }), 1000).allowed).toBe(false);
+  expect(evaluateMessagingIngress(first, 1000).allowed).toBe(false);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'next-day' }), 86_401_000).allowed).toBe(true);
+  expect(evaluateMessagingIngress(first, 86_401_000).allowed).toBe(true);
+});
+
+it('keeps delimiter-containing chat and user identities separate', () => {
+  resetMessagingIngressPolicyForTest();
+  const first = incoming({ chatType: 'private', chatId: 'a:b', userId: 'c' });
+  for (let i = 0; i < 20; i++) evaluateMessagingIngress(first, 1000);
+  expect(evaluateMessagingIngress(incoming({ chatType: 'private', chatId: 'a', userId: 'b:c' }), 1000).allowed).toBe(true);
+});
+
 function incoming(partial: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
     platform: 'feishu',

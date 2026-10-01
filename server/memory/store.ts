@@ -3,10 +3,7 @@ import {
   Memory,
   MemoryEvidenceClass,
   MemoryQuery,
-  MemoryType,
   MemoryTier,
-  MemoryPerspective,
-  CONVERSATIONAL_MEMORY_EVIDENCE,
 } from './types';
 export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
 import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall';
@@ -233,10 +230,6 @@ let coRetrievalMap: CoRetrievalMap = new Map();
 const ASSOCIATION_STRENGTH_INCREMENT = 0.08;  // Per co-retrieval boost
 const ASSOCIATION_DECAY_RATE = 0.02;           // Per decay cycle
 const ASSOCIATION_THRESHOLD = 0.25;            // Min strength to be considered "associated"
-
-function getAssocKey(idA: string, idB: string): [string, string] {
-  return idA < idB ? [idA, idB] : [idB, idA]; // Canonical ordering
-}
 
 /** Load co-retrieval map from DB on startup */
 function loadCoRetrievalMap(): void {
@@ -1064,30 +1057,6 @@ export function resolveMemoryConflict(input: {
   }
   saveMemoryStore(all);
   return group;
-}
-
-/** Tier-based decay: core_identity never decays, episodic decays fast */
-export function decayMemories(userId: string, domain?: string, orgId?: string, agentId?: string): void {
-  const all = getMemoryStore();
-  let changed = false;
-
-  const decayRates: Record<MemoryTier, { amount: number; min: number }> = {
-    core_identity: { amount: 0, min: 0.9 },     // Never decays
-    growth: { amount: 0.02, min: 0.6 },          // Very slow
-    internalized: { amount: 0.03, min: 0.3 },    // Slow
-    episodic: { amount: 0.05, min: 0.1 },        // Fast
-  };
-
-  for (const m of all) {
-    if (m.userId !== userId || !matchesMemoryScope(m, domain, orgId, agentId)) continue;
-    const rate = decayRates[m.tier] || decayRates.episodic;
-    if (rate.amount === 0) continue;
-    if (m.confidence <= rate.min) continue;
-    m.confidence = Math.max(rate.min, +(m.confidence - rate.amount).toFixed(2));
-    changed = true;
-  }
-
-  if (changed) saveMemoryStore(all);
 }
 
 /** Get episodic memories that are ready for consolidation (unconsolidated, count >= threshold) */

@@ -1,6 +1,6 @@
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 import type { TaskCompletionFeedback } from '../cognition/acceptance_evidence';
-import { sanitizeExecutionDiagnosticForPublicFeedback } from '../cognition/execution_guard_recovery';
+import { sanitizeExecutionDiagnosticForPublicFeedback } from '../client/diagnostic_sanitizer';
 
 export type { TaskCompletionFeedback } from '../cognition/acceptance_evidence';
 
@@ -103,36 +103,28 @@ export function normalizeCompletionFeedbackForPersistence(
   const status = String(raw.status || '').trim().toLowerCase() as TaskCompletionFeedback['status'];
   if (!COMPLETION_FEEDBACK_STATUSES.has(status)) return undefined;
   const chinese = feedbackUsesChinese(raw);
-  const rawCompletedPresent = Array.isArray(raw.completed)
-    && raw.completed.some(item => typeof item === 'string' && item.trim());
-  const rawEvidencePresent = Array.isArray(raw.evidence)
-    && raw.evidence.some(item => typeof item === 'string' && item.trim());
-  const rawIncompletePresent = Array.isArray(raw.incomplete)
-    && raw.incomplete.some(item => typeof item === 'string' && item.trim());
-  const rawBlockersPresent = Array.isArray(raw.blockers)
-    && raw.blockers.some(item => typeof item === 'string' && item.trim());
+  const hasItems = (section: FeedbackSection) => Array.isArray(raw[section])
+    && (raw[section] as unknown[]).some(item => typeof item === 'string' && item.trim());
   const blockers = normalizePublicNarrativeItems(raw.blockers);
-  if ((status === 'blocked' || status === 'failed') && rawBlockersPresent && blockers.length === 0) {
+  if ((status === 'blocked' || status === 'failed') && hasItems('blockers') && blockers.length === 0) {
     blockers.push(publicStatusItem('blockers', status, chinese));
   }
-  const rawNextStepsPresent = Array.isArray(raw.nextSteps)
-    && raw.nextSteps.some(item => typeof item === 'string' && item.trim());
-  const narratives = (section: FeedbackSection, present: boolean) => {
-    if (!present) return [];
+  const narratives = (section: FeedbackSection) => {
+    if (!hasItems(section)) return [];
     const items = normalizePublicNarrativeItems(raw[section]);
     return items.length ? items : [publicStatusItem(section, status, chinese)];
   };
   return {
     status,
-    completed: narratives('completed', rawCompletedPresent),
-    evidence: rawEvidencePresent
+    completed: narratives('completed'),
+    evidence: hasItems('evidence')
       ? [publicStatusItem('evidence', status, chinese)]
       : [],
-    incomplete: narratives('incomplete', rawIncompletePresent),
+    incomplete: narratives('incomplete'),
     blockers,
     nextSteps: status === 'completed' || status === 'cancelled'
-      ? rawNextStepsPresent ? [publicStatusItem('nextSteps', status, chinese)] : []
-      : narratives('nextSteps', rawNextStepsPresent),
+      ? hasItems('nextSteps') ? [publicStatusItem('nextSteps', status, chinese)] : []
+      : narratives('nextSteps'),
   };
 }
 

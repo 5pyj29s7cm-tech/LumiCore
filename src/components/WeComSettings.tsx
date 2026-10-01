@@ -67,7 +67,6 @@ const EMPTY_FORM = {
 export function WeComSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const [config, setConfig] = useState<WeComConfigResponse | null>(null);
   const [mode, setMode] = useState<WeComMode>('aibot_long_connection');
   const [form, setForm] = useState(EMPTY_FORM);

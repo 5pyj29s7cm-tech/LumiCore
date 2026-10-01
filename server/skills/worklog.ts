@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 /**
  * Workflow recorder — captures tool execution traces for pattern detection.
  * Keeps last 50 workflows in memory; the scheduler periodically checks
@@ -89,7 +90,7 @@ export function getRecentWorkflows(userId?: string, domain?: string, orgId?: str
 
 /** Capture is a scoped proposal, never an assertion that model-only reasoning is executable. */
 export function boundCapturedWorkflowSteps(record: WorkflowRecord): WorkflowStep[] | null {
-  const steps = record.toolSequence.map(step => ({ ...step, args: structuredClone(step.args) }));
+  const steps = record.toolSequence.map(step => ({ ...step, args: cloneDatabaseValue(step.args) }));
   const outputs: Array<{ ref: string; value: unknown; reader: boolean }> = [];
   const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && isDeepStrictEqual(a, b);
   let sawReader = false;
@@ -179,34 +180,6 @@ export function workflowTransformationBlocker(intent: string, steps: Array<{
 /** Clear all workflows */
 export function clearWorkflows(): void {
   recentWorkflows.length = 0;
-}
-
-/** Remove specific workflows by ID */
-export function removeWorkflows(ids: string[]): void {
-  const idSet = new Set(ids);
-  for (let i = recentWorkflows.length - 1; i >= 0; i--) {
-    if (idSet.has(recentWorkflows[i].id)) {
-      recentWorkflows.splice(i, 1);
-    }
-  }
-}
-
-/** Count how many workflows match a given intent (simple keyword overlap for now)
- * @deprecated Use findWorkflowClusters() for auto-generation; this remains for backward compat. */
-export function countSimilarWorkflows(intent: string, threshold = 3): WorkflowRecord[] {
-  const intentLower = intent.toLowerCase();
-  const tokens = intentLower.split(/\s+/).filter(w => w.length > 2);
-
-  const matches = recentWorkflows.filter(w => {
-    const wLower = w.userIntent.toLowerCase();
-    let hits = 0;
-    for (const t of tokens) {
-      if (wLower.includes(t)) hits++;
-    }
-    return hits >= Math.min(2, tokens.length);
-  });
-
-  return matches.length >= threshold ? matches : [];
 }
 
 // ── Improved pattern detection ──

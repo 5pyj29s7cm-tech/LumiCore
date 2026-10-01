@@ -271,7 +271,6 @@ async function readDocx(args: Record<string, any>): Promise<string> {
 
   const mammoth = require('mammoth');
   const result = await mammoth.extractRawText({ path: filePath });
-  const text = result.value.slice(0, 15000);
   let output = result.value;
   if (result.value.length > 15000) {
     output = result.value.slice(0, 15000) + `\n\n[Truncated — ${result.value.length} total characters]`;

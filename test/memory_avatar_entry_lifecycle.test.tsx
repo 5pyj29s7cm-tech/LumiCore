@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
+import { extractSourceExpression } from './source_expression';
 import React from 'react';
-import fs from 'node:fs';
-import ts from 'typescript';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ user: { uid: 'owner-a' }, api: vi.fn(), login: vi.fn(), success: vi.fn(), error: vi.fn() }));
@@ -115,19 +114,7 @@ it('discards old distillation after an owner change and lets the new owner start
 
 // Execute the production shell callbacks; avoid mounting unrelated desktop OS,
 // model, microphone and WebGL modules just to exercise entry authorization.
-const desktop = fs.readFileSync('src/components/DesktopUI.tsx', 'utf8');
-const ast = ts.createSourceFile('DesktopUI.tsx', desktop, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function shellCallback(name: string, context: Record<string, any>): any {
-  let callback: ts.Expression | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name && node.initializer && ts.isCallExpression(node.initializer)) callback = node.initializer.arguments[0];
-    ts.forEachChild(node, visit);
-  };
-  visit(ast);
-  if (!callback || !ts.isArrowFunction(callback)) throw new Error(`Missing actual shell callback ${name}`);
-  const code = ts.transpileModule(`return (${callback.getText(ast)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(context), code)(...Object.values(context));
-}
+const shellCallback = extractSourceExpression.bind(null, 'src/components/DesktopUI.tsx');
 function shell() {
   const scope = { userId: 'owner-a' };
   return {

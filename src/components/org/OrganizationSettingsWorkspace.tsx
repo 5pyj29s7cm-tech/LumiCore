@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { GitBranch, Settings } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
@@ -11,8 +11,6 @@ type OrganizationSettingsTab = 'general' | 'branch';
 export function OrganizationSettingsWorkspace({ initialTab = 'general' }: { initialTab?: OrganizationSettingsTab }) {
   const { orgConnection } = useApp();
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const canManage = ['owner', 'admin'].includes(String(orgConnection?.orgRole || '').toLowerCase());
   const [tab, setTab] = useState<OrganizationSettingsTab>(() => initialTab === 'general' && !canManage ? 'branch' : initialTab);
 

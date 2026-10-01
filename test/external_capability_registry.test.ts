@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDatabase, flushDBOrThrow, initDatabase, readDB, writeDB } from '../db_layer';
@@ -120,7 +121,7 @@ function registerOpenTool(registry: ToolRegistry, input: { source?: 'builtin' | 
       if (args.url !== 'https://aivid.example.test/app') throw new Error('unexpected target');
     },
     handler: async args => {
-      calls.push(structuredClone(args));
+      calls.push(cloneDatabaseValue(args));
       return JSON.stringify({ status: 'opened', targetMatched: true, verified: true });
     },
   });
@@ -361,7 +362,7 @@ describe('reviewed external capability packages', () => {
         subjectArgument: 'url',
       },
       handler: async args => {
-        calls.push(structuredClone(args));
+        calls.push(cloneDatabaseValue(args));
         return JSON.stringify({ status: 'opened', targetMatched: true, verified: true });
       },
     });
@@ -473,7 +474,7 @@ describe('reviewed external capability packages', () => {
         source: 'chat',
         currentTurnExecutionRequested: true,
         requestConfirmation: async (_name, args) => {
-          confirmationArguments = structuredClone(args);
+          confirmationArguments = cloneDatabaseValue(args);
           return false;
         },
       },
@@ -732,7 +733,7 @@ describe('reviewed external capability packages', () => {
     const registry = new ToolRegistry();
     const calls = registerOpenTool(registry);
     await reviewAndActivate(registry);
-    const beforeReceipts = structuredClone(readDB().externalCapabilityReceipts);
+    const beforeReceipts = cloneDatabaseValue(readDB().externalCapabilityReceipts);
     let persistenceCalls = 0;
     configureExternalCapabilityRegistryForTests({
       persist: async () => {
@@ -826,7 +827,7 @@ describe('reviewed external capability packages', () => {
         subjectArgument: 'url',
       },
       handler: async args => {
-        calls.push(structuredClone(args));
+        calls.push(cloneDatabaseValue(args));
         throw new Error('permanent provider failure after local state changed');
       },
     });

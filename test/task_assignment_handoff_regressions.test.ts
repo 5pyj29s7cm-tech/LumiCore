@@ -9,7 +9,7 @@ import { processWithPersonality } from '../server/regions/packs/cn/messaging_rou
 import { flushDBOrThrow, querySQL, readDB } from '../db_layer';
 import * as legalIntake from '../server/regions/packs/cn/legal_notice_intake';
 import type { IncomingMessage } from '../server/messaging/types';
-import { delegateTask, getTask, getTasksForSession, updateTaskStatus, resetLAPTasksForTests } from '../server/lap/delegate';
+import { registerOutboundTask, getTask, getTasksForSession, updateTaskStatus, resetLAPTasksForTests } from '../server/lap/delegate';
 import type { LAPSession, LAPTaskDelegateRequest } from '../server/lap/types';
 
 let url: string;
@@ -140,7 +140,7 @@ describe('organization assignment and handoff regressions', () => {
     expect((await api(`work-items/${item.id}`, target)).status).toBe(403);
   });
 
-  it('preserves duplicate incoming LAP task results and isolates another approved session with the same task id', () => {
+  it('preserves duplicate outbound LAP task results and isolates another approved session with the same task id', () => {
     resetLAPTasksForTests();
     const session = (id: string, remote: string): LAPSession => ({ sessionId: id, authorizationStatus: 'approved', scope: ['delegate_task'],
       peerA: { agentId: remote }, peerB: { agentId: 'synthetic-local' } } as LAPSession);
@@ -148,12 +148,11 @@ describe('organization assignment and handoff regressions', () => {
     const secondSession = session('synthetic-session-b', 'synthetic-peer-b');
     const request = (sessionId: string, text: string): LAPTaskDelegateRequest => ({ lap: '2.0', id: `request-${sessionId}`, sessionId,
       method: 'lap.task.delegate', timestamp: new Date().toISOString(), task: { taskId: 'synthetic-shared-task-id', type: 'probe', priority: 'normal', payload: { text } } });
-    expect(delegateTask(request(firstSession.sessionId, 'first'), firstSession).accepted).toBe(true);
+    expect(registerOutboundTask(request(firstSession.sessionId, 'first').task, firstSession, firstSession.peerA.agentId).status).toBe('pending');
     expect(updateTaskStatus(firstSession.sessionId, 'synthetic-shared-task-id', 'completed', { output: 'Synthetic terminal evidence' }, undefined, 'synthetic-local')).toBe(true);
-    expect(delegateTask(request(firstSession.sessionId, 'first'), firstSession)).toMatchObject({
-      accepted: true, status: 'completed', result: { output: 'Synthetic terminal evidence' },
+    expect(registerOutboundTask(request(firstSession.sessionId, 'first').task, firstSession, firstSession.peerA.agentId)).toMatchObject({ status: 'completed', result: { output: 'Synthetic terminal evidence' },
     });
-    expect(delegateTask(request(secondSession.sessionId, 'replacement'), secondSession).accepted).toBe(true);
+    expect(registerOutboundTask(request(secondSession.sessionId, 'replacement').task, secondSession, secondSession.peerA.agentId).status).toBe('pending');
     expect(getTasksForSession(firstSession.sessionId)).toHaveLength(1);
     expect(getTask('synthetic-shared-task-id')).toBeUndefined();
     expect(getTask('synthetic-shared-task-id', firstSession.sessionId)).toMatchObject({ status: 'completed', result: { output: 'Synthetic terminal evidence' } });

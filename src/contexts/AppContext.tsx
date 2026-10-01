@@ -64,10 +64,6 @@ interface ToolOverride {
 export type OperationMode = LumiClientMode;
 export type AppearanceMode = 'system' | 'light' | 'dark';
 
-function normalizeOperationMode(mode: unknown): OperationMode {
-  return normalizeLumiClientMode(mode);
-}
-
 function normalizeAppearanceMode(mode: unknown): AppearanceMode {
   if (mode === 'system' || mode === 'light' || mode === 'dark') return mode;
   return 'dark';
@@ -201,7 +197,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
     const saved = localStorage.getItem('lumi_ai_config');
-    if (!saved) return {
+    const fallback: AIConfig = {
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       apiKey: '',
@@ -209,6 +205,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fallbackCandidates: [],
       allowCloudFallback: true,
     };
+    if (!saved) return fallback;
     try {
       const parsed = JSON.parse(saved);
       const sanitized = {
@@ -226,14 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return sanitized;
     } catch {
       localStorage.removeItem('lumi_ai_config');
-      return {
-        provider: 'deepseek',
-        model: 'deepseek-v4-flash',
-        apiKey: '',
-        selectionMode: 'pinned',
-        fallbackCandidates: [],
-        allowCloudFallback: true,
-      };
+      return fallback;
     }
   });
   const modelPreferenceRequestRef = React.useRef(0);
@@ -359,38 +349,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [voiceStorageKeys.scope]);
 
   const switchDomain = async (domain: 'personal' | 'work'): Promise<DomainSwitchResult> => {
-    if (domain === 'personal') {
-      try {
-        const res = await apiFetch('/api/auth/switch-org', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orgId: null }),
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          if (data.token) {
-            localStorage.setItem('lumi_auth_token', data.token);
-            socketService.refreshAuth();
-          }
-          setWorkDomain('personal');
-          localStorage.setItem('lumi_work_domain', 'personal');
-          window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
-            detail: { domain: 'personal', orgId: null, orgRole: null },
-          }));
-          return { success: true, domain: 'personal', message: translate('domainPersonalSwitched'), connection: orgConnection };
-        }
-        const data = await res.json().catch(() => ({}));
-        return { success: false, domain: 'personal', message: data.error || translate('domainPersonalSwitchFailed'), connection: orgConnection };
-      } catch (err: any) {
-        return { success: false, domain: 'personal', message: err.message || translate('domainPersonalSwitchFailed'), connection: orgConnection };
-      }
-    }
+    const isWork = domain === 'work';
+    const failureMessage = translate(isWork ? 'domainWorkSwitchFailed' : 'domainPersonalSwitchFailed');
     // Switch to work: use known org or auto-discover
-    let orgId = orgConnection?.orgId || null;
+    let orgId = isWork ? orgConnection?.orgId || null : null;
     let orgRole = orgConnection?.orgRole || 'member';
     let orgName = orgConnection?.orgName || '';
-    if (!orgId) {
+    if (isWork && !orgId) {
       try {
         const orgsRes = await apiFetch('/api/auth/orgs');
         if (orgsRes.ok) {
@@ -405,43 +370,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { success: false, domain: 'work', message: err.message || translate('organizationListLoadFailed'), connection: orgConnection };
       }
     }
-    if (!orgId) {
+    if (isWork && !orgId) {
       return { success: false, domain: 'work', message: translate('organizationSwitchUnavailable'), connection: orgConnection };
     }
     try {
       const res = await apiFetch('/api/auth/switch-org', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orgId, orgRole }),
+        body: JSON.stringify(isWork ? { orgId, orgRole } : { orgId: null }),
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        if (data.orgId) {
-          const conn = { orgId: data.orgId, orgRole: data.orgRole, orgName, connected: true };
-          if (data.token) {
-            localStorage.setItem('lumi_auth_token', data.token);
-            socketService.refreshAuth();
-          }
-          setOrgConnection(conn);
-          setWorkDomain('work');
-          localStorage.setItem('lumi_work_domain', 'work');
-          localStorage.setItem('lumi_org_connection', JSON.stringify(conn));
-          window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
-            detail: { domain: 'work', orgId: conn.orgId, orgRole: conn.orgRole, orgName: conn.orgName },
-          }));
-          return { success: true, domain: 'work', message: translate('domainWorkSwitched'), connection: conn };
-        }
+      if (!res.ok || (isWork && !data.orgId)) {
+        return { success: false, domain, message: data.error || failureMessage, connection: orgConnection };
       }
-      return { success: false, domain: 'work', message: data.error || translate('domainWorkSwitchFailed'), connection: orgConnection };
+      const connection = isWork
+        ? { orgId: data.orgId, orgRole: data.orgRole, orgName, connected: true }
+        : orgConnection;
+      if (data.token) {
+        localStorage.setItem('lumi_auth_token', data.token);
+        socketService.refreshAuth();
+      }
+      if (isWork) {
+        setOrgConnection(connection);
+        localStorage.setItem('lumi_org_connection', JSON.stringify(connection));
+      }
+      setWorkDomain(domain);
+      localStorage.setItem('lumi_work_domain', domain);
+      window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
+        detail: isWork
+          ? { domain, orgId: connection!.orgId, orgRole: connection!.orgRole, orgName: connection!.orgName }
+          : { domain, orgId: null, orgRole: null },
+      }));
+      return { success: true, domain, message: translate(isWork ? 'domainWorkSwitched' : 'domainPersonalSwitched'), connection };
     } catch (err: any) {
-      return { success: false, domain: 'work', message: err.message || translate('domainWorkSwitchFailed'), connection: orgConnection };
+      return { success: false, domain, message: err.message || failureMessage, connection: orgConnection };
     }
   };
 
   const [operationMode, setOperationModeState] = useState<OperationMode>(() => {
     try {
-      const stored = normalizeOperationMode(localStorage.getItem('lumi_operation_mode'));
+      const stored = normalizeLumiClientMode(localStorage.getItem('lumi_operation_mode'));
       return stored === 'meeting' ? 'assistant' : stored;
     } catch { return 'assistant'; }
   });
@@ -454,7 +423,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const resolvedAppearanceMode = appearanceMode === 'system' ? systemAppearanceMode : appearanceMode;
 
   const setOperationMode = async (mode: OperationMode) => {
-    const normalizedMode = normalizeOperationMode(mode);
+    const normalizedMode = normalizeLumiClientMode(mode);
     const previousMode = operationModeRef.current;
     const requestId = ++operationModeRequestRef.current;
     operationModeRef.current = normalizedMode;
@@ -480,10 +449,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    operationModeRef.current = operationMode;
-  }, [operationMode]);
-
-  useEffect(() => {
     if (!user?.uid) return;
     let cancelled = false;
     const requestVersion = operationModeRequestRef.current;
@@ -492,7 +457,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (cancelled || operationModeRequestRef.current !== requestVersion) return;
-        const serverMode = normalizeOperationMode(data?.mode);
+        const serverMode = normalizeLumiClientMode(data?.mode);
         const restoredMode = serverMode === 'meeting' ? 'assistant' : serverMode;
         operationModeRef.current = restoredMode;
         setOperationModeState(restoredMode);

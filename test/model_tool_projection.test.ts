@@ -481,20 +481,25 @@ describe('model tool declaration projection', () => {
   it('shows only the bounded schemas while the base authorization can still execute a hidden tool', async () => {
     const registry = new ToolRegistry();
     registerProbe(registry, 'visible_probe');
+    registerProbe(registry, 'optional_probe');
     const hidden = registerProbe(registry, 'hidden_authorized_probe');
     mocks.makeLLMCall.mockResolvedValueOnce({ text: 'No tool needed.', toolCalls: null });
 
     await projectedRun(registry, {
       toolPolicy: WILDCARD_POLICY,
       modelToolProjection: {
-        toolNames: ['visible_probe'],
-        maxTools: 1,
+        toolNames: ['visible_probe', 'optional_probe'],
+        requiredToolNames: ['visible_probe'],
+        maxTools: 2,
         allowDynamicDiscovery: false,
       },
     }, 1);
 
     expect(mocks.makeLLMCall.mock.calls[0][1].map((item: any) => item.function.name))
-      .toEqual(['visible_probe']);
+      .toEqual(['visible_probe', 'optional_probe']);
+    expect(mocks.makeLLMCall.mock.calls[0][2]).toMatchObject({
+      protectedToolNames: ['visible_probe'], localRequiredToolNames: ['visible_probe'], bufferStreamUntilCandidateSuccess: true,
+    });
     await expect(registry.execute('hidden_authorized_probe', {}, {
       toolPolicy: buildModelCapabilityPolicy(decision()),
     })).resolves.toContain('hidden_authorized_probe-ok');

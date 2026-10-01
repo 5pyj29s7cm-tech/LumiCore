@@ -1,6 +1,6 @@
 import type sqlite3 from 'sqlite3';
 
-// Startup and persistence rebuilds share the same schema/index definitions.
+// Schema migrations own these indexes; ordinary persistence preserves them.
 export const PERFORMANCE_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_interactions_user_conv ON interactions(userId, conversationId)`,
   `CREATE INDEX IF NOT EXISTS idx_interactions_agent ON interactions(agentId)`,
@@ -94,6 +94,24 @@ export function migrateSchema(database: sqlite3.Database): Promise<void> {
       }
     };
     database.serialize(() => {
+    // Archive rows use direct SQL, outside the mutable whole-database snapshot.
+    database.run(`CREATE TABLE IF NOT EXISTS generated_archive_scopes (scope TEXT PRIMARY KEY)`, onAlter);
+    database.run(`CREATE TABLE IF NOT EXISTS generated_archive (
+      scope TEXT NOT NULL, id TEXT NOT NULL, filename TEXT NOT NULL, sourcePath TEXT NOT NULL,
+      sourceSize REAL NOT NULL, sourceMtimeMs REAL NOT NULL, createdAt TEXT NOT NULL, deletedAt TEXT,
+      payload TEXT NOT NULL,
+      PRIMARY KEY(scope, id)
+    )`, onAlter);
+    database.run('CREATE INDEX IF NOT EXISTS idx_generated_archive_filename ON generated_archive(scope, filename)', onAlter);
+    database.run('CREATE INDEX IF NOT EXISTS idx_generated_archive_source ON generated_archive(scope, sourcePath, sourceSize, sourceMtimeMs)', onAlter);
+    database.run('CREATE INDEX IF NOT EXISTS idx_generated_archive_scope ON generated_archive(scope)', onAlter);
+    database.run('DROP INDEX IF EXISTS idx_generated_archive_created', onAlter);
+    database.run("ALTER TABLE generated_archive_scopes ADD COLUMN revision TEXT NOT NULL DEFAULT ''", onAlter);
+    for (const action of ['INSERT', 'UPDATE', 'DELETE']) {
+      const scopes = action === 'UPDATE' ? 'OLD.scope, NEW.scope' : action === 'DELETE' ? 'OLD.scope' : 'NEW.scope';
+      database.run(`CREATE TRIGGER IF NOT EXISTS generated_archive_revision_${action} AFTER ${action} ON generated_archive
+        BEGIN UPDATE generated_archive_scopes SET revision=lower(hex(randomblob(16))) WHERE scope IN (${scopes}); END`, onAlter);
+    }
     // The table must exist before its legacy column upgrades are replayed.
     database.run(`CREATE TABLE IF NOT EXISTS memories (
       id TEXT PRIMARY KEY,

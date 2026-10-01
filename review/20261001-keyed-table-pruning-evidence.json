@@ -1,0 +1,5511 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune19; baseline is turn-start worktree, not HEAD",
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1082,
+        "lines": 368010
+      },
+      "tests": {
+        "files": 737,
+        "lines": 158732
+      },
+      "total": {
+        "files": 1819,
+        "lines": 526742
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1082,
+        "lines": 367989
+      },
+      "tests": {
+        "files": 738,
+        "lines": 158695
+      },
+      "total": {
+        "files": 1820,
+        "lines": 526684
+      }
+    }
+  },
+  "files": [
+    {
+      "file": "db_layer.ts",
+      "before": 2538,
+      "after": 2540,
+      "delta": 2,
+      "beforeSha256": "0e5ce930439ee6f31dfac42957ac603c01ad709b34e0edcc259b45f276927a1d",
+      "afterSha256": "526d4231bd3cfa3cb5247f721afb8d45046d753e18c4bfd55b3b0fcaca4262c2"
+    },
+    {
+      "file": "test/chat_page_fixture.ts",
+      "before": 0,
+      "after": 101,
+      "delta": 101,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "bf78a5c1023b8167636fd8650cfa21117aaf36eee1af031707839e78d96fc0a9"
+    },
+    {
+      "file": "test/chat_attachment_upload_delivery.test.ts",
+      "before": 456,
+      "after": 366,
+      "delta": -90,
+      "beforeSha256": "22c3a886f50ef51b5f9cbeeeea1f791cff1f110ea3df2cf78c2c6e5424a8d2f2",
+      "afterSha256": "ef626da86297906b35c12a0538612f1dbd75618727c8360e78ddb6bf6fd22dc2"
+    },
+    {
+      "file": "test/chat_conversation_transition.test.ts",
+      "before": 232,
+      "after": 144,
+      "delta": -88,
+      "beforeSha256": "138d6333f4d6eb0156d59dc3dc3d5c710a1de00d58a8ce123ff5de7d22ab152e",
+      "afterSha256": "33d96ef9111db819189bf4a5c380b12249eb7850a1ee5cb0ade7ba54e20c0185"
+    },
+    {
+      "file": "src/components/AvatarStudio.tsx",
+      "before": 706,
+      "after": 700,
+      "delta": -6,
+      "beforeSha256": "cb2f83c10965a5993a6a298ee218f605d89a7afcec1e15d864d96b5a9fb4f849",
+      "afterSha256": "85256bbd484e46ed3fb01e0ec0ac55bb2612df8afb62ce28c75807e401b218cb"
+    },
+    {
+      "file": "server/files/generated_archive.ts",
+      "before": 202,
+      "after": 203,
+      "delta": 1,
+      "beforeSha256": "9a638a3dcff05239406ffe856b5ef81fbf7c8bcd294e9ad647ad7782f92da9d3",
+      "afterSha256": "d8dc4a4a09c9f969a008b37829b504eabcafa968dc83c6a303f07136681d6e4b"
+    },
+    {
+      "file": "routes/files.ts",
+      "before": 2888,
+      "after": 2870,
+      "delta": -18,
+      "beforeSha256": "d537de704aff83fcda2fa13a3b45b149312848cbc18bb0004fdb79b86a4a8695",
+      "afterSha256": "802ae234adba24cd2cdb4c67a859a57472c07b92e7aa160eba4c7ba2fe22481d"
+    },
+    {
+      "file": "test/generated_library.test.ts",
+      "before": 205,
+      "after": 209,
+      "delta": 4,
+      "beforeSha256": "46d04852d7965c24711591fb9176856ccbe791e8b84fe247ac752644b366e610",
+      "afterSha256": "c0f9641f901af32810a745cf2bc8ebba54d189d5154eff9fab06a17817814317"
+    },
+    {
+      "file": "test/database_snapshot_batch.test.ts",
+      "before": 203,
+      "after": 237,
+      "delta": 34,
+      "beforeSha256": "0aa5cfe203596f919235c5b1ea57df5cacf3d591c5c43cb85cf6aff13e5d74bc",
+      "afterSha256": "d4e898989479277475f27c2f2bb17de929cdab658354eaa72993ab94614b6dbd"
+    },
+    {
+      "file": "test/db_indexes.test.ts",
+      "before": 284,
+      "after": 286,
+      "delta": 2,
+      "beforeSha256": "36e9fd7030ff51a3e21ea6671cab74e75df25affa97c4a0c7057c224db71e2b2",
+      "afterSha256": "5efefc6f942dc092490874497e838630f4c3dbe528d580fddd77ca651db15ef7"
+    }
+  ],
+  "changes": [
+    "A10: expand the existing keyed snapshot mechanism from three to 45 tables. Changed normal-table rows are deleted together then inserted, allowing secondary UNIQUE values to be exchanged while retaining untouched rows. Original three hot tables retain UPSERT. No second persistence framework or caller dirty flags.",
+    "Two non-text-keyed projections (voice_profiles and founder_vision), and legacy invalid-key rows, retain atomic table replacement. Snapshots still finish synchronously before SQL awaits, with fingerprints published only after COMMIT.",
+    "Use stable persistenceTimestamp fallback for legacy memory avatars instead of generating new dates on each save.",
+    "A10: generated archive registration returns its durable entry; files/save reuses it instead of repeated archive lookups and duplicate metadata setup. Recheck source ownership immediately after awaiting archive registration. files/list passes the already-read directory set to avoid per-entry existsSync calls.",
+    "A11: AvatarStudio palette derives from the current pet, deleting duplicate state/effect and duplicate initial localStorage read.",
+    "A12: two chat tests share the production-callback fixture. No test cases removed; preserves attachment defaults and pending-conversation state setter behavior. One new test-only helper, no new business module."
+  ],
+  "verification": {
+    "full": {
+      "startedAt": "2026-10-01T04:26:37.118Z",
+      "finishedAt": "2026-10-01T04:28:38.673Z",
+      "status": 0,
+      "signal": null,
+      "passed": 6538,
+      "failed": 0,
+      "pending": 0,
+      "files": [
+        {
+          "file": "src/contexts/frontendPreferenceContracts.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "src/components/BusinessWorkbench.test.tsx",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "src/components/ChatSongWorkbench.test.tsx",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "src/components/DesktopOnboarding.test.tsx",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "src/components/frontendBusinessContracts.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "src/components/MediaGenerationStudio.test.tsx",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "src/components/PrivacyModeSettings.test.tsx",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/acceptance_evidence.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/action_constitution_argument_scope.test.ts",
+          "status": "passed",
+          "tests": 22
+        },
+        {
+          "file": "test/action_continuation.test.ts",
+          "status": "passed",
+          "tests": 33
+        },
+        {
+          "file": "test/action_contract.test.ts",
+          "status": "passed",
+          "tests": 69
+        },
+        {
+          "file": "test/action_ledger_receipt_ids.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/action_receipt_restart_persistence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/action_turn_durability_fence.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/action_turn_ledger.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/active_task_widget.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/adaptation_report_truth.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/adapter_registry_external_tools.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/adapter_resilience.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/adaptive_compact_window.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/adaptive_voice_endpointing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/agent_status_truth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/aliyun_avatar_connection.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/aliyun_avatar_provider.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/aliyun_avatar_sessions.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/ambient_observation_silence.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/anticipatory_context.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/artifact_progress.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/artifact_progress_prompt.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/artifact_write_scope.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/audio_file_transcription.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/audio_transcription_boundaries.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/audit_session_file_boundaries.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/auth.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/authenticated_file_resources.test.tsx",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/auth_write_concurrency.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/autocad_draw_script.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/autocad_mcp_control.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_capability_pipeline.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_cycle_cancellation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_durable_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/autonomous_finalization.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/autonomous_output_closure.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/autonomous_playback_verification.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/autonomous_report_storage.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomous_task_generator_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_web_learning.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomy_levels.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomy_queue_isolation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomy_routes_projection.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/avatar_authoring_routing.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/avatar_live_history.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/avatar_live_inbox.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/avatar_live_playback.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/avatar_live_preview.test.tsx",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/avatar_live_routes.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/behavioral_evidence.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/biometric_capability_receipts.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/build_data_root_isolation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/bundled_skill_capability_metadata.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/bundled_weather.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/business_consolidation.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/business_legacy_archive.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/business_lifecycle_boundaries.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/business_ops_skills.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/business_remediation_contracts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/cad_geometry_verification.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/cad_real_folder_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cad_renovation_folder_workflow.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/calendar_target_identity.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/capability_context.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/capability_execution_plan_persistence.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/capability_gap_autofix.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/capability_learning_current_state.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_manifest.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/capability_meta.test.ts",
+          "status": "passed",
+          "tests": 35
+        },
+        {
+          "file": "test/capability_metrics.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_rollout.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_selection.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "test/capability_state_receipts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/capability_verification.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_artifact_preview.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_attachment_references.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_attachment_upload_delivery.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/chat_attachment_upload_status.test.tsx",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_authorization_revocation.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_authorization_terminal.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_confirmation_terminal_consistency.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_control_cancel_chain.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_conversation_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_conversation_transition.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_document_delivery_consistency.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/chat_event_receipts.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_execution_recovery.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/chat_execution_registry.test.ts",
+          "status": "passed",
+          "tests": 33
+        },
+        {
+          "file": "test/chat_file_preview_ui.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_history_receive_order.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/chat_isolated_conversation_continuity.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_knowledge_terminal.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/chat_local_preflight.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_new_artifact_status_routing.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_pending_cleanup_offer.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_post_cancel_durable_binding.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_prior_action_status_handler.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_progress_finalization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/chat_public_error_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/chat_recovery_auth_integration.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/chat_retrieval_cancellation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_runtime_shutdown.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_song.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/chat_task_feedback_binding.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_task_model_failover_continuity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_task_relation_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/chat_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_view_async_boundaries.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/chat_voice_response_delivery.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_voice_tool_stability.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/client_action_external_work_routing.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/client_action_migration.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/client_diagnostic_plan.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/client_domain_ui_state.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/client_runtime_resources.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/client_self_model.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/client_self_repair_receipts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/client_surface_render_commit.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/cloud_resilience.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/cloud_resilience_deadline.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/command_center_css_budget.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/command_center_customer_projection.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/command_center_execution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/command_center_membership_authorization.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/command_center_navigation_contract.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/command_center_office_scene.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/command_center_planner_mode.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/command_center_plans.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/command_center_plan_retry.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/command_center_scheduled_execution.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/command_platform_validation.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/commerce_tax_skills.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/completion_feedback_persistence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/completion_guard.test.ts",
+          "status": "passed",
+          "tests": 65
+        },
+        {
+          "file": "test/computer_capability_prompt_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/computer_exploration_ui_wiring.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/computer_use_verification.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/confirmed_save_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/control_sequence_truth_snapshot.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/conversation_action_continuation_state.test.ts",
+          "status": "passed",
+          "tests": 32
+        },
+        {
+          "file": "test/conversation_action_request_supersession.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_action_turn_manager.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/conversation_deletion_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/conversation_exact_correction.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/conversation_execution_facts.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/conversation_focus_threads.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_guard_history.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/conversation_latency_policy.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/conversation_new_session.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/conversation_prompt_context.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/conversation_receipt_archive.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/conversation_request_lease_convergence.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/conversation_rollover.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/conversation_routes.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_summary_scheduler.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/conversation_sync.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/conversation_terminal_task_disposition.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_turn.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/core_capability_boundaries.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cross_channel_action_turn_binding.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/cross_channel_task_request_identity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cross_platform_capability_contract.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/customer_output_projection_surfaces.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/dashscope_async_task.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/database_health_status.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_migration_failure.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_query_contract.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/database_retention_policy.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_shutdown.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/database_snapshot_batch.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/data_root_process_lease.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/data_root_windows_process_probe.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/db_indexes.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/decision_continuity_regression.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/desktop_ai_tools.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_bootstrap_helper.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_bootstrap_security.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/desktop_build_receipt.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/desktop_bundle_budget_contract.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_capability_alignment.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/desktop_command_receipt.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_completion_review.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/desktop_control_lease.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/desktop_control_messages.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_control_pause_adjudication.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_display_scaling.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_exact_target.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_execution_plan.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/desktop_execution_runtime.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/desktop_execution_stability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_foreground_ownership.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/desktop_native_open_completion.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/desktop_observation.test.ts",
+          "status": "passed",
+          "tests": 40
+        },
+        {
+          "file": "test/desktop_optional_bundle_budget.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_relay.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/desktop_relay_recovery.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/desktop_resource_copy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_socket_recovery.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_text_file_capability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_wechat_watch.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/deterministic_runtime_routing.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/deterministic_tool_recovery.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/device_registry.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/diagnostic_secret_redaction.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/document_functional_regressions.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/domain_session_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/doubao_speech_api_key.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/doubao_streaming_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/doubao_streaming_protocol.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/duplicate_confirmation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/durable_control_plan_routes.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/durable_scope_mutation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/durable_task_queue.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/durable_task_recovery_state_machine.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/ecommerce_review_source.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/ecommerce_workbench.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/emotional_state.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/evidence_workflow.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/execution_decision.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/execution_guard_feedback_sequence.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/execution_guard_recovery.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/execution_pipeline.test.ts",
+          "status": "passed",
+          "tests": 50
+        },
+        {
+          "file": "test/explore_routes_isolated_scan.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/extension_registry.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/external_ai_history_sync.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/external_app_permission_boundaries.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/external_capability_credential_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/external_capability_deactivation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/external_capability_frontend_contract.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/external_capability_registry.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/external_capability_route_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/external_cli.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/external_cli_conversation.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/external_commit_unknown_outcome.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/external_control_candidates.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/failover_policy.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/file_home_paths.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/file_read_history_continuity.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/finance_delivery_e2e.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/finance_office_precision.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/floorplan_extraction_pipeline.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/floorplan_geometry_handoff.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/focus_client_projection.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/focus_socket_contract.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/foreground_activity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/foreground_request_finalization.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/formal_acceptance_evidence.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/formal_client_e2e_script.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/formal_client_restart_recovery_script.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/formal_model_failover_recovery.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/formal_native_client_binding.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/formal_stage9_adjudicator.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/formal_stage9_producer_evidence.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/formal_variant_acceptance.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/formal_wps_batch_acceptance.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/frontend_response_finalization.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/generated_library.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/generated_output_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/generated_skill_history.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/git_tool_boundaries.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/gptsovits_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/gptsovits_provider.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/http_fixture_database_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/image_edit_routing.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/image_generation_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/industry_ecommerce_customer_service_drafts.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_listing_action_queue.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_store_data_snapshot.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_ecommerce_today_snapshot.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_trend_discovery.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/industry_ecommerce_workbench_archive.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_learning.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_research_constraints.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_source_bound_arguments.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/javascript_sandbox_boundary.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/keys.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/knowledge_entry_navigation.test.tsx",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/knowledge_extraction_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/knowledge_ingestion_manifest.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/knowledge_late_ingestion.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/knowledge_protection_retry.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/knowledge_source_format_matrix.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/knowledge_source_revision.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/language.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lap_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lap_delegation_idempotency.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/lap_identity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/lap_pairing.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lap_policy.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/lap_transport.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/laya_shadow.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/learning_interface.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_authority_refresh.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_capability_receipts.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/legal_case_client_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/legal_case_folder_workflow.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/legal_citation_verification.test.ts",
+          "status": "passed",
+          "tests": 29
+        },
+        {
+          "file": "test/legal_retrieval_identity.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_semiauto_workflows.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/legal_tool_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/live_conversation_regression.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/live_conversation_regressions.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/live_task_regressions.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/llm_completion_status.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/llm_desktop_pause_boundary.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/llm_legacy_tool_protocol.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_reasoning.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/llm_stream_supervision.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/llm_tool_context_compaction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_tool_invocation_budget.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/llm_tool_lifecycle_persistence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/llm_tool_loop_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_tool_loop_recovery.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/llm_tool_loop_turn_deadline.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/llm_tool_protocol_integrity.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/local_model_capacity.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/local_model_context_budget.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/local_model_probe_isolation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/local_model_runtime.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/local_security_boundary.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/local_whisper_cancellation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/local_whisper_privacy.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/lumi-client-action-routing.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/lumicore_branding.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_august_voice_replay.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/lumi_autonomous_chain_pressure.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_call_stability_replay.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/lumi_character_motion.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_continuous_action_pressure.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_core_integrity_pressure.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lumi_layered_motion.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/lumi_real_failure_replay.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/lumi_requirement_matrix_pressure.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/lumi_runtime_action_pressure.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/lumi_scene_protocol.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/lumi_systematic_naturalness_regression.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/macos_action_receipt.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/macos_wallpaper_mode.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mac_system_explorer.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/make_llm_call_arity.test.ts",
+          "status": "passed",
+          "tests": 42
+        },
+        {
+          "file": "test/manifest_driven_consumers.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/markdown_knowledge.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/marketplace_official_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/marketplace_route_projection_security.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/marketplace_skill_install.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_config_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/mcp_desktop_filesystem_migration.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/mcp_output_finalization.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/mcp_public_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mcp_remote_devices.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_route_security.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/mcp_runtime_cleanup.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mcp_shutdown.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/mcp_skill_install_resilience.test.ts",
+          "status": "passed",
+          "tests": 40
+        },
+        {
+          "file": "test/mcp_tool_annotations.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_websocket_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mediapipe_face_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/media_artifact.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/media_artifact_socket_receipt.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/media_delivery_recovery.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/media_generation_artifacts.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/media_playback_evidence.test.ts",
+          "status": "passed",
+          "tests": 81
+        },
+        {
+          "file": "test/media_recovery_gallery.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/media_request_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/media_workbench_chat_contract.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/meeting_speakers.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_auto_organize.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_authoring.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_call_hook.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/memory_avatar_chat_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_conversation.test.tsx",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_distill_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_editor.test.tsx",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/memory_avatar_entry_lifecycle.test.tsx",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_media.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/memory_avatar_media_service.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_media_ui.test.tsx",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/memory_avatar_portrait.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/memory_avatar_portrait_audio_contract.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/memory_avatar_portrait_connection.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/memory_avatar_portrait_service.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/memory_avatar_portrait_settings.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_avatar_portrait_voice_integration.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_stage.test.tsx",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_territory.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/memory_avatar_voice.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/memory_conflict_evidence.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/memory_derived_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/memory_device_sync_durability.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/memory_entity_grounding.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_index_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/memory_learning_provenance.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_operational_trace_filter.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_recall_negated_lookup.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/memory_route_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_route_security.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/memory_territory_navigation.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/memory_territory_surface.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_tier_priority.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/messaging_adapters.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/messaging_attachment_context.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/messaging_authorization_revocation.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_connections_and_routing.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/messaging_execution_receipts.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/messaging_feishu_governance.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_file_transfer.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/messaging_inbox_admission.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/messaging_legal_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/messaging_legal_notice_intake.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/messaging_organization_work_routing.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/messaging_personal_org_scope.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_remote_learning_authorization.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/messaging_remote_reply_durability.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/messaging_turn_integrity.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/missing_task_input.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_auto_routing_constraints.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/model_configuration_tools.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/model_execution_self_awareness.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/model_failover_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/model_failover_tool_continuity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/model_media_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/model_owned_chat_dispatch.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/model_provider_access.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/model_request_context_budget.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/model_request_tool_protection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/model_role_preferences.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_routing_outbound_evidence.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_service_settings.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/model_streaming_routing.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/model_switching_stability.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/model_tool_projection.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/model_turn_latency.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/native_build_boundaries.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/native_client_identity.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "test/native_invocation_failure.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/native_request_binding_persistence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/new_artifact_task_relation.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/normalized_desktop_intent.test.ts",
+          "status": "passed",
+          "tests": 106
+        },
+        {
+          "file": "test/notifications.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/notification_state.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/no_mutation_policy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/ocr_coordinate_handoff.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/office_broadcast_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/office_presentation_receipts.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/official_api_apply.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/official_api_role_settings_contract.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/official_api_transport.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/official_model_catalog_migration.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/official_model_configuration_concurrency.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/official_reasoning_defaults_migration.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/official_sdk_error_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/official_stt_stream.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/official_tts_adapter.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/official_wake_detector.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/operating_kernel.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/operation_mode_autonomy_sync.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/operation_mode_commands.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/operation_mode_taxonomy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/organization_branch_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/organization_branch_commit_concurrency.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/organization_branch_recovery.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/organization_branch_sync.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/organization_resource_acl.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/organization_resource_acl_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/organization_work_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/organization_work_routing_routes.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/organization_ws_security.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_kb.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_legal_case_deletion.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/org_profile.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/org_workspace_information_architecture.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/output_finalization_paths.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/password_pdf.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/pending_cleanup_offer_task_relation.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/pending_confirmation.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/pending_confirmation_repository.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/personality_evolution_cost_guard.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/personality_growth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/personal_client_surface_coverage.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/pet_preference_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/playback_crop.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/playback_entry_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/playback_observation_delivery.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/playback_verification.test.ts",
+          "status": "passed",
+          "tests": 59
+        },
+        {
+          "file": "test/portable_evidence_comparison.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/portable_external_evidence.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/portable_paired_barrier.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/portable_paired_controller.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/portable_paired_runner.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/portable_task_regression_truth_v2_adapter.test.ts",
+          "status": "passed",
+          "tests": 29
+        },
+        {
+          "file": "test/pptx_extraction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/presence_owner_signal.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/privacy_execution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/privacy_mode.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/privacy_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/privacy_speech.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/privacy_startup_order.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/proactive_notification_center_only.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/proactive_voice_delivery.test.tsx",
+          "status": "passed",
+          "tests": 36
+        },
+        {
+          "file": "test/process_resource_monitor.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/profession_skills.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/profile_voice_access_ui.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/provider_connection_test.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/provider_failure_backoff.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/provider_health_observation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/provider_json_schema_format.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/public_agent_event_projection.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/python_process_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/python_terminal_receipts.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/qwen_stt_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/read_only_cache.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/read_only_tool_learning.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/region_capability_packs.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/registry.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/reminder_delivery_atomicity.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/remote_chat_route_boundary.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/remote_execution_boundary.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/reply_style.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/response_constraints.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/response_delivery.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/rest_workflow_receipts.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/result_finalizer.test.ts",
+          "status": "passed",
+          "tests": 156
+        },
+        {
+          "file": "test/result_finalizer_formatting.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/retrieval_model_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/retrieval_safety.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/root_review_file_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/route_security_hardening.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/routing_shadow_guard.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/rtf_extraction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/runtime_build_metadata.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/runtime_data_isolation.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/runtime_file_logger.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/runtime_reliability_source_mode.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/runtime_shutdown.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/runtime_source_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/runtime_workflow_control.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/runtime_work_batch_cancel.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/safety_boundaries.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/scheduler_capability_execution.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/scheduler_stability.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/scope_isolation.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/script_authority_boundary.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/self_improvement_program.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/self_improvement_staging.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/self_model_snapshot.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/sensor_permission_service.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/serial_execution_queue.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/server_entry_data_migration.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/settings.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/shared_loop_target_continuity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_authoring_chain.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/skill_authoring_completion.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/skill_authoring_pipeline.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/skill_generation_policy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_generation_transport.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/skill_generation_validation.test.ts",
+          "status": "passed",
+          "tests": 50
+        },
+        {
+          "file": "test/skill_lifecycle_receipts.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/skill_profile_migration.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/skill_route_scope_security.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_runtime_state_truth.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/socket_guard_history_paths.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/socket_history_membership.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/socket_legacy_history_roles.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/socket_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/socket_sidecar_idempotency_contract.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/speculative_tts_sentence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/speech_normalization.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/spreadsheet_tools.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/startup_shell.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/stockbot_trading.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/structured_media_execution.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/structured_media_request.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/structured_runtime_status.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/stt_adapter.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/stt_partial_transcript.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/stt_stream_resilience.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/summary_grounding.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/systemic_runtime_voice_and_window.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/system_app_detection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/system_exploration_worker_resolution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/system_explorer_capability_profile.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/system_explorer_consent.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/system_stats_accuracy.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/task_assignment_handoff_regressions.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/task_cancel_durability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/task_capsule.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/task_completion_feedback_ui.test.tsx",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/task_concurrency.test.ts",
+          "status": "passed",
+          "tests": 49
+        },
+        {
+          "file": "test/task_execution_ledger.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/task_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/task_membership_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/task_plan_reference.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/task_regression_black_box_runner.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/task_regression_build_identity.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/task_regression_desktop_relay_security.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/task_regression_matrix.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/task_regression_stale_receipt_evidence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/task_regression_truth_v2.test.ts",
+          "status": "passed",
+          "tests": 34
+        },
+        {
+          "file": "test/task_regression_wps_semantic_relay_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_relation_matrix.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/task_runtime_real_sequence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/task_semantic_continuity.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/task_target_anchor_e2e.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/task_target_reference.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/task_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_truth_snapshot_collector.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/task_truth_snapshot_provider_integration.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_truth_snapshot_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/tauri_dev_single_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/technical_architecture.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/text_file_format.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/time_calendar_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_confirmation_detection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_execution_engine.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/tool_execution_envelope.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/tool_execution_timeout.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/tool_intent_audio.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/tool_output_security.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/tool_permission_enforcement.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/tool_planning.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/tool_receipt_observer.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_record_status.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/tool_router.test.ts",
+          "status": "passed",
+          "tests": 112
+        },
+        {
+          "file": "test/translations.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/tts_adapter.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/turn_continuation_authority.test.ts",
+          "status": "passed",
+          "tests": 22
+        },
+        {
+          "file": "test/turn_dispatch.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/turn_flow.test.ts",
+          "status": "passed",
+          "tests": 42
+        },
+        {
+          "file": "test/turn_memory_durability.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/unified_artifact_delivery.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/unified_core_policy.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/unified_lumi_workspace_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/unified_org_workspace.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/unified_runtime_supervisor.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/user_identity_boundary.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/user_observed_media_completion.test.ts",
+          "status": "passed",
+          "tests": 41
+        },
+        {
+          "file": "test/variant_manager.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/verified_bounded_action_completion.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/video_container_validation.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/video_generation_routing.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/video_measurements.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/vision_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/vitest_inventory_diagnostics.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/vite_watch_policy.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/voice.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voiceprint_sidecar_supervision.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/voice_audio_transport.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_call_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/voice_chat_accepted_stt_continuity.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/voice_cloning_capture_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_device_preferences.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_execution_receipts.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_fast_path.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/voice_hot_switch.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/voice_input_guard.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_latency_store.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_live_regressions.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voice_media_routes_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_meeting_authorization.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voice_parallel_work_and_cad_blank.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_playback_state.test.tsx",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/voice_preference_model.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/voice_preview_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_profile_persistence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_prompt_context_contract.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_provenance.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_provenance_formal_chain.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/voice_reconnect_and_presence.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/voice_runtime_stability.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_settings_window_activation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_surface_state_sync.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/voice_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_text_continuation_truth_snapshot.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/voice_transcript_guard.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/voice_turn_state.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/voice_work_watchdog.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/wake_detector.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/wake_official_frontend.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/wake_socket_readiness.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wallpaper_surface_projection.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/web_login_key_protection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/web_login_scope.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/web_login_state.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/web_response_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wechat_connection.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/wechat_routes.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/wechat_shutdown.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/windows_calendar_target_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/windows_deploy_failure.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/windows_uia_rectangles.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/workflow_attached_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_calculation_capture.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/workflow_capture_turn.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_conversation_binding.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/workflow_execution_ledger.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/workflow_fresh_input_execution.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_live_control.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/workflow_membership_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/workflow_progress_completion.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/workflow_reference_encoding.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/workflow_runtime.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/workflow_shutdown_tracking.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/work_product_evidence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/work_takeover_account_sessions.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/work_takeover_cancellation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/work_takeover_capability_reuse_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/work_takeover_continuity.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/work_takeover_evidence_connection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/work_takeover_execution_writeback.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/work_takeover_industry_parameters.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wps_current_app_e2e_regression.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "src/i18n/runtime.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "src/hooks/frontendScopeContracts.test.tsx",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "src/hooks/useGeneratedLibrary.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "src/lib/audioContextLifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "src/lib/externalNavigation.test.tsx",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "src/services/apiClient.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "src/services/frontendWriteContracts.test.ts",
+          "status": "passed",
+          "tests": 4
+        }
+      ]
+    },
+    "removedTests": [],
+    "addedTests": [
+      {
+        "name": "D:/lumiOS/test/database_snapshot_batch.test.ts::snapshot batch persistence exchanges unique usernames without rewriting untouched users, and retains all rows on failure",
+        "added": 1
+      }
+    ],
+    "checks": [
+      "lint (i18n/hooks/type check): exit 0",
+      "all frontend targets: exit 0",
+      "desktop frontend: exit 0",
+      "compact CSS: exit 0",
+      "server build: exit 0",
+      "test inventory threshold 6473 unchanged: exit 0",
+      "CRLF-aware diff check: exit 0"
+    ],
+    "tableKeyContract": [
+      {
+        "table": "users",
+        "first": "uid",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "uid",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "interactions",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "memories",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "memory_avatars",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "reminders",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "conversations",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "conversation_action_tasks",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "conversation_action_turns",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "conversation_action_receipts",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "model_routing_receipts",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "read_only_tool_patterns",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "command_center_plans",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "autonomous_tasks",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_ai_history_sources",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_ai_history_sync_jobs",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_ai_history_conversations",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_ai_history_messages",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_ai_history_attachments",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "extension_publishers",
+        "first": "fingerprint",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "fingerprint",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "extension_revisions",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "extension_activation_receipts",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_capability_packages",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "external_capability_receipts",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "canvas_sessions",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "marketplace_skills",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "skills",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "settings",
+        "first": "key",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "key",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "voice_profiles",
+        "first": "userId",
+        "keyed": false,
+        "primary": [
+          {
+            "name": "id",
+            "type": "INTEGER"
+          }
+        ]
+      },
+      {
+        "table": "token_usage",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "organizations",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "departments",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_memberships",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_positions",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_work_routing_rules",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_work_items",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_work_approvals",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_work_handoffs",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_resource_policies",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_resource_grants",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_credential_references",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_devices",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_invitations",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_kb_articles",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "org_kb_embeddings",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "notifications",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "audit_log",
+        "first": "id",
+        "keyed": true,
+        "primary": [
+          {
+            "name": "id",
+            "type": "TEXT"
+          }
+        ]
+      },
+      {
+        "table": "founder_vision",
+        "first": "id",
+        "keyed": false,
+        "primary": [
+          {
+            "name": "id",
+            "type": "INTEGER"
+          }
+        ]
+      }
+    ],
+    "regressionCoverage": [
+      "Actual SQLite username exchange updates only the two changed users; a conflicting exchange rolls back and can be retried, then survives reopen",
+      "Existing no-op flush test also covers missing-date avatars",
+      "Single-file archive lookup and directory-set listing return identical IDs, with no per-file existence probes for the latter",
+      "Prior 6537 cases preserved by file/full-name multiset, one new case"
+    ]
+  },
+  "performance": {
+    "method": "Real writeDB/flushDBOrThrow against isolated SQLite. N conversation rows plus N setting rows in each size. Two warmups and six measured samples per mode, with process GC before timing; total_changes queries outside timing. Before/after order alternates at 10000. No concurrent build/full-suite jobs. Exactly two reusable synthetic data roots.",
+    "scenarios": [
+      {
+        "size": 1000,
+        "mode": "unchanged",
+        "before": {
+          "medianMs": 2.05,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 2.279399999999896,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 2.0631000000000768,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 2.0417999999999665,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 2.005100000000084,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 2.0208999999999833,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 2.2671000000000276,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 2.17,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 2.3034999999999854,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 2.173999999999978,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 2.1588000000001557,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 2.117999999999938,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 2.076300000000174,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 2.233399999999847,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        }
+      },
+      {
+        "size": 1000,
+        "mode": "setting",
+        "before": {
+          "medianMs": 26.49,
+          "changedRows": [
+            2000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 26.76610000000005,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 27.73630000000003,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 25.317800000000034,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 26.59810000000016,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 25.489000000000033,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 26.37909999999988,
+              "changedRows": 2000,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 10.45,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 10.373599999999897,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 11.158200000000079,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 9.189200000000028,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 10.292400000000043,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 10.520500000000084,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 11.116500000000087,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "size": 1000,
+        "mode": "conversation",
+        "before": {
+          "medianMs": 33.24,
+          "changedRows": [
+            2000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 33.222099999999955,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 33.24570000000017,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 33.09980000000019,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 33.22669999999994,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 36.510099999999966,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 33.40560000000005,
+              "changedRows": 2000,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 10.18,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 9.944899999999961,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 10.09439999999995,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 10.26929999999993,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 9.884000000000015,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 12.112700000000132,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 12.3433,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "size": 10000,
+        "mode": "unchanged",
+        "before": {
+          "medianMs": 16.33,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 16.72539999999981,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 16.072400000000016,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 16.590700000000197,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 16.037799999999606,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 16.953700000000026,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 15.786699999999655,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 17.24,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 17.502199999999903,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 17.041200000000117,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 17.84089999999992,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 17.140499999999975,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 17.33699999999999,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 16.95029999999997,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        }
+      },
+      {
+        "size": 10000,
+        "mode": "setting",
+        "before": {
+          "medianMs": 201.13,
+          "changedRows": [
+            20000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 200.98019999999997,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 208.42439999999988,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 201.2750000000001,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 203.98710000000028,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 200.9639000000002,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 200.11390000000029,
+              "changedRows": 20000,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 27.14,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 27.577600000000075,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 26.579700000000003,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 29.066800000000057,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 31.11760000000004,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 26.698200000000043,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 25.659999999999854,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "size": 10000,
+        "mode": "conversation",
+        "before": {
+          "medianMs": 272.36,
+          "changedRows": [
+            20000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 271.80680000000007,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 277.59490000000005,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 269.3263999999999,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 274.7633000000001,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 266.58740000000034,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 272.91759999999977,
+              "changedRows": 20000,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 25.57,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 25.553100000000086,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 25.59140000000002,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 25.624199999999973,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 26.198599999999942,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 24.45510000000013,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 25.255899999999883,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "size": 30000,
+        "mode": "unchanged",
+        "before": {
+          "medianMs": 43.1,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 44.42519999999968,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 43.042599999999766,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 43.42230000000018,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 42.222999999999956,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 43.15230000000156,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 42.07159999999931,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 63.72,
+          "changedRows": [
+            0
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "unchanged",
+              "elapsedMs": 63.710999999999785,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 3,
+              "mode": "unchanged",
+              "elapsedMs": 64.82940000000008,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 4,
+              "mode": "unchanged",
+              "elapsedMs": 63.736599999999726,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 5,
+              "mode": "unchanged",
+              "elapsedMs": 63.67009999999982,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 6,
+              "mode": "unchanged",
+              "elapsedMs": 63.52719999999999,
+              "changedRows": 0,
+              "tables": []
+            },
+            {
+              "round": 7,
+              "mode": "unchanged",
+              "elapsedMs": 64.04700000000003,
+              "changedRows": 0,
+              "tables": []
+            }
+          ]
+        }
+      },
+      {
+        "size": 30000,
+        "mode": "setting",
+        "before": {
+          "medianMs": 594.82,
+          "changedRows": [
+            60000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 596.7519999999995,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 600.0585000000001,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 592.8838000000005,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 610.0156999999999,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 585.8924999999999,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 580.1341000000011,
+              "changedRows": 60000,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 57.52,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "setting",
+              "elapsedMs": 57.403999999999996,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "setting",
+              "elapsedMs": 59.41220000000021,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "setting",
+              "elapsedMs": 57.30029999999988,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "setting",
+              "elapsedMs": 57.64350000000013,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "setting",
+              "elapsedMs": 60.09230000000025,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "setting",
+              "elapsedMs": 56.447099999999864,
+              "changedRows": 2,
+              "tables": [
+                "settings"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "size": 30000,
+        "mode": "conversation",
+        "before": {
+          "medianMs": 806.11,
+          "changedRows": [
+            60000
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 815.9694,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 812.6632,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 823.6052999999993,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 797.8757000000005,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 796.2322000000004,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 799.5573999999997,
+              "changedRows": 60000,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        },
+        "after": {
+          "medianMs": 56.29,
+          "changedRows": [
+            2
+          ],
+          "samples": [
+            {
+              "round": 2,
+              "mode": "conversation",
+              "elapsedMs": 67.60739999999987,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 3,
+              "mode": "conversation",
+              "elapsedMs": 55.23160000000007,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 4,
+              "mode": "conversation",
+              "elapsedMs": 56.69369999999981,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 5,
+              "mode": "conversation",
+              "elapsedMs": 55.524799999999686,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 6,
+              "mode": "conversation",
+              "elapsedMs": 56.67579999999998,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            },
+            {
+              "round": 7,
+              "mode": "conversation",
+              "elapsedMs": 55.90520000000015,
+              "changedRows": 2,
+              "tables": [
+                "conversations"
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "durable": [
+      {
+        "sizePerTable": 1000,
+        "before": {
+          "conversations": {
+            "rows": 1000,
+            "sha256": "8f2ccb87d1fa9da374d7000ce26c3cd12b02a478a5911ccf344b3196765e4fce"
+          },
+          "settings": {
+            "rows": 1000,
+            "sha256": "faaac79a4800962131889bbec2e1a30289bcf15c6455d50507bda5e1bbde92a1"
+          }
+        },
+        "after": {
+          "conversations": {
+            "rows": 1000,
+            "sha256": "8f2ccb87d1fa9da374d7000ce26c3cd12b02a478a5911ccf344b3196765e4fce"
+          },
+          "settings": {
+            "rows": 1000,
+            "sha256": "faaac79a4800962131889bbec2e1a30289bcf15c6455d50507bda5e1bbde92a1"
+          }
+        },
+        "equal": true
+      },
+      {
+        "sizePerTable": 10000,
+        "before": {
+          "conversations": {
+            "rows": 10000,
+            "sha256": "0ce1e213cc256ea2020ceda2b6950b317380fc4177a211954121484f196aef25"
+          },
+          "settings": {
+            "rows": 10000,
+            "sha256": "316f4df91025a173c2b33cb46e9eeff18e49977f8c76137843cfc3a4ba787ce1"
+          }
+        },
+        "after": {
+          "conversations": {
+            "rows": 10000,
+            "sha256": "0ce1e213cc256ea2020ceda2b6950b317380fc4177a211954121484f196aef25"
+          },
+          "settings": {
+            "rows": 10000,
+            "sha256": "316f4df91025a173c2b33cb46e9eeff18e49977f8c76137843cfc3a4ba787ce1"
+          }
+        },
+        "equal": true
+      },
+      {
+        "sizePerTable": 30000,
+        "before": {
+          "conversations": {
+            "rows": 30000,
+            "sha256": "981c3b2821efd6bfc49f7027b01e1aa039b3bae3a7f4d5cd2e1aea98eb3f8c6b"
+          },
+          "settings": {
+            "rows": 30000,
+            "sha256": "350da564d4ac7f690005c8d62a3634d579d907e22664175764d773e4086d410f"
+          }
+        },
+        "after": {
+          "conversations": {
+            "rows": 30000,
+            "sha256": "981c3b2821efd6bfc49f7027b01e1aa039b3bae3a7f4d5cd2e1aea98eb3f8c6b"
+          },
+          "settings": {
+            "rows": 30000,
+            "sha256": "350da564d4ac7f690005c8d62a3634d579d907e22664175764d773e4086d410f"
+          }
+        },
+        "equal": true
+      }
+    ],
+    "bundles": [
+      {
+        "label": "before",
+        "file": ".codex-run/prune19-db-before.cjs",
+        "sha256": "78cb7533b84e4a510beb95085b38264ab6d52eac0fe446bb9e676566c9fbb3e3"
+      },
+      {
+        "label": "after",
+        "file": ".codex-run/prune19-db-after.cjs",
+        "sha256": "93535290b7a98345b4637d6df5dfc2f5808cc0c74c84f7d9024392f8a114f9bb"
+      }
+    ],
+    "sourceTiming": "Bundles were built before the later missing-avatar-timestamp fallback edit. The benchmark has no avatar fixtures; that fix is covered by the final test suite, not this performance measurement.",
+    "physicalWrites": "changedRows is SQLite total_changes delta. An updated ordinary keyed row uses one DELETE plus one INSERT, hence 2 physical changes; it is not two logical records.",
+    "regression": "No-change 30000+30000-row flush median increased from 43.10 to 63.72 ms. Row-key tracking has overhead; this is not an across-the-board speed improvement.",
+    "scope": "Synthetic persistence benchmark only, not live model/API/chat/desktop latency; no peak-memory claim."
+  },
+  "remaining": [
+    "All rows still scanned and serialized to catch raw aliases and nested in-place changes. Removing this safely requires converging mutation entry points, not simply trusting object identity.",
+    "voice_profiles, founder_vision and legacy invalid keys retain replacement snapshots. Bulk changed rows still captured before SQL awaits.",
+    "Archive JSON readIndex remains synchronous; directory-set reuse removes redundant existence checks, not JSON parsing or all IO.",
+    "Other complex UI state, old structural tests, execution projections and real-client acceptance remain within the whole-project audit. This batch does not close them."
+  ],
+  "limits": [
+    "No real user database touched",
+    "No live model/API calls or client launch/restart",
+    "No commit or push",
+    "No subagents; existing dirty worktree preserved",
+    "Overall pruning not declared complete"
+  ]
+}

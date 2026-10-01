@@ -88,10 +88,6 @@ export function shareContext(
   };
 }
 
-export function getSharedContexts(sessionId: string): SharedContextRecord[] {
-  return sharedContexts.get(sessionId) || [];
-}
-
 export function getActiveSharedContexts(sessionId: string): SharedContextRecord[] {
   const records = sharedContexts.get(sessionId) || [];
   const now = new Date().toISOString();

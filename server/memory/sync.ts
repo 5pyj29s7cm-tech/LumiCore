@@ -13,10 +13,6 @@ export function registerUserSocket(userId: string, socketId: string): void {
   userSockets.get(userId)!.add(socketId);
 }
 
-export function getUserSockets(userId: string): Set<string> {
-  return userSockets.get(userId) || new Set();
-}
-
 export function unregisterUserSocket(socketId: string): void {
   for (const [uid, sockets] of userSockets) {
     sockets.delete(socketId);
@@ -32,17 +28,6 @@ export function broadcastMemoryChange(scope: MutationScope, action: 'added' | 'u
     ? `user:${scope.userId}:org:${scope.orgId}`
     : `user:${scope.userId}:personal`;
   _io.to(room).emit('memories:changed', { action, memoryId, ...scope, timestamp: new Date().toISOString() });
-}
-
-/** Broadcast device list change */
-export function broadcastDeviceChange(userId: string): void {
-  if (!_io) return;
-  const sockets = userSockets.get(userId);
-  if (sockets) {
-    for (const sid of sockets) {
-      _io.to(sid).emit('devices:update', { timestamp: new Date().toISOString() });
-    }
-  }
 }
 
 /** Broadcast preference change to all devices of a user (pet, accessories, wallpaper, etc.) */

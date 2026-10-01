@@ -1,9 +1,4 @@
 import type { OperationMode } from '../../../cognition/operation_modes';
-import {
-  LUMI_MEETING_CAPTURE_SURFACE,
-  LUMI_OPERATION_MODE_IDS,
-  type LumiOperationMode,
-} from '../../../../shared/operation_modes';
 
 export function formatCnOperationModeInventoryResponse(): string {
   return 'Lumi 是一个统一的个人人格核心，对话、办事、记忆和学习不再分成聊天、助手或自主模式。你直接说需求即可；后台工作按已启用的计划和权限运行，会议转写是独立的录音功能。';

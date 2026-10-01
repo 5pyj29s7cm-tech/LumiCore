@@ -1,0 +1,172 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune32",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "server/self_extension/staging.ts",
+      "beforeLines": 1823,
+      "afterLines": 1748,
+      "delta": -75,
+      "beforeSha256": "26bf25690331108a9b515a88109ee1778af5e04f5993d36fe29f706e18145fd9",
+      "afterSha256": "b979a9e5a51050ad06149f9a10523ff4594be13024566d38016dd1c03d411f76"
+    },
+    {
+      "file": "server/mcp/client.ts",
+      "beforeLines": 2813,
+      "afterLines": 2807,
+      "delta": -6,
+      "beforeSha256": "6c048016bc022dbc955a739d0717fb16286b577f4dba6e05f3e0a1ccaf29520f",
+      "afterSha256": "3eb4b03c82eea2f34fc91926db70c20ce9a972c942eed18a5beb316b47164708"
+    },
+    {
+      "file": "test/self_improvement_staging.test.ts",
+      "beforeLines": 824,
+      "afterLines": 851,
+      "delta": 27,
+      "beforeSha256": "5843675bb8a98ec20059ee716d336868ce9292dbb99854805abff9004c753a03",
+      "afterSha256": "230742575ff9919589749467ebd2dfa5f943115757828eea7d69e95bc64402de"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1085,
+        "lines": 367328
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159623
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526951
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1085,
+        "lines": 367247
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159650
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526897
+      }
+    }
+  },
+  "tests": {
+    "files": 731,
+    "passed": 6598,
+    "failed": 0,
+    "skipped": 0,
+    "added": [],
+    "removed": [],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "server/self_extension/staging.ts": "b979a9e5a51050ad06149f9a10523ff4594be13024566d38016dd1c03d411f76",
+        "server/mcp/client.ts": "3eb4b03c82eea2f34fc91926db70c20ce9a972c942eed18a5beb316b47164708",
+        "test/self_improvement_staging.test.ts": "230742575ff9919589749467ebd2dfa5f943115757828eea7d69e95bc64402de"
+      },
+      "startedAt": "2026-10-01T15:34:29.335Z",
+      "finishedAt": "2026-10-01T15:41:21.637Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 5,
+    "passed": 86
+  },
+  "parity": {
+    "projectionCases": 36,
+    "validationCases": 7,
+    "toolMappingCases": 14,
+    "passed": true
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T15:33:26.308Z",
+      "end": "2026-10-01T15:34:04.447Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T15:34:04.449Z",
+      "end": "2026-10-01T15:34:14.147Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T15:34:14.147Z",
+      "end": "2026-10-01T15:34:23.844Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T15:34:23.844Z",
+      "end": "2026-10-01T15:34:24.245Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T15:34:24.246Z",
+      "end": "2026-10-01T15:34:29.288Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T15:33:26.257Z",
+      "end": "2026-10-01T15:34:29.295Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T15:34:29.297Z",
+      "end": "2026-10-01T15:41:21.645Z",
+      "status": 0
+    }
+  ],
+  "scope": {
+    "selfImprovement": [
+      "Replaced three replay result projections with one local constructor; executable replay still omits treeDigest.",
+      "Two autonomous static-stage replay entry points share the same ordered branch/parent/path/tree/content/file validation.",
+      "Caller-specific patch review, trusted repository, task binding, expected branch, cancellation and cleanup remain in their original entry points.",
+      "The stage replay content check is now unconditional inside the static-only helper; the non-autonomous branch still returns before entering it.",
+      "Fresh staging and activation paths remain unchanged."
+    ],
+    "mcp": [
+      "Existing-connection and new-connection tool catalogs share one typed projection; raw names, schemas, annotations, defaults and validation are preserved.",
+      "Transport creation, timeout, ownership, stale-connection fallback and tool permission policy remain unchanged."
+    ],
+    "validation": [
+      "Expanded the existing crash-recovery test using an isolated real Git repository, checking equal replay receipts through both entry points.",
+      "Wrong task and cancellation are rejected; changed staged bytes and a moved branch are rejected by both replay entries; restored identity replays successfully.",
+      "Checked original/new projection object keys and values across 36 cases, seven success/error command traces, and 14 MCP tool name/schema/annotation cases."
+    ]
+  },
+  "boundaries": {
+    "newBusinessFiles": [],
+    "commit": false,
+    "push": false,
+    "backendRestarted": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "officialModelApiTested": false,
+    "realUserDataChanged": false,
+    "performanceSpeedupMeasured": false,
+    "wholeProjectSimplificationComplete": false
+  },
+  "limitations": [
+    "This round reduces duplicated implementation; it does not establish a measured model or desktop execution latency improvement.",
+    "Independently packaged skills still need package/install validation before their duplicate file extractors can be shared.",
+    "Other large UI state and task adapter duplication remain to be inspected individually."
+  ]
+}

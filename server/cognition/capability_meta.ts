@@ -7,8 +7,6 @@ import {
 import { normalizeActionIntent } from './normalized_action_intent';
 import {
   LUMI_MEETING_CAPTURE_SURFACE,
-  LUMI_OPERATION_MODE_IDS,
-  type LumiOperationMode,
 } from '../../shared/operation_modes';
 
 export interface CapabilityMetaResponseInput {

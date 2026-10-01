@@ -12,7 +12,7 @@ import {
   recordSelfImprovementPatchReview,
   updateSelfImprovementProgram,
 } from '../server/self_extension/improvement_program';
-import { markFailed, markRunning, resetAutonomousTaskQueueForTest } from '../server/autonomy/task_queue';
+import { recordAutonomousTaskFailure, markRunning, resetAutonomousTaskQueueForTest } from '../server/autonomy/task_queue';
 
 beforeAll(async () => {
   await initDatabase();
@@ -290,7 +290,7 @@ describe('durable self-improvement program', () => {
     const queued = await enqueueSelfImprovementProposal(scope, proposal.id, { localAdminAuthorized: true });
     const running = markRunning(queued.task.id);
     expect(running?.leaseId).toBeTruthy();
-    expect(markFailed(running!.id, 'simulated terminal failure', running!.leaseId)?.status).toBe('failed');
+    expect(recordAutonomousTaskFailure(running!.id, { error: 'simulated terminal failure' }, running!.leaseId)?.status).toBe('failed');
 
     await expect(enqueueSelfImprovementProposal(scope, proposal.id, { localAdminAuthorized: true }))
       .rejects.toThrow(/already terminal/i);

@@ -86,11 +86,3 @@ export function getEvidenceKeyMaterial(): EvidenceKeyMaterial {
   cached = { key, keyId };
   return { key: Buffer.from(key), keyId };
 }
-
-export function getEvidenceIdentityPath(): string {
-  return EVIDENCE_IDENTITY_PATH;
-}
-
-export function resetEvidenceIdentityCacheForTests(): void {
-  cached = null;
-}

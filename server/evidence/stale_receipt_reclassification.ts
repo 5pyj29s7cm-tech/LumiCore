@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
 import { readDB } from '../../db_layer';
 import {
@@ -149,7 +150,7 @@ function taskSemanticProjection(value: Record<string, any>): Record<string, any>
 }
 
 function clone<T>(value: T): T {
-  if (typeof structuredClone === 'function') return structuredClone(value);
+  if (typeof structuredClone === 'function') return cloneDatabaseValue(value);
   return JSON.parse(JSON.stringify(value)) as T;
 }
 

@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const reportPath = path.resolve(process.argv[2] || 'vitest-results.json');
-const minimum = Number(process.env.LUMI_MIN_TESTS || 1562);
+const minimum = Number(process.env.LUMI_MIN_TESTS || 6473);
 if (!existsSync(reportPath)) {
   console.error(`[test-inventory] missing Vitest JSON report: ${reportPath}`);
   process.exit(2);
@@ -104,4 +104,20 @@ console.log(`[test-inventory] ${total} tests collected; minimum is ${minimum}.`)
 if (total < minimum) {
   console.error(`[test-inventory] blocked: test inventory dropped by ${minimum - total}.`);
   process.exit(1);
+}
+
+// Check discovered files as well as total assertions: a large neighbouring
+// suite must not hide a missing functional area. These are vitest.config.ts roots.
+function testFiles(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? testFiles(file) : /\.test\.tsx?$/.test(entry.name) ? [path.resolve(file)] : [];
+  });
+}
+const collectedFiles = new Set((report.testResults || []).map(file => path.resolve(file.name)));
+const missing = ['src', 'test'].flatMap(testFiles).filter(file => !collectedFiles.has(file));
+if (missing.length) {
+  console.error('[test-inventory] uncollected test files: ' + missing.map(file => path.relative(process.cwd(), file)).join(', '));
+  process.exitCode = 1;
 }

@@ -25,7 +25,7 @@ import { collectChatArtifacts } from '../server/conversation/chat_artifacts';
 import { sameArtifactPath } from '../server/tools/artifact_evidence';
 import { readDocumentPreview } from '../server/files/document_preview';
 import { getPersonalKnowledgeDirectory } from '../server/files/knowledge_directory';
-import { listGeneratedArchive, reconcileGeneratedArchive, mutateGeneratedArchiveFile, registerGeneratedKnowledgeFile } from '../server/files/generated_archive';
+import { type GeneratedArchiveEntry, type GeneratedArchiveScope, listGeneratedArchive, reconcileGeneratedArchive, mutateGeneratedArchiveFile, registerGeneratedKnowledgeFile } from '../server/files/generated_archive';
 import { streamLocalFile } from '../server/files/stream_local_file';
 import {
   requireAdmin as requireUnifiedAdmin,
@@ -114,7 +114,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-interface KnowledgeEntry {
+export interface KnowledgeEntry {
   archiveId?: string;
   archiveKind?: string;
   sourceConversationId?: string;
@@ -187,10 +187,7 @@ interface ObsidianNoteFile {
   mtimeMs: number;
 }
 
-interface FileScope {
-  domain: 'personal' | 'work';
-  userId: string;
-  orgId?: string;
+interface FileScope extends GeneratedArchiveScope {
   dir: string;
   legacyPersonalOwner?: boolean;
 }
@@ -983,9 +980,8 @@ function metaMatchesScope(meta: any, scope: FileScope): boolean {
   return scope.legacyPersonalOwner === true;
 }
 
-function findFileMeta(db: any, filename: string, scope: FileScope): any | undefined {
+function findFileMeta(db: any, filename: string, scope: FileScope, archived?: GeneratedArchiveEntry): any | undefined {
   const existing = (db.knowledgeFiles || []).find((m: any) => m.filename === filename && metaMatchesScope(m, scope));
-  const archived = listGeneratedArchive(scope).find(entry => entry.filename === filename);
   if (!archived) return existing;
   const meta = existing || { filename, agentIds: [], status: 'ready' };
   Object.assign(meta, archiveFileMeta(archived));
@@ -993,7 +989,19 @@ function findFileMeta(db: any, filename: string, scope: FileScope): any | undefi
   return meta;
 }
 
-function archiveFileMeta(entry: ReturnType<typeof listGeneratedArchive>[number]) {
+async function readRequestArchive(req: Request, scope: FileScope, filename?: string) {
+  const member = scope.domain === 'work' ? getMember(scope.orgId!, scope.userId) : null;
+  const identity = member && [member.id, member.role];
+  const entries = await listGeneratedArchive(scope, filename);
+  getFileScope(req);
+  const current = identity && getMember(scope.orgId!, scope.userId);
+  if (identity && (!current || current.id !== identity[0] || current.role !== identity[1])) {
+    throw Object.assign(new Error('Organization access changed while reading files.'), { status: 403 });
+  }
+  return entries;
+}
+
+function archiveFileMeta(entry: GeneratedArchiveEntry) {
   return { filename: entry.filename, displayName: entry.displayName, userId: entry.userId, domain: entry.domain,
     orgId: entry.orgId, source: 'generated', archiveId: entry.id, archiveKind: entry.kind,
     sourceConversationId: entry.sourceConversationId, createdAt: entry.createdAt };
@@ -1874,36 +1882,49 @@ function buildEntry(filename: string, source: KnowledgeFileSource, agentIds: str
 }
 
 // ── GET /files/list — list knowledge base files ──
-function fileMemoryMatchesScope(memory: any, scope: FileScope): boolean {
-  const domain = memory?.domain || 'personal';
-  const orgId = memory?.orgId || '';
-  return domain === scope.domain && orgId === (scope.orgId || '');
-}
-
-function fileMemoryMatchesName(memory: any, filename: string): boolean {
-  const target = filename.normalize('NFC').toLowerCase();
-  const source = String(memory?.sourceInteractionId || '');
-  const sourceBase = source ? path.basename(source).normalize('NFC').toLowerCase() : '';
-  if (sourceBase === target) return true;
-
-  const keywords = Array.isArray(memory?.keywords) ? memory.keywords : [];
-  if (keywords.some((kw: any) => String(kw || '').normalize('NFC').toLowerCase() === `source:${target}`)) return true;
-
-  return String(memory?.content || '').normalize('NFC').startsWith(`[${filename} #`);
+function groupExistingFileMemories(
+  db: any, filenames: string[], scope: FileScope,
+  options: { userId?: string; agentId?: string } = {},
+): Map<string, any[]> {
+  const grouped = new Map<string, any[]>(), targets = new Map<string, string[]>();
+  const names = new Set(filenames);
+  let headerLength = 0;
+  for (const name of names) {
+    const key = name.normalize('NFC').toLowerCase();
+    targets.set(key, [...(targets.get(key) || []), name]);
+    headerLength = Math.max(headerLength, name.length + 3);
+  }
+  if (!names.size) return grouped;
+  for (const memory of db.memories || []) {
+    if (memory?.type !== 'knowledge' || (options.userId && memory.userId !== options.userId)
+      || (options.agentId && (memory.agentId || '') !== options.agentId)
+      || (memory.domain || 'personal') !== scope.domain || (memory.orgId || '') !== (scope.orgId || '')) continue;
+    const matched = new Set<string>();
+    const include = (key: string) => { for (const name of targets.get(key) || []) matched.add(name); };
+    include(path.basename(String(memory.sourceInteractionId || '')).normalize('NFC').toLowerCase());
+    for (const keyword of Array.isArray(memory.keywords) ? memory.keywords : []) {
+      const key = String(keyword || '').normalize('NFC').toLowerCase();
+      if (key.startsWith('source:')) include(key.slice(7));
+    }
+    // Preserve every legacy prefix match, including filenames containing " #".
+    const header = String(memory.content || '').normalize('NFC').slice(0, headerLength);
+    if (header.startsWith('[')) for (let end = header.indexOf(' #', 1); end !== -1; end = header.indexOf(' #', end + 2)) {
+      const name = header.slice(1, end);
+      if (names.has(name)) matched.add(name);
+    }
+    for (const name of matched) {
+      if (!grouped.has(name)) grouped.set(name, []);
+      grouped.get(name)!.push(memory);
+    }
+  }
+  return grouped;
 }
 
 function findExistingFileMemories(
-  db: any,
-  filename: string,
-  scope: FileScope,
+  db: any, filename: string, scope: FileScope,
   options: { userId?: string; agentId?: string } = {},
 ): any[] {
-  return (db.memories || []).filter((memory: any) => {
-    if (memory?.type !== 'knowledge') return false;
-    if (options.userId && memory.userId !== options.userId) return false;
-    if (options.agentId && (memory.agentId || '') !== options.agentId) return false;
-    return fileMemoryMatchesScope(memory, scope) && fileMemoryMatchesName(memory, filename);
-  });
+  return groupExistingFileMemories(db, [filename], scope, options).get(filename) || [];
 }
 
 function removeFileMemoryReferences(db: any, filename: string, scope: FileScope): number {
@@ -2029,9 +2050,10 @@ router.post('/files/archive-generated', requireAuth, async (req: Request, res: R
   } catch (error: any) { sendRouteError(res, error); }
 });
 
-router.get('/files/list', requireAuth, (req: Request, res: Response) => {
+router.get('/files/list', requireAuth, async (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
+    const archived = await readRequestArchive(req, scope);
     const db = readDB();
     const fileMeta: Record<string, any> = {};
     if (db.knowledgeFiles) {
@@ -2042,20 +2064,15 @@ router.get('/files/list', requireAuth, (req: Request, res: Response) => {
     }
 
     const entries = fs.readdirSync(scope.dir);
-    for (const entry of listGeneratedArchive(scope)) {
+    for (const entry of archived) {
       fileMeta[entry.filename] = { ...fileMeta[entry.filename], ...archiveFileMeta(entry) };
     }
     const visibleNames = entries.filter(name => !name.startsWith('.') && !name.startsWith('_'));
     const backlinkMap = buildSourceBacklinkMap(fileMeta, visibleNames);
+    const memoryGroups = groupExistingFileMemories(db, visibleNames, scope, scope.domain === 'personal' ? { userId: scope.userId } : {});
     const files: KnowledgeEntry[] = [];
-    for (const name of entries) {
-      if (name.startsWith('.') || name.startsWith('_')) continue;
-      const inferredMemories = findExistingFileMemories(
-        db,
-        name,
-        scope,
-        scope.domain === 'personal' ? { userId: scope.userId } : {},
-      );
+    for (const name of visibleNames) {
+      const inferredMemories = memoryGroups.get(name) || [];
       const inferredAgentIds = [...new Set(inferredMemories.map((m: any) => String(m.agentId || '').trim()).filter(Boolean))];
       const meta = {
         ...(fileMeta[name] || { source: 'upload' as const, agentIds: [] as string[] }),
@@ -2333,31 +2350,13 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
     const filePath = path.join(scope.dir, safeName);
     fs.writeFileSync(filePath, contentText, 'utf-8');
     const assertSourceCurrent = captureKnowledgeSource(filePath);
-    await registerGeneratedKnowledgeFile(scope, safeName);
-
+    const archived = await registerGeneratedKnowledgeFile(scope, safeName);
+    assertSourceCurrent();
     const db = readDB();
-    if (!db.knowledgeFiles) db.knowledgeFiles = [];
-    const existing = findFileMeta(db, safeName, scope);
-    if (existing) {
-      existing.source = 'generated';
-      existing.domain = scope.domain;
-      existing.orgId = scope.orgId || '';
-      existing.userId = scope.domain === 'personal' ? scope.userId : existing.userId;
-      existing.updatedAt = new Date().toISOString();
-    } else {
-      db.knowledgeFiles.push({
-        filename: safeName,
-        displayName: repairFilename(safeName),
-        userId: scope.userId,
-        domain: scope.domain,
-        orgId: scope.orgId || '',
-        source: 'generated',
-        agentIds: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
-    const meta = findFileMeta(db, safeName, scope);
+    db.knowledgeFiles ||= [];
+    let meta = db.knowledgeFiles.find((item: any) => item.filename === safeName && metaMatchesScope(item, scope));
+    if (!meta) { meta = { agentIds: [], status: 'ready' }; db.knowledgeFiles.push(meta); }
+    Object.assign(meta, archiveFileMeta(archived), { updatedAt: new Date().toISOString() });
     const generatedExtraction = extractGeneratedTextKnowledge(safeName, contentText);
     const generatedKnowledgeContent = generatedExtraction.content || contentText;
     if (meta) applyExtractionMeta(meta, generatedExtraction, generatedKnowledgeContent);
@@ -2473,7 +2472,8 @@ router.get('/files/download/:id', requireAuth, async (req: Request, res: Respons
     if (inline) {
       res.setHeader('Content-Disposition', 'inline');
     } else {
-      const meta = findFileMeta(readDB(), safeName, scope);
+      const archived = (await readRequestArchive(req, scope, safeName))[0];
+      const meta = findFileMeta(readDB(), safeName, scope, archived);
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(repairFilename(meta?.displayName || safeName))}`);
     }
     streamLocalFile(req, res, filePath, mime);
@@ -2586,15 +2586,16 @@ router.post('/files/rename', requireAuth, async (req: Request, res: Response) =>
 });
 
 // ── GET /files/info/:id ──
-router.get('/files/info/:id', requireAuth, (req: Request, res: Response) => {
+router.get('/files/info/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);
     const filePath = path.join(scope.dir, safeName);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
+    const archived = (await readRequestArchive(req, scope, safeName))[0];
     const st = fs.statSync(filePath);
     const db = readDB();
-    const meta = findFileMeta(db, safeName, scope);
+    const meta = findFileMeta(db, safeName, scope, archived);
     const currentManifest = readCurrentIngestionManifest(meta);
     res.json({
       id: safeName,
@@ -2742,13 +2743,15 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       return res.status(404).json({ error: 'File not found' });
     }
 
+    const archived = (await readRequestArchive(req, scope, safeName))[0];
+    request.signal.throwIfAborted();
     const extraction = await extractKnowledgeFileContent(filePath, userId, request.signal);
     const content = extraction.content;
 
     // Mark as indexing
     const db = readDB();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
-    let meta = findFileMeta(db, safeName, scope);
+    let meta = findFileMeta(db, safeName, scope, archived);
     if (!meta) {
       meta = {
         filename: safeName,

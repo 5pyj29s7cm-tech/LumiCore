@@ -17,11 +17,14 @@ import {
   type LegalArticleType,
 } from '../../../legal/kb';
 import {
-  searchWenshu, searchFLK, searchMOHURDTemplates,
-  searchCompany, searchCompanySources, searchEnforcementRecords, listLegalSourceCapabilities,
-  searchLegalAuthorityDatabase, type ExternalLegalSearchKind,
+  searchMOHURDTemplates,
+  searchCompany,
+  searchCompanySources,
+  searchEnforcementRecords,
+  listLegalSourceCapabilities,
+  searchLegalAuthorityDatabase,
+  type ExternalLegalSearchKind,
 } from '../../../legal/sources';
-import { generateEmbedding } from '../../../memory/store';
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import * as LegalCases from '../../../org/legal_cases';
@@ -318,10 +321,6 @@ function resolveWritableOutputDir(input: string, fallbackRoot: string, caseName:
     return resolved;
   }
   return uniqueLegalFolder(fallbackRoot, caseName, suffix);
-}
-
-function psEscape(value: string): string {
-  return String(value).replace(/'/g, "''");
 }
 
 function markdownTitle(markdown: string, fallback: string): string {

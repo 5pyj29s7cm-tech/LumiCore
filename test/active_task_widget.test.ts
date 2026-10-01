@@ -15,8 +15,6 @@ function task(status: string) {
 function select(input: Record<string, unknown> = {}) {
   return selectActiveTaskWidgetState({
     status: null,
-    focusThreads: [],
-    tasks: [],
     workflowActive: false,
     workflowStatus: 'idle',
     progressText: '',
@@ -59,23 +57,23 @@ describe('active task widget', () => {
   });
 
   it('shows active autonomous work without keeping completed work visible', () => {
-    expect(select({ tasks: [{ id: 'task-1', title: 'Research', status: 'running' }] }).visible).toBe(true);
-    expect(select({ tasks: [{ id: 'task-1', title: 'Research', status: 'completed' }] }).visible).toBe(false);
+    expect(select({ status: { durableWork: [{ taskId: 'task-1', title: 'Research', status: 'running' }] } }).visible).toBe(true);
+    expect(select({ status: { durableWork: [{ taskId: 'task-1', title: 'Research', status: 'completed' }] } }).visible).toBe(false);
   });
 
-  it('deduplicates the same durable task across ledger and focus projections', () => {
+  it('uses task-owned focus from the same runtime snapshot without double-counting', () => {
     const view = select({
-      status: { tasks: [task('executing')] },
-      focusThreads: [{ taskId: 'task-1', goal: 'Prepare the client report', status: 'executing' }],
+      status: { tasks: [{ ...task('executing'), focus: { taskId: 'task-1', goal: 'Prepare the client report', status: 'executing' } }] },
     });
     expect(view.activeCount).toBe(1);
   });
 
   it('never fills a task with another task confirmation or transient progress', () => {
     const view = select({
-      status: { tasks: [task('executing')] },
-      focusThreads: [{ taskId: 'mail-task', goal: 'Send mail', status: 'waiting_confirmation', waitingFor: 'Confirm recipient' }],
-      tasks: [{ id: 'third-task', title: 'Export', status: 'running', error: 'Other failure' }],
+      status: { tasks: [
+        { ...task('executing'), focus: { taskId: 'mail-task', waitingFor: 'Confirm recipient' } },
+        { ...task('waiting_confirmation'), taskId: 'mail-task', goal: 'Send mail' },
+      ], durableWork: [{ taskId: 'third-task', title: 'Export', status: 'running', checkpoint: 'Other failure' }] },
       progressText: 'Unowned transient progress',
     });
     expect(view.title).toBe('Prepare the client report');
@@ -86,10 +84,14 @@ describe('active task widget', () => {
 
   it('accepts detail from a matching task identity', () => {
     const view = select({
-      status: { tasks: [task('executing')] },
-      focusThreads: [{ taskId: 'task-1', goal: 'Prepare report', status: 'executing', nextAction: 'Review the report' }],
+      status: { tasks: [{ ...task('executing'), focus: { taskId: 'task-1', nextAction: 'Review the report' } }] },
     });
     expect(view.detail).toBe('Review the report');
+  });
+
+  it('keeps the full active count when the runtime task list is capped', () => {
+    const view = select({ status: { tasks: [task('executing')], counts: { activeTasks: 14, waitingConfirmation: 2, autonomousActive: 3 } } });
+    expect(view.activeCount).toBe(19);
   });
 
   it('does not expose runtime codes or receipt details in the foreground widget', () => {

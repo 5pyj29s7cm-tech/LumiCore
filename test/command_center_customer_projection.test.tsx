@@ -100,7 +100,6 @@ describe('command-center customer projection', () => {
         verifiedReceipts: 0,
         failedReceipts: 1,
         unknownReceipts: 0,
-        backgroundActive: 0,
         autonomousActive: 0,
         durableBlocked: 0,
       },
@@ -198,7 +197,7 @@ describe('command-center rendering contracts', () => {
     expect(panel).not.toContain('task.progress?.checkpoint ?');
     expect(panel).toContain('task.blocker && !task.completionFeedback');
     expect(planner).toContain('normalizeTaskCompletionFeedback(task.completionFeedback)');
-    expect(source('src/components/TaskCompletionFeedbackDetails.tsx')).toContain('projectTaskCompletionFeedbackForCustomer(normalizedInput, locale)');
+    expect(source('src/components/TaskCompletionFeedbackDetails.tsx')).toContain('projectTaskCompletionFeedbackForCustomer(feedback, locale)');
     expect(planner).toContain('task.blocker && !task.completionFeedback');
     expect(evidence).not.toContain('{receipt.toolName}');
     expect(evidence).not.toContain('{receipt.outcome}');

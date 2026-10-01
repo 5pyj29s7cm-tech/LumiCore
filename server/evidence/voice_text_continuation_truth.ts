@@ -1,3 +1,5 @@
+import { parseStoredObject as parseObject } from '../tools/receipt_payload';
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import {
   createHash,
   createPublicKey,
@@ -404,19 +406,6 @@ export function verifyVoiceTextContinuationTruthEnvelope(
     return verifyBytes(null, signaturePayload(core), publicKey, signature);
   } catch {
     return false;
-  }
-}
-
-function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, any>;
-  }
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
   }
 }
 
@@ -907,7 +896,7 @@ export async function captureVoiceTextContinuationTruth(
   input: CaptureVoiceTextContinuationTruthInput,
 ): Promise<VoiceTextContinuationTruth> {
   const db = typeof structuredClone === 'function'
-    ? structuredClone(readDB())
+    ? cloneDatabaseValue(readDB())
     : JSON.parse(JSON.stringify(readDB()));
   return buildVoiceTextContinuationTruthFromSources({ ...input, db });
 }

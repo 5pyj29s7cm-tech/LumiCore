@@ -57,8 +57,6 @@ function formatNumber(n: number): string {
 
 export const TokenDashboard: React.FC = () => {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [data, setData] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);

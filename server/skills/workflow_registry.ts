@@ -105,10 +105,3 @@ export function matchSkillWorkflow(
   if (!normalized.trim()) return null;
   return SKILL_WORKFLOWS.find(workflow => workflow.match(normalized, context)) || null;
 }
-
-export function estimateSkillWorkflowChatSpeechMs(workflow: SkillWorkflowDescriptor, line: string): number {
-  return Math.min(
-    workflow.chatSpeech.maxMs,
-    Math.max(workflow.chatSpeech.minMs, line.length * workflow.chatSpeech.msPerChar),
-  );
-}

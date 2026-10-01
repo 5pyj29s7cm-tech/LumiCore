@@ -38,6 +38,50 @@ function fixture(org = '') {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); resetDesktopControlLeasesForTests(); members.clear(); vi.useRealTimers(); });
 describe('desktop native recovery and cancellation', () => {
+ it('persists a late terminal before acknowledging it, without replaying UI or execution', async () => {
+  const f = fixture(); let finish!: () => void;
+  const barrier = new Promise<void>(resolve => { finish = resolve; });
+  const onLateResult = vi.fn(() => barrier);
+  const args = { command: 'original command' };
+  const run = f.relay({ onLateResult })('desktop_run_command', args).catch(e => e);
+  await vi.advanceTimersByTimeAsync(121); await run;
+  args.command = 'mutated command';
+  const acknowledgement = handleDesktopRelayResult(f.cid(), { output: 'late actual result' }, f.original.id);
+  expect(handleDesktopRelayResult(f.cid(), { output: 'duplicate cannot replace result' }, f.original.id)).toBe(acknowledgement);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(getPendingDesktopRelayCount()).toBe(1);
+  expect(onLateResult).toHaveBeenCalledOnce();
+  expect(onLateResult).toHaveBeenCalledWith(expect.objectContaining({ arguments: { command: 'original command' }, result: 'late actual result' }));
+  finish(); await expect(acknowledgement).resolves.toBe(true);
+  expect(getPendingDesktopRelayCount()).toBe(0);
+  expect(handleDesktopRelayResult(f.cid(), { output: 'duplicate' }, f.original.id)).toBe(true);
+  expect(onLateResult).toHaveBeenCalledOnce();
+  expect(f.lifecycle.filter(e => e.result)).toEqual([]);
+  expect(f.events.filter(e => e.event === 'tool:desktop_exec')).toHaveLength(1);
+ });
+ it('retains the execution hold and refuses ACK when late receipt storage fails, then accepts a retry', async () => {
+  const f = fixture(); const onLateResult = vi.fn().mockRejectedValueOnce(Error('isolated persistence failure')).mockResolvedValue(undefined);
+  const run = f.relay({ onLateResult })('desktop_run_command').catch(e => e);
+  await vi.advanceTimersByTimeAsync(121); await run;
+  await expect(handleDesktopRelayResult(f.cid(), { output: 'real result' }, f.original.id)).resolves.toBe(false);
+  expect(getPendingDesktopRelayCount()).toBe(1);
+  await expect(f.relay()('desktop_active_window')).rejects.toThrow('outcome_unknown');
+  await expect(handleDesktopRelayResult(f.cid(), { output: 'real result' }, f.original.id)).resolves.toBe(true);
+  expect(getPendingDesktopRelayCount()).toBe(0);
+  expect(onLateResult).toHaveBeenCalledTimes(2);
+ });
+ it('never sends forged or revoked organization content to the late archive', async () => {
+  const f = fixture('late-org'); const onLateResult = vi.fn().mockResolvedValue(undefined);
+  const run = f.relay({ onLateResult })('desktop_run_command').catch(e => e);
+  await vi.advanceTimersByTimeAsync(121); await run;
+  const stranger = f.socket('forged-late', f.uid, f.org, { ...f.identity, pid: 999999 });
+  expect(handleDesktopRelayResult(f.cid(), { output: 'FORGED' }, stranger.id)).toBe(false);
+  expect(onLateResult).not.toHaveBeenCalled();
+  members.delete(f.org + ':' + f.uid);
+  await expect(handleDesktopRelayResult(f.cid(), { output: 'PRIVATE REVOKED OUTPUT' }, f.original.id)).resolves.toBe(true);
+  expect(onLateResult).toHaveBeenCalledWith(expect.objectContaining({ result: undefined, error: expect.stringContaining('authorization ended') }));
+  expect(JSON.stringify(onLateResult.mock.calls)).not.toContain('PRIVATE REVOKED OUTPUT');
+ });
  it('requests cancellation at relay deadline and retains an unknown hold until the real receipt', async () => {
   const f = fixture(); const run = f.relay()('desktop_run_command', { command: 'synthetic' }).catch(e => e);
   await vi.advanceTimersByTimeAsync(101); expect(f.events.some(e => e.event === 'tool:desktop_cancel')).toBe(true); expect(getPendingDesktopRelayCount()).toBe(1);

@@ -62,15 +62,15 @@ export const DEFAULT_MEMORY_AVATAR_APPEARANCE: MemoryAvatarAppearance = {
   hairColor: '#302a28', outfitColor: '#64748b', backgroundColor: '#121827',
 };
 
-export const LUMI_COMPANION_APPEARANCE: MemoryAvatarAppearance = {
-  style: 'lumi3d', preset: 'neutral', skinColor: '#f1eee2',
-  hairColor: '#183534', outfitColor: '#6bbaa8', backgroundColor: '#d5d6c5',
-};
-
 export const LUMI_OTOME_APPEARANCE: MemoryAvatarAppearance = {
   style: 'lumi2d', preset: 'masculine', skinColor: '#e5c8b2',
   hairColor: '#70625b', outfitColor: '#314345', backgroundColor: '#c0d4ce',
 };
+
+/** Retire legacy Lumi models while preserving appearance and scene settings. */
+export function normalizeMemoryAvatarAppearance(value: MemoryAvatarAppearance): MemoryAvatarAppearance {
+  return value.style === 'lumi3d' || value.style === 'lumivrm' ? { ...value, style: 'lumi2d' } : value;
+}
 
 export interface MemoryAvatarMaterial {
   id: string;

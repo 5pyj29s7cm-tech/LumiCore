@@ -27,8 +27,6 @@ export function WorkModeSwitch({
   connected,
 }: Props) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [switching, setSwitching] = useState(false);
   const isWork = domain === 'work';
 

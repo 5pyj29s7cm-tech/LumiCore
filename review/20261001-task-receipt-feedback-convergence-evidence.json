@@ -1,0 +1,281 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune26",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "server/cognition/task_execution_ledger.ts",
+      "beforeLines": 634,
+      "afterLines": 641,
+      "delta": 7,
+      "beforeSha256": "0b46a9c2b054535f2feee7f80110153ecb8ffe26832dd6bac0bdea4891d7fc52",
+      "afterSha256": "ec4c933b16e113ecc2a71129d0fcafb1d1127911ce88c77b7008d58eb174f173"
+    },
+    {
+      "file": "server/monitor/runtime_status.ts",
+      "beforeLines": 283,
+      "afterLines": 282,
+      "delta": -1,
+      "beforeSha256": "1fc5e25207a759df1d91d4e8af856a75f382065c52f0dec940c76d5a4717cb55",
+      "afterSha256": "60e436ad936287e93d006b4aa82ca4d99bfb40b11de030cbee1fbe2deedc155d"
+    },
+    {
+      "file": "server/cognition/acceptance_evidence.ts",
+      "beforeLines": 1031,
+      "afterLines": 1016,
+      "delta": -15,
+      "beforeSha256": "02d0cdd04d6a5c2d6ca625465c2b6bda99466069ba20ce13c18be3cada450c3f",
+      "afterSha256": "81b482a206e5018af241201d2f6dc7faa5ca4773be353bfa4ae86afad8d80676"
+    },
+    {
+      "file": "src/components/workflowTypes.ts",
+      "beforeLines": 143,
+      "afterLines": 119,
+      "delta": -24,
+      "beforeSha256": "dd59173f28c8cc04b921909b64712869a13b06fc19e6542a2674709909181382",
+      "afterSha256": "c32f9686d0cedbd16e7994ebe81cc3834c07be0cf41c0aa3a56eb52f20c76cc9"
+    },
+    {
+      "file": "src/components/TaskCompletionFeedbackDetails.tsx",
+      "beforeLines": 179,
+      "afterLines": 179,
+      "delta": 0,
+      "beforeSha256": "0484a056f88903ba71d9e83b6908fdcfe21e00ddd2e129ff06190f18b9b42595",
+      "afterSha256": "5113d1c0f1b192764a3da1bf23d0827a0947097476d04fcfe9b37b1012f40701"
+    },
+    {
+      "file": "server/conversation/completion_feedback.ts",
+      "beforeLines": 157,
+      "afterLines": 149,
+      "delta": -8,
+      "beforeSha256": "41b84f49aacdbe1f02b5b935e5ebe059a26a6c77eb6716ecae37410af517be48",
+      "afterSha256": "1a1d7da40a8ee0d09298df7e88aeb7a5f06d8a4f214bf487a153256bada7c2b0"
+    },
+    {
+      "file": "server/conversation/action_ledger.ts",
+      "beforeLines": 2398,
+      "afterLines": 2394,
+      "delta": -4,
+      "beforeSha256": "5c642a1a3d647e7902b0c79d3aad7702f66bcddc0f9783de4a04c0b5b3fa8a57",
+      "afterSha256": "7f8d12cf562320ac63ad240cf4a110ca619342c9a97f3f1aab40e824301790f3"
+    },
+    {
+      "file": "src/components/CommandCenterPanel.tsx",
+      "beforeLines": 403,
+      "afterLines": 388,
+      "delta": -15,
+      "beforeSha256": "21634e19ebd058cf8ba4fa5508b0229cd43f557dc60062397056922d7dc5815b",
+      "afterSha256": "5afc2edfeebcc95493445bc754fc91362077e94af1559012ad1c9833d6e6fb5b"
+    },
+    {
+      "file": "test/source_expression.ts",
+      "beforeLines": 29,
+      "afterLines": 42,
+      "delta": 13,
+      "beforeSha256": "289f61622dc324cadc0cc67457818ff204e9ac3d1379a408521628eb3327f9b9",
+      "afterSha256": "8a46ce8a84e7bcdb4e9c1521c6fa491122527a78cfb9f67a7809ab23db26dd79"
+    },
+    {
+      "file": "test/voice_cloning_capture_lifecycle.test.ts",
+      "beforeLines": 85,
+      "afterLines": 75,
+      "delta": -10,
+      "beforeSha256": "2176f3a73d58b3d9590b74752b4f7034f2f4ed0419d043797253712bb6e75bef",
+      "afterSha256": "ca2f010e065ac3a02a3a6415f91b4826f31a362644b512d1a64608c202e384bd"
+    },
+    {
+      "file": "test/wake_official_frontend.test.ts",
+      "beforeLines": 110,
+      "afterLines": 101,
+      "delta": -9,
+      "beforeSha256": "55a93a77016d2e0a0ddb704488c9113b579f68046533b2a7035e2424a2026ace",
+      "afterSha256": "4e074fe5d50c7821cea78fb95e89613a44ef61e07a465210d4397effc0a0378a"
+    },
+    {
+      "file": "test/acceptance_evidence.test.ts",
+      "beforeLines": 790,
+      "afterLines": 813,
+      "delta": 23,
+      "beforeSha256": "509650a86224a0fe51d1ef1f5b942f8276d2fa86aa91e24d1bcf608886e0616f",
+      "afterSha256": "5bd67f923b2921f96e3c57ca0e52b5b451872e6c9f65310c651501d598fda26b"
+    },
+    {
+      "file": "test/command_center_office_scene.test.ts",
+      "beforeLines": 193,
+      "afterLines": 223,
+      "delta": 30,
+      "beforeSha256": "dfc870900997cac65425b2b14d9f8849cb36d7eb9d71dcee12198db07bc8f2e3",
+      "afterSha256": "3213ddbdb00294812bbabcfc8e1399f2fe1f9ea5ab8bb73ff25fb7ee771c331a"
+    },
+    {
+      "file": "test/command_center_customer_projection.test.tsx",
+      "beforeLines": 207,
+      "afterLines": 207,
+      "delta": 0,
+      "beforeSha256": "77a908856060f178d7f6aa19a221c0cbc99d565a7a6bfecd0c533d81baa2027b",
+      "afterSha256": "35d91be8074bb6b41de6c1f0360de3ffb22871aeac38cccae18867687e2fb7c2"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 368004
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159143
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527147
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 367944
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159190
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527134
+      }
+    }
+  },
+  "tests": {
+    "files": 730,
+    "passed": 6567,
+    "failed": 0,
+    "skipped": 0,
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/acceptance_evidence.test.ts::indexes receipts once across scoped tasks while preserving complete verification and unrelated evidence",
+        1
+      ]
+    ],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "server/cognition/task_execution_ledger.ts": "ec4c933b16e113ecc2a71129d0fcafb1d1127911ce88c77b7008d58eb174f173",
+        "server/monitor/runtime_status.ts": "60e436ad936287e93d006b4aa82ca4d99bfb40b11de030cbee1fbe2deedc155d",
+        "server/cognition/acceptance_evidence.ts": "81b482a206e5018af241201d2f6dc7faa5ca4773be353bfa4ae86afad8d80676",
+        "src/components/workflowTypes.ts": "c32f9686d0cedbd16e7994ebe81cc3834c07be0cf41c0aa3a56eb52f20c76cc9",
+        "src/components/TaskCompletionFeedbackDetails.tsx": "5113d1c0f1b192764a3da1bf23d0827a0947097476d04fcfe9b37b1012f40701",
+        "server/conversation/completion_feedback.ts": "1a1d7da40a8ee0d09298df7e88aeb7a5f06d8a4f214bf487a153256bada7c2b0",
+        "server/conversation/action_ledger.ts": "7f8d12cf562320ac63ad240cf4a110ca619342c9a97f3f1aab40e824301790f3",
+        "src/components/CommandCenterPanel.tsx": "5afc2edfeebcc95493445bc754fc91362077e94af1559012ad1c9833d6e6fb5b",
+        "test/source_expression.ts": "8a46ce8a84e7bcdb4e9c1521c6fa491122527a78cfb9f67a7809ab23db26dd79",
+        "test/voice_cloning_capture_lifecycle.test.ts": "ca2f010e065ac3a02a3a6415f91b4826f31a362644b512d1a64608c202e384bd",
+        "test/wake_official_frontend.test.ts": "4e074fe5d50c7821cea78fb95e89613a44ef61e07a465210d4397effc0a0378a",
+        "test/acceptance_evidence.test.ts": "5bd67f923b2921f96e3c57ca0e52b5b451872e6c9f65310c651501d598fda26b",
+        "test/command_center_office_scene.test.ts": "3213ddbdb00294812bbabcfc8e1399f2fe1f9ea5ab8bb73ff25fb7ee771c331a",
+        "test/command_center_customer_projection.test.tsx": "35d91be8074bb6b41de6c1f0360de3ffb22871aeac38cccae18867687e2fb7c2"
+      },
+      "startedAt": "2026-10-01T11:56:50.402Z",
+      "finishedAt": "2026-10-01T12:03:33.168Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 11,
+    "passed": 95
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T11:55:49.506Z",
+      "end": "2026-10-01T11:56:26.102Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T11:56:26.104Z",
+      "end": "2026-10-01T11:56:35.500Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T11:56:35.500Z",
+      "end": "2026-10-01T11:56:45.287Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T11:56:45.288Z",
+      "end": "2026-10-01T11:56:45.696Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T11:56:45.697Z",
+      "end": "2026-10-01T11:56:50.344Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T11:55:49.467Z",
+      "end": "2026-10-01T11:56:50.356Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T11:56:50.359Z",
+      "end": "2026-10-01T12:03:33.178Z",
+      "status": 0
+    }
+  ],
+  "typeOnlyBrowserDependency": {
+    "file": "src/components/workflowTypes.ts",
+    "serverRuntimeImportEmitted": false,
+    "compiledSha256": "8bf65862159c83dc4f96478b5e95e4233bb1f4618d87f8b8cf729a63e0d6d33f"
+  },
+  "scope": {
+    "receiptGrouping": [
+      "acceptance projection",
+      "runtime status",
+      "legacy scheduler compaction"
+    ],
+    "feedback": [
+      "shared canonical type",
+      "remove unused WorkflowTask",
+      "reuse compactCustomerText",
+      "single default UI normalization",
+      "shared server presence checks",
+      "reuse validated durable receipt reason"
+    ],
+    "panel": [
+      "remove unused normalized fields",
+      "start current-scope reads independently",
+      "latest-response wins",
+      "preserve mounted task sphere"
+    ],
+    "tests": [
+      "reuse explicit-dependency hook loader",
+      "replace obsolete in-flight-promise source assertion with mounted React scope/order behavior",
+      "receipt getter-read bound with unrelated envelopes excluded"
+    ]
+  },
+  "intermediateTestFailure": {
+    "reason": "One source contract asserted the removed redundant feedback normalization call.",
+    "resolution": "Updated the argument expectation to raw feedback. Existing render/privacy assertions, test names, counts and timeouts retained."
+  },
+  "boundaries": {
+    "backendRestarted": false,
+    "commit": false,
+    "push": false,
+    "realUserDataModified": false,
+    "nativeDesktopTested": false,
+    "performanceSpeedupMeasured": false,
+    "newBusinessModules": 0,
+    "storedTaskOrReceiptRowsRemoved": false,
+    "completeProjectSimplificationClaimed": false
+  }
+}

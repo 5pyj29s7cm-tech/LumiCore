@@ -143,7 +143,6 @@ describe('voice reconnect and perception continuity', () => {
     const root = process.cwd();
     const source = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     const button = readFileSync(path.join(root, 'src/components/VoiceCallButton.tsx'), 'utf8');
-    const subtitle = readFileSync(path.join(root, 'src/components/VoiceSubtitle.tsx'), 'utf8');
 
     expect(source).toContain('releaseAudioBufferSource(source)');
     expect(source).toContain('disposePlaybackContexts()');
@@ -152,7 +151,6 @@ describe('voice reconnect and perception continuity', () => {
     expect(source).not.toContain('audioQueueContext');
     expect(source).not.toContain('pendingAudio');
     expect(button).not.toContain('useLiveVoiceAudioLevel');
-    expect(subtitle).not.toContain('useLiveVoiceAudioLevel');
   });
 
   it('keeps the active voice work request alive while handling a conversational aside', () => {
@@ -233,7 +231,8 @@ describe('voice reconnect and perception continuity', () => {
     const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
     expect(source).toContain('formatCompactClientSelfPrompt(session.userId, voiceScope)');
     expect(source).toContain('getMessagesByTokenBudget(conversationTurn.conversation.id, 6_000, 6, requestId)');
-    expect(source).toContain('processInput(routedUserText, cognitiveCtx, undefined, toolContext)');
+    expect(source).not.toContain('processInput(');
+    expect(source).toContain('executionPipeline.normalizedIntent.kind');
     expect(source).not.toContain('const llmClassifier = async');
     expect(source).toContain('Prompt budget request=${requestId}');
   });

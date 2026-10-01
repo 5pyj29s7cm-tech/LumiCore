@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chatAttachmentIdentity,
+  serializeChatAttachment, inferChatAttachmentKind, extractAudioTranscript,
   chatAttachmentRequestMatchesScope,
   createChatAttachmentReference,
   mergeChatAttachmentReferences,
@@ -88,4 +89,24 @@ describe('chat attachment references', () => {
     expect(serialized).not.toContain('too-large-to-persist');
     expect(parseChatAttachmentContext(serialized, savedAt + 31 * 24 * 60 * 60 * 1000)).toEqual([]);
   });
+  it('preserves attachment identity and transcript metadata without sending extra object fields', () => {
+    const attachment = { id: 'upload-original', kind: 'audio' as const, fileName: 'voice.webm', path: 'D:/voice.webm', fileId: 'voice-id',
+      transcript: 'Keep these words', transcriptionStatus: 'ready', transcriptionProvider: 'local', transcriptionModel: 'speech', unrelated: 'private' };
+    const payload = serializeChatAttachment(attachment);
+    expect(payload).toMatchObject({ id: 'upload-original', kind: 'audio', path: 'D:/voice.webm', fileId: 'voice-id',
+      transcript: 'Keep these words', transcriptionStatus: 'ready', transcriptionProvider: 'local', transcriptionModel: 'speech' });
+    expect(payload).not.toHaveProperty('unrelated');
+    expect(serializeChatAttachment({ id: 'x', fileName: 'x.txt', kind: 'file' })).toMatchObject({ content: null, preview: null, size: 0, transcript: null, transcriptionError: null });
+    expect(extractAudioTranscript('  Transcript: Keep these words  ')).toBe('Keep these words');
+    expect(extractAudioTranscript('  ')).toBeNull();
+  });
+  it.each([
+    ['photo.PNG', 'application/octet-stream', undefined, 'image'],
+    ['voice.webm', undefined, undefined, 'audio'],
+    ['photo.png', 'audio/wav', 'audio', 'image'],
+    ['report.pdf', undefined, undefined, 'file'],
+  ])('uses the same attachment kind precedence for %s with %s and %s', (fileName, mimeType, kind, expected) => {
+    expect(inferChatAttachmentKind(fileName!, mimeType, kind)).toBe(expected);
+  });
+
 });

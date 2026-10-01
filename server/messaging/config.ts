@@ -141,14 +141,9 @@ export function normalizeMessagingConfig(raw: Partial<MessagingConfig> | null, f
 // Init: file overrides env (so user changes persist across restarts)
 const fileConfig = loadFromFile();
 let _config: MessagingConfig = normalizeMessagingConfig(fileConfig, loadFromEnv());
-let _configured = _config.feishu.enabled || _config.wecom.enabled || _config.wechat.enabled;
 
 export function getMessagingConfig(): MessagingConfig {
   return _config;
-}
-
-export function isMessagingConfigured(): boolean {
-  return _configured;
 }
 
 export function updateMessagingConfig(
@@ -166,7 +161,6 @@ export function updateMessagingConfig(
     _config.feishu.transport = _config.feishu.transport === 'webhook' ? 'webhook' : 'long_connection';
     _config.feishu.enabled = feishuReady(_config.feishu);
   }
-  _configured = _config.feishu.enabled || _config.wecom.enabled || _config.wechat.enabled;
   saveToFile(_config);
   return _config;
 }

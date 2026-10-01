@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Wrench, Shield, AlertTriangle, CheckCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Wrench, AlertTriangle, CheckCircle, Loader2, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApp } from '@/contexts/AppContext';
 
@@ -72,7 +72,6 @@ export function ToolPanel({ t }: { t?: any }) {
           </div>
         ) : (
           sections.map(section => {
-            const colorKey = section.color as keyof typeof SECURITY_COLORS;
             return (
               <div key={section.label} className="space-y-2">
                 <div className="flex items-center gap-2">

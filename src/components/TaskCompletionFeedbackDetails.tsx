@@ -111,9 +111,9 @@ export function TaskCompletionFeedbackDetails({
   variant?: 'default' | 'chat';
   className?: string;
 }) {
-  const normalizedInput = normalizeTaskCompletionFeedback(feedback);
-  if (!normalizedInput) return null;
   if (variant === 'chat') {
+    const normalizedInput = normalizeTaskCompletionFeedback(feedback);
+    if (!normalizedInput) return null;
     // A normal completed/cancelled task should read like an ordinary assistant
     // reply. Failed/blocked details are already present in the assistant's
     // natural-language reply, so reserve the inline disclosure for live work
@@ -121,7 +121,7 @@ export function TaskCompletionFeedbackDetails({
     if (normalizedInput.status !== 'working' && !feedbackNeedsConfirmation(normalizedInput)) return null;
     return <ChatTaskCompletionFeedback feedback={normalizedInput} locale={locale} className={className} />;
   }
-  const normalized = projectTaskCompletionFeedbackForCustomer(normalizedInput, locale);
+  const normalized = projectTaskCompletionFeedbackForCustomer(feedback, locale);
   if (!normalized) return null;
   const copy = taskCompletionFeedbackCopy(locale);
   const sections: Array<{ key: FeedbackSectionKey; items: string[] }> = [

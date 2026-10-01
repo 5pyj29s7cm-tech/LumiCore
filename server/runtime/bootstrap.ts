@@ -1,7 +1,6 @@
 import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
 import {
   readDB,
-  writeDB,
   flushDB,
   closeDatabase,
   ensureDatabaseInitialized,

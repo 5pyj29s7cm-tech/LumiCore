@@ -21,11 +21,9 @@ describe('agent user-visible status truth', () => {
     expect(projectAgentActivity('idle')).toBeNull();
   });
 
-  it('routes both chat surfaces through the shared truthful projection', () => {
+  it('routes active chat through the shared truthful projection', () => {
     const agentChat = readFileSync(join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
-    const taskChat = readFileSync(join(process.cwd(), 'src/components/ChatPanel.tsx'), 'utf8');
     expect(agentChat).toContain('projectAgentActivity(data.status');
-    expect(taskChat).toContain('projectAgentActivity(data.status');
     expect(agentChat).not.toContain("data.status === 'responding' || data.status === 'executing'");
   });
 });

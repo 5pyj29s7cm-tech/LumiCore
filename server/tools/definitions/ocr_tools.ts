@@ -189,20 +189,6 @@ function resolveVisionProvider(_args: Record<string, any>, context?: any): Visio
   return null;
 }
 
-function visionModelFor(provider: VisionProvider): string {
-  switch (provider) {
-    case 'qwen': return 'qwen-vl-max';
-    case 'ark': return 'doubao-1-5-vision-pro-32k';
-    case 'ollama': return 'qwen2.5vl:7b';
-    case 'lmstudio': return 'local-vision-model';
-    case 'relay': return DEFAULT_VISION_MODELS.relay;
-    case 'openai': return 'gpt-4o';
-    case 'gemini':
-    default:
-      return 'gemini-2.0-flash';
-  }
-}
-
 function resolveReadableImagePath(input: string): string {
   const raw = String(input || '').trim();
   if (!raw) throw new Error('imagePath is required.');
@@ -248,7 +234,7 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
     return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.' });
   }
 
-  const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
+  const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
     const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
     // Reading an error message is a successful observation. Keep the tool's
@@ -273,7 +259,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
     return JSON.stringify({ format: 'screenshot_base64', data: base64, note: 'No configured visual-perception model is available. Configure one in Settings > World Model > Visual Perception.' });
   }
 
-  const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
+  const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
     const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
     return JSON.stringify({ status: 'observed', description, provider, model });
@@ -303,7 +289,7 @@ export async function ocrImageFile(args: Record<string, any>, context?: any): Pr
     .jpeg({ quality: 85 })
     .toBuffer();
   const base64 = buffer.toString('base64');
-  const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
+  const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
     const imagePayload = JSON.stringify({ image_base64: base64, format: 'jpeg', width: meta.width || null, height: meta.height || null });
     const description = await analyzeScreen(imagePayload, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
@@ -785,7 +771,7 @@ export async function floorplanExtractGeometry(args: Record<string, any>, contex
   const preparedSource = await prepareFloorplanSourceImage(imagePath);
   const buffer = preparedSource.buffer;
   const base64 = buffer.toString('base64');
-  const model = getUserPreferredVision(context?.userId || 'anonymous').model || visionModelFor(provider);
+  const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   const projectName = String(args.projectName || args.title || '').trim();
   const knownScale = String(args.knownScale || args.scale || '').trim();
   const knownDimensions = String(args.knownDimensions || args.dimensions || '').trim();

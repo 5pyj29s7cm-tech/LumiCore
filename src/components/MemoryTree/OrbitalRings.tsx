@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RingDef } from './types';
@@ -19,7 +19,6 @@ const DEFAULT_RINGS: RingDef[] = [
 
 export function OrbitalRings({ hue, syncRate }: OrbitalRingsProps) {
   const groupRef = useRef<THREE.Group>(null);
-  const particleGroupsRef = useRef<THREE.Group[]>([]);
 
   const rings = useMemo(() => DEFAULT_RINGS, []);
 

@@ -1,0 +1,293 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune27",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "test/execution_pipeline.test.ts",
+      "beforeLines": 662,
+      "afterLines": 697,
+      "delta": 35,
+      "beforeSha256": "1bb6e2cdf1157cc0c13c746438657890cff266ce2d1b4495c69b72ca9216b1ff",
+      "afterSha256": "12b6fcbef10fb2a865efdcbf2b06e8b0d09ba1a348b23f69e7c0e335623453f0"
+    },
+    {
+      "file": "test/command_center_planner_mode.test.tsx",
+      "beforeLines": 90,
+      "afterLines": 115,
+      "delta": 25,
+      "beforeSha256": "c36a7f0499243ff067bba63737e6db585641f5fcf274488a6245bf7236c169ca",
+      "afterSha256": "29f2177ac18287bb0d2b7bb3dd93ac14b2383a733e1a5de0100cb3b70f6b9f66"
+    },
+    {
+      "file": "server/cognition/execution_pipeline.ts",
+      "beforeLines": 593,
+      "afterLines": 593,
+      "delta": 0,
+      "beforeSha256": "56204b43f98070510717ea17d17aa136b48b7710658853796b40fcf7218798c6",
+      "afterSha256": "d03fb8ce289122cd0068d6ae9c984fbbd0b4a2dc8c46ddf2c9be8788ac4f7caf"
+    },
+    {
+      "file": "server/cognition/execution_decision.ts",
+      "beforeLines": 680,
+      "afterLines": 678,
+      "delta": -2,
+      "beforeSha256": "8bd9410ddd9e26cb965919da4f0c45fb7947bd2eed7560b85771ab61e4786144",
+      "afterSha256": "a1809bc8c8d2cbdb43bebab2bcb5587d4dd90fb4a10989f853ab8e14e8dc8c64"
+    },
+    {
+      "file": "server/routes/chat_routes.ts",
+      "beforeLines": 894,
+      "afterLines": 882,
+      "delta": -12,
+      "beforeSha256": "740b02b99711bf2052215540b6e06fdec0d017831621611484d3b35ce2c2ddb1",
+      "afterSha256": "e28b97f65c81af8b5920e80f2e06bc4ee067c4f614045a903face8ef82f6558b"
+    },
+    {
+      "file": "src/components/CommandCenterPlanner.tsx",
+      "beforeLines": 387,
+      "afterLines": 386,
+      "delta": -1,
+      "beforeSha256": "325fd140091db9982d3fa7d55103b4dbff576b232680958ecaad42ad17cc5ba7",
+      "afterSha256": "21caf85b3978541db16a6529626f758f700d778797bf858a04271495f31a91e6"
+    },
+    {
+      "file": "test/output_finalization_paths.test.ts",
+      "beforeLines": 458,
+      "afterLines": 458,
+      "delta": 0,
+      "beforeSha256": "622120a948e7ded733f4d235e36c6c03e742cb090d1e7a2c64db7be190ec2713",
+      "afterSha256": "f79e14eb512c5e9cf1568b8eebe1b84143209e9525ba45b608e3baf710e7618e"
+    },
+    {
+      "file": "server/cognition/action_continuation.ts",
+      "beforeLines": 1524,
+      "afterLines": 1524,
+      "delta": 0,
+      "beforeSha256": "6c35cac3c942c6afceadf7a0cce862930e910dfbbade5378eadf6386f3a9a777",
+      "afterSha256": "b112df502a6bc1817dd7ced740d7280f33bef39126b76a6255c0f9c86728ff32"
+    },
+    {
+      "file": "server/cognition/task_concurrency.ts",
+      "beforeLines": 525,
+      "afterLines": 524,
+      "delta": -1,
+      "beforeSha256": "1839f07cf9681ece832ebb96cc2bdbbb20118e923463f031fdb804aeb7d8df07",
+      "afterSha256": "29c14841c2eea57517a296fc0dd25e549744adba47d0b4c0e4eb8e558a4159d9"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 367944
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159190
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527134
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 367928
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159250
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527178
+      }
+    }
+  },
+  "tests": {
+    "files": 730,
+    "passed": 6573,
+    "failed": 0,
+    "skipped": 0,
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/command_center_planner_mode.test.tsx::rejects obsolete account plan snapshots and releases listeners",
+        1
+      ],
+      [
+        "D:/lumiOS/test/command_center_planner_mode.test.tsx::rejects obsolete organization plan snapshots and releases listeners",
+        1
+      ],
+      [
+        "D:/lumiOS/test/command_center_planner_mode.test.tsx::rejects obsolete refresh plan snapshots and releases listeners",
+        1
+      ],
+      [
+        "D:/lumiOS/test/execution_pipeline.test.ts::keeps new and stale chat plans separate from the previous task evidence",
+        1
+      ],
+      [
+        "D:/lumiOS/test/execution_pipeline.test.ts::keeps new and stale voice plans separate from the previous task evidence",
+        1
+      ],
+      [
+        "D:/lumiOS/test/execution_pipeline.test.ts::keeps new and stale task plans separate from the previous task evidence",
+        1
+      ]
+    ],
+    "relocatedTest": {
+      "from": "D:/lumiOS/test/make_llm_call_arity.test.ts::production makeLLMCall provider getter contract 'routes/chat_routes.ts':842 passes every provider getter",
+      "to": "D:/lumiOS/test/make_llm_call_arity.test.ts::production makeLLMCall provider getter contract 'routes/chat_routes.ts':830 passes every provider getter",
+      "reason": "Test title contains the production call-site line; complete AST call text is unchanged.",
+      "beforeCalls": [
+        {
+          "line": 842,
+          "sha256": "eab967403125019c04334040e198a7d097b774cf786db0a7b7be8857e113e443"
+        }
+      ],
+      "afterCalls": [
+        {
+          "line": 830,
+          "sha256": "eab967403125019c04334040e198a7d097b774cf786db0a7b7be8857e113e443"
+        }
+      ]
+    },
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "test/execution_pipeline.test.ts": "12b6fcbef10fb2a865efdcbf2b06e8b0d09ba1a348b23f69e7c0e335623453f0",
+        "test/command_center_planner_mode.test.tsx": "29f2177ac18287bb0d2b7bb3dd93ac14b2383a733e1a5de0100cb3b70f6b9f66",
+        "server/cognition/execution_pipeline.ts": "d03fb8ce289122cd0068d6ae9c984fbbd0b4a2dc8c46ddf2c9be8788ac4f7caf",
+        "server/cognition/execution_decision.ts": "a1809bc8c8d2cbdb43bebab2bcb5587d4dd90fb4a10989f853ab8e14e8dc8c64",
+        "server/routes/chat_routes.ts": "e28b97f65c81af8b5920e80f2e06bc4ee067c4f614045a903face8ef82f6558b",
+        "src/components/CommandCenterPlanner.tsx": "21caf85b3978541db16a6529626f758f700d778797bf858a04271495f31a91e6",
+        "test/output_finalization_paths.test.ts": "f79e14eb512c5e9cf1568b8eebe1b84143209e9525ba45b608e3baf710e7618e",
+        "server/cognition/action_continuation.ts": "b112df502a6bc1817dd7ced740d7280f33bef39126b76a6255c0f9c86728ff32",
+        "server/cognition/task_concurrency.ts": "29c14841c2eea57517a296fc0dd25e549744adba47d0b4c0e4eb8e558a4159d9"
+      },
+      "startedAt": "2026-10-01T12:24:46.929Z",
+      "finishedAt": "2026-10-01T12:31:11.985Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 11,
+    "passed": 264
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T12:23:46.815Z",
+      "end": "2026-10-01T12:24:22.434Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T12:24:22.436Z",
+      "end": "2026-10-01T12:24:32.250Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T12:24:32.251Z",
+      "end": "2026-10-01T12:24:41.672Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T12:24:41.673Z",
+      "end": "2026-10-01T12:24:42.144Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T12:24:42.144Z",
+      "end": "2026-10-01T12:24:46.875Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T12:23:46.769Z",
+      "end": "2026-10-01T12:24:46.886Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T12:24:46.888Z",
+      "end": "2026-10-01T12:31:11.993Z",
+      "status": 0
+    }
+  ],
+  "beforeFixReproduction": {
+    "files": 2,
+    "passed": 58,
+    "failed": 5,
+    "failures": [
+      {
+        "name": "rejects obsolete account plan snapshots and releases listeners",
+        "reason": "AssertionError: expected [ [Function], [Function] ] to have a length of 4 but got 2"
+      },
+      {
+        "name": "rejects obsolete refresh plan snapshots and releases listeners",
+        "reason": "AssertionError: expected <div …(1)></div> to be null"
+      },
+      {
+        "name": "keeps new and stale chat plans separate from the previous task evidence",
+        "reason": "AssertionError: expected 'old-file-task' not to be 'old-file-task' // Object.is equality"
+      },
+      {
+        "name": "keeps new and stale voice plans separate from the previous task evidence",
+        "reason": "AssertionError: expected 'old-file-task' not to be 'old-file-task' // Object.is equality"
+      },
+      {
+        "name": "keeps new and stale task plans separate from the previous task evidence",
+        "reason": "AssertionError: expected 'old-file-task' not to be 'old-file-task' // Object.is equality"
+      }
+    ]
+  },
+  "scope": {
+    "execution": [
+      "plan identity and source refs use accepted bound task only",
+      "remove redundant resumption reclassification",
+      "REST consumes pipeline turnIntent through execution and finalization",
+      "unfinished progress questions use shared follow-up parser",
+      "remove unreachable repeated status branch"
+    ],
+    "planner": [
+      "account in scope identity",
+      "latest read response wins",
+      "invalidate reads and mutations on unmount",
+      "old-scope run completion cannot clear current run membership",
+      "remove unused projected fields and unused failure formatting"
+    ],
+    "regression": [
+      "chat/voice/task new-media/file/accepted-plan/stale/unbound identity separation",
+      "current-task continuation and progress preserve identity without re-execution",
+      "task-owned identity remains supplied",
+      "mounted React account/organization/out-of-order refresh/unmount behavior"
+    ]
+  },
+  "intermediateFindings": [
+    "Corrected initial fixture media envelope and localized completed label before the final pre-fix reproduction.",
+    "Restored cadenceLabel after existing create-plan tests proved it is used; no original assertions removed.",
+    "A positive status-query control exposed the unrecognized phrase 现在做得怎么样了; extended the existing unfinished-task-only parser and retained the failing control."
+  ],
+  "boundaries": {
+    "backendRestarted": false,
+    "commit": false,
+    "push": false,
+    "realUserDataModified": false,
+    "nativeDesktopTested": false,
+    "officialModelApiTested": false,
+    "performanceSpeedupMeasured": false,
+    "newBusinessModules": 0,
+    "storedTaskOrReceiptRowsRemoved": false,
+    "completeProjectSimplificationClaimed": false
+  }
+}

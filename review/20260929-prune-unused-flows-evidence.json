@@ -1,0 +1,349 @@
+{
+  "date": "2026-09-29",
+  "scope": "prune10; delta from working tree at turn start, not from HEAD",
+  "before": {
+    "source": {
+      "files": 1083,
+      "lines": 370687
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158831
+    },
+    "total": {
+      "files": 1821,
+      "lines": 529518
+    }
+  },
+  "after": {
+    "source": {
+      "files": 1083,
+      "lines": 370158
+    },
+    "tests": {
+      "files": 738,
+      "lines": 158849
+    },
+    "total": {
+      "files": 1821,
+      "lines": 529007
+    }
+  },
+  "files": [
+    {
+      "file": "src/components/DesktopUI.tsx",
+      "before": 6325,
+      "after": 6233,
+      "delta": -92,
+      "beforeSha256": "3ee2cafba269a52a95c4ac2dca2966ff74bb4229180de41c5b9d10b0ca65ab09",
+      "afterSha256": "45e5067be84f03a0e88c27886d00cf8ee1ad8f80adeec9f1585d850516add6d8"
+    },
+    {
+      "file": "src/components/workflowTypes.ts",
+      "before": 163,
+      "after": 155,
+      "delta": -8,
+      "beforeSha256": "9288ddbab954bbe3e5e675248f376282faf3b80d15d29bd94b2aa17ad5e80622",
+      "afterSha256": "2b84c53dd5a2b687ebbb3daf58767738a2e97dc7aaaedd873511335313f493ea"
+    },
+    {
+      "file": "server/client/self_model.ts",
+      "before": 2299,
+      "after": 2297,
+      "delta": -2,
+      "beforeSha256": "6d951aa7f30a5090fce62a31200cab0e3e636b845e025b7ea6ca4835b356388d",
+      "afterSha256": "4593521352e30ed9b45e3c0a90c9df1aa9a166db8213e6a44a202b86ec2d3b03"
+    },
+    {
+      "file": "server/cloud/fallback.ts",
+      "before": 214,
+      "after": 85,
+      "delta": -129,
+      "beforeSha256": "f9bdc5063930f306bf927d12daa72997dc709061b770f3e01d081165938a6b75",
+      "afterSha256": "b4c1c17c94cf83ae765b058f28269412d496fa58801e3e58af61eab56de21010"
+    },
+    {
+      "file": "server/cloud/core.ts",
+      "before": 198,
+      "after": 185,
+      "delta": -13,
+      "beforeSha256": "b3f400f2019ecf503f80daa1cbab8f7676566225fa2eaffa026c878e1354bf29",
+      "afterSha256": "71e66c66517adfd9c6857a76c4d8e97f6bb0b3beb6dce195cad5e7c600a1b109"
+    },
+    {
+      "file": "src/lib/translations.ts",
+      "before": 3051,
+      "after": 3045,
+      "delta": -6,
+      "beforeSha256": "a3761a16079407cce8fa613310911cc3719294822da71dba0a3664917393a2fb",
+      "afterSha256": "9a26acd87af31fa41bf2525f64fd9d920da4fda8758ecb89f4e654568fa48f68"
+    },
+    {
+      "file": "server/context/fusion.ts",
+      "before": 106,
+      "after": 81,
+      "delta": -25,
+      "beforeSha256": "1d7ae96e0fa0c65989e1f15df5f178197e9f27ce23ea015ff044b041b58b95bc",
+      "afterSha256": "6a714c6b9617b60d683f2d0f3ecffccc9ab7ecbe45cbea40a9752bcc93a8253d"
+    },
+    {
+      "file": "server/conversation/manager.ts",
+      "before": 4707,
+      "after": 4689,
+      "delta": -18,
+      "beforeSha256": "5e2802fd4dc0a9ec2a39784d02f76cc98aa041a24633a5cdea88d243a8787d41",
+      "afterSha256": "abffd8160d82f7ac864ce529447460be965428567a839f8fd41bffd351e4e0e9"
+    },
+    {
+      "file": "server/config/privacy.ts",
+      "before": 121,
+      "after": 104,
+      "delta": -17,
+      "beforeSha256": "ccc7ce5be8581f067089f8a139ed2d551f5872e9924aa69197b78c2dcb863dda",
+      "afterSha256": "0ffbad6cad9c309617437e414aef63a511a1e754acb972434e370086fb35e966"
+    },
+    {
+      "file": "server/memory/store.ts",
+      "before": 1487,
+      "after": 1463,
+      "delta": -24,
+      "beforeSha256": "d128258bca6ef50689c26cff541f1831ed3dab0f2a71ce3f72baa7ec72ac7627",
+      "afterSha256": "601a209ad6a9b1fa2f4fdbce93130544a8c9b2c580d351d3833ac1cd8d25da8b"
+    },
+    {
+      "file": "server/skills/worklog.ts",
+      "before": 357,
+      "after": 339,
+      "delta": -18,
+      "beforeSha256": "5ab534c1ecd1141a0ed06ee0ea0d1d570695e31b52490bf71c09aff91310a0c5",
+      "afterSha256": "221f43db95c684a387f3b10864ec51c3fd8808cbf5563439199a12692084796b"
+    },
+    {
+      "file": "server/org/branch.ts",
+      "before": 792,
+      "after": 772,
+      "delta": -20,
+      "beforeSha256": "467b8bce39ada4fb0bcb8a578913da7e5f492683a6d0c3fac67119a27957d822",
+      "afterSha256": "153b7fa34ff771963045ed5edfc7e98521e06761a0ae55ec6650c47e25339658"
+    },
+    {
+      "file": "server/personality/evolution.ts",
+      "before": 869,
+      "after": 844,
+      "delta": -25,
+      "beforeSha256": "5fad8db62e8fc70270a402dba7c61efdab0c8994242dd13c98836d9f89e34f60",
+      "afterSha256": "99203747341e89b4b425988a086642ad675e8b4f1913c9d9eff8b5bc67340a16"
+    },
+    {
+      "file": "src/components/SharedUI.tsx",
+      "before": 103,
+      "after": 84,
+      "delta": -19,
+      "beforeSha256": "08a36d21b369af5a72dcc27c73cfe2209a73269dc8fa3b4a14f25e283954b0c1",
+      "afterSha256": "1d1d90b9c691ed29196c72b9a0d143d674796f2fada567b3bc940a65dc4b9df4"
+    },
+    {
+      "file": "server/legal/parser.ts",
+      "before": 215,
+      "after": 183,
+      "delta": -32,
+      "beforeSha256": "9a32b80b1d39fffb36e1a12a88cdb7830354dc5a23c2ace5824029bc18330518",
+      "afterSha256": "d4a127bddcc20b31f4cbf16baac61738af3e3f73a5b7b848fad6c845aaaff9dc"
+    },
+    {
+      "file": "server/time/utils.ts",
+      "before": 312,
+      "after": 287,
+      "delta": -25,
+      "beforeSha256": "76d0cac29209c8b3b1943aca2f27e27df6511220859251bfb534dab175b47154",
+      "afterSha256": "a2ce032a5a5169f3abd1daa3565c387689d32c25da722491f27c43fb9c3c6581"
+    },
+    {
+      "file": "shared/evidence_workflow.ts",
+      "before": 355,
+      "after": 329,
+      "delta": -26,
+      "beforeSha256": "1b20e5bffee141eb5b5e952c4e3be1c368144a90a1f93934d4cbd4011e576cdb",
+      "afterSha256": "4d748ce0bb699e7856e9fa8e583937ddbe25173da03be269bb8ef701ab069431"
+    },
+    {
+      "file": "server/i18n/naturalness_messages.ts",
+      "before": 91,
+      "after": 61,
+      "delta": -30,
+      "beforeSha256": "89f210ad9d27df1005b55779a292bedc866d2bf6398e8a32401f7c87bd552711",
+      "afterSha256": "c63226d6070eb67d0f532a77e4129863b1c789048be0bf0912ad3f4e95d594fa"
+    },
+    {
+      "file": "server/memory/index.ts",
+      "before": 15,
+      "after": 15,
+      "delta": 0,
+      "beforeSha256": "ba5d2420c4886b5a3b9d6f6e03dbd409ac8fce0b620226baeed8a4cf301a7c34",
+      "afterSha256": "99cf1172aa89347598401c5923105c92be997dc886cb08afbccd8cde12fb05dd"
+    },
+    {
+      "file": "test/desktop_foreground_ownership.test.ts",
+      "before": 34,
+      "after": 52,
+      "delta": 18,
+      "beforeSha256": "39a19ccd1b742428a9a1d9d0e5e40cf84723c54dad31b9aaa0d880447435cc49",
+      "afterSha256": "009f704922bb5368c6d662dbdba30542733056105ae00a262c087e4ac1882c32"
+    }
+  ],
+  "tests": [
+    {
+      "name": "focused",
+      "success": true,
+      "files": 16,
+      "tests": 113,
+      "passed": 113,
+      "failed": 0,
+      "skipped": 0,
+      "suites": [
+        {
+          "file": "test/agent_status_truth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/client_self_model.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/cloud_resilience.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/desktop_foreground_ownership.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/frontend_response_finalization.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/memory_derived_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/memory_tier_priority.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/model_failover_tool_continuity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/official_sdk_error_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/organization_branch_recovery.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/output_finalization_paths.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/personality_evolution_cost_guard.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/privacy_execution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/self_model_snapshot.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/time_calendar_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_calculation_capture.test.ts",
+          "status": "passed",
+          "tests": 2
+        }
+      ]
+    },
+    {
+      "name": "partitions",
+      "success": true,
+      "files": 8,
+      "tests": 43,
+      "passed": 43,
+      "failed": 0,
+      "skipped": 0,
+      "suites": [
+        {
+          "file": "test/evidence_workflow.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/learning_interface.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/organization_branch_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/password_pdf.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/personality_growth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/scope_isolation.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/skill_authoring_pipeline.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/workflow_fresh_input_execution.test.ts",
+          "status": "passed",
+          "tests": 3
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "lint": 0,
+    "frontendsBuild": 0,
+    "serverBuild": 0,
+    "diffCheck": 0
+  },
+  "fullSuiteThisTurn": false,
+  "liveAcceptanceThisTurn": false,
+  "committed": false,
+  "pushed": false,
+  "restarted": false
+}

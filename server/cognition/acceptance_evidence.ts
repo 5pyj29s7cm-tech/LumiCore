@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { isDelegatedActionEvidenceArchive } from './task_execution_ledger';
+import { groupTaskReceipts, isDelegatedActionEvidenceArchive } from './task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import { getJwtSecret } from '../config/local_identity';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
@@ -609,21 +609,6 @@ export function buildCapabilityAcceptanceProjections(input: {
   }).sort((left, right) => left.toolName.localeCompare(right.toolName));
 }
 
-function latestDurableReason(task: any): string {
-  const diagnosis = Array.isArray(task?.recovery?.diagnoses) ? task.recovery.diagnoses.at(-1) : null;
-  const terminalReceipt = hasValidTerminalReceiptSignature(task?.terminalReceipt)
-    ? task.terminalReceipt as TaskTerminalReceipt
-    : undefined;
-  return compact(
-    terminalReceipt?.reason
-      || diagnosis?.reason
-      || task?.recovery?.blockedReason
-      || task?.verificationReason
-      || task?.error,
-    700,
-  );
-}
-
 function projectDurableTask(task: any): TaskAcceptanceProjection {
   const runtime = 'autonomous' as const;
   const status = compact(task?.status || 'unknown', 60);
@@ -633,7 +618,9 @@ function projectDurableTask(task: any): TaskAcceptanceProjection {
   const validation = status === 'completed'
     ? validateCompletionTerminalReceipt(terminalReceipt, { taskId: String(task?.id || ''), runtime })
     : null;
-  const reason = latestDurableReason(task);
+  const diagnosis = Array.isArray(task?.recovery?.diagnoses) ? task.recovery.diagnoses.at(-1) : null;
+  const reason = compact(trustedTerminalReceipt?.reason || diagnosis?.reason || task?.recovery?.blockedReason
+    || task?.verificationReason || task?.error, 700);
   const terminalVerification = terminalReceiptIntegrityValid
     ? terminalReceipt.verification
     : terminalReceipt
@@ -678,8 +665,7 @@ function projectDurableTask(task: any): TaskAcceptanceProjection {
   };
 }
 
-function projectConversationTask(task: any, receipts: any[]): TaskAcceptanceProjection {
-  const taskReceipts = receipts.filter(row => row?.taskId === task?.id);
+function projectConversationTask(task: any, taskReceipts: any[], context: Record<string, any>): TaskAcceptanceProjection {
   const verified = taskReceipts.some(row => (
     row?.outcome === 'verified_success' && receiptVerification(row) === 'verified'
   ));
@@ -697,7 +683,6 @@ function projectConversationTask(task: any, receipts: any[]): TaskAcceptanceProj
       : status === 'blocked'
         ? 'conversation_task_blocked'
         : 'not_terminal';
-  const context = parseObject(task?.context);
   const diagnosticReason = compact(task?.blocker || (latest ? `Latest terminal outcome: ${latest.outcome || 'unknown'}.` : ''), 700);
   return {
     taskId: compact(task?.id, 180),
@@ -792,8 +777,7 @@ function isVerifiedCurrentSchedulerCheckpoint(
   );
 }
 
-function projectCompactSchedulerTask(task: any, receipts: any[], context: Record<string, any>): TaskAcceptanceProjection {
-  const taskReceipts = receipts.filter(row => row?.taskId === task?.id);
+function projectCompactSchedulerTask(task: any, taskReceipts: any[], context: Record<string, any>): TaskAcceptanceProjection {
   const audit = parseObject(context.schedulerAudit);
   const currentExecution = parseObject(audit.currentExecution);
   const currentExecutionId = compact(currentExecution.executionId, 180);
@@ -880,13 +864,14 @@ export function buildTaskAcceptanceProjections(db: any, input: {
   orgId?: string;
 } = {}): TaskAcceptanceProjection[] {
   const actionReceipts = Array.isArray(db?.conversationActionReceipts) ? db.conversationActionReceipts : [];
-  const conversation = (Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks : [])
-    .filter((task: any) => !isDelegatedActionEvidenceArchive(task) && scopeMatches(task, input))
-    .map((task: any) => {
+  const actionTasks = (Array.isArray(db?.conversationActionTasks) ? db.conversationActionTasks : [])
+    .filter((task: any) => !isDelegatedActionEvidenceArchive(task) && scopeMatches(task, input));
+  const receiptsByTask = groupTaskReceipts(actionTasks, actionReceipts);
+  const conversation = actionTasks.map((task: any) => {
       const context = parseObject(task?.context);
       return context.source === 'scheduler' && context.compactAudit === true
-        ? projectCompactSchedulerTask(task, actionReceipts, context)
-        : projectConversationTask(task, actionReceipts);
+        ? projectCompactSchedulerTask(task, receiptsByTask.get(task.id)!, context)
+        : projectConversationTask(task, receiptsByTask.get(task.id)!, context);
     });
   const autonomous = (Array.isArray(db?.autonomousTasks) ? db.autonomousTasks : [])
     .filter((task: any) => scopeMatches(task, input))

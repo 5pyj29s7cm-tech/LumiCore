@@ -8,6 +8,7 @@ import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { hasExplicitNoToolInstruction } from '../server/cognition/tool_intent';
 import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
 import { resolveActiveTaskMessageRelation } from '../server/cognition/task_concurrency';
+import { guardCurrentAppToolCall } from '../server/cognition/current_app_execution';
 
 beforeAll(async () => {
   const { initDatabase } = await import('../db_layer');
@@ -21,6 +22,42 @@ function createRegistry(): ToolRegistry {
 }
 
 describe('unified execution pipeline', () => {
+  it.each([
+    ['chat', 'chat'], ['voice', 'voice'], ['task', 'task'],
+    ['chat', 'rest_chat'], ['autonomy', 'autonomy'], ['chat', 'feishu'],
+  ] as const)('keeps one restricted policy and projection for %s/%s', (channel, source) => {
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: { userId: 'entry-boundary', channel, source, text: '搜索公开网页里的人工智能新闻，然后打开本机 WPS。', operationMode: 'assistant' },
+      registry: createRegistry(), executionBoundary: 'remote_restricted',
+      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 10 },
+    });
+    expect(pipeline.execution.toolPolicy).toBe(pipeline.authorizationPolicy);
+    expect(pipeline.execution.baseToolPolicy).toBe(pipeline.authorizationPolicy);
+    for (const names of [pipeline.authorizationPolicy.allowedTools, pipeline.modelToolProjection.toolNames, pipeline.execution.toolRoute?.toolNames || []]) {
+      expect(names.every(name => name === 'web_search')).toBe(true);
+    }
+    expect(pipeline.modelToolProjection.toolNames).not.toContain('desktop_open');
+  });
+
+  it('uses the structured application reference even if prompt metadata names a different app', () => {
+    const state = { version: 2 as const, taskId: 'wps-task', revision: 1, status: 'completed' as const,
+      goal: '打开 WPS', latestInstruction: '打开 WPS', appTarget: 'WPS', sourcePaths: [], latestBlocker: '',
+      unfinished: false, evidenceTools: ['desktop_open'], assistantState: '已打开', toolSummaries: [], updatedAt: new Date().toISOString() };
+    const input = { dispatch: { userId: 'app-binding', channel: 'chat' as const, text: '在这里面新建一个空白文档并写入：测试。',
+      continuationContext: '## Recent action continuation context\nRecovered structured action state:\n- followupIntent: status\n- appTarget: Chrome',
+      operationMode: 'assistant' }, registry: createRegistry() };
+    const bound = buildLumiExecutionPipeline({ ...input, actionTaskState: state });
+    expect(bound.turnIntent.flow.currentAppEditTarget).toBe('WPS');
+    expect(bound.modelToolProjection.toolNames).toContain('wps_create_document_with_text');
+    const unbound = buildLumiExecutionPipeline(input);
+    expect(unbound.turnIntent.flow.currentAppEditTarget).toBe('');
+    expect(unbound.trustedActionContinuation).toBe(false);
+    const plain = buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, continuationContext: '' } });
+    expect(unbound.modelToolProjection.toolNames).toEqual(plain.modelToolProjection.toolNames);
+    expect(guardCurrentAppToolCall({ taskText: `${input.dispatch.text}\n${input.dispatch.continuationContext}`,
+      toolName: 'wps_create_document_with_text', arguments: { text: '测试' } }).allowed).toBe(false);
+  });
+
   it.each(['chat', 'voice'] as const)('retains browser execution schemas through the complete %s legal lookup projection', channel => {
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'court-lookup', channel, source: channel, operationMode: 'assistant',
       text: '打开中国裁判文书网查找浙江省衢州市中级法院最新的判例', targetIsLumi: true }, registry: createRegistry(),
@@ -156,12 +193,13 @@ describe('unified execution pipeline', () => {
     expect(pipeline.executionRequested).toBe(true);
     expect(pipeline.turnIntent.flow.modelToolAccess).toBe('manifest');
   });
-  it.each(['chat', 'voice'] as const)('binds short plan acceptance to the latest user goal for %s', channel => {
+  it.each(['chat', 'voice', 'task'] as const)('binds short plan acceptance to the latest user goal for %s', channel => {
     const text = '按刚才的计划执行。';
     const goal = '读取 C:/Users/Administrator/Documents/orders.csv，计算每项金额和总额';
     const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'plan-acceptance', channel, source: channel,
       operationMode: 'assistant', text, targetIsLumi: true }, registry: createRegistry(),
       personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
+      traceText: text,
       persistedConversationHistory: [
         { role: 'user', message: '数量改成4。' },
         { id: 'latest-plan', role: 'user', message: goal + '。先只告诉我准备怎么做，暂时不要读取文件。原文件不动。' },
@@ -175,6 +213,9 @@ describe('unified execution pipeline', () => {
     expect(pipeline.authorizationPolicy.forbiddenTools).toContain('write_file');
     expect(pipeline.trustedActionContinuation).toBe(false);
     expect(pipeline.turnIntent.promptOverlay).toContain('latest-plan');
+    expect(pipeline.intentTrace.input.text).toBe(text);
+    expect(pipeline.normalizedIntent.target).toBe('C:/Users/Administrator/Documents/orders.csv');
+    expect(pipeline.intentTrace.normalizedActionIntent).toEqual(pipeline.normalizedIntent);
   });
   it.each(['chat', 'voice'] as const)('keeps a visible-client planning request in discussion through %s finalization', channel => {
     const text = 'LC-UI-统一验收：我要处理 C:/Users/Administrator/LumiCore/task-skill-acceptance-20260908/LC-TASK-ORDERS.csv，计算每项金额和总额。先只告诉我准备怎么做，暂时不要读取文件。';
@@ -618,4 +659,39 @@ describe('unified execution pipeline', () => {
       state: 'candidate',
     }));
   });
+});
+
+it.each(['chat', 'voice', 'task'] as const)('keeps new and stale %s plans separate from the previous task evidence', channel => {
+  const state = { version: 2 as const, taskId: 'old-file-task', revision: 3, status: 'blocked' as const,
+    goal: '读取 D:/old-orders.csv 并计算总额', latestInstruction: '读取 D:/old-orders.csv 并计算总额',
+    sourcePaths: ['D:/old-orders.csv'], unfinished: true, latestBlocker: 'waiting', evidenceTools: [],
+    toolSummaries: [], assistantState: '', appTarget: '', updatedAt: new Date().toISOString() };
+  const input = { dispatch: { userId: 'plan-identity', channel, source: channel, operationMode: 'assistant', targetIsLumi: true, text: '' },
+    registry: createRegistry(), actionTaskState: state };
+  for (const extra of [
+    { dispatch: { ...input.dispatch, text: '新建 D:/new-note.txt，写入新的独立内容。' } },
+    { dispatch: { ...input.dispatch, text: '生成一张山水图片' }, structuredMediaRequest: { operation: 'text_to_image' as const, prompt: 'mountains', size: '1024x1024' } },
+    { dispatch: { ...input.dispatch, text: '继续' }, taskRelation: { ...resolveActiveTaskMessageRelation('继续', state), revision: 2 } },
+    { dispatch: { ...input.dispatch, text: '继续' }, taskRelation: { ...resolveActiveTaskMessageRelation('继续', state), taskId: undefined } },
+    { dispatch: { ...input.dispatch, text: '按刚才的计划执行。' }, persistedConversationHistory: [
+      { role: 'user', message: '读取 D:/new-orders.csv，计算总额。先只告诉我准备怎么做，暂时不要读取文件。' },
+      { role: 'assistant', message: '等待确认后读取。' },
+    ] },
+  ]) {
+    const result = buildLumiExecutionPipeline({ ...input, ...extra });
+    expect(result.trustedActionContinuation).toBe(false);
+    expect(result.executionPlan.taskId).not.toBe(state.taskId);
+    expect(result.executionPlan.contextRefs).not.toContainEqual({ kind: 'source', value: state.sourcePaths[0] });
+    if (result.taskRelation.binding === 'stale') expect(result.executionRequested).toBe(false);
+  }
+  for (const text of ['继续', '现在做得怎么样了', '目前进度如何', '执行到哪一步了']) {
+    const result = buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, text } });
+    expect(result.executionPlan.taskId, JSON.stringify({ text, relation: result.taskRelation })).toBe(state.taskId);
+    expect(result.executionPlan.contextRefs).toContainEqual({ kind: 'source', value: state.sourcePaths[0] });
+    if (text === '继续') expect(result.trustedActionContinuation).toBe(true);
+    else expect(result.executionRequested).toBe(false);
+  }
+  const owned = buildLumiExecutionPipeline({ ...input, taskId: 'new-owned-task', dispatch: { ...input.dispatch, text: '新建 D:/new-note.txt，写入新的独立内容。' } });
+  expect(owned.executionPlan.taskId).toBe('new-owned-task');
+  expect(owned.executionPlan.contextRefs).toEqual([]);
 });

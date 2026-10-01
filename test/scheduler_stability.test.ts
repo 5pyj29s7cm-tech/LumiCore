@@ -1,28 +1,21 @@
 import './helpers';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   getScheduledTaskExecutionContract,
   getScheduledTaskTimeoutMs,
   parseSchedule,
   redactSchedulerDiagnostic,
   requiresStrictScheduledPersistence,
-  runAgentAutonomousAnalysis,
   Scheduler,
   type ScheduledTask,
   type ScheduledTaskExecutionContext,
 } from '../server/scheduler';
-import {
-  resetRealtimeUserActivityForTests,
-  setRealtimeVoiceSessionActive,
-} from '../server/autonomy/foreground_activity';
-import { saveGateConfig } from '../server/autonomy/safety_gate';
 
 describe('scheduler stability', () => {
   beforeAll(async () => {
     const { initDatabase } = await import('../db_layer');
     await initDatabase();
   });
-  afterEach(() => resetRealtimeUserActivityForTests());
 
   it('queues maintenance before its deadline while allowing foreground probes', async () => {
     const { writeDB } = await import('../db_layer');
@@ -1126,34 +1119,4 @@ describe('scheduler stability', () => {
     }
   });
 
-  it('does not start an autonomous analysis while live voice is active', async () => {
-    const userId = 'scheduler-live-voice-active';
-    saveGateConfig({ autonomyLevel: 'full' }, userId);
-    setRealtimeVoiceSessionActive(userId, 'socket-live', true);
-    const analyze = vi.fn(async () => 'should not run');
-
-    await expect(runAgentAutonomousAnalysis(userId, analyze)).resolves.toBe('');
-    expect(analyze).not.toHaveBeenCalled();
-  });
-
-  it('aborts an in-flight autonomous analysis when live voice starts', async () => {
-    const userId = 'scheduler-live-voice-race';
-    saveGateConfig({ autonomyLevel: 'full' }, userId);
-    let started!: () => void;
-    const didStart = new Promise<void>(resolve => { started = resolve; });
-    let providerSignal: AbortSignal | undefined;
-
-    const analysis = runAgentAutonomousAnalysis(userId, signal => {
-      providerSignal = signal;
-      started();
-      return new Promise<string>((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      });
-    });
-    await didStart;
-    setRealtimeVoiceSessionActive(userId, 'socket-live', true);
-
-    await expect(analysis).resolves.toBe('');
-    expect(providerSignal?.aborted).toBe(true);
-  });
 });

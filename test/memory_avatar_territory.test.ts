@@ -8,7 +8,7 @@ import { captureMemoryAvatarAuthorization } from '../server/memory_avatar/lifecy
 import { addScopedVoiceProfile, voiceProfileScope } from '../server/tts/profile_store';
 import { addMessageIdempotent, getOrCreateActiveConversation } from '../server/conversation/manager';
 import { generateSystemPrompt } from '../server/personality/engine';
-import { LUMI_COMPANION_APPEARANCE, LUMI_OTOME_APPEARANCE } from '../shared/memory_avatar';
+import { normalizeMemoryAvatarAppearance, LUMI_OTOME_APPEARANCE } from '../shared/memory_avatar';
 import { validMemoryAvatar } from '../src/services/memoryAvatarService';
 
 let base = '';
@@ -51,20 +51,20 @@ it('makes simultaneous create retries idempotent and rejects conflicting reuse',
 
 it('persists the Lumi companion appearance and accepts it in the client without changing memories', async () => {
   const a = (await create({ narrative: 'Keep this biography' })).body;
-  const updated = await request(`/${a.id}`, 'PATCH', { revision: a.revision, appearance: LUMI_COMPANION_APPEARANCE });
+  const updated = await request(`/${a.id}`, 'PATCH', { revision: a.revision, appearance: { ...LUMI_OTOME_APPEARANCE, style: 'lumi3d' } });
   expect(updated.status).toBe(200);
   const loaded = (await request(`/${a.id}`)).body;
-  expect(loaded.appearance).toEqual(LUMI_COMPANION_APPEARANCE);
+  expect(loaded.appearance).toEqual(LUMI_OTOME_APPEARANCE);
   expect(loaded.narrative).toBe(a.narrative); expect(loaded.memoryCount).toBe(a.memoryCount);
   expect(validMemoryAvatar(loaded)).toBe(true);
-  expect((await request(`/${a.id}`, 'PATCH', { revision: loaded.revision, appearance: { ...LUMI_COMPANION_APPEARANCE, style: 'unknown' } })).status).toBe(400);
+  expect((await request(`/${a.id}`, 'PATCH', { revision: loaded.revision, appearance: { ...{ ...LUMI_OTOME_APPEARANCE, style: 'lumi3d' }, style: 'unknown' } })).status).toBe(400);
 });
 
 it.each([LUMI_OTOME_APPEARANCE, { ...LUMI_OTOME_APPEARANCE, style: 'lumivrm' }])('persists local style $style without changing public identity or private memory',async(appearance)=>{
   const a=(await create({publicBrief:'Approved company identity',narrative:'Private biography'})).body;
   const next=await request(`/${a.id}`,'PATCH',{revision:a.revision,appearance});
   expect(next.status).toBe(200);expect(validMemoryAvatar(next.body)).toBe(true);
-  expect((await request(`/${a.id}`)).body).toMatchObject({appearance,publicBrief:a.publicBrief,narrative:a.narrative});
+  expect((await request(`/${a.id}`)).body).toMatchObject({appearance: normalizeMemoryAvatarAppearance(appearance as any),publicBrief:a.publicBrief,narrative:a.narrative});
 });
 
 it('keeps materials private by owner and avatar, including the full later text', async () => {

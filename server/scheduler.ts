@@ -3,21 +3,20 @@
 
 import crypto from 'node:crypto';
 import { Server as SocketIOServer } from 'socket.io';
-import { queryMemories, getDueReminders, runBehavioralAnalysis, decayMemories, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped, type Reminder } from './memory';
+import { queryMemories, getDueReminders, runBehavioralAnalysis, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped, type Reminder } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
 import { runDreamCycle } from './memory/dream';
 import { organizePersonalMemories } from './memory/auto_organize';
 import { makeLLMCall } from './llm/providers';
-import { getWeatherBrief, getTimeGreeting } from './services/weather';
+import { getTimeOfDay } from './time/utils';
 import { autoGenerateWorkflows } from './agents/workflows';
-import { runHealthAudit, HealthReport } from './agents/health_audit';
+import { runHealthAudit } from './agents/health_audit';
 import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
 import { personalityRegistry } from './personality';
 import { evolvePersonality, generateReviewPrompt } from './personality/evolution';
 import { backfillEmbeddings } from './memory/store';
 import { isDerivedLearningMemory, isMalformedBehavioralMemory, isOwnerInteractionEvidence, isTestMemory } from './memory/provenance';
 import { loadEmotionalState } from './personality/state';
-import { getSameMonthDayPast, getMonthDayFromISO } from './time/utils';
 import { detectSpatiotemporalPatterns } from './time/spatiotemporal';
 import { getRecentActivity } from './context/activity_stream';
 import {
@@ -30,8 +29,7 @@ import {
   resolveSystemExplorationRuntimeDir,
   SystemExplorationAlreadyRunningError,
 } from './runtime/system_exploration_worker';
-import { getGateConfig, isAutonomousWorkAllowed } from './autonomy/safety_gate';
-import { createRealtimeVoicePrioritySignal } from './autonomy/foreground_activity';
+import { getGateConfig } from './autonomy/safety_gate';
 import { getUserPreferredLLMConfig } from './llm/user_preferences';
 import { refreshAuthoritativeStatuteSources } from './legal/statute_authority_refresh';
 import { finalizeLumiResponse } from './cognition/result_finalizer';
@@ -437,30 +435,6 @@ export function resolveScheduledUserIds(db: any): string[] {
   return registered.size > 0 ? [...registered] : ['anonymous'];
 }
 
-/**
- * Runs one background reflection behind both the autonomy gate and a live
- * voice interruption signal. The second gate check closes the race between a
- * scheduler tick being admitted and the model request actually starting.
- */
-export async function runAgentAutonomousAnalysis(
-  userId: string,
-  analyze: (signal: AbortSignal) => Promise<string>,
-): Promise<string> {
-  if (!isAutonomousWorkAllowed(userId).allowed) return '';
-  const voicePriority = createRealtimeVoicePrioritySignal(userId);
-  try {
-    if (voicePriority.signal.aborted || !isAutonomousWorkAllowed(userId).allowed) return '';
-    try {
-      return await analyze(voicePriority.signal);
-    } catch (error) {
-      if (voicePriority.signal.aborted) return '';
-      throw error;
-    }
-  } finally {
-    voicePriority.dispose();
-  }
-}
-
 type LLMGetters = {
   getDeepSeek: () => any;
   getGemini: () => any;
@@ -528,7 +502,6 @@ export class Scheduler {
   private scheduleGenerations: Map<string, number> = new Map();
   private lifecycleGeneration = 0;
   io: SocketIOServer | null = null;
-  private llmGetters: LLMGetters | null = null;
   private disabledTasks: Set<string> = new Set();
   private maintenanceQueue: Array<{ task: ScheduledTask; generation: number; resolve: () => void }> = [];
   private maintenanceActive = new Set<string>();
@@ -541,10 +514,6 @@ export class Scheduler {
 
   setIO(io: SocketIOServer) {
     this.io = io;
-  }
-
-  setLLMGetters(getters: LLMGetters) {
-    this.llmGetters = getters;
   }
 
   register(task: ScheduledTask) {
@@ -2433,7 +2402,7 @@ export function registerScheduledTasks(
     },
   });
 
-  // Morning briefing with weather — LLM-generated for natural warmth
+  // Daily briefing uses user-local time and confirmed personal context.
   scheduler.register({
     id: 'daily_summary',
     cron: 'daily_9am',
@@ -2445,14 +2414,11 @@ export function registerScheduledTasks(
 
       for (const userId of userIds) {
         try {
-          const greeting = getTimeGreeting();
-          const weather = await getWeatherBrief();
-          const pending = getDueReminders({ userId, domain: 'personal', orgId: '' });
+          const timeOfDay = getTimeOfDay(userId);
+          const greeting = `Good ${timeOfDay === 'night' ? 'evening' : timeOfDay}`;          const pending = getDueReminders({ userId, domain: 'personal', orgId: '' });
           const recentMemories = queryMemories({ userId, limit: 3, minConfidence: 0.4, domain: 'personal', orgId: '' });
 
-          const contextParts: string[] = [];
-          if (weather) contextParts.push(`天气: ${weather}`);
-          if (pending.length > 0) contextParts.push(`${pending.length} 条待办: ${pending.map(r => r.content).join('; ')}`);
+          const contextParts: string[] = [];          if (pending.length > 0) contextParts.push(`${pending.length} 条待办: ${pending.map(r => r.content).join('; ')}`);
           if (recentMemories.length > 0) {
             contextParts.push(`近期记忆: ${recentMemories.map(m => m.content.slice(0, 80)).join('; ')}`);
           }
@@ -2478,13 +2444,11 @@ Output ONLY the greeting — no preamble, no labels.`;
             } else {
               // Fallback to template
               const parts: string[] = [`${greeting}!`];
-              if (weather) parts.push(weather);
               if (pending.length > 0) parts.push(`${pending.length} 条待办`);
               messages.push({ userId, message: parts.join(' - '), domain: 'personal' });
             }
           } catch {
             const parts: string[] = [`${greeting}!`];
-            if (weather) parts.push(weather);
             messages.push({ userId, message: parts.join(' - '), domain: 'personal' });
           }
         } catch (err: any) {

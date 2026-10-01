@@ -35,10 +35,6 @@ export function useLumiScene(input: { enabled?: boolean; scopeKey?: string; user
     setError('');
     setLoading(enabled);
     if (!enabled) {
-      sceneRef.current = null;
-      setScene(null);
-      setLoading(false);
-      setError('');
       requestRef.current = () => {};
       return;
     }

@@ -852,6 +852,89 @@ async function stageAutonomousStaticDocumentation(input: {
   }
 }
 
+function replayedStageResult(
+  proposal: SelfImprovementProposal,
+  repositoryId: string,
+  treeDigest?: string,
+): SelfImprovementStageResult {
+  return {
+    ok: true,
+    status: 'verified',
+    persisted: true,
+    isolated: true,
+    activated: false,
+    pushed: false,
+    proposal,
+    baseCommit: proposal.baseCommit!,
+    branch: proposal.stagedBranch!,
+    commit: proposal.stagedCommit,
+    worktreePath: proposal.worktreePath!,
+    changedPaths: proposal.changedPaths || [],
+    repositoryId,
+    ...(treeDigest === undefined ? {} : { treeDigest }),
+    verification: (proposal.evidence || [])
+      .filter(item => item.kind === 'verification')
+      .map(item => ({
+        profile: proposal.verificationProfile || 'standard',
+        command: item.ref,
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 0,
+        outputDigest: '',
+        summary: item.summary,
+      })),
+    replayed: true,
+  };
+}
+
+async function verifyStaticStageReplay(
+  proposal: SelfImprovementProposal,
+  runner: CommandRunner,
+  repository: SelfImprovementRepositoryIdentity,
+  gitContext: ReturnType<typeof makeRestrictedGitContext>,
+): Promise<string> {
+  const branchCommit = (await runRestrictedGit(
+    runner,
+    repository,
+    gitContext,
+    ['rev-parse', `refs/heads/${proposal.stagedBranch}`],
+  )).stdout.trim();
+  if (branchCommit !== proposal.stagedCommit) throw new Error('Verified self-improvement branch moved after staging.');
+  const parent = (await runRestrictedGit(
+    runner,
+    repository,
+    gitContext,
+    ['rev-parse', `${proposal.stagedCommit}^`],
+  )).stdout.trim();
+  if (parent !== proposal.baseCommit) throw new Error('Verified self-improvement commit parent no longer matches its base.');
+  const committedPaths = parseNullSeparatedPaths((await runRestrictedGit(
+    runner,
+    repository,
+    gitContext,
+    ['diff', '--no-ext-diff', '--name-only', '-z', proposal.baseCommit!, proposal.stagedCommit!],
+  )).stdout);
+  assertExactPathSet(committedPaths, proposal.changedPaths || [], 'Verified replay commit');
+  const manifest = await exactCommitManifest(
+    runner,
+    repository,
+    gitContext,
+    proposal.stagedCommit!,
+    proposal.changedPaths || [],
+  );
+  if (manifest.digest !== proposal.stagedTreeDigest) {
+    throw new Error('Verified self-improvement tree digest no longer matches the persisted receipt.');
+  }
+  assertStaticDocumentationContent(proposal.worktreePath!, proposal.changedPaths || []);
+  await assertStageFilesMatchCommit(
+    runner,
+    repository,
+    gitContext,
+    proposal.worktreePath!,
+    manifest.entries,
+  );
+  return manifest.digest;
+}
+
 export async function stageSelfImprovementPatch(
   scope: SelfImprovementScope,
   input: {
@@ -958,106 +1041,13 @@ export async function stageSelfImprovementPatch(
         }
         const status = await worktreeChangePaths(runner, proposal.worktreePath);
         if (status.length > 0) throw new Error('Verified executable self-improvement worktree is no longer clean.');
-        return {
-          ok: true,
-          status: 'verified',
-          persisted: true,
-          isolated: true,
-          activated: false,
-          pushed: false,
-          proposal,
-          baseCommit: proposal.baseCommit,
-          branch: proposal.stagedBranch,
-          commit: proposal.stagedCommit,
-          worktreePath: proposal.worktreePath,
-          changedPaths: proposal.changedPaths || [],
-          repositoryId: repository.repositoryId,
-          verification: (proposal.evidence || [])
-            .filter(item => item.kind === 'verification')
-            .map(item => ({
-              profile: proposal.verificationProfile || 'standard',
-              command: item.ref,
-              status: 'passed',
-              exitCode: 0,
-              durationMs: 0,
-              outputDigest: '',
-              summary: item.summary,
-            })),
-          replayed: true,
-        };
+        return replayedStageResult(proposal, repository.repositoryId);
       }
       if (!proposal.stagedCommit || !proposal.stagedBranch || !proposal.stagedTreeDigest) {
         throw new Error('Verified self-improvement replay is missing its exact commit and tree identity.');
       }
-      const branchCommit = (await runRestrictedGit(
-        runner,
-        repository,
-        identityGitContext,
-        ['rev-parse', `refs/heads/${proposal.stagedBranch}`],
-      )).stdout.trim();
-      if (branchCommit !== proposal.stagedCommit) throw new Error('Verified self-improvement branch moved after staging.');
-      const parent = (await runRestrictedGit(
-        runner,
-        repository,
-        identityGitContext,
-        ['rev-parse', `${proposal.stagedCommit}^`],
-      )).stdout.trim();
-      if (parent !== proposal.baseCommit) throw new Error('Verified self-improvement commit parent no longer matches its base.');
-      const committedPaths = parseNullSeparatedPaths((await runRestrictedGit(
-        runner,
-        repository,
-        identityGitContext,
-        ['diff', '--no-ext-diff', '--name-only', '-z', proposal.baseCommit, proposal.stagedCommit],
-      )).stdout);
-      assertExactPathSet(committedPaths, proposal.changedPaths || [], 'Verified replay commit');
-      const manifest = await exactCommitManifest(
-        runner,
-        repository,
-        identityGitContext,
-        proposal.stagedCommit,
-        proposal.changedPaths || [],
-      );
-      if (manifest.digest !== proposal.stagedTreeDigest) {
-        throw new Error('Verified self-improvement tree digest no longer matches the persisted receipt.');
-      }
-      if (autonomousStaticDocumentation) {
-        assertStaticDocumentationContent(proposal.worktreePath, proposal.changedPaths || []);
-        await assertStageFilesMatchCommit(
-          runner,
-          repository,
-          identityGitContext,
-          proposal.worktreePath,
-          manifest.entries,
-        );
-      }
-      return {
-        ok: true,
-        status: 'verified',
-        persisted: true,
-        isolated: true,
-        activated: false,
-        pushed: false,
-        proposal,
-        baseCommit: proposal.baseCommit,
-        branch: proposal.stagedBranch,
-        commit: proposal.stagedCommit,
-        worktreePath: proposal.worktreePath,
-        changedPaths: proposal.changedPaths || [],
-        repositoryId: repository.repositoryId,
-        treeDigest: manifest.digest,
-        verification: (proposal.evidence || [])
-          .filter(item => item.kind === 'verification')
-          .map(item => ({
-            profile: proposal.verificationProfile || 'standard',
-            command: item.ref,
-            status: 'passed',
-            exitCode: 0,
-            durationMs: 0,
-            outputDigest: '',
-            summary: item.summary,
-          })),
-        replayed: true,
-      };
+      const treeDigest = await verifyStaticStageReplay(proposal, runner, repository, identityGitContext);
+      return replayedStageResult(proposal, repository.repositoryId, treeDigest);
     } finally {
       try {
         assertWithin(identityParent, identityGitContext.hooksPath);
@@ -1223,74 +1213,9 @@ export async function replayVerifiedSelfImprovementStage(
     assertSafePlainStageRoot(proposal.worktreePath, proposal, repository);
     const expectedBranch = `lumi/self-improvement/${safeBranchId(proposal.id)}`;
     if (proposal.stagedBranch !== expectedBranch) throw new Error('Verified replay branch identity is invalid.');
-    const branchCommit = (await runRestrictedGit(
-      runner,
-      repository,
-      gitContext,
-      ['rev-parse', `refs/heads/${proposal.stagedBranch}`],
-    )).stdout.trim();
-    if (branchCommit !== proposal.stagedCommit) throw new Error('Verified self-improvement branch moved after staging.');
-    const parent = (await runRestrictedGit(
-      runner,
-      repository,
-      gitContext,
-      ['rev-parse', `${proposal.stagedCommit}^`],
-    )).stdout.trim();
-    if (parent !== proposal.baseCommit) throw new Error('Verified self-improvement commit parent no longer matches its base.');
-    const committedPaths = parseNullSeparatedPaths((await runRestrictedGit(
-      runner,
-      repository,
-      gitContext,
-      ['diff', '--no-ext-diff', '--name-only', '-z', proposal.baseCommit, proposal.stagedCommit],
-    )).stdout);
-    assertExactPathSet(committedPaths, proposal.changedPaths || [], 'Verified replay commit');
-    const manifest = await exactCommitManifest(
-      runner,
-      repository,
-      gitContext,
-      proposal.stagedCommit,
-      proposal.changedPaths || [],
-    );
-    if (manifest.digest !== proposal.stagedTreeDigest) {
-      throw new Error('Verified self-improvement tree digest no longer matches the persisted receipt.');
-    }
-    assertStaticDocumentationContent(proposal.worktreePath, proposal.changedPaths || []);
-    await assertStageFilesMatchCommit(
-      runner,
-      repository,
-      gitContext,
-      proposal.worktreePath,
-      manifest.entries,
-    );
+    const treeDigest = await verifyStaticStageReplay(proposal, runner, repository, gitContext);
     assertStagingMayContinue(options);
-    return {
-      ok: true,
-      status: 'verified',
-      persisted: true,
-      isolated: true,
-      activated: false,
-      pushed: false,
-      proposal,
-      baseCommit: proposal.baseCommit,
-      branch: proposal.stagedBranch,
-      commit: proposal.stagedCommit,
-      worktreePath: proposal.worktreePath,
-      changedPaths: proposal.changedPaths || [],
-      repositoryId: repository.repositoryId,
-      treeDigest: manifest.digest,
-      verification: (proposal.evidence || [])
-        .filter(item => item.kind === 'verification')
-        .map(item => ({
-          profile: proposal.verificationProfile || 'standard',
-          command: item.ref,
-          status: 'passed',
-          exitCode: 0,
-          durationMs: 0,
-          outputDigest: '',
-          summary: item.summary,
-        })),
-      replayed: true,
-    };
+    return replayedStageResult(proposal, repository.repositoryId, treeDigest);
   } finally {
     try {
       assertWithin(identityParent, gitContext.hooksPath);

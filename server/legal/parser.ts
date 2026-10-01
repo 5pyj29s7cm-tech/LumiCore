@@ -118,8 +118,6 @@ const COURT_RE = /(.*?(?:人民法院|中级法院|高级法院|最高法院))/;
 const JUDGMENT_DATE_RE = /(?:二[〇○]|二零)(?:\d{2})年[一二三四五六七八九十\d]+月[一二三四五六七八九十\d]+日/;
 const CAUSE_RE = /案由[：:]\s*(.+?)(?:\n|$)/;
 const STATUTE_RE = /《([^》]+)》/g;
-const PARTY_SECTION_RE = /(?:原告|被告|上诉人|被上诉人|申请人|被申请人|再审申请人|再审被申请人|第三人)[：:]/g;
-
 export function extractLegalMetadata(text: string): LegalMetadata {
   const meta: LegalMetadata = { rawText: text };
 
@@ -164,54 +162,4 @@ export function extractLegalMetadata(text: string): LegalMetadata {
   }
 
   return meta;
-}
-
-// ── Chinese-aware Sentence Splitting ────────────────────────────────────
-
-export function splitSentences(text: string): string[] {
-  const sentences: string[] = [];
-  let current = '';
-  for (let i = 0; i < text.length; i++) {
-    current += text[i];
-    if ('。！？；\n'.includes(text[i])) {
-      const trimmed = current.trim();
-      if (trimmed && trimmed.length > 2) sentences.push(trimmed);
-      current = '';
-    }
-  }
-  const remainder = current.trim();
-  if (remainder && remainder.length > 2) sentences.push(remainder);
-  return sentences;
-}
-
-// ── Legal-aware Chunking ────────────────────────────────────────────────
-
-/**
- * Chunk legal text by section/paragraph boundaries rather than fixed width.
- * Preserves citation context: a statute reference stays with its surrounding reasoning.
- */
-export function chunkLegalText(text: string, maxChunkChars = 800, overlapChars = 150): string[] {
-  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 20);
-  const chunks: string[] = [];
-
-  for (const para of paragraphs) {
-    if (para.length <= maxChunkChars) {
-      chunks.push(para.trim());
-      continue;
-    }
-    // Split oversized paragraphs by sentence
-    const sentences = splitSentences(para);
-    let buf = '';
-    for (const s of sentences) {
-      if (buf.length + s.length > maxChunkChars && buf.length > 0) {
-        chunks.push(buf.trim());
-        buf = buf.slice(-overlapChars) + s;
-      } else {
-        buf += (buf ? '' : '') + s;
-      }
-    }
-    if (buf.trim()) chunks.push(buf.trim());
-  }
-
-  return chunks.filter(c => c.length > 10);
 }

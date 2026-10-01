@@ -13,7 +13,6 @@ import {
 import { formatClientDiagnosticResult } from '../server/cognition/client_diagnostic_result';
 import { buildLumiCapabilitySelection } from '../server/cognition/capability_selection';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
-import { isQuickCommand, matchQuickCommand } from '../server/cognition/quick_commands';
 import { shouldDeferModelOutputUntilFinalized } from '../server/cognition/response_delivery';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
@@ -108,11 +107,13 @@ function decideFromContinuation(
   continuationContext: string,
   channel: 'chat' | 'voice' = 'voice',
   actionTaskState?: ConversationActionContinuationState | null,
+  continuationAppTarget = actionTaskState?.appTarget || '',
 ) {
   const dispatch = buildLumiTurnDispatch({
     userId,
     text,
     continuationContext,
+    continuationAppTarget,
     channel,
     source: channel,
     operationMode: 'assistant',
@@ -281,6 +282,8 @@ describe('Lumi real failure-chain replay', () => {
       text,
       bridge,
       'chat',
+      undefined,
+      state.appTarget,
     );
 
     expect(state.appTarget).toBe('WPS');
@@ -484,9 +487,8 @@ describe('Lumi real failure-chain replay', () => {
     expect(result.notification?.type).toBe('work_product_guard');
   });
 
-  it('answers the microphone audibility check immediately without self-check routing', async () => {
+  it('keeps a microphone audibility question out of repair and tool routing', async () => {
     const text = '\u4f60\u80fd\u542c\u89c1\u6211\u8bf4\u8bdd\u5417\uff1f';
-    const quick = await matchQuickCommand(text, 'real_replay_hearing_user', { surface: 'voice' });
     const dispatch = buildLumiTurnDispatch({
       userId: 'real_replay_hearing_user',
       text,
@@ -496,12 +498,6 @@ describe('Lumi real failure-chain replay', () => {
       targetIsLumi: true,
     });
 
-    expect(isQuickCommand(text)).toBe(true);
-    expect(quick).toMatchObject({
-      matched: true,
-      responseText: '\u80fd\u542c\u89c1\u3002\u4f60\u8bf4\u3002',
-    });
-    expect(quick?.toolCall).toBeUndefined();
     expect(dispatch.flow.selfRepairTurn).toBe(false);
     expect(dispatch.flow.allowToolUseForTurn).toBe(false);
     expect(shouldDeferModelOutputUntilFinalized({
@@ -511,7 +507,7 @@ describe('Lumi real failure-chain replay', () => {
 
     const finalized = finalizeLumiResponse({
       taskText: text,
-      responseText: quick!.responseText,
+      responseText: '能听见。你说。',
       toolRecords: [],
       source: 'voice',
       flow: dispatch.flow,

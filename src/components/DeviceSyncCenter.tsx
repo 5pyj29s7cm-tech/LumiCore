@@ -5,7 +5,6 @@ import {
   Smartphone,
   Monitor,
   RefreshCcw,
-  ShieldCheck,
   Zap,
   MapPin,
   Move3d,
@@ -14,7 +13,7 @@ import {
   CheckCircle2,
   Glasses,
   Box,
-  HardDrive
+  HardDrive,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePlatform } from '@/hooks/usePlatform';
@@ -30,13 +29,6 @@ const DEVICE_ICONS: Record<string, React.ReactNode> = {
   web: <Monitor size={20} />,
 };
 
-const DEVICE_LABELS: Record<string, string> = {
-  desktop: 'Desktop',
-  mobile: 'Mobile',
-  ar_glasses: 'AR Glasses',
-  holographic_prototype: 'Holographic',
-  web: 'Browser',
-};
 
 function getDeviceLabel(type: string, t: any): string {
   const labels: Record<string, string> = {

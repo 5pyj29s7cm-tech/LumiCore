@@ -265,11 +265,3 @@ export function getIndustryWorkflowContracts(productLine: unknown): IndustryWork
   const normalized = normalizeIndustryProductLine(productLine);
   return normalized ? CONTRACTS.filter(contract => contract.productLine === normalized) : [];
 }
-
-export function getIndustryWorkflowContract(productLine: unknown, entryId: unknown): IndustryWorkflowContract | null {
-  const normalized = normalizeIndustryProductLine(productLine);
-  const normalizedEntryId = String(entryId || '').trim();
-  return normalized
-    ? CONTRACTS.find(contract => contract.productLine === normalized && contract.entryId === normalizedEntryId) || null
-    : null;
-}

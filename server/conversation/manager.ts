@@ -1,3 +1,4 @@
+import { parseStoredObject as parsePersistedObject } from '../tools/receipt_payload';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { buildHistoricalFileObservations } from './file_observation_history';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -35,6 +36,7 @@ import {
   sanitizeSummaryForPrompt,
 } from './summary_grounding';
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
+import { projectConversationReceiptHistory } from './receipt_history';
 import { normalizeNativeRequestBinding } from '../devices/native_identity';
 import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
 import {
@@ -1179,21 +1181,6 @@ export function commitConversationTerminalDurabilityStage(
     committed += 1;
   }
   return committed;
-}
-
-function parsePersistedObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, any>;
-  }
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, any>
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 /**
@@ -4268,7 +4255,7 @@ export function getMessages(conversationId: string, limit = 1000): MessageRecord
     })
     .map(({ row }: any) => row);
 
-  return rows
+  return projectConversationReceiptHistory(db, rows
     .filter((row: any) => {
       const response = String(row.response || '').trim();
       if (row.role !== 'user' || !response) return true;
@@ -4289,7 +4276,7 @@ export function getMessages(conversationId: string, limit = 1000): MessageRecord
       );
       return !(hasSplitUser || hasSplitAssistant);
     })
-    .slice(-limit);
+    .slice(-limit));
 }
 
 /**
@@ -4685,22 +4672,4 @@ export function getTopicContext(conversationId: string): string | null {
   lines.push('If the user references "that thing we discussed" or returns to a prior topic, check these recent topics for context.');
 
   return lines.join('\n');
-}
-
-export function getUnclosedConversation(userId: string, orgId?: string): Conversation | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const convs = db.conversations.filter(
-    (c: Conversation) => {
-      if (c.userId !== userId || c.status !== 'active') return false;
-      if (orgId) return c.orgId === orgId;
-      return (!c.orgId || c.orgId === '');
-    }
-  );
-  if (convs.length === 0) return null;
-  const conversation = convs.reduce((a: Conversation, b: Conversation) =>
-    new Date(a.lastActiveAt).getTime() > new Date(b.lastActiveAt).getTime() ? a : b
-  );
-  if (isolateConversationSummaryForUse(conversation)) writeDB(db);
-  return conversation;
 }

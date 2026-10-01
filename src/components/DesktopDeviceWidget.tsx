@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowUpRight, Monitor, Smartphone, Cpu, Radio } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import { useApp } from '@/contexts/AppContext';

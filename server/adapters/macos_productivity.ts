@@ -1,8 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type {
-  CalendarCreateInput,
-  CalendarModifyInput,
   ProductivityAdapter,
 } from './productivity_contract';
 

@@ -1,0 +1,1946 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune22",
+  "baseline": "turn-start worktree, not HEAD",
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1082,
+        "lines": 367837
+      },
+      "tests": {
+        "files": 738,
+        "lines": 158830
+      },
+      "total": {
+        "files": 1820,
+        "lines": 526667
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 368223
+      },
+      "tests": {
+        "files": 739,
+        "lines": 158976
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527199
+      }
+    }
+  },
+  "files": [
+    {
+      "file": "server/db/snapshot_changes.ts",
+      "before": 0,
+      "after": 326,
+      "delta": 326,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "e0d64fee137077e8ba50359ff7071806f9a1e8238cc8312806e73e8ab27ee9f8"
+    },
+    {
+      "file": "db_layer.ts",
+      "before": 2540,
+      "after": 2538,
+      "delta": -2,
+      "beforeSha256": "526d4231bd3cfa3cb5247f721afb8d45046d753e18c4bfd55b3b0fcaca4262c2",
+      "afterSha256": "4069c06af4da3d506bfad14a76cca7d258ba6c1936c871d7dfbf59dfda6c8710"
+    },
+    {
+      "file": "server/autonomy/task_queue.ts",
+      "before": 872,
+      "after": 873,
+      "delta": 1,
+      "beforeSha256": "0d1833a0ae8760d82ff592b55594fbb5cafd0c375bdd77acd0a5b5e7120f4a14",
+      "afterSha256": "c7c44c90566d6ffac93be3dbf4b633682896267fe061d85cdbdc121725b2a1cc"
+    },
+    {
+      "file": "server/evidence/voice_text_continuation_truth.ts",
+      "before": 913,
+      "after": 914,
+      "delta": 1,
+      "beforeSha256": "f95d36bcad7ac4ff516ce511a12cdcbd44fae832fc3d7011ac701a9e5e8b0796",
+      "afterSha256": "a317917715991f18b774cb52193fdf930fbabcee658878cbc5963811cccc6907"
+    },
+    {
+      "file": "server/evidence/stale_receipt_reclassification.ts",
+      "before": 665,
+      "after": 666,
+      "delta": 1,
+      "beforeSha256": "80f90e267ab36eb62417b1d87ae03428434298cd67da29b7096c40897eb0990c",
+      "afterSha256": "f14e430be459f74e9ff5dfba1dcdb83a9669e2c97b48aba117118d3263c795ec"
+    },
+    {
+      "file": "server/evidence/task_truth_snapshot.ts",
+      "before": 764,
+      "after": 765,
+      "delta": 1,
+      "beforeSha256": "94cedeb1632ba5107b869d145868af610f1e4a3fa59075730dae4c2577457f79",
+      "afterSha256": "8fe12fba15e27c50f4fbacd8e3c4c22cd387efd3f6bfa997f92c0948a9b13ee6"
+    },
+    {
+      "file": "server/evidence/control_sequence_truth_snapshot.ts",
+      "before": 737,
+      "after": 738,
+      "delta": 1,
+      "beforeSha256": "904b31bcd0a8c572d63da8b43640868cba57fc97e03852d6649cfc2c258c5ae4",
+      "afterSha256": "88510fe91987d4f4379f1bb1050ac7004b6096d2d739bea28cc730fb9d87bac0"
+    },
+    {
+      "file": "server/extensions/registry.ts",
+      "before": 2043,
+      "after": 2044,
+      "delta": 1,
+      "beforeSha256": "face2f33264fba3031f3ddbca06fe0006c5a8ccdbb1b38a3d378035cfcf32864",
+      "afterSha256": "8c5ba083045a48a53d6bc4282f3f112c5d5e953a55aac14e31a29d7455a788a7"
+    },
+    {
+      "file": "server/external_capabilities/registry.ts",
+      "before": 1758,
+      "after": 1759,
+      "delta": 1,
+      "beforeSha256": "0de44b6519e0b2c91abf32158294382968ea286e4c3eab20bf2ff15fe8633fe7",
+      "afterSha256": "63385a6245971386d63235d5758f6ead9528680a8b29015ce649b66744febb0e"
+    },
+    {
+      "file": "test/conversation_action_turn_manager.test.ts",
+      "before": 1124,
+      "after": 1125,
+      "delta": 1,
+      "beforeSha256": "11c6ff923af06bfd1446ddfe156f59c79575b849c1cd0925d5025f583da4d5a9",
+      "afterSha256": "6074787b6ee11b521caa9316f25a737c092a5b362e412600f337a77643ed7d5e"
+    },
+    {
+      "file": "test/conversation_receipt_archive.test.ts",
+      "before": 186,
+      "after": 187,
+      "delta": 1,
+      "beforeSha256": "172a80f43e807a368b223393e27711dade5bb87131adab0cbb53d67dfebe6a47",
+      "afterSha256": "9a25a1a64fc3eb8f3d0f9400aa71c0505b1c2e597e6a86fec2c47f357b781418"
+    },
+    {
+      "file": "test/external_capability_registry.test.ts",
+      "before": 949,
+      "after": 950,
+      "delta": 1,
+      "beforeSha256": "4537fc309918c8df6fe99c6be4afac91412654ef94b576b3443c607d0b05817c",
+      "afterSha256": "994f58dad9d14c3e0094681872c93aa305c7f2fe22160ef844ead58969b962a2"
+    },
+    {
+      "file": "test/task_truth_snapshot_provider_integration.test.ts",
+      "before": 327,
+      "after": 328,
+      "delta": 1,
+      "beforeSha256": "52af183398b1427bf2e8e5ac9922bc4e5d9c2259f059398ed4b3b8e53e3a3bfb",
+      "afterSha256": "7af6b69940cd997bd6b102dcf0190600737c498fda28a51cc6ecf54cadcf06fd"
+    },
+    {
+      "file": "server/db/migrations.ts",
+      "before": 277,
+      "after": 283,
+      "delta": 6,
+      "beforeSha256": "1ecaa310d2b5cb35548ddb2685081f2b6df5aa81df18917a9ae95b52a1e9f23c",
+      "afterSha256": "f8d361ebe4c4145e8787e8a83b036933dd4be8e82b9e3027f842e96b6d9cb06e"
+    },
+    {
+      "file": "server/files/generated_archive.ts",
+      "before": 221,
+      "after": 264,
+      "delta": 43,
+      "beforeSha256": "c5ebd4408cf4eb6bc8ed0b4adf8245b98038ab41c0faac6143c9a6897c1118de",
+      "afterSha256": "a94bd07dde1df5495ddb2a78971bf18cfa6e0d38b57e05812616d36498b28492"
+    },
+    {
+      "file": "test/database_mutation_tracking.test.ts",
+      "before": 0,
+      "after": 119,
+      "delta": 119,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "715449919339ade0a681db5bf2065975c045e0ec8b93b3c0d108afd3e1868be2"
+    },
+    {
+      "file": "test/generated_library.test.ts",
+      "before": 290,
+      "after": 312,
+      "delta": 22,
+      "beforeSha256": "e6ecce7fe36f98d8c49512a80b71c54acb4eeec1a7d8a344c710b03bb369a2f6",
+      "afterSha256": "fcc2c104cf0b992e5e454ddd5dc9e261513fa0c948a552e66c06f6a34aebde6c"
+    },
+    {
+      "file": "server/memory_avatar/store.ts",
+      "before": 324,
+      "after": 325,
+      "delta": 1,
+      "beforeSha256": "97dfc43abe629fddca0a789e1c9d7afa84f1e6405d6fb4a7468136958b417670",
+      "afterSha256": "ffae4c65fe0f67799bcbfc1306d2fb7b5e10f57442f36fde73d838e1387cd7a5"
+    },
+    {
+      "file": "server/routes/durable_mutation.ts",
+      "before": 41,
+      "after": 42,
+      "delta": 1,
+      "beforeSha256": "223142bbf98a48b1b5166e42ffdc8a2e8972aba8964e57e30511ea1c78481472",
+      "afterSha256": "da668658d7621e05ecc266509c07e2c122749fe070cbfd37fce9d915b4e930ae"
+    },
+    {
+      "file": "server/tools/registry.ts",
+      "before": 1668,
+      "after": 1669,
+      "delta": 1,
+      "beforeSha256": "bdbb81ccc056e9ebafa8d4da7f3a736e5e2d83108f0a3a53775cfd48213275a7",
+      "afterSha256": "97c35fc1cfacd4e09302804c7fdeab19af76c4070494a3a91998a122b81e91a1"
+    },
+    {
+      "file": "server/socket/desktop_relay.ts",
+      "before": 753,
+      "after": 754,
+      "delta": 1,
+      "beforeSha256": "478d53ac47f75a8bb92a69230f2d661b33bcfe5ec070f267c93c9aae189d5315",
+      "afterSha256": "325e19843e26606dc132dbf4284923f3da29217d012ba70c8b8c8b75a6f2ce33"
+    },
+    {
+      "file": "server/skills/worklog.ts",
+      "before": 329,
+      "after": 330,
+      "delta": 1,
+      "beforeSha256": "a0dd57dc7375f630bd63d9f71d8940082ef970f7efff76463633584b80aebcba",
+      "afterSha256": "a3ba79f7424ec31e050711e6457c4a8d8bf9d3b69d4edcdf4fc653594fddafde"
+    },
+    {
+      "file": "server/tools/definitions/workflow_tools.ts",
+      "before": 1657,
+      "after": 1658,
+      "delta": 1,
+      "beforeSha256": "26cd10f1b9bb638b55728fdd75acb2adb02bea188cfa9f4e2cee80c60c37016c",
+      "afterSha256": "1f51c520e93d304021be37c875f20a8c2625aecb33f774e0b0b7fb728c011bc7"
+    },
+    {
+      "file": "test/conversation_new_session.test.ts",
+      "before": 220,
+      "after": 221,
+      "delta": 1,
+      "beforeSha256": "fc2bfbabb346b078e7140cc0bb04a8ed2da48a07ba984ae389cc3be0e1391de7",
+      "afterSha256": "f4321c75f91ed57585613b862a38bbff321ef6c46844ff3729f3ba575e48db6b"
+    }
+  ],
+  "tests": {
+    "files": 730,
+    "passed": 6554,
+    "failed": 0,
+    "skipped": 0,
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "server/db/snapshot_changes.ts": "e0d64fee137077e8ba50359ff7071806f9a1e8238cc8312806e73e8ab27ee9f8",
+        "db_layer.ts": "4069c06af4da3d506bfad14a76cca7d258ba6c1936c871d7dfbf59dfda6c8710",
+        "server/autonomy/task_queue.ts": "c7c44c90566d6ffac93be3dbf4b633682896267fe061d85cdbdc121725b2a1cc",
+        "server/evidence/voice_text_continuation_truth.ts": "a317917715991f18b774cb52193fdf930fbabcee658878cbc5963811cccc6907",
+        "server/evidence/stale_receipt_reclassification.ts": "f14e430be459f74e9ff5dfba1dcdb83a9669e2c97b48aba117118d3263c795ec",
+        "server/evidence/task_truth_snapshot.ts": "8fe12fba15e27c50f4fbacd8e3c4c22cd387efd3f6bfa997f92c0948a9b13ee6",
+        "server/evidence/control_sequence_truth_snapshot.ts": "88510fe91987d4f4379f1bb1050ac7004b6096d2d739bea28cc730fb9d87bac0",
+        "server/extensions/registry.ts": "8c5ba083045a48a53d6bc4282f3f112c5d5e953a55aac14e31a29d7455a788a7",
+        "server/external_capabilities/registry.ts": "63385a6245971386d63235d5758f6ead9528680a8b29015ce649b66744febb0e",
+        "test/conversation_action_turn_manager.test.ts": "6074787b6ee11b521caa9316f25a737c092a5b362e412600f337a77643ed7d5e",
+        "test/conversation_receipt_archive.test.ts": "9a25a1a64fc3eb8f3d0f9400aa71c0505b1c2e597e6a86fec2c47f357b781418",
+        "test/external_capability_registry.test.ts": "994f58dad9d14c3e0094681872c93aa305c7f2fe22160ef844ead58969b962a2",
+        "test/task_truth_snapshot_provider_integration.test.ts": "7af6b69940cd997bd6b102dcf0190600737c498fda28a51cc6ecf54cadcf06fd",
+        "server/db/migrations.ts": "f8d361ebe4c4145e8787e8a83b036933dd4be8e82b9e3027f842e96b6d9cb06e",
+        "server/files/generated_archive.ts": "a94bd07dde1df5495ddb2a78971bf18cfa6e0d38b57e05812616d36498b28492",
+        "test/database_mutation_tracking.test.ts": "715449919339ade0a681db5bf2065975c045e0ec8b93b3c0d108afd3e1868be2",
+        "test/generated_library.test.ts": "fcc2c104cf0b992e5e454ddd5dc9e261513fa0c948a552e66c06f6a34aebde6c",
+        "server/memory_avatar/store.ts": "ffae4c65fe0f67799bcbfc1306d2fb7b5e10f57442f36fde73d838e1387cd7a5",
+        "server/routes/durable_mutation.ts": "da668658d7621e05ecc266509c07e2c122749fe070cbfd37fce9d915b4e930ae",
+        "server/tools/registry.ts": "97c35fc1cfacd4e09302804c7fdeab19af76c4070494a3a91998a122b81e91a1",
+        "server/socket/desktop_relay.ts": "325e19843e26606dc132dbf4284923f3da29217d012ba70c8b8c8b75a6f2ce33",
+        "server/skills/worklog.ts": "a3ba79f7424ec31e050711e6457c4a8d8bf9d3b69d4edcdf4fc653594fddafde",
+        "server/tools/definitions/workflow_tools.ts": "1f51c520e93d304021be37c875f20a8c2625aecb33f774e0b0b7fb728c011bc7",
+        "test/conversation_new_session.test.ts": "f4321c75f91ed57585613b862a38bbff321ef6c46844ff3729f3ba575e48db6b"
+      },
+      "startedAt": "2026-10-01T07:43:26.663Z",
+      "finishedAt": "2026-10-01T07:50:13.524Z",
+      "status": 0,
+      "signal": null
+    },
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes compares no unchanged rows, one edited nested row, and one edited setting",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes tracks removal, primary-key changes, and replacement by an equivalent object",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes retains dirty rows on rollback and captures another mutation during the SQL await",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes detects retained raw arrays and nested raw aliases without rechecking unrelated loaded rows",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes tracks descriptor edits and virtual system rows without scanning settings",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes keeps filtered arrays tracked and isolates stale database roots",
+        1
+      ],
+      [
+        "D:/lumiOS/test/database_mutation_tracking.test.ts::tracked database writes clones database views and preserves undefined, cycles, maps and sparse arrays",
+        1
+      ],
+      [
+        "D:/lumiOS/test/generated_library.test.ts::Generated libraries across conversations invalidates full lists after SQL changes and rollback, and never caches file existence or caller edits",
+        1
+      ]
+    ]
+  },
+  "firstRunFailures": [
+    {
+      "file": "D:/lumiOS/test/conversation_new_session.test.ts",
+      "name": "explicit new conversation runs and exactly cleans an isolated E2E conversation without changing personal active data or settings",
+      "reason": [
+        "DataCloneError: [object Array] could not be cloned.\n    at new DOMException (node:internal/per_context/domexception:76:18)\n    at structuredClone (node:internal/worker/js_transferable:126:26)\n    at D:/lumiOS/test/conversation_new_session.test.ts:115:28\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)"
+      ]
+    },
+    {
+      "file": "D:/lumiOS/test/variant_manager.test.ts",
+      "name": "Lumi variant release train rolls back an interrupted all-variant preparation and preserves a durable partial-push recovery state",
+      "reason": [
+        "Error: STACK_TRACE_ERROR\n    at task (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/lumiOS/test/variant_manager.test.ts:609:3\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+      ]
+    }
+  ],
+  "lazyRunTimeout": [
+    {
+      "file": "D:/lumiOS/test/database_mutation_tracking.test.ts",
+      "name": "tracked database writes keeps filtered arrays tracked and isolates stale database roots",
+      "durationMs": 16550.261300000002,
+      "reason": [
+        "Error: STACK_TRACE_ERROR\n    at task (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/lumiOS/test/database_mutation_tracking.test.ts:92:3\n    at file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/lumiOS/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+      ]
+    }
+  ],
+  "firstRunResolution": "A test cloning a database view now uses the same proxy-aware clone boundary as production; existing assertions retained. The variant transaction fixture exceeded its time limit under the first full run; its original timeout and assertions were retained. Focused and final full suites rerun. A later full run hit the unchanged 15-second limit in the new retained-array/root test under parallel load. Final full verification limits test worker count to 4, without changing any test timeout, assertion or inventory.",
+  "memory": {
+    "before": {
+      "label": "before",
+      "conversations": 30000,
+      "settings": 30000,
+      "heapUsedMiB": 51.81751251220703,
+      "rssMiB": 212.59765625,
+      "afterReadHeapMiB": 51.8135986328125
+    },
+    "after": {
+      "label": "after",
+      "conversations": 30000,
+      "settings": 30000,
+      "heapUsedMiB": 77.65135955810547,
+      "rssMiB": 279.046875,
+      "afterReadHeapMiB": 83.80946350097656
+    },
+    "eagerPrototypeHeapMiB": 169.54501342773438
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T07:37:04.788Z",
+      "end": "2026-10-01T07:37:40.702Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T07:37:40.704Z",
+      "end": "2026-10-01T07:37:50.351Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T07:37:50.351Z",
+      "end": "2026-10-01T07:38:00.204Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T07:38:00.204Z",
+      "end": "2026-10-01T07:38:00.647Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T07:38:00.648Z",
+      "end": "2026-10-01T07:38:05.299Z",
+      "exitCode": 0
+    }
+  ],
+  "core": [
+    {
+      "size": 1000,
+      "mode": "unchanged",
+      "before": {
+        "medianMs": 2.94,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 3.3059000000002925,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 2.580399999999827,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 2.5536000000001877,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 3.6608000000001084,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 2.5639000000001033,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 3.8333999999999833,
+            "changedRows": 0,
+            "tables": []
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 0.13,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 0.1275999999998021,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 0.17239999999992506,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 0.09369999999989886,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 0.2925000000000182,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 0.1202000000002954,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 0.12750000000005457,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 1000,
+      "mode": "setting",
+      "before": {
+        "medianMs": 11.49,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 10.857500000000073,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 11.13630000000012,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 10.178899999999885,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 12.976000000000113,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 13.134300000000167,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 11.841600000000199,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 8.52,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 8.63879999999972,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 7.308700000000044,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 7.663700000000063,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 10.832699999999932,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 9.10109999999986,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 8.406499999999596,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 1000,
+      "mode": "conversation",
+      "before": {
+        "medianMs": 12.05,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 11.665200000000368,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 10.275000000000091,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 11.235200000000077,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 12.434899999999743,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 13.444700000000012,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 16.24940000000015,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 8.35,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 8.058500000000095,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 7.421800000000076,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 8.88209999999981,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 7.456300000000283,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 9.1257999999998,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 8.636399999999867,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 10000,
+      "mode": "unchanged",
+      "before": {
+        "medianMs": 20.26,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 20.00220000000013,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 20.511299999999892,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 19.12519999999995,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 18.002500000000055,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 20.545100000000275,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 24.26700000000028,
+            "changedRows": 0,
+            "tables": []
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 0.16,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 0.34580000000005384,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 0.302599999999984,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 0.15010000000006585,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 0.14109999999982392,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 0.15579999999999927,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 0.15989999999987958,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 10000,
+      "mode": "setting",
+      "before": {
+        "medianMs": 31.14,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 27.85940000000005,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 32.87689999999998,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 28.763799999999947,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 30.46219999999994,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 34.808899999999994,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 31.815900000000056,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 8.1,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 10.086499999999887,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 7.7047000000000025,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 9.975300000000061,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 7.9728999999999814,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 7.578600000000051,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 8.224900000000162,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 10000,
+      "mode": "conversation",
+      "before": {
+        "medianMs": 30.75,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 30.364299999999957,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 29.351400000000012,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 26.97460000000001,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 31.12799999999993,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 37.145400000000336,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 32.0002999999997,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 7.93,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 8.196699999999964,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 7.65930000000003,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 9.468599999999924,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 7.487300000000005,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 7.5892999999998665,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 10.42410000000018,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 30000,
+      "mode": "unchanged",
+      "before": {
+        "medianMs": 60.26,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 55.51389999999992,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 63.052999999999884,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 63.337900000000445,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 83.97749999999996,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 56.75889999999981,
+            "changedRows": 0,
+            "tables": []
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 57.457900000000336,
+            "changedRows": 0,
+            "tables": []
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 0.2,
+        "changedRows": [
+          0
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "unchanged",
+            "elapsedMs": 0.18869999999969878,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "unchanged",
+            "elapsedMs": 0.16859999999996944,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "unchanged",
+            "elapsedMs": 0.18830000000070868,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "unchanged",
+            "elapsedMs": 0.21479999999974098,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "unchanged",
+            "elapsedMs": 0.30199999999967986,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "unchanged",
+            "elapsedMs": 0.2753999999995358,
+            "changedRows": 0,
+            "tables": [],
+            "comparedRows": 0,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 30000,
+      "mode": "setting",
+      "before": {
+        "medianMs": 79.73,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 88.59250000000065,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 71.9386000000004,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 76.20759999999973,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 83.24340000000029,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 67.94899999999961,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 101.45820000000003,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 8.85,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "setting",
+            "elapsedMs": 9.47740000000067,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "setting",
+            "elapsedMs": 8.468800000000556,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "setting",
+            "elapsedMs": 8.836199999999735,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "setting",
+            "elapsedMs": 8.866500000000087,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "setting",
+            "elapsedMs": 8.869799999999486,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "setting",
+            "elapsedMs": 8.560100000000602,
+            "changedRows": 2,
+            "tables": [
+              "settings"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    },
+    {
+      "size": 30000,
+      "mode": "conversation",
+      "before": {
+        "medianMs": 72.55,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 73.66780000000017,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 71.4395999999997,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 82.8180999999995,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 81.54050000000007,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 67.35079999999925,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 69.38779999999952,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ]
+          }
+        ]
+      },
+      "after": {
+        "medianMs": 9.84,
+        "changedRows": [
+          2
+        ],
+        "samples": [
+          {
+            "round": 2,
+            "mode": "conversation",
+            "elapsedMs": 10.206600000000435,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 3,
+            "mode": "conversation",
+            "elapsedMs": 10.104199999999764,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 4,
+            "mode": "conversation",
+            "elapsedMs": 8.412100000000464,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 5,
+            "mode": "conversation",
+            "elapsedMs": 9.951999999999316,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 6,
+            "mode": "conversation",
+            "elapsedMs": 8.875500000000102,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          },
+          {
+            "round": 7,
+            "mode": "conversation",
+            "elapsedMs": 9.721300000000156,
+            "changedRows": 2,
+            "tables": [
+              "conversations"
+            ],
+            "comparedRows": 1,
+            "scannedRows": 0
+          }
+        ]
+      }
+    }
+  ],
+  "coreDurability": [
+    {
+      "size": 1000,
+      "before": {
+        "conversations": {
+          "rows": 1000,
+          "sha256": "d28484bff6c5f781375c35a1d3efa42579e0aa2281b1452c007d1b9084e8e8af"
+        },
+        "settings": {
+          "rows": 1000,
+          "sha256": "faaac79a4800962131889bbec2e1a30289bcf15c6455d50507bda5e1bbde92a1"
+        }
+      },
+      "after": {
+        "conversations": {
+          "rows": 1000,
+          "sha256": "d28484bff6c5f781375c35a1d3efa42579e0aa2281b1452c007d1b9084e8e8af"
+        },
+        "settings": {
+          "rows": 1000,
+          "sha256": "faaac79a4800962131889bbec2e1a30289bcf15c6455d50507bda5e1bbde92a1"
+        }
+      }
+    },
+    {
+      "size": 10000,
+      "before": {
+        "conversations": {
+          "rows": 10000,
+          "sha256": "94f4eec1c7452ee6a3da387f0b1868694ac24a44ff99d51fc91ce30b281fc00b"
+        },
+        "settings": {
+          "rows": 10000,
+          "sha256": "316f4df91025a173c2b33cb46e9eeff18e49977f8c76137843cfc3a4ba787ce1"
+        }
+      },
+      "after": {
+        "conversations": {
+          "rows": 10000,
+          "sha256": "94f4eec1c7452ee6a3da387f0b1868694ac24a44ff99d51fc91ce30b281fc00b"
+        },
+        "settings": {
+          "rows": 10000,
+          "sha256": "316f4df91025a173c2b33cb46e9eeff18e49977f8c76137843cfc3a4ba787ce1"
+        }
+      }
+    },
+    {
+      "size": 30000,
+      "before": {
+        "conversations": {
+          "rows": 30000,
+          "sha256": "4de82b11d77203fe44961850843959faa938e595f92464030c1e3ecd882d10c9"
+        },
+        "settings": {
+          "rows": 30000,
+          "sha256": "350da564d4ac7f690005c8d62a3634d579d907e22664175764d773e4086d410f"
+        }
+      },
+      "after": {
+        "conversations": {
+          "rows": 30000,
+          "sha256": "4de82b11d77203fe44961850843959faa938e595f92464030c1e3ecd882d10c9"
+        },
+        "settings": {
+          "rows": 30000,
+          "sha256": "350da564d4ac7f690005c8d62a3634d579d907e22664175764d773e4086d410f"
+        }
+      }
+    }
+  ],
+  "archive": [
+    {
+      "label": "original",
+      "size": 30000,
+      "firstReadMs": 82.35239999999999,
+      "lookup": {
+        "medianMs": 53.2132499999999,
+        "samples": [
+          54.8768,
+          70.34960000000001,
+          63.30399999999986,
+          49.81179999999995,
+          52.34919999999988,
+          50.347099999999955,
+          52.87479999999982,
+          55.67510000000016,
+          50.04279999999994,
+          51.71289999999999,
+          50.400899999999865,
+          49.703899999999976,
+          50.60200000000009,
+          51.01000000000022,
+          56.769799999999805,
+          61.718399999999974,
+          54.618999999999915,
+          59.04309999999987,
+          57.24260000000004,
+          53.55169999999998
+        ]
+      },
+      "list": {
+        "medianMs": 66.2203000000004,
+        "samples": [
+          72.51099999999997,
+          69.40319999999974,
+          64.8099000000002,
+          61.98429999999962,
+          64.39570000000003,
+          67.63070000000062
+        ]
+      },
+      "denseList": {
+        "medianMs": 65.2252999999996,
+        "samples": [
+          65.16389999999956,
+          61.60320000000047,
+          65.28669999999966,
+          67.84940000000006,
+          65.4905000000008,
+          62.42270000000008
+        ],
+        "maxGapMedianMs": 53.38585000000012,
+        "gaps": [
+          55.90910000000076,
+          49.95889999999963,
+          52.48419999999987,
+          57.466699999999946,
+          54.287500000000364,
+          50.86200000000008
+        ]
+      },
+      "rename": {
+        "medianMs": 129.29445000000032,
+        "samples": [
+          119.75640000000021,
+          120.02400000000034,
+          127.17640000000029,
+          138.5003999999999,
+          131.41250000000036,
+          132.78150000000005
+        ]
+      },
+      "coldList": {
+        "medianMs": 65.45284999999967,
+        "samples": [
+          61.53030000000035,
+          74.80569999999898,
+          68.69919999999911,
+          62.20650000000023
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 179.88365000000067,
+        "samples": [
+          185.8006000000005,
+          189.6172000000006,
+          173.96670000000086,
+          167.8806999999997
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    },
+    {
+      "label": "before",
+      "size": 30000,
+      "firstReadMs": 842.8247,
+      "lookup": {
+        "medianMs": 1.1570499999999129,
+        "samples": [
+          0.8774000000000797,
+          1.2386000000001332,
+          1.0541000000000622,
+          1.1894999999999527,
+          1.2409000000000106,
+          1.2620999999999185,
+          1.160799999999881,
+          1.5084999999999127,
+          0.8798999999999069,
+          0.9011000000000422,
+          1.503500000000031,
+          0.9740999999999076,
+          1.096900000000005,
+          1.183999999999969,
+          0.8177000000000589,
+          1.1462000000001353,
+          1.346900000000005,
+          1.1532999999999447,
+          1.6308000000001357,
+          0.8461999999999534
+        ]
+      },
+      "list": {
+        "medianMs": 111.53115000000003,
+        "samples": [
+          117.14969999999994,
+          118.98779999999988,
+          109.03919999999971,
+          113.36900000000014,
+          109.69329999999991,
+          108.14139999999952
+        ]
+      },
+      "denseList": {
+        "medianMs": 118.58919999999989,
+        "samples": [
+          118.86229999999978,
+          122.60559999999987,
+          118.3161,
+          113.11880000000019,
+          121.55779999999959,
+          116.79439999999977
+        ],
+        "maxGapMedianMs": 20.521600000000035,
+        "gaps": [
+          22.368599999999788,
+          18.96010000000024,
+          24.64519999999993,
+          17.879500000000007,
+          22.08309999999983,
+          18.12840000000051
+        ]
+      },
+      "rename": {
+        "medianMs": 8.806649999999536,
+        "samples": [
+          8.910799999999654,
+          8.529099999999744,
+          8.962099999999737,
+          9.382500000000618,
+          8.702499999999418,
+          8.45089999999982
+        ]
+      },
+      "coldList": {
+        "medianMs": 111.43485000000055,
+        "samples": [
+          115.28589999999986,
+          114.27900000000045,
+          107.66949999999997,
+          108.59070000000065
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 119.15089999999964,
+        "samples": [
+          113.69300000000112,
+          116.59139999999934,
+          121.71039999999994,
+          136.22229999999945
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    },
+    {
+      "label": "after",
+      "size": 30000,
+      "firstReadMs": 849.229,
+      "lookup": {
+        "medianMs": 1.2290499999999156,
+        "samples": [
+          1.0316000000000258,
+          1.5565000000001419,
+          0.7801999999999225,
+          1.1880999999998494,
+          1.3081999999999425,
+          1.2630999999998949,
+          1.0257000000001426,
+          0.9339999999999691,
+          1.3395000000000437,
+          1.5440000000000964,
+          1.1358999999999924,
+          1.3363999999999123,
+          1.1949999999999363,
+          1.3458000000000538,
+          1.5474000000001524,
+          0.9571000000000822,
+          1.113399999999956,
+          1.3279999999999745,
+          0.9828999999999724,
+          1.3557000000000698
+        ]
+      },
+      "list": {
+        "medianMs": 13.981449999999995,
+        "samples": [
+          13.61160000000018,
+          13.60550000000012,
+          14.061799999999948,
+          14.148000000000138,
+          13.901100000000042,
+          14.185399999999845
+        ]
+      },
+      "denseList": {
+        "medianMs": 15.820900000000165,
+        "samples": [
+          16.999499999999898,
+          16.341599999999744,
+          13.813400000000001,
+          17.821200000000317,
+          13.649999999999636,
+          15.300200000000586
+        ],
+        "maxGapMedianMs": 10.210200000000441,
+        "gaps": [
+          10.621500000000196,
+          10.700399999999718,
+          9.259000000000015,
+          12.337999999999738,
+          8.489800000000287,
+          9.798900000000685
+        ]
+      },
+      "rename": {
+        "medianMs": 14.889550000000327,
+        "samples": [
+          14.17489999999998,
+          16.781800000000203,
+          15.251500000000306,
+          16.027300000000196,
+          14.527600000000348,
+          14.302200000000084
+        ]
+      },
+      "coldList": {
+        "medianMs": 101.96849999999995,
+        "samples": [
+          104.02130000000034,
+          103.98580000000038,
+          98.92540000000008,
+          99.95119999999952
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 31.888049999999566,
+        "samples": [
+          31.980199999999968,
+          30.330799999999726,
+          31.795899999999165,
+          37.65110000000004
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    }
+  ],
+  "boundaries": {
+    "ordinaryDatabaseFlushScannedRows": 0,
+    "ordinarySingleRowEditComparedRows": 1,
+    "rawExternalAliasesConservativelyCompared": true,
+    "explicitWholeRootReplacementMayRequireFullComparison": true,
+    "startupInitialScanRemains": true,
+    "loadedArrayFilterSliceMapTracked": true,
+    "legacyInvalidKeysUseAtomicTableReplacement": true,
+    "archiveColdReadNotEliminated": true,
+    "archiveColdReadStillSlowerThanOriginalJson": true,
+    "archiveCacheBudgetEstimatedBytes": 67108864,
+    "archiveCacheMaxScopes": 8,
+    "archiveResultsTruncated": false,
+    "archiveLegacyImportStillOneTimeFullJsonParse": true,
+    "realUserDataMigrated": false,
+    "backendRestarted": false,
+    "commit": false,
+    "push": false,
+    "otherProjectUIStatesNotInScope": true
+  }
+}

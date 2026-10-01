@@ -76,4 +76,18 @@ describe.sequential('database shutdown durability', () => {
     expect(await querySQL('SELECT value FROM settings WHERE key = ?', ['shutdown-close-failure']))
       .toEqual([{ value: 'still-live' }]);
   });
+
+  it('retries a failed background flush through the same durable path without losing later writes', async () => {
+    await flushDB();
+    await runSQL('PRAGMA query_only = ON');
+    setting('background-retry-first', 'first');
+    await vi.waitFor(() => expect(getDatabasePersistenceStatus()).toMatchObject({ pending: true, degraded: true }), { timeout: 3000 });
+    expect(await querySQL("SELECT value FROM settings WHERE key='background-retry-first'")).toEqual([]);
+    setting('background-retry-later', 'later');
+    await runSQL('PRAGMA query_only = OFF');
+    await vi.waitFor(() => expect(getDatabasePersistenceStatus()).toMatchObject({ pending: false, degraded: false }), { timeout: 3000 });
+    await closeDatabase(); await initDatabase();
+    expect(await querySQL("SELECT value FROM settings WHERE key LIKE 'background-retry-%' ORDER BY key"))
+      .toEqual([{ value: 'first' }, { value: 'later' }]);
+  });
 });

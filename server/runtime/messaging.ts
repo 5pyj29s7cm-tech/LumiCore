@@ -49,23 +49,25 @@ export function setupMessaging(
     getConnectionStatus: platform => messagingConnectionManager.status(platform),
     sendProactive: (platform, chatId, text) => messagingConnectionManager.sendProactive(platform, chatId, text),
     createScopedDesktopRelay: io
-      ? (userId, source, domain, orgId) => createDesktopRelay({
+      ? (userId, source, domain, orgId, lifecycle) => createDesktopRelay({
           io,
           userId,
           domain,
           orgId,
           source,
           timeoutMs: 90_000,
+          ...lifecycle,
         })
       : undefined,
     createPersonalDesktopRelay: io
-      ? (userId, source) => createDesktopRelay({
+      ? (userId, source, lifecycle) => createDesktopRelay({
           io,
           userId,
           domain: 'personal',
           orgId: '',
           source,
           timeoutMs: 90_000,
+          ...lifecycle,
         })
       : undefined,
     onConversationUpdated: update => {

@@ -247,18 +247,18 @@ describe('Lumi learning interface', () => {
     expect(voiceSource).toContain('persistLumiPostTurnLearning');
     expect(voiceSource).toContain("channel: 'workflow'");
     expect(voiceSource).toContain('voice quick command');
-    expect(voiceSource).toContain('voice cognition direct');
+    expect(voiceSource).not.toContain('voice cognition direct');
     expect(voiceSource).toContain('voice confirmation');
     expect(voiceSource).not.toContain('voice music execution');
     expect(voiceSource).not.toContain('voice music shortcut');
-    expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(8);
+    expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(7);
 
     expect(taskSource).toContain('const persistTaskLearning');
     expect(taskSource).toContain('persistLumiPostTurnLearning');
     expect(taskSource).toContain('task confirmation');
-    expect(taskSource).toContain('task direct cognition');
+    expect(taskSource).not.toContain('task direct cognition');
     expect(taskSource).toContain('task cancelled');
     expect(taskSource).toContain("logLabel: 'task'");
-    expect(taskSource.match(/persistTaskLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(4);
+    expect(taskSource.match(/persistTaskLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(3);
   });
 });

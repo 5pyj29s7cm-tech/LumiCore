@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { DEFAULT_MEMORY_AVATAR_APPEARANCE, LUMI_COMPANION_APPEARANCE, type MemoryAvatar, type MemoryAvatarMaterial } from '../shared/memory_avatar';
+import { DEFAULT_MEMORY_AVATAR_APPEARANCE, LUMI_OTOME_APPEARANCE, type MemoryAvatar, type MemoryAvatarMaterial } from '../shared/memory_avatar';
 const mocks = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn(), get: vi.fn(), materials: vi.fn(), addMaterial: vi.fn(), removeMaterial: vi.fn(), archive: vi.fn(), voices: vi.fn(), api: vi.fn() }));
 vi.mock('../src/services/apiClient', () => ({ apiFetch: mocks.api }));
 vi.mock('../src/services/memoryAvatarService', async original => ({ ...await original<typeof import('../src/services/memoryAvatarService')>(), memoryAvatarService: mocks }));
@@ -158,11 +158,11 @@ it('edits and persists public briefing separately from the private biography', a
 it('previews and saves the local Lumi companion then can return to a human preset', async () => {
   const preview = vi.fn(); profile({ onPreviewAppearance: preview }); await loaded();
   fireEvent.click(screen.getByRole('tab', { name: 'Appearance & voice' }));
-  fireEvent.click(screen.getByRole('button', { name: /Lumi · Original companion/ }));
-  expect(preview).toHaveBeenLastCalledWith(LUMI_COMPANION_APPEARANCE);
-  expect(screen.getByLabelText('Shell')).toBeTruthy(); expect(screen.getByLabelText('Visor')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Lumi ·/ }));
+  expect(preview).toHaveBeenLastCalledWith(LUMI_OTOME_APPEARANCE);
+  expect(screen.queryByRole('button', { name: /Original companion/ })).toBeNull();
   fireEvent.click(button('Save details')); await screen.findByRole('status');
-  expect(mocks.update.mock.calls[0][1].appearance).toEqual(LUMI_COMPANION_APPEARANCE);
+  expect(mocks.update.mock.calls[0][1].appearance).toEqual(LUMI_OTOME_APPEARANCE);
   await waitFor(() => expect(button('Save details').disabled).toBe(false));
   fireEvent.click(button('Soft')); expect(preview).toHaveBeenLastCalledWith({ ...DEFAULT_MEMORY_AVATAR_APPEARANCE, preset: 'feminine' });
 });

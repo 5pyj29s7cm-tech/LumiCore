@@ -21,6 +21,7 @@ import {
   type WorkTakeoverTask,
 } from '../../../../work_takeover/tasks';
 import {
+  canonicalJson,
   getIndustryWorkflowTask,
   settleIndustryWorkflowConversationTask,
   type IndustryWorkflowScope,
@@ -106,21 +107,6 @@ type ArtifactProof = { path: string; basename: string; size: number; sha256: str
 type DeliveryAttemptStatus = 'artifact_created' | 'readback_verified' | 'verified' | 'blocked';
 
 const inFlightByTask = new Map<string, InFlightDelivery>();
-
-function canonicalJson(value: unknown): string {
-  const normalize = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (!candidate || typeof candidate !== 'object') return candidate;
-    return Object.keys(candidate as Record<string, unknown>)
-      .sort()
-      .reduce<Record<string, unknown>>((result, key) => {
-        const child = (candidate as Record<string, unknown>)[key];
-        if (child !== undefined) result[key] = normalize(child);
-        return result;
-      }, {});
-  };
-  return JSON.stringify(normalize(value));
-}
 
 function sha256(value: string | Buffer): string {
   return crypto.createHash('sha256').update(value).digest('hex');

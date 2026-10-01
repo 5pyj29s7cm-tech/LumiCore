@@ -28,8 +28,6 @@ import {
   sanitizeDiagnosticValue,
 } from '../client/diagnostic_sanitizer';
 
-type TaskScope = { domain: 'personal' | 'work'; orgId: string };
-
 function boundedText(value: unknown, limit = 700): string | undefined {
   const text = redactDiagnosticSecrets(value)
     .replace(/\s+/g, ' ')

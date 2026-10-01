@@ -1,4 +1,3 @@
-import React from 'react';
 import type { ChatUploadFailure } from '../lib/chatAttachmentUploads';
 import { chatAttachmentCopy } from '../i18n/locales/chatAttachments';
 

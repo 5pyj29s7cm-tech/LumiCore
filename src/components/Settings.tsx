@@ -9,7 +9,6 @@ import {
   BrainCircuit,
   ChevronDown,
   Music,
-  Headphones,
   MessagesSquare,
   Sparkle,
   Zap,
@@ -29,7 +28,7 @@ import {
   Wrench,
   FileText,
   Search,
-  Trash2
+  Trash2,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
@@ -37,7 +36,7 @@ import { toast } from 'sonner';
 import { usePlatform } from '@/hooks/usePlatform';
 import { BiometricsEnrollPanel } from './biometrics/BiometricsEnrollPanel';
 import { PrivacyModeSettings } from './PrivacyModeSettings';
-import { useApp, type AppearanceMode, type OperationMode } from '@/contexts/AppContext';
+import { useApp, type AppearanceMode } from '@/contexts/AppContext';
 import { VoiceProviderSwitch } from './VoiceProviderSwitch';
 import { VoiceDeviceSelector } from './VoiceDeviceSelector';
 import { MCPSettings } from './MCPSettings';
@@ -282,8 +281,6 @@ export function Settings({
         ? 'tools'
         : activeSection;
   const externalConnectionsTab = activeSection === 'applications' ? 'applications' : 'data-sources';
-  const isZh = lang !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
 
   useEffect(() => {
     let cancelled = false;
@@ -545,8 +542,6 @@ export function Settings({
 }
 
 function HardwareSettings({ t }: { t: any }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [micStatus, setMicStatus] = useState<SensorPermissionState>('unknown');
   const [camStatus, setCamStatus] = useState<SensorPermissionState>('unknown');
   const [micEnabled, setMicEnabled] = useState(() => isSensorEnabled('microphone'));
@@ -762,8 +757,6 @@ function HardwareCapCard({ icon, label, desc, status, enabled, onToggle, disable
   disabled: boolean,
   t: any
 }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const isUnavailable = status === 'unavailable';
   const isLinked = enabled && status === 'granted';
   const isBlocked = status === 'denied';
@@ -1007,8 +1000,6 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
   placeholder: string; disabled?: boolean; serverKey: string; t?: any;
 }) {
   const { aiConfig, updateAIConfig } = useApp();
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   // Provider secrets are write-only server credentials.  Do not hydrate them
   // from (or write them to) browser storage; an upgraded installation is
   // cleaned up as soon as this row mounts.
@@ -1162,527 +1153,7 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
   );
 }
 
-function VisionProviderRow({ icon, label, providerId, models, placeholder, disabled = false, serverKey, t }: {
-  icon: React.ReactNode; label: string; providerId: string; models: string[];
-  placeholder: string; disabled?: boolean; serverKey: string; t?: any;
-}) {
-  const { visionConfig, updateVisionConfig } = useApp();
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
-  // Vision provider secrets are kept exclusively by the backend.
-  const [keyValue, setKeyValue] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [serverConfigured, setServerConfigured] = useState(false);
-  const [showKey, setShowKey] = useState(false);
-  const [keyDirty, setKeyDirty] = useState(false);
-  const [testState, setTestState] = useState<ProviderTestState>('idle');
-  const [testMessage, setTestMessage] = useState('');
-  const savedModels = (() => {
-    try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-  })();
-  const [model, setModel] = useState(() => savedModels[providerId] || models[0]);
-
-  useEffect(() => {
-    try { localStorage.removeItem(`lumi_vision_${providerId}_key`); } catch {}
-    getSavedKeyStatus()
-      .then(data => setServerConfigured(!!data[serverKey]))
-      .catch(() => {});
-  }, [serverKey]);
-
-  const handleSaveKey = () => {
-    if (!keyValue.trim()) return;
-    saveServerKeys({ [serverKey]: keyValue.trim() }).then(() => {
-      try { localStorage.removeItem(`lumi_vision_${providerId}_key`); } catch {}
-      setServerConfigured(true);
-      setKeyDirty(false);
-      setKeyValue('');
-      setTestState('idle');
-      setTestMessage('');
-      if (visionConfig.provider === providerId) {
-        void updateVisionConfig({ model });
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key.58568a4911')));
-  };
-
-  const handleRemoveKey = () => {
-    saveServerKeys({ [serverKey]: '' }).then(() => {
-      localStorage.removeItem(`lumi_vision_${providerId}_key`);
-      setServerConfigured(false);
-      setKeyValue('');
-      setKeyDirty(false);
-      setTestState('idle');
-      setTestMessage('');
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
-  };
-
-  const handleModelChange = async (m: string) => {
-    const previousModel = model;
-    setModel(m);
-    setTestState('idle');
-    setTestMessage('');
-    const saved = await updateVisionConfig(visionConfig.provider === providerId ? { model: m } : {}, { [providerId]: m });
-    if (saved === false) setModel(previousModel);
-  };
-
-  const handleTest = async () => {
-    if (!serverConfigured || keyDirty || !model.trim()) return;
-    setTestState('testing');
-    setTestMessage('');
-    try {
-      const result = await runVisionConnectionTest(providerId, model.trim());
-      setTestState('ok');
-      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
-    } catch (error: any) {
-      setTestState('error');
-      setTestMessage(error?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
-    }
-  };
-
-  return (
-    <SettingsDisclosure
-      icon={icon}
-      label={label}
-      defaultOpen={visionConfig.provider === providerId}
-      badges={<>
-        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {visionConfig.provider === providerId && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
-      </>}
-    >
-      <div className="space-y-3">
-      <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-        <div className="relative flex-1">
-          <input
-            disabled={disabled}
-            type={showKey ? 'text' : 'password'}
-            value={keyValue}
-            onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
-            onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
-            placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
-            className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-14 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-300/50 disabled:opacity-50"
-          />
-          <div className="absolute right-1.5 top-1.5 flex gap-1">
-            <button type="button" onClick={() => setShowKey(!showKey)}
-              className="h-8 rounded-md border border-white/5 bg-white/5 px-2 text-[11px] font-semibold text-white/60 hover:bg-white/10">
-              {showKey ? (t?.hide || uiMessage('settings.hide.d2e660d104')) : (t?.show || uiMessage('settings.show.520bd3e959'))}
-            </button>
-          </div>
-        </div>
-        <Button
-          onClick={handleSaveKey}
-          disabled={disabled || !keyValue.trim()}
-          className="h-11 rounded-lg bg-cyan-300 px-4 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          {t?.save || uiMessage('settings.save.ec8e6d5819')}
-        </Button>
-        <Button
-          onClick={handleRemoveKey}
-          disabled={disabled || (!keyValue && !serverConfigured)}
-          className="h-11 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
-        >
-          {t?.remove || uiMessage('settings.remove.78190c6054')}
-        </Button>
-        <Button
-          onClick={handleTest}
-          disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
-          className="h-11 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-20"
-        >
-          {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
-        </Button>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)] sm:items-center">
-        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
-        <input
-          type="text"
-          value={model}
-          onChange={e => handleModelChange(e.target.value)}
-          list={`vision-models-${providerId}`}
-          placeholder={models[0]}
-          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-cyan-300/50"
-        />
-        <datalist id={`vision-models-${providerId}`}>
-          {models.map(m => <option key={m} value={m} />)}
-        </datalist>
-      </div>
-      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-      </div>
-    </SettingsDisclosure>
-  );
-}
-
-function VisionLocalProviderRow({ icon, label, providerId, endpoint, storageKey, defaultUrl, defaultModel, suggestions, t }: {
-  icon: React.ReactNode;
-  label: string;
-  providerId: 'ollama' | 'lmstudio';
-  endpoint: string;
-  storageKey: string;
-  defaultUrl: string;
-  defaultModel: string;
-  suggestions: string[];
-  t?: any;
-}) {
-  const { visionConfig, updateVisionConfig } = useApp();
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const [baseUrl, setBaseUrl] = useState(() => {
-    try { return localStorage.getItem(storageKey) || defaultUrl; } catch { return defaultUrl; }
-  });
-  const [detected, setDetected] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-  const [checking, setChecking] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
-  const [testState, setTestState] = useState<ProviderTestState>('idle');
-  const [testMessage, setTestMessage] = useState('');
-  const savedModels = (() => {
-    try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-  })();
-  const [model, setModel] = useState(() => savedModels[providerId] || defaultModel);
-
-  useEffect(() => {
-    fetch(endpoint, { credentials: 'include' })
-      .then(async r => {
-        const cfg = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(cfg.error || 'Failed to load local vision config');
-        return cfg;
-      })
-      .then(cfg => {
-        setBaseUrl(cfg.baseUrl || defaultUrl);
-        setDetected(!!cfg.detected);
-        setModels(cfg.models || []);
-        setError(cfg.lastError || '');
-      })
-      .catch(() => {});
-  }, [defaultUrl, endpoint]);
-
-  const allModelOptions = Array.from(new Set([model, ...models, ...suggestions].filter(Boolean)));
-
-  const persistModel = async (nextModel: string) => {
-    const previousModel = model;
-    setModel(nextModel);
-    setTestState('idle');
-    setTestMessage('');
-    const saved = await updateVisionConfig(visionConfig.provider === providerId ? { model: nextModel } : {}, { [providerId]: nextModel });
-    if (saved === false) setModel(previousModel);
-  };
-
-  const handleDetect = async () => {
-    setChecking(true);
-    setError('');
-    setTestState('idle');
-    setTestMessage('');
-    try {
-      const resp = await fetch(endpoint, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ baseUrl }),
-      });
-      const cfg = await resp.json();
-      if (!resp.ok) throw new Error(cfg.error || 'Detect failed');
-      setDetected(!!cfg.detected);
-      setModels(cfg.models || []);
-      setBaseUrl(cfg.baseUrl || baseUrl);
-      setError(cfg.lastError || '');
-      localStorage.setItem(storageKey, cfg.baseUrl || baseUrl);
-      const firstVisionModel = (cfg.models || []).find((m: string) => /vl|vision|minicpm|internvl|llava|glm.*v/i.test(m)) || model || defaultModel;
-      if (firstVisionModel && firstVisionModel !== model) persistModel(firstVisionModel);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err: any) {
-      setDetected(false);
-      setModels([]);
-      setError(err.message || 'Detect failed');
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const handleUse = () => {
-    updateVisionConfig({ provider: providerId, model });
-  };
-
-  const handleTest = async () => {
-    if (!detected || !model.trim()) return;
-    setTestState('testing');
-    setTestMessage('');
-    try {
-      const result = await runVisionConnectionTest(providerId, model.trim());
-      setTestState('ok');
-      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
-    } catch (caught: any) {
-      setTestState('error');
-      setTestMessage(caught?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
-    }
-  };
-
-  return (
-    <SettingsDisclosure
-      icon={icon}
-      label={label}
-      defaultOpen={visionConfig.provider === providerId}
-      badges={<>
-        {detected && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.connected.4f18b17c87')}</span>}
-        {visionConfig.provider === providerId && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
-      </>}
-    >
-      <div className="space-y-3">
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <input
-          type="text"
-          value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
-          onKeyDown={e => e.key === 'Enter' && handleDetect()}
-          placeholder={defaultUrl}
-          className="h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-emerald-400/50"
-        />
-        <Button
-          onClick={handleDetect}
-          disabled={checking || !baseUrl.trim()}
-          className="h-11 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white transition-all hover:bg-emerald-500 disabled:opacity-30"
-        >
-          {checking ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.detect.333c762fe5')}
-        </Button>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)_auto_auto] sm:items-center">
-        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
-        <input
-          type="text"
-          value={model}
-          onChange={e => persistModel(e.target.value)}
-          list={`vision-local-models-${providerId}`}
-          placeholder={defaultModel}
-          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-emerald-400/50"
-        />
-        <datalist id={`vision-local-models-${providerId}`}>
-          {allModelOptions.map(m => <option key={m} value={m} />)}
-        </datalist>
-        <Button
-          onClick={handleUse}
-          disabled={!model.trim()}
-          className="h-10 rounded-lg bg-cyan-300 px-3 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:opacity-30"
-        >
-          {uiMessage('settings.use.998b2bc522')}
-        </Button>
-        <Button
-          onClick={handleTest}
-          disabled={!detected || !model.trim() || testState === 'testing'}
-          className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:opacity-30"
-        >
-          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
-        </Button>
-      </div>
-      <p className="text-[12px] text-white/45 leading-relaxed">
-        {uiMessage('settings.local-vision-processes-screenshots-and.94552138f2')}
-      </p>
-      {detected && models.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {models.slice(0, 12).map(m => (
-            <button key={m} onClick={() => persistModel(m)} className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/60 hover:text-white hover:bg-white/10 font-mono transition-colors">{m}</button>
-          ))}
-        </div>
-      )}
-      {error && !checking && <p className="text-xs text-amber-300/80">{error}</p>}
-      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-      </div>
-    </SettingsDisclosure>
-  );
-}
-
-function VisionRelayProviderRow({ t }: { t?: any }) {
-  const { visionConfig, updateVisionConfig } = useApp();
-  const officialCatalog = useLumiOfficialCatalog();
-  const relayVisionModels = officialModelOptions(officialCatalog, 'vision', [
-    LUMI_OFFICIAL_DEFAULT_MODELS.vision,
-    'aliyun/qwen3-vl-flash',
-    'aliyun/qwen3-vl-plus',
-  ]);
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
-  // Never hydrate a secret from browser storage. The backend only exposes a
-  // boolean configured status; the user can enter a replacement key when
-  // needed and the field is cleared after a successful save.
-  const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState(() => {
-    // The endpoint is documented and owned by Lumi; only the key is kept
-    // blank until the user enters it. A previously chosen endpoint remains
-    // editable for managed deployments.
-    return readStoredRelayBaseUrl() || LUMI_OFFICIAL_BASE_URL;
-  });
-  const savedModels = (() => {
-    try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-  })();
-  const [model, setModel] = useState(() => savedModels.relay || LUMI_OFFICIAL_DEFAULT_MODELS.vision);
-  const [serverConfigured, setServerConfigured] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [connectionDirty, setConnectionDirty] = useState(false);
-  const [testState, setTestState] = useState<ProviderTestState>('idle');
-  const [testMessage, setTestMessage] = useState('');
-
-  useEffect(() => {
-    clearLegacyRelaySecret();
-    getSavedKeyStatus()
-      .then(data => setServerConfigured(!!data.RELAY_API_KEY && !!data.RELAY_BASE_URL))
-      .catch(() => {});
-  }, []);
-
-  const persistModel = async (nextModel: string) => {
-    const previousModel = model;
-    setModel(nextModel);
-    setTestState('idle');
-    setTestMessage('');
-    const saved = await updateVisionConfig(visionConfig.provider === 'relay' ? { model: nextModel } : {}, { ['relay']: nextModel });
-    if (saved === false) setModel(previousModel);
-  };
-
-  const handleSave = () => {
-    const enteredKey = apiKey.trim();
-    // Once a key is stored, changing only the endpoint must not require
-    // asking the user to paste the secret again.  The backend never returns
-    // the existing key; an empty field therefore means "keep it" here.
-    if ((!enteredKey && !serverConfigured) || !baseUrl.trim()) return;
-    saveServerKeys({
-      RELAY_BASE_URL: baseUrl.trim(),
-      ...(enteredKey ? { RELAY_API_KEY: enteredKey } : {}),
-    }).then(() => {
-      clearLegacyRelaySecret();
-      localStorage.setItem('lumi_relay_url', baseUrl.trim());
-      setApiKey('');
-      setServerConfigured(true);
-      setConnectionDirty(false);
-      setTestState('idle');
-      setTestMessage('');
-      setSaved(true);
-      refreshLumiOfficialCatalog();
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
-  };
-
-  const handleRemove = () => {
-    saveServerKeys({ RELAY_API_KEY: '', RELAY_BASE_URL: '' }).then(() => {
-      localStorage.removeItem('lumi_relay_key');
-      localStorage.removeItem('lumi_relay_url');
-      setApiKey('');
-      setBaseUrl('');
-      setServerConfigured(false);
-      setConnectionDirty(false);
-      setTestState('idle');
-      setTestMessage('');
-      refreshLumiOfficialCatalog();
-      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
-    }).catch(err => toast.error(err.message || uiMessage('settings.failed-to-remove.5c5d9c7827')));
-  };
-
-  const handleUse = () => {
-    updateVisionConfig({ provider: 'relay', model });
-  };
-
-  const handleTest = async () => {
-    if (!serverConfigured || connectionDirty || !model.trim()) return;
-    setTestState('testing');
-    setTestMessage('');
-    try {
-      const result = await runVisionConnectionTest('relay', model.trim());
-      setTestState('ok');
-      setTestMessage(formatUiMessage('settings.vision-call-passed-value0-ms.c80d92a068', { value0: result.latencyMs }));
-    } catch (caught: any) {
-      setTestState('error');
-      setTestMessage(caught?.message || uiMessage('settings.vision-call-failed.adf12eb156'));
-    }
-  };
-
-  return (
-    <SettingsDisclosure
-      icon={<Globe size={18} className="text-cyan-400" />}
-      label={lumiOfficialApiLabel(t) + ' · Vision'}
-      defaultOpen={visionConfig.provider === 'relay'}
-      badges={<>
-        {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {visionConfig.provider === 'relay' && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-200">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
-      </>}
-    >
-      <div className="space-y-3">
-      <div className="grid grid-cols-1 gap-3">
-        <input
-          type="password"
-          value={apiKey}
-          onChange={e => { setApiKey(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
-          onKeyDown={e => e.key === 'Enter' && handleSave()}
-          placeholder="API Key"
-          className="h-11 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
-        />
-        <input
-          type="text"
-          value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setConnectionDirty(true); setTestState('idle'); setTestMessage(''); }}
-          onKeyDown={e => e.key === 'Enter' && handleSave()}
-          placeholder={LUMI_RELAY_BASE_URL_PLACEHOLDER}
-          className="h-11 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
-        />
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[92px_minmax(0,1fr)] sm:items-center">
-        <label className="text-xs font-semibold text-white/50">{t?.model || uiMessage('settings.model.44c0cd4289')}</label>
-        <input
-          type="text"
-          value={model}
-          onChange={e => persistModel(e.target.value)}
-          list="vision-relay-models"
-          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-cyan-400/50"
-        />
-        <datalist id="vision-relay-models">
-          {relayVisionModels.map(m => <option key={m} value={m} />)}
-        </datalist>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={handleSave}
-          disabled={(!apiKey.trim() && !serverConfigured) || !baseUrl.trim()}
-          className="h-10 rounded-lg bg-cyan-600 px-4 text-xs font-semibold text-white transition-all hover:bg-cyan-500 disabled:opacity-30"
-        >
-          {t?.save || uiMessage('settings.save.ec8e6d5819')}
-        </Button>
-        <Button
-          onClick={handleUse}
-          disabled={!model.trim()}
-          className="h-10 rounded-lg bg-cyan-300 px-4 text-xs font-semibold text-black transition-all hover:bg-cyan-200 disabled:opacity-30"
-        >
-          {uiMessage('settings.use-as-vision.adf03f9489')}
-        </Button>
-        <Button
-          onClick={handleTest}
-          disabled={!serverConfigured || connectionDirty || !model.trim() || testState === 'testing'}
-          className="h-10 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:opacity-30"
-        >
-          {testState === 'testing' ? <Loader2 size={15} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
-        </Button>
-        <Button
-          onClick={handleRemove}
-          disabled={!serverConfigured && !apiKey}
-          className="h-10 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-300 transition-all hover:bg-red-500/20 disabled:opacity-30"
-        >
-          {t?.remove || uiMessage('settings.remove.78190c6054')}
-        </Button>
-      </div>
-      <p className="text-[12px] text-white/45 leading-relaxed">
-        {uiMessage('settings.use-this-for-vllm-sglang.6ba52812bd')}
-      </p>
-      {testMessage && <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>{testMessage}</p>}
-      </div>
-    </SettingsDisclosure>
-  );
-}
-
-function ProactiveVoiceToggle() {
-  const storageKey = 'lumi_allow_proactive_voice';
+function VoicePreferenceToggle({ storageKey, label }: { storageKey: string; label: string }) {
   const [enabled, setEnabled] = useState(() => localStorage.getItem(storageKey) === 'true');
 
   const toggle = () => {
@@ -1695,58 +1166,7 @@ function ProactiveVoiceToggle() {
   };
 
   return (
-    <button
-      onClick={toggle}
-      className={`w-11 h-6 rounded-full transition-all relative ${enabled ? 'bg-celestial-saturn' : 'bg-white/10 border border-white/20'}`}
-    >
-      <motion.div
-        animate={{ x: enabled ? 20 : 2 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-        className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-md"
-      />
-    </button>
-  );
-}
-
-function WakeWordToggle() {
-  const storageKey = 'lumi_wake_word_enabled';
-  const [enabled, setEnabled] = useState(() => localStorage.getItem(storageKey) === 'true');
-
-  const toggle = () => {
-    const next = !enabled;
-    setEnabled(next);
-    localStorage.setItem(storageKey, String(next));
-    window.dispatchEvent(new CustomEvent('lumi:setting-changed', {
-      detail: { key: storageKey, value: next },
-    }));
-  };
-
-  return (
-    <button
-      onClick={toggle}
-      className={`w-11 h-6 rounded-full transition-all relative ${enabled ? 'bg-celestial-saturn' : 'bg-white/10 border border-white/20'}`}
-    >
-      <motion.div
-        animate={{ x: enabled ? 20 : 2 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-        className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-md"
-      />
-    </button>
-  );
-}
-
-function AlwaysOnVoiceToggle() {
-  const storageKey = 'lumi_always_on_voice';
-  const [enabled, setEnabled] = useState(() => localStorage.getItem(storageKey) === 'true');
-
-  const toggle = () => {
-    const next = !enabled;
-    setEnabled(next);
-    localStorage.setItem(storageKey, String(next));
-  };
-
-  return (
-    <button
+    <button role="switch" aria-checked={enabled} aria-label={label}
       onClick={toggle}
       className={`w-11 h-6 rounded-full transition-all relative ${enabled ? 'bg-celestial-saturn' : 'bg-white/10 border border-white/20'}`}
     >
@@ -1761,13 +1181,6 @@ function AlwaysOnVoiceToggle() {
 
 function VisionRoleSettings({ t }: { t: any }) {
   const { visionConfig, updateVisionConfig } = useApp();
-  const setVisionModel = (model: string) => {
-    const savedModels = (() => {
-      try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-    })();
-    savedModels[visionConfig.provider] = model;
-    updateVisionConfig({ model });
-  };
   return (
     <SettingsSection title={uiMessage('settings.visual-perception-model.c74ca64c0f')} icon={<Camera size={18} className="text-cyan-300" />}>
       <div className="border-y border-white/10 py-5">
@@ -1793,7 +1206,7 @@ function VisionRoleSettings({ t }: { t: any }) {
             label={uiMessage('settings.model.44c0cd4289')}
             value={visionConfig.model}
             options={WORLD_MODEL_OPTIONS[visionConfig.provider] || []}
-            onChange={setVisionModel}
+            onChange={model => updateVisionConfig({ model })}
           />
         </div>
         <div className="mt-4 grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
@@ -1803,45 +1216,6 @@ function VisionRoleSettings({ t }: { t: any }) {
           </span>
         </div>
         <LumiOfficialCapabilityBadge t={t} supported={true} capabilityKey="settings.capability-vision-world-actions.b8c9d0e1f2" />
-      </div>
-    </SettingsSection>
-  );
-}
-
-function VisionProviderSettings({ t }: { t: any }) {
-  return (
-    <SettingsSection title={uiMessage('settings.vision-capable-providers.40ab375ce2')} icon={<Camera size={18} className="text-cyan-300" />}>
-      <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
-        {uiMessage('settings.vision-provider-description.77b9f301aa')}
-      </p>
-      <div className="border-y border-white/10">
-        <VisionProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI Vision" providerId="openai" models={['gpt-4o', 'gpt-4o-mini']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
-        <VisionProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label="Google Gemini Vision" providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={uiMessage('settings.enter-gemini-api-key.4295b94e77')} serverKey="GEMINI_API_KEY" t={t} />
-        <VisionProviderRow icon={<Cloud size={18} className="text-cyan-400" />} label="Doubao Vision (Ark)" providerId="ark" models={['doubao-1-5-vision-pro-32k']} placeholder={uiMessage('settings.enter-ark-api-key.9f82bf67e1')} serverKey="ARK_API_KEY" t={t} />
-        <VisionProviderRow icon={<Zap size={18} className="text-violet-400" />} label="Qwen-VL / DashScope" providerId="qwen" models={['qwen-vl-max']} placeholder="sk-..." serverKey="DASHSCOPE_API_KEY" t={t} />
-        <VisionLocalProviderRow
-          icon={<Cpu size={18} className="text-emerald-400" />}
-          label="Ollama Local Vision"
-          providerId="ollama"
-          endpoint="/api/ollama/config"
-          storageKey="lumi_ollama_url"
-          defaultUrl="http://127.0.0.1:11434"
-          defaultModel="qwen2.5vl:7b"
-          suggestions={['qwen2.5vl:7b', 'minicpm-v:8b', 'llama3.2-vision:11b']}
-          t={t}
-        />
-        <VisionLocalProviderRow
-          icon={<Cpu size={18} className="text-amber-400" />}
-          label="LM Studio Local Vision"
-          providerId="lmstudio"
-          endpoint="/api/lmstudio/config"
-          storageKey="lumi_lmstudio_url"
-          defaultUrl="http://127.0.0.1:1234"
-          defaultModel="local-vision-model"
-          suggestions={['qwen2.5-vl-7b-instruct', 'minicpm-v-4_5', 'internvl3_5-8b']}
-          t={t}
-        />
-        <VisionRelayProviderRow t={t} />
       </div>
     </SettingsSection>
   );
@@ -2183,40 +1557,6 @@ function GenerativeModelsPage({ t }: { t: any }) {
         </div>
       </SettingsSection>
     </div>
-  );
-}
-
-function GenerationProviderSettings({ t }: { t: any }) {
-  return (
-    <SettingsSection title={uiMessage('settings.generation-model-providers.b4f1c95162')} icon={<Cloud size={18} className="text-cyan-300" />}>
-      <p className="mb-4 max-w-2xl text-sm leading-relaxed text-white/45">
-        {uiMessage('settings.generation-model-providers-description.a548399017')}
-      </p>
-      <div className="border-y border-white/10">
-        <ApiKeyField
-          compact
-          icon={<Sparkle size={18} className="text-rose-300" />}
-          label="MiniMax"
-          placeholder="sk-..."
-          storageKey="lumi_minimax_key"
-          serverKey="MINIMAX_API_KEY"
-          consoleUrl="https://platform.minimaxi.com"
-          hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')}
-          t={t}
-        />
-        <ApiKeyField
-          compact
-          icon={<Sparkle size={18} className="text-emerald-300" />}
-          label="SiliconFlow"
-          placeholder="sk-..."
-          storageKey="lumi_siliconflow_key"
-          serverKey="SILICONFLOW_API_KEY"
-          consoleUrl="https://cloud.siliconflow.cn"
-          hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')}
-          t={t}
-        />
-      </div>
-    </SettingsSection>
   );
 }
 
@@ -3421,8 +2761,6 @@ function LocalLLMProviderRow({
   accent: 'emerald' | 'amber';
   t?: any;
 }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const { aiConfig, updateAIConfig } = useApp();
   const [baseUrl, setBaseUrl] = useState(() => {
     try { return localStorage.getItem(storageKey) || defaultUrl; } catch { return defaultUrl; }
@@ -3627,52 +2965,28 @@ function VoiceServicesPage({ t }: { t: any }) {
         <p className="text-sm text-white/40 max-w-xl mb-6">
           {t.voiceServicesDesc || uiMessage('settings.speech-recognition-asr-and-speech.4d604985a1')}
         </p>
-        <div className="mt-6 p-4 bg-white/5 rounded-xl border border-white/10">
-          <div className="flex items-center justify-between">
-            <div>
-               <p className="text-xs font-bold text-white/80">{t.proactiveVoiceGreeting}</p>
-               <p className="text-xs text-white/55 mt-0.5">{t.proactiveVoiceGreetingDesc}</p>
+        <div className="mt-6 space-y-3 p-4 bg-white/5 rounded-xl border border-white/10">
+          {[
+            { key: 'lumi_allow_proactive_voice', label: t.proactiveVoiceGreeting, description: t.proactiveVoiceGreetingDesc },
+            { key: 'lumi_wake_word_enabled', label: t.wakeWordLabel, description: t.wakeWordDesc },
+            { key: 'lumi_always_on_voice', label: t.alwaysOnVoiceLabel, description: t.alwaysOnVoiceDesc },
+          ].map(({ key, label, description }) => (
+            <div key={key} className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white/80">{label}</p>
+                <p className="text-xs text-white/55 mt-0.5">{description}</p>
+              </div>
+              <VoicePreferenceToggle storageKey={key} label={label} />
             </div>
-            <ProactiveVoiceToggle />
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div>
-               <p className="text-xs font-bold text-white/80">{t.wakeWordLabel}</p>
-               <p className="text-xs text-white/55 mt-0.5">{t.wakeWordDesc}</p>
-            </div>
-            <WakeWordToggle />
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div>
-               <p className="text-xs font-bold text-white/80">{t.alwaysOnVoiceLabel}</p>
-               <p className="text-xs text-white/55 mt-0.5">{t.alwaysOnVoiceDesc}</p>
-            </div>
-            <AlwaysOnVoiceToggle />
-          </div>
+          ))}
         </div>
       </SettingsSection>
     </div>
   );
 }
 
-function SpeechProviderSettings({ t }: { t: any }) {
-  return (
-    <SettingsSection title={uiMessage('settings.speech-model-providers.99e68f2051')} icon={<Mic size={18} className="text-emerald-300" />}>
-      <p className="mb-5 max-w-3xl text-sm leading-relaxed text-white/45">
-        {uiMessage('settings.speech-provider-description.ea8bf84041')}
-      </p>
-      <div className="border-y border-white/10">
-        <ApiKeyField icon={<Volume2 size={18} className="text-emerald-400" />} label={t.doubaoSpeechLabel || 'Doubao Speech (STT + TTS)'} placeholder="New-console API Key value" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" consoleUrl="https://console.volcengine.com/speech/new/setting/apikeys" testEndpoint="/api/voice/doubao/probe" persistInBrowser={false} hint={uiMessage('settings.doubao-speech-api-key-only.4ab619f21d')} t={t} />
-        <ApiKeyField icon={<Zap size={18} className="text-violet-400" />} label={t.dashscopeLabel || 'DashScope (Cloud STT + TTS)'} placeholder="sk-..." storageKey="lumi_dashscope_key" serverKey="DASHSCOPE_API_KEY" hint={t.dashscopeHint || uiMessage('settings.powers-qwen-asr-and-dashscope.519f4cb3da')} t={t} />
-      </div>
-      <LumiOfficialCapabilityBadge t={t} supported={true} capabilityKey="settings.capability-speech-recognition-synthesis.c5d6e7f8a9" />
-    </SettingsSection>
-  );
-}
-
 function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, testEndpoint, persistInBrowser = false, compact = false, secret = true, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, testEndpoint?: string, persistInBrowser?: boolean, compact?: boolean, secret?: boolean, t?: any }) {
   const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [value, setValue] = useState(() => {
     if (!persistInBrowser) return '';
     try { return localStorage.getItem(storageKey) || ''; } catch { return ''; }
@@ -3832,8 +3146,6 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
 
 
 function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   // Relay secrets belong in the server credential store, never in browser
   // localStorage. Existing installations are cleaned up on mount below.
   const [apiKey, setApiKey] = useState('');
@@ -3986,8 +3298,6 @@ function AutonomousSettingsPanel({ t }: { t: any }) {
   const [nativeRuntimeError, setNativeRuntimeError] = useState('');
   const [taskList, setTaskList] = useState<any[]>([]);
   const [tasksExpanded, setTasksExpanded] = useState(false);
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
 
   useEffect(() => {
     fetch('/api/autonomy/gate_config')
@@ -4230,8 +3540,6 @@ function SettingsSection({ title, icon, children }: { title: string; icon?: Reac
 }
 
 function SettingsItem({ label, desc, active = false, storageKey, onChange, t }: { label: string; desc: string; active?: boolean; storageKey?: string; onChange?: (v: boolean) => void; t?: any }) {
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [isActive, setIsActive] = useState(() => {
     if (storageKey) {
       try { return localStorage.getItem(storageKey) === 'true'; } catch { return active; }

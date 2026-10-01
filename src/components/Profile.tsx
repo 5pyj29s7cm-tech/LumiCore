@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { User, Shield, Cpu, Rocket, Ghost, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle, BarChart3 } from 'lucide-react';
+import { User, Shield, Cpu, Rocket, Activity, Wallet, Zap, Key, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useApp } from '../contexts/AppContext';
@@ -223,25 +223,6 @@ function Badge({ icon, label, color }: { icon: React.ReactNode; label: string; c
     <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest ${color}`}>
       {icon}
       {label}
-    </div>
-  );
-}
-
-function AgentItem({ name, type, status }: { name: string; type: string; status: string }) {
-  return (
-    <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-celestial-saturn">
-          <Ghost size={20} />
-        </div>
-        <div className="space-y-0.5">
-          <div className="font-bold text-sm">{name}</div>
-          <div className="text-xs text-white/40 uppercase tracking-widest">{type}</div>
-        </div>
-      </div>
-      <div className={`text-xs font-bold uppercase tracking-widest ${status === 'Online' ? 'text-green-500' : status === 'Standby' ? 'text-celestial-saturn' : 'text-white/45'}`}>
-        {status}
-      </div>
     </div>
   );
 }

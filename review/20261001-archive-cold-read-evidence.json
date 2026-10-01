@@ -1,0 +1,571 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune23",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "server/files/generated_archive.ts",
+      "beforeLines": 264,
+      "afterLines": 280,
+      "delta": 16,
+      "beforeSha256": "a94bd07dde1df5495ddb2a78971bf18cfa6e0d38b57e05812616d36498b28492",
+      "afterSha256": "5de1dfd4836a70d1333fded5df90325fed26d08c4ab26c38d7f4d19ba587b2d7"
+    },
+    {
+      "file": "db_layer.ts",
+      "beforeLines": 2538,
+      "afterLines": 2533,
+      "delta": -5,
+      "beforeSha256": "4069c06af4da3d506bfad14a76cca7d258ba6c1936c871d7dfbf59dfda6c8710",
+      "afterSha256": "efd507b73c74362c9e27264bc1266a6af44d06b1f328fb0f0789bdf75bf67030"
+    },
+    {
+      "file": "server/db/migrations.ts",
+      "beforeLines": 283,
+      "afterLines": 284,
+      "delta": 1,
+      "beforeSha256": "f8d361ebe4c4145e8787e8a83b036933dd4be8e82b9e3027f842e96b6d9cb06e",
+      "afterSha256": "4e73e99de61e2c6ab7b5ccc0e6f022e4cb1810d49dc97db7e230c78f57c8df85"
+    },
+    {
+      "file": "test/generated_library.test.ts",
+      "beforeLines": 312,
+      "afterLines": 378,
+      "delta": 66,
+      "beforeSha256": "fcc2c104cf0b992e5e454ddd5dc9e261513fa0c948a552e66c06f6a34aebde6c",
+      "afterSha256": "a46553aab5e25b7025adf02e05aefc30a3d5489c88cc7316712adb9ee0604eef"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 368223
+      },
+      "tests": {
+        "files": 739,
+        "lines": 158976
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527199
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 368235
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159042
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527277
+      }
+    }
+  },
+  "tests": {
+    "files": 730,
+    "passed": 6556,
+    "failed": 0,
+    "skipped": 0,
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/generated_library.test.ts::Generated libraries across conversations rejects malformed SQL payloads without caching a truncated list",
+        1
+      ],
+      [
+        "D:/lumiOS/test/generated_library.test.ts::Generated libraries across conversations reads every scoped row across empty and partial batches with interleaved accounts",
+        1
+      ]
+    ],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "server/files/generated_archive.ts": "5de1dfd4836a70d1333fded5df90325fed26d08c4ab26c38d7f4d19ba587b2d7",
+        "db_layer.ts": "efd507b73c74362c9e27264bc1266a6af44d06b1f328fb0f0789bdf75bf67030",
+        "server/db/migrations.ts": "4e73e99de61e2c6ab7b5ccc0e6f022e4cb1810d49dc97db7e230c78f57c8df85",
+        "test/generated_library.test.ts": "a46553aab5e25b7025adf02e05aefc30a3d5489c88cc7316712adb9ee0604eef"
+      },
+      "startedAt": "2026-10-01T08:26:59.468Z",
+      "finishedAt": "2026-10-01T08:33:20.081Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T08:26:01.497Z",
+      "end": "2026-10-01T08:26:37.440Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T08:26:37.442Z",
+      "end": "2026-10-01T08:26:45.911Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T08:26:45.911Z",
+      "end": "2026-10-01T08:26:54.541Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T08:26:54.542Z",
+      "end": "2026-10-01T08:26:54.957Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T08:26:54.957Z",
+      "end": "2026-10-01T08:26:59.420Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "original-bench",
+      "start": "2026-10-01T08:25:35.442Z",
+      "end": "2026-10-01T08:25:44.826Z",
+      "status": 0
+    },
+    {
+      "step": "before-bench",
+      "start": "2026-10-01T08:25:44.827Z",
+      "end": "2026-10-01T08:25:52.218Z",
+      "status": 0
+    },
+    {
+      "step": "before-readback",
+      "start": "2026-10-01T08:25:52.218Z",
+      "end": "2026-10-01T08:25:53.224Z",
+      "status": 0
+    },
+    {
+      "step": "after-bench",
+      "start": "2026-10-01T08:25:53.225Z",
+      "end": "2026-10-01T08:26:00.481Z",
+      "status": 0
+    },
+    {
+      "step": "after-readback",
+      "start": "2026-10-01T08:26:00.481Z",
+      "end": "2026-10-01T08:26:01.466Z",
+      "status": 0
+    },
+    {
+      "step": "builds",
+      "start": "2026-10-01T08:26:01.467Z",
+      "end": "2026-10-01T08:26:59.430Z",
+      "status": 0
+    },
+    {
+      "step": "full",
+      "start": "2026-10-01T08:26:59.431Z",
+      "end": "2026-10-01T08:33:20.092Z",
+      "status": 0
+    }
+  ],
+  "archive": [
+    {
+      "label": "original",
+      "size": 30000,
+      "firstReadMs": 79.28769999999997,
+      "lookup": {
+        "medianMs": 50.358100000000036,
+        "samples": [
+          47.79989999999998,
+          51.82299999999998,
+          50.519399999999905,
+          48.23519999999985,
+          52.4978000000001,
+          47.03599999999983,
+          54.74829999999997,
+          47.95129999999995,
+          55.66340000000014,
+          48.92189999999982,
+          48.27620000000002,
+          56.233400000000074,
+          51.58069999999998,
+          54.88440000000014,
+          53.474699999999984,
+          49.849100000000135,
+          44.47160000000008,
+          50.19680000000017,
+          48.94880000000012,
+          50.86940000000004
+        ]
+      },
+      "list": {
+        "medianMs": 63.60024999999996,
+        "samples": [
+          59.96549999999979,
+          62.695000000000164,
+          64.88289999999961,
+          74.82450000000017,
+          64.50549999999976,
+          58.884599999999864
+        ]
+      },
+      "denseList": {
+        "medianMs": 59.28229999999985,
+        "samples": [
+          61.97649999999976,
+          58.854699999999866,
+          59.709899999999834,
+          61.793800000000374,
+          56.79029999999966,
+          58.0561000000007
+        ],
+        "maxGapMedianMs": 49.3155499999998,
+        "gaps": [
+          51.826500000000124,
+          49.567299999999705,
+          48.371900000000096,
+          51.417999999999665,
+          48.6893,
+          49.0637999999999
+        ]
+      },
+      "rename": {
+        "medianMs": 129.77710000000025,
+        "samples": [
+          148.13189999999986,
+          139.02719999999954,
+          127.33800000000065,
+          117.2560999999996,
+          132.21619999999984,
+          119.89350000000013
+        ]
+      },
+      "coldList": {
+        "medianMs": 63.30519999999933,
+        "samples": [
+          61.52179999999953,
+          58.46299999999974,
+          61.49619999999959,
+          65.08859999999913,
+          71.08809999999994,
+          69.26389999999992,
+          68.5003999999999,
+          61.51540000000023
+        ],
+        "maxGapMedianMs": 52.00824999999986,
+        "gaps": [
+          52.100899999999456,
+          49.60359999999946,
+          51.91560000000027,
+          52.17650000000049,
+          57.703599999999824,
+          56.85239999999976,
+          50.258600000000115,
+          51.07809999999972
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 183.9716500000004,
+        "samples": [
+          170.67749999999978,
+          192.8757000000005,
+          175.0676000000003,
+          197.51610000000073
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    },
+    {
+      "label": "before",
+      "size": 30000,
+      "firstReadMs": 838.0553,
+      "lookup": {
+        "medianMs": 1.4791000000000167,
+        "samples": [
+          1.719300000000203,
+          1.0814000000000306,
+          1.1439000000000306,
+          1.705500000000029,
+          1.2688000000000557,
+          1.6734999999998763,
+          1.5718999999999141,
+          1.1303000000000338,
+          0.9085999999999785,
+          1.4201000000000477,
+          1.1574000000000524,
+          1.3583999999998468,
+          1.251299999999901,
+          1.5257000000001426,
+          1.9884999999999309,
+          1.4476999999999407,
+          1.5963999999999032,
+          1.5105000000000928,
+          1.5380999999999858,
+          1.8302000000001044
+        ]
+      },
+      "list": {
+        "medianMs": 15.699950000000172,
+        "samples": [
+          19.60689999999977,
+          16.27930000000015,
+          17.249899999999798,
+          13.613700000000335,
+          14.19340000000011,
+          15.120600000000195
+        ]
+      },
+      "denseList": {
+        "medianMs": 17.675000000000182,
+        "samples": [
+          17.66660000000047,
+          17.683399999999892,
+          18.76549999999952,
+          18.13050000000021,
+          14.845399999999245,
+          15.583700000000135
+        ],
+        "maxGapMedianMs": 10.917149999999765,
+        "gaps": [
+          12.31959999999981,
+          9.702900000000227,
+          12.449099999999817,
+          12.131399999999303,
+          8.730900000000474,
+          8.41859999999997
+        ]
+      },
+      "rename": {
+        "medianMs": 15.136400000000094,
+        "samples": [
+          14.62559999999985,
+          15.29359999999997,
+          13.615099999999984,
+          17.447400000000016,
+          16.227300000000014,
+          14.979200000000219
+        ]
+      },
+      "coldList": {
+        "medianMs": 95.88559999999961,
+        "samples": [
+          89.9385999999995,
+          97.3088000000007,
+          94.10660000000007,
+          95.65899999999965,
+          96.11219999999958,
+          92.15269999999964,
+          117.22230000000036,
+          106.32840000000033
+        ],
+        "maxGapMedianMs": 18.940900000000056,
+        "gaps": [
+          19.319399999999405,
+          18.88680000000022,
+          17.709599999999227,
+          18.99499999999989,
+          18.516100000000733,
+          17.914700000000266,
+          23.359599999999773,
+          23.47690000000057
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 31.314899999999852,
+        "samples": [
+          31.742299999999886,
+          33.1186000000007,
+          30.028299999999945,
+          30.887499999999818
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    },
+    {
+      "label": "after",
+      "size": 30000,
+      "firstReadMs": 844.5513000000001,
+      "lookup": {
+        "medianMs": 1.325649999999996,
+        "samples": [
+          1.6588999999999032,
+          1.3587999999999738,
+          1.8780000000001564,
+          1.5222999999998592,
+          1.1217999999998938,
+          1.521900000000187,
+          1.0670999999999822,
+          1.2322999999998956,
+          1.346900000000005,
+          1.6638000000000375,
+          1.021600000000035,
+          1.4505000000001473,
+          1.304399999999987,
+          1.1341999999999643,
+          1.4943000000000666,
+          1.0045000000000073,
+          0.9962000000000444,
+          1.2554999999999836,
+          1.1408000000001266,
+          1.4997000000000753
+        ]
+      },
+      "list": {
+        "medianMs": 16.327199999999948,
+        "samples": [
+          16.91090000000031,
+          15.743499999999585,
+          18.913100000000213,
+          21.390499999999975,
+          15.23909999999978,
+          14.58869999999979
+        ]
+      },
+      "denseList": {
+        "medianMs": 16.015849999999773,
+        "samples": [
+          14.351200000000063,
+          14.602399999999761,
+          15.540600000000268,
+          16.49109999999928,
+          16.756599999999708,
+          16.842999999999847
+        ],
+        "maxGapMedianMs": 10.033649999999852,
+        "gaps": [
+          8.70759999999973,
+          8.422299999999268,
+          10.516200000000026,
+          11.260599999999613,
+          9.551099999999678,
+          11.231600000000071
+        ]
+      },
+      "rename": {
+        "medianMs": 15.688899999999876,
+        "samples": [
+          16.56140000000005,
+          13.998099999999795,
+          14.827499999999873,
+          16.55029999999988,
+          14.227199999999812,
+          18.31230000000005
+        ]
+      },
+      "coldList": {
+        "medianMs": 89.2521499999998,
+        "samples": [
+          77.98160000000007,
+          92.46800000000076,
+          81.66499999999996,
+          86.1815000000006,
+          90.33600000000024,
+          103.92499999999927,
+          119.3730000000005,
+          88.16829999999936
+        ],
+        "maxGapMedianMs": 13.125949999999648,
+        "gaps": [
+          10.482600000000275,
+          14.789599999999155,
+          10.630799999999908,
+          12.915299999999661,
+          13.336599999999635,
+          14.651299999999537,
+          14.828199999999924,
+          10.291400000000067
+        ]
+      },
+      "renameAndList": {
+        "medianMs": 32.308150000000296,
+        "samples": [
+          31.70049999999992,
+          29.144400000000132,
+          32.91580000000067,
+          36.49399999999969
+        ]
+      },
+      "durable": {
+        "count": 30000,
+        "hash": "507cf4dd1e3d266990ca07b09fbf0542ada9d5e2f2de7eb7bdd6af2622a9538e"
+      }
+    }
+  ],
+  "readback": [
+    {
+      "label": "before",
+      "processId": 24244,
+      "count": 29970,
+      "persistedCount": 30000,
+      "durableHash": "52c166aabe65fbe7abca7db1425d040b350baa7bc2d4d9712cc8c5332f1aab67",
+      "firstListMs": 125.17779999999993,
+      "maxGapMs": 32.60820000000001,
+      "indexes": [
+        "idx_generated_archive_created",
+        "idx_generated_archive_source",
+        "idx_generated_archive_filename",
+        "sqlite_autoindex_generated_archive_1"
+      ]
+    },
+    {
+      "label": "after",
+      "processId": 37532,
+      "count": 29970,
+      "persistedCount": 30000,
+      "durableHash": "52c166aabe65fbe7abca7db1425d040b350baa7bc2d4d9712cc8c5332f1aab67",
+      "firstListMs": 112.10390000000001,
+      "maxGapMs": 22.04200000000003,
+      "indexes": [
+        "idx_generated_archive_scope",
+        "idx_generated_archive_source",
+        "idx_generated_archive_filename",
+        "sqlite_autoindex_generated_archive_1"
+      ]
+    }
+  ],
+  "interruptedRun": {
+    "receipt": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "server/files/generated_archive.ts": "0d2618ee545da3e88fa99f345182c59aa7955dc8ac5e0a196cf19f067eda62b5",
+        "db_layer.ts": "efd507b73c74362c9e27264bc1266a6af44d06b1f328fb0f0789bdf75bf67030",
+        "server/db/migrations.ts": "4e73e99de61e2c6ab7b5ccc0e6f022e4cb1810d49dc97db7e230c78f57c8df85",
+        "test/generated_library.test.ts": "0f6710ff99a0840ee3a6f9d793e90cab1c31f76aa1e5a0ce022e242cdbf08f90"
+      },
+      "startedAt": "2026-10-01T08:23:09.312Z",
+      "finishedAt": "2026-10-01T08:24:36.373Z",
+      "status": 4294967295,
+      "signal": null
+    },
+    "reason": "Stopped only this round's test process tree to restore strict per-record JSON parse semantics before final verification. Not counted as a passing run."
+  },
+  "boundaries": {
+    "mainDatabasePersistenceBehaviorUnchanged": true,
+    "recordsPerParseAtMost": 256,
+    "oneSqlSnapshot": true,
+    "scopeIndexRangeRead": true,
+    "archiveResultsTruncated": false,
+    "archiveDataFormatUnchanged": true,
+    "coldBenchmarkInvalidatesApplicationCacheOnly": true,
+    "osFileCacheNotFlushed": true,
+    "oldJsonColdReadStillFaster": true,
+    "fullListStillLinear": true,
+    "initialLegacyImportStillWholeJson": true,
+    "mmapNotEnabled": true,
+    "additionalPersistentSnapshot": false,
+    "liveBackendRestarted": false,
+    "realUserDataMigrated": false,
+    "commit": false,
+    "push": false
+  }
+}

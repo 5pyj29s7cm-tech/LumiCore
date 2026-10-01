@@ -27,6 +27,21 @@ afterEach(() => {
 });
 
 describe('accepted action-turn durability fence', () => {
+  it.each(['ok', 'okay', '行', '没问题', '开始吧', '确认', '好的'])('binds %s only to the exact durable pending action, once', async userText => {
+    const channelScope = buildTransportNeutralConfirmationScope({ domain: 'personal', conversationId: 'shared-confirmation' });
+    const taskScope = buildTransportNeutralConfirmationScope({ domain: 'personal', conversationId: 'shared-confirmation', taskId: 'reviewed-task' });
+    recordPendingConfirmation('confirmation-user', 'desktop_open', { target: 'Notepad' }, 'chat', taskScope);
+    const admission = await admitAcceptedUserTurnDurably({ persistAcceptedUserTurn: () => 'message-id', flush: async () => undefined, onPersistenceUnknown: vi.fn() });
+    const input = { admission: admission!, userId: 'confirmation-user', userText, taskScope, channelScope };
+    const wrong = await resolveAcceptedTurnConfirmation({ ...input, taskScope: { ...taskScope, taskId: 'another-task' } });
+    expect(wrong.pending).toBeNull();
+    const resolution = await resolveAcceptedTurnConfirmation(input);
+    expect(resolution.pending).toMatchObject({ toolName: 'desktop_open', taskId: 'reviewed-task' });
+    const pending = resolution.pending!;
+    expect(await consumePendingConfirmationDurably('confirmation-user', pending.id, pending.toolName, pending.exactArgs, taskScope)).toBe(true);
+    expect((await resolveAcceptedTurnConfirmation(input)).pending).toBeNull();
+  });
+
   it('does not admit the executor when the accepted transcript flush fails', async () => {
     const executor = vi.fn(async () => 'should-never-run');
     const onPersistenceUnknown = vi.fn();

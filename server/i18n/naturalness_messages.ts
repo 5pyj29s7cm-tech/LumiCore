@@ -16,48 +16,6 @@ export function formatDesktopProcessCount(
   return `The current snapshot contains ${entryCount} active process entries across ${processNames.length} process names${listedNames.length ? `, including ${listedNames.join(', ')}` : ''}. One app can own several processes and the result is bounded, so this is not the total number of running apps or open windows.`;
 }
 
-export function formatDesktopObservationUnavailable(userText: string): string {
-  return usesChinese(userText)
-    ? '这次没有读到可用的桌面状态。'
-    : 'No usable desktop state was returned this time.';
-}
-
-export function formatKnownLoginOpening(userText: string, siteLabel: string): string {
-  return usesChinese(userText)
-    ? `正在打开${siteLabel}的登录页面。`
-    : `Opening the ${siteLabel} login page.`;
-}
-
-export function formatKnownLoginResult(
-  userText: string,
-  siteLabel: string,
-  raw: string,
-  error?: string,
-): string {
-  if (error) {
-    return usesChinese(userText)
-      ? `${siteLabel}登录页面没有打开：${error}`
-      : `The ${siteLabel} login page did not open: ${error}`;
-  }
-  let result: Record<string, unknown> = {};
-  try {
-    result = JSON.parse(raw || '{}');
-  } catch {}
-  if (result.status === 'logged_in') {
-    return usesChinese(userText)
-      ? `${siteLabel}的登录会话已经可用。`
-      : `The ${siteLabel} login session is ready.`;
-  }
-  if (result.browserOpen) {
-    return usesChinese(userText)
-      ? `${siteLabel}登录页面已经打开；如果有扫码、验证码或二次验证，需要你在页面上完成。`
-      : `The ${siteLabel} login page is open. Complete any QR code, captcha, or two-factor check on the page.`;
-  }
-  return usesChinese(userText)
-    ? `${siteLabel}登录页面已经打开。`
-    : `The ${siteLabel} login page is open.`;
-}
-
 export function formatInternalDispatchUnavailable(chinese: boolean): string {
   return chinese
     ? '这次内部调度没有形成可用结果。'
@@ -84,8 +42,4 @@ export function formatArtifactCreatedAndOpened(
   return usesChinese(userText)
     ? `文件已创建${verified ? '、验证' : ''}并打开：${path}`
     : `The file was created${verified ? ', verified,' : ''} and opened: ${path}`;
-}
-
-export function buildInternalOpenCommand(userText: string, target: string): string {
-  return usesChinese(userText) ? `打开 ${target}` : `open ${target}`;
 }

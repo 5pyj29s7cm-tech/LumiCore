@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { flushDB, initDatabase, readDB, writeDB } from '../db_layer';
 import { canInspectSession, canUseSession, claimSession } from '../server/lap/access';
 import { shareContext, resetSharedContextsForTests } from '../server/lap/context';
-import { buildTaskListResponse, delegateTask, registerOutboundTask, resetLAPTasksForTests, updateTaskStatus } from '../server/lap/delegate';
+import { buildTaskListResponse, registerOutboundTask, resetLAPTasksForTests, updateTaskStatus } from '../server/lap/delegate';
 import { createSession, resetLAPSessionsForTests } from '../server/lap/session';
 import type { LAPAgentIdentity } from '../server/lap/types';
 
@@ -38,7 +38,6 @@ describe('LAP workspace authorization', () => {
 
     expect(canInspectSession(session, personalScope)).toBe(true);
     expect(canUseSession(session, personalScope)).toBe(false);
-    expect(delegateTask({ lap: '2.0', id: 'd1', sessionId: session.sessionId, timestamp: new Date().toISOString(), method: 'lap.task.delegate', task: { taskId: 'task-1', type: 'probe', priority: 'normal', payload: {} } }, session).accepted).toBe(false);
     expect(shareContext({ lap: '2.0', id: 'c1', sessionId: session.sessionId, timestamp: new Date().toISOString(), method: 'lap.context.share', contexts: [{ type: 'knowledge', scope: 'session', payload: 'public fact', confidence: 0.8 }] }, session).accepted).toBe(false);
 
     expect(claimSession({ sessionId: session.sessionId, peerAgentId: remote.agentId, scope: personalScope }).ok).toBe(true);

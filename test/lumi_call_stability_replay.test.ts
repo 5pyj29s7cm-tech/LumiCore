@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
-import { matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildDeterministicClientNavigationCommand } from '../server/cognition/quick_commands';
 import { buildActionContract } from '../server/cognition/action_contract';
-import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs } from '../server/agents/nl_chainer';
+import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foreground_wechat_intent';
 import {
   findConversationActionTask,
   formatConversationActionLedgerStatus,
@@ -124,9 +124,18 @@ describe('Lumi field-call stability replay', () => {
         target: '张勇',
         sideEffectClass: 'none',
       });
-      expect(buildForegroundWeChatReadArgs(text)).toMatchObject({ contact: '张勇', useSearch: true });
       expect(buildForegroundWeChatSendArgs(text)).toBeNull();
     }
+  });
+
+  it.each([
+    ['打开微信看看我和阿陆最近的聊天内容', '阿陆'],
+    ['总结我和方天明的聊天记录', '方天明'],
+    ['查看张勇的聊天记录', '张勇'],
+    ['查看微信聊天记录', ''],
+  ])('resolves the same read contact in the active normalizer: %s', (text, target) => {
+    expect(normalizeActionIntent(text)).toMatchObject({ kind: 'messaging_read', operation: 'read', target, sideEffectClass: 'none' });
+    expect(buildForegroundWeChatSendArgs(text)).toBeNull();
   });
 
   it('requires an exact recipient and payload before constructing a send', () => {
@@ -145,7 +154,7 @@ describe('Lumi field-call stability replay', () => {
       operation: 'navigate',
       clientAction: 'open_chat',
     });
-    const quick = await matchQuickCommand('打开聊天界面', 'field-replay', { surface: 'voice' });
+    const quick = buildDeterministicClientNavigationCommand(intent);
     expect(quick?.toolCall).toEqual({ name: 'client_action', arguments: { action: 'open_chat' } });
   });
 
@@ -158,7 +167,7 @@ describe('Lumi field-call stability replay', () => {
       relation: 'correction',
     });
     expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
-    expect(await matchQuickCommand(text, 'field-replay', { surface: 'chat' })).toBeNull();
+    expect(buildDeterministicClientNavigationCommand(normalizeActionIntent(text))).toBeNull();
   });
 
   it('keeps completed CAD receipts queryable after the legacy pointer disappears', () => {

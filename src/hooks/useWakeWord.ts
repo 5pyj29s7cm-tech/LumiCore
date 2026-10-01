@@ -560,11 +560,3 @@ export function useWakeWord({
 
   return { isListening, isSupported, lastDetection, error, enable, disable };
 }
-
-export function savePicovoiceKey(key: string) {
-  localStorage.setItem(PICOVOICE_ACCESS_KEY_STORAGE, key);
-}
-
-export function getPicovoiceKey(): string | null {
-  return localStorage.getItem(PICOVOICE_ACCESS_KEY_STORAGE);
-}

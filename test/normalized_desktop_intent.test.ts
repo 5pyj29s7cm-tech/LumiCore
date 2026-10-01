@@ -12,7 +12,6 @@ import {
   buildDeterministicKnowledgeInspectionCommand,
   buildDeterministicLocalDesktopNavigationCommand,
   buildDeterministicWpsDocumentCommand,
-  buildDeterministicTextArtifactCommand,
   buildDeterministicWorkTaskCreateCommand,
   buildDeterministicWorkTaskProgressCommand,
   buildDeterministicWorkTaskStatusCommand,
@@ -205,30 +204,6 @@ describe('normalized desktop intent priority', () => {
     expect(buildDeterministicWorkTaskStatusCommand(text)).toBeNull();
   });
 
-  it('builds an exact write then readback chain for enumerated local text lines', () => {
-    const text = '请在 C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt 新建一个 TXT 文件，只写入以下三行：第一行“验收对象：Lumi 主程序”；第二行“验收项目：本地文件创建与回读”；第三行“验收代号：青穹-17”。写入后必须重新读取。';
-    const command = buildDeterministicTextArtifactCommand(text);
-    expect(command?.toolCall).toEqual({
-      name: 'write_file',
-      arguments: {
-        path: 'C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt',
-        content: '验收对象：Lumi 主程序\n验收项目：本地文件创建与回读\n验收代号：青穹-17',
-      },
-    });
-    expect(command?.followUpToolCalls).toEqual([{
-      name: 'read_file',
-      arguments: { path: 'C:\\Users\\test-user\\Documents\\Lumi主程序实机验收_20260817.txt' },
-    }]);
-    const response = command?.formatToolRecords?.([
-      { name: 'write_file', arguments: command?.toolCall?.arguments, result: 'File written' },
-      { name: 'read_file', arguments: command?.followUpToolCalls?.[0].arguments, result: '验收对象：Lumi 主程序\n验收项目：本地文件创建与回读\n验收代号：青穹-17' },
-    ]);
-    expect(response).toContain('总行数：3');
-    expect(response).toContain('编码：UTF-8');
-    expect(response).toContain('验收代号：青穹-17');
-    expect(buildDeterministicTextArtifactCommand('帮我写一份普通总结')).toBeNull();
-  });
-
   it('does not treat the Open prefix inside OpenAI as a desktop launch verb', () => {
     expect(normalizeActionIntent('搜一下今天 OpenAI 新闻')).toMatchObject({
       kind: 'none',
@@ -314,6 +289,14 @@ describe('normalized desktop intent priority', () => {
       target: '记事本',
       sideEffectClass: 'none',
     });
+  });
+
+  it.each([
+    '打开计算器。不要修改文件，读取 D:/fixtures/orders.csv 并总结内容。',
+    'Open Calculator. Do not edit files, read D:/fixtures/orders.csv and summarize it.',
+    '打开记事本，然后打开技能大厅。',
+  ])('preserves affirmative work after a negative constraint: %s', text => {
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toBeNull();
   });
 
   it('keeps a labelled exact app launch ahead of negated substitute and file clauses', () => {

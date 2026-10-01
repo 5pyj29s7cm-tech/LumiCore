@@ -1,3 +1,5 @@
+import { toolRecordSucceeded } from '../tools/receipt_payload';
+export { toolRecordSucceeded } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolExecutionRecord } from '../tools/types';
@@ -9,11 +11,25 @@ import {
 } from './action_contract';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 import {
-  parseNestedJson,
-  toolRecordHasTerminalPayload,
   toolRecordTerminalPayload,
-  toolRecordTerminalText,
 } from '../tools/receipt_payload';
+
+/** Merge repeated deliveries of one call, preserving distinct observations. */
+export function mergeToolExecutionRecords(prior: ToolExecutionRecord[], incoming: ToolExecutionRecord[]): ToolExecutionRecord[] {
+  const merged = [...prior];
+  for (const record of incoming) {
+    const index = merged.findIndex(item => item.name === record.name
+      && item.taskId === record.taskId && item.requestId === record.requestId
+      && (record.id ? item.id === record.id : !item.id
+        && item.idempotencyKey === record.idempotencyKey
+        && JSON.stringify(item.arguments || {}) === JSON.stringify(record.arguments || {})
+        && item.result === record.result && item.error === record.error));
+    // This is an evolving turn-local snapshot; normal terminal receipts are immutable.
+    if (index >= 0 && record.name === 'desktop_execution_plan_receipt') merged[index] = record;
+    else if (index < 0) merged.push(record);
+  }
+  return merged;
+}
 
 export type ConversationTaskStatus =
   | 'created'
@@ -25,6 +41,13 @@ export type ConversationTaskStatus =
   | 'completed'
   | 'failed'
   | 'cancelled';
+
+/** Index only the selected tasks; never change stored receipt order or payloads. */
+export function groupTaskReceipts<T extends { taskId: string }>(tasks: readonly { id: string }[], receipts: readonly T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>(tasks.map(task => [task.id, []]));
+  for (const receipt of receipts) grouped.get(receipt?.taskId)?.push(receipt);
+  return grouped;
+}
 
 /** An archive shares receipt storage, while its delegated owner owns execution. */
 export function isDelegatedActionEvidenceArchive(task: { id?: string; context?: unknown }): boolean {
@@ -107,46 +130,6 @@ export interface ConversationTaskReceipt {
   capability?: ToolExecutionRecord['capability'];
   recordedAt: string;
 }
-
-const TERMINAL_FAILURE_STATUSES = new Set([
-  'blocked',
-  'cancelled',
-  'canceled',
-  'denied',
-  'error',
-  'failed',
-  'forbidden',
-  'incomplete',
-  'needs_confirmation',
-  'not_found',
-  'not_ready',
-  'partial',
-  'pending',
-  'queued',
-  'requires_confirmation',
-  'requires_setup',
-  'submitted_unverified',
-  'timed_out',
-  'timeout',
-  'unverified',
-  'uncertain',
-  'not_verified',
-]);
-
-const SEMANTIC_FALSE_FIELDS = [
-  'sent',
-  'opened',
-  'saved',
-  'written',
-  'created',
-  'generated',
-  'submitted',
-  'targetMatched',
-  'resultVerified',
-  'geometryReady',
-  'geometryVerified',
-  'executableGeometryAvailable',
-] as const;
 
 function compact(value: unknown, limit: number): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
@@ -328,74 +311,9 @@ function receiptScope(value: Record<string, any>): {
   return scope;
 }
 
-function parseResult(value: unknown): unknown {
-  return parseNestedJson(value);
-}
-
 function structuredRecordPayload(record: ToolExecutionRecord): unknown {
   const payload = toolRecordTerminalPayload(record);
   return payload && typeof payload === 'object' ? payload : null;
-}
-
-export function toolRecordSucceeded(record: ToolExecutionRecord): boolean {
-  if (!record?.name || compact(record.error, 600)) return false;
-  if (record.terminalVerification?.status === 'failed') return false;
-  if (!toolRecordHasTerminalPayload(record)) return false;
-  const result = compact(toolRecordTerminalText(record), 4000);
-  const structuredPayload = structuredRecordPayload(record);
-  if (structuredPayload && !Array.isArray(structuredPayload)) {
-    const payload = structuredPayload as Record<string, any>;
-    const verification = payload.verification && typeof payload.verification === 'object'
-      ? payload.verification as Record<string, any>
-      : {};
-    const status = compact(
-      payload.status
-        || payload.verificationStatus
-        || verification.status,
-      80,
-    ).toLowerCase();
-    // The dedicated WPS create adapter deliberately leaves a newly-created
-    // document unsaved unless the user explicitly requested a save path.
-    // `saved: false` is therefore a verified state of that create operation,
-    // not evidence that document creation failed. Save contracts are checked
-    // separately by the action contract and still require `saved: true` plus
-    // a concrete path.
-    const ignoredFalseFields = /^(?:wps_create_document|wps_create_document_with_text)$/i.test(record.name)
-      ? new Set<string>(['saved'])
-      : new Set<string>();
-    const declaredProgress = record.terminalVerification?.status === 'verified'
-      && record.capability?.verification.successStatuses?.includes(status)
-      && ['started', 'queued', 'running', 'waiting_confirmation', 'paused'].includes(status);
-    if (declaredProgress) ignoredFalseFields.add('completed');
-    const explicitlyFailedOutcome = SEMANTIC_FALSE_FIELDS.some(field => (
-      !ignoredFalseFields.has(field) && payload[field] === false
-    ));
-    const verifiedRuntimeCancellation = record.name === 'runtime_work_cancel'
-      && payload.ok === true
-      && Number(payload.failedCount || 0) === 0
-      && (status === 'idle' || status === 'cancelled');
-    if (verifiedRuntimeCancellation) return true;
-    if (
-      payload.ok === false
-      || payload.success === false
-      || payload.failed === true
-      || payload.completed === false && !declaredProgress
-      || payload.verified === false
-      || explicitlyFailedOutcome
-      || payload.completionMarkerExists === false
-      || payload.requiresConfirmation === true
-      || payload.confirmationRequired === true
-      || TERMINAL_FAILURE_STATUSES.has(status)
-      || compact(payload.error || verification.error, 400)
-    ) return false;
-    // A structured terminal receipt is authoritative. Do not scan its JSON
-    // text for words such as `failed` after the structured value explicitly
-    // reported `failed: 0`; that production bug inverted verified client
-    // actions into failures.
-    return true;
-  }
-  if (Array.isArray(structuredPayload)) return true;
-  return !/(?:requires? (?:user )?confirmation|permission denied|not allowed|forbidden|timed out|(?:^|\b)(?:failed|error|blocked)(?:\b|:))/i.test(result);
 }
 
 export function toolRecordVerifiedForCompletion(record: ToolExecutionRecord): boolean {

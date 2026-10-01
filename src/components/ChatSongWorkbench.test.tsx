@@ -85,7 +85,7 @@ it('keeps image preparation available but requires a confirmed song before video
   const video = screen.getByRole('button', { name: 'Generate video (Lumi Official API)' });
   expect((video as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(video); expect(p.onGenerate).not.toHaveBeenCalled();
-  expect((screen.getByRole('button', { name: 'Generate image (Lumi Official API)' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((await screen.findByRole('button', { name: 'Generate image (Lumi Official API)' }) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Confirm the song first' }));
   expect(screen.getByRole('tab', { name: '2 · Generate song' }).getAttribute('aria-selected')).toBe('true');
 });

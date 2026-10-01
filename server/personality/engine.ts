@@ -4,7 +4,7 @@ import { formatMemoriesForContext } from '../memory/store';
 import { EmotionalState, formatEmotionalStateForPrompt, resolveVerbosityFromState, applyIntimacyToVector } from './state';
 import { generateSpatiotemporalContext } from '../time/spatiotemporal';
 import { getDesktopContext } from '../context/activity_stream';
-import { getModeConfig, ConversationMode } from '../cognition/modes';
+import { getModeConfig } from '../cognition/modes';
 import { formatLumiConstitutionForPrompt } from './constitution';
 import { buildResponseLanguageInstruction } from '../utils/language';
 import { formatUserIdentityBoundary } from './user_identity';
@@ -418,14 +418,6 @@ function resolveEffectiveConfig(
     toolPolicy: { ...config.toolPolicy, ...overrides.toolPolicy },
     memoryPolicy: { ...config.memoryPolicy, ...overrides.memoryPolicy },
   };
-}
-
-/**
- * Generate a short self-description for streaming status messages.
- * e.g. "Lumi is thinking..."
- */
-export function getStatusText(config: PersonalityConfig): string {
-  return `${config.name} is thinking...`;
 }
 
 /**

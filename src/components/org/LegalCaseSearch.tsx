@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, FileText, FolderOpen, Hash, Loader2, MapPin, Search, Scale } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
@@ -33,8 +33,6 @@ export function LegalCaseSearch({
 }) {
   const t = useT();
   const { workDomain, orgConnection } = useApp();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultQuery = useMemo(() => caseSearchSeed(caseFile), [caseFile?.cause, caseFile?.notes]);
   const [query, setQuery] = useState(defaultQuery);
   const [results, setResults] = useState<CaseResult[]>([]);

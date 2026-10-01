@@ -48,12 +48,10 @@ interface ToolConfig {
   icon: React.ReactNode;
 }
 
-const localText = (t: any, zh: string, en: string) => (t.langCode === 'en' ? en : zh);
 
 export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspace }) {
   const [view, setView] = useState<DesignView>(() => workspace === 'spatial' ? 'space' : 'brand');
   const t = useT();
-  const ui = (zh: string, en: string) => localText(t, zh, en);
 
   React.useEffect(() => {
     setView(workspace === 'spatial' ? 'space' : 'brand');
@@ -219,7 +217,6 @@ export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspa
 
 function useDesignChat() {
   const t = useT();
-  const ui = (zh: string, en: string) => localText(t, zh, en);
   const [input, setInput] = useState('');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
@@ -250,7 +247,6 @@ function useDesignChat() {
 
 function DesignToolView({ config, workspace }: { config: ToolConfig; workspace: DesignWorkspace }) {
   const t = useT();
-  const ui = (zh: string, en: string) => localText(t, zh, en);
   const { input, setInput, result, loading, send } = useDesignChat();
 
   const run = () => {

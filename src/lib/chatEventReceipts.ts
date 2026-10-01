@@ -22,6 +22,9 @@ export type PersistedPendingChatExecution = {
     size: string;
     count?: number;
     duration?: number;
+    primaryArtifactId?: string;
+    referenceArtifactIds?: string[];
+    referenceArtifactId?: string;
     primaryImage?: string;
     referenceImages?: string[];
     referenceImage?: string;
@@ -55,9 +58,12 @@ function normalizePendingExecution(value: unknown): PersistedPendingChatExecutio
       ? (rawOperation === 'image_to_video' ? 'image_to_video' : 'text_to_video')
       : undefined;
   const primaryImage = compact(rawMedia?.primaryImage).slice(0, 8192);
-  const referenceImages = Array.isArray(rawMedia?.referenceImages)
-    ? rawMedia.referenceImages.map(value => compact(value).slice(0, 8192)).filter(Boolean).slice(0, 1)
-    : [];
+  const referenceIndex = Array.isArray(rawMedia?.referenceImages) ? rawMedia.referenceImages.findIndex(value => compact(value)) : -1;
+  const referenceImages = referenceIndex >= 0 ? [compact(rawMedia!.referenceImages![referenceIndex]).slice(0, 8192)] : [];
+  const primaryArtifactId = compact(rawMedia?.primaryArtifactId).slice(0, 512);
+  const referenceArtifactIds = referenceIndex >= 0 && Array.isArray(rawMedia?.referenceArtifactIds)
+    ? [compact(rawMedia.referenceArtifactIds[referenceIndex]).slice(0, 512)].filter(Boolean) : [];
+  const referenceArtifactId = compact(rawMedia?.referenceArtifactId).slice(0, 512);
   const referenceImage = compact(rawMedia?.referenceImage).slice(0, 8192);
   const mediaGeneration = mode && size ? {
     mode,
@@ -67,12 +73,12 @@ function normalizePendingExecution(value: unknown): PersistedPendingChatExecutio
       ? { count: Math.min(4, Math.max(1, Number(rawMedia?.count) || 1)) }
       : operation === 'image_edit'
         ? {
-            ...(primaryImage ? { primaryImage } : {}),
-            ...(referenceImages.length ? { referenceImages } : {}),
+            ...(primaryImage ? { primaryImage, ...(primaryArtifactId ? { primaryArtifactId } : {}) } : {}),
+            ...(referenceImages.length ? { referenceImages, ...(referenceArtifactIds.length ? { referenceArtifactIds } : {}) } : {}),
           }
         : {
             duration: Math.min(120, Math.max(1, Number(rawMedia?.duration) || 6)),
-            ...(operation === 'image_to_video' && referenceImage ? { referenceImage } : {}),
+            ...(operation === 'image_to_video' && referenceImage ? { referenceImage, ...(referenceArtifactId ? { referenceArtifactId } : {}) } : {}),
           }),
   } : undefined;
   return {

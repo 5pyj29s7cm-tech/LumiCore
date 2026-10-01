@@ -1032,10 +1032,7 @@ export const translations: TranslationMap = {
     workflowWaiting: "Waiting for LumiCore activity...",
     workflowAnalyzing: "Analyzing your request...",
     workflowCompleted: "Completed",
-    workflowCalling: "Calling",
     workflowToolDone: "done",
-    workflowToolFailed: "failed",
-    workflowResponseReady: "Response ready",
     // ── Error ──
     errorSignalInterrupted: "Signal Interrupted",
     errorRenderFailure: "Component render failure",
@@ -2554,10 +2551,7 @@ export const translations: TranslationMap = {
     workflowWaiting: "等待 LumiCore 活动...",
     workflowAnalyzing: "正在分析您的请求...",
     workflowCompleted: "已完成",
-    workflowCalling: "调用中",
     workflowToolDone: "完成",
-    workflowToolFailed: "失败",
-    workflowResponseReady: "响应就绪",
     // ── Error ──
     errorSignalInterrupted: "信号中断",
     errorRenderFailure: "组件渲染失败",

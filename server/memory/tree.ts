@@ -38,19 +38,6 @@ export function buildTree(memories: Memory[]): MemoryTree[] {
   return roots;
 }
 
-/** Flatten tree back to a list */
-export function flattenTree(tree: MemoryTree[]): Memory[] {
-  const result: Memory[] = [];
-  const walk = (nodes: MemoryTree[]) => {
-    for (const t of nodes) {
-      result.push(t.node);
-      walk(t.children);
-    }
-  };
-  walk(tree);
-  return result;
-}
-
 /** Move a node to a new parent. Validates no circular references. */
 export function moveNode(
   id: string,
@@ -99,20 +86,6 @@ export function getAllDescendantIds(id: string, memories?: Memory[]): Set<string
     }
   }
   return result;
-}
-
-/** Get the ancestor chain (breadcrumb) for a node */
-export function getAncestors(id: string, memories?: Memory[]): Memory[] {
-  const store = memories || readDB().memories || [];
-  const ancestors: Memory[] = [];
-  let current = store.find(m => m.id === id);
-  while (current?.parentId) {
-    const parent = store.find(m => m.id === current!.parentId);
-    if (!parent) break;
-    ancestors.unshift(parent);
-    current = parent;
-  }
-  return ancestors;
 }
 
 /** Find or create a branch node with the given title */

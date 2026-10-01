@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Upload, FileText, Sparkles, Heart, Users, Briefcase, GraduationCap, User, X, ArrowRight, ArrowLeft, Eye, Castle, Loader2, CheckCircle, AlertTriangle, Zap, Mic, Headphones } from 'lucide-react';
+import { Upload, FileText, Heart, Users, Briefcase, GraduationCap, ArrowRight, ArrowLeft, Eye, Castle, Loader2, CheckCircle, AlertTriangle, Zap, Mic, Headphones } from 'lucide-react';
 import { toast } from 'sonner';
 import { useApp } from '../contexts/AppContext';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
@@ -34,7 +34,6 @@ interface DistillResult {
   summary: DistillSummary;
 }
 
-const localize = (isZh: boolean, zh: string, en: string) => (isZh ? zh : en);
 
 const RELATIONSHIP_TYPES = [
   { id: 'close_friend', icon: <Users size={18} /> },

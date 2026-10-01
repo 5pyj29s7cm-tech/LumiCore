@@ -65,7 +65,6 @@ type SetupStep = 'idle' | 'scanning' | 'awaiting_binding' | 'connected';
 export function WeChatSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const [status, setStatus] = useState<WeChatStatus | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [bindingCode, setBindingCode] = useState('');

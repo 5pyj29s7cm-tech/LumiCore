@@ -12,13 +12,9 @@ import {
 } from './tool_router';
 import { isInteractiveTurnChannel, type LumiTurnFlow } from './turn_flow';
 import {
-  getRecoveredApplicationContinuationTarget,
-  isRecoveredCurrentAppEditingContinuation,
-} from './action_continuation';
-import {
   buildCurrentAppUiStateMachinePrompt,
   CURRENT_APP_MAX_ITERATIONS,
-  isRecoveredWpsCreateTask,
+  isWpsCreateTask,
   WPS_CURRENT_APP_MAX_ITERATIONS,
 } from './current_app_execution';
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
@@ -353,8 +349,8 @@ function enhanceToolRouteForFlow(
   const semanticPriority = new Set<string>();
   const categories = [...route.categories];
   const reasons = [...route.reasons];
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(flow.routeText);
-  const recoveredWpsCreateAndType = isRecoveredWpsCreateTask(flow.routeText);
+  const recoveredCurrentAppEdit = Boolean(flow.currentAppEditTarget);
+  const recoveredWpsCreateAndType = isWpsCreateTask(flow.routeText, flow.currentAppEditTarget);
   const actionContract = buildActionContract(semanticText);
   const authoringTools = skillAuthoringTools(classifySkillAuthoringIntent(semanticText));
   addAvailable(additions, available, authoringTools);
@@ -520,9 +516,8 @@ function enhanceToolRouteForFlow(
 }
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(input.flow.routeText || input.text);
-  const statusOnlyContinuation =
-    /Recovered structured action state:[\s\S]{0,500}- followupIntent:\s*status\b/i.test(input.flow.routeText || input.text);
+  const recoveredCurrentAppEdit = Boolean(input.flow.currentAppEditTarget);
+  const statusOnlyContinuation = input.flow.actionFollowupIntent === 'status';
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
     input.flow.routeText || input.text,
     input.pendingAssistantOfferContext,
@@ -618,7 +613,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   // invocation budget, so a large planning limit cannot cause an unbounded
   // number of real tool actions.
   const taskIterationCap = recoveredCurrentAppEdit
-    ? isRecoveredWpsCreateTask(input.flow.routeText || input.text)
+    ? isWpsCreateTask(input.flow.routeText || input.text, input.flow.currentAppEditTarget)
       ? WPS_CURRENT_APP_MAX_ITERATIONS
       : CURRENT_APP_MAX_ITERATIONS
     : Number.MAX_SAFE_INTEGER;
@@ -644,7 +639,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     statusOnlyContinuation ? 'This is a status/why/recall follow-up about the recovered recent action. Explain the saved goal, actual tool evidence, blocker, and unfinished state. Do not restart execution, create a task-center item, or claim new work in this turn.' : '',
     recoveredCurrentAppEdit
       ? buildCurrentAppUiStateMachinePrompt(
-          getRecoveredApplicationContinuationTarget(input.flow.routeText || input.text),
+          input.flow.currentAppEditTarget || '',
         )
       : '',
     resumesPinnedTask

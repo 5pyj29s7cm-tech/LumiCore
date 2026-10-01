@@ -430,30 +430,6 @@ function correctionOrExplanation(text: string): NormalizedActionIntent | null {
   };
 }
 
-export type NormalizedIntentRuntimeRole = 'advisory' | 'native_client_event';
-export type NormalizedIntentOrigin =
-  | 'natural_language'
-  | 'structured_client_event'
-  | 'model_selected_capability';
-
-/**
- * Normalized intent is a planning hint, not a natural-language executor.
- * Merely recognizing a registered client surface in user text never upgrades
- * the text into a native event. Deterministic ownership is reserved for a
- * structured client event; model-selected capabilities execute through the
- * shared tool loop and therefore remain advisory here.
- */
-export function getNormalizedIntentRuntimeRole(
-  intent: NormalizedActionIntent,
-  origin: NormalizedIntentOrigin = 'natural_language',
-): NormalizedIntentRuntimeRole {
-  return origin === 'structured_client_event'
-    && intent.kind === 'client_navigation'
-    && Boolean(intent.clientAction)
-    ? 'native_client_event'
-    : 'advisory';
-}
-
 const MIXED_STATUS_SIGNAL_RE =
   /(?:\u72b6\u6001|\u8fdb\u5ea6|\u7ed3\u679c|(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u597d)(?:\u4e86)?(?:\u5417|\u6ca1|\u4e86\u6ca1)|\u662f\u5426.{0,16}(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|\b(?:status|progress|result)\b|\b(?:is|was|has)\b.{0,24}\b(?:done|complete|completed|finished|successful)\b|\bwhether\b.{0,24}\b(?:done|complete|completed|finished)\b)/iu;
 
@@ -876,11 +852,18 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
   const generalRead = // i18n-allow: Chinese messaging-read input recognition; not user-visible copy.
     /(?:微信|wechat|weixin|聊天记录|聊天内容|消息).{0,40}(?:看看|查看|看一下|读取|读|最近|记录|总结)|(?:看看|查看|看一下|读取|读|最近|总结).{0,40}(?:微信|wechat|weixin|聊天记录|聊天内容|消息)/iu;
   if (!generalRead.test(text) || /(?:发给|发送给|帮我发|替我发|直接发|send\s+to)/iu.test(text)) return null; // i18n-allow: Chinese outbound-message exclusion.
+  // Resolve contact slots here so all channels share the accepted read target.
+  const contact = trimSlot(
+    text.match(/(?:我和|和|跟|与)\s*([^\s,，。！？!?:：;；、]{1,32}?)\s*(?:的)?(?:最近)?(?:的)?(?:聊天|消息|对话)/u)?.[1] // i18n-allow: Chinese messaging contact recognition.
+    || text.match(/(?:看看|查看|读取|总结)\s*([^\s,，。！？!?:：;；、]{1,32}?)\s*(?:的)?(?:最近)?(?:的)?(?:聊天|消息|对话)/u)?.[1] // i18n-allow: Chinese messaging contact recognition.
+    || '',
+  );
+  const target = /^(?:我|我们|你|微信|wechat|weixin|lumi)$/iu.test(contact) ? '' : contact; // i18n-allow: Pronouns and platform names are not contact identities.
   return {
     kind: 'messaging_read',
     operation: 'read',
-    subject: '',
-    target: '',
+    subject: target,
+    target,
     payload: '',
     sideEffectClass: 'none',
     relation: 'new',
@@ -1008,9 +991,11 @@ function localDesktopOperation(text: string): NormalizedActionIntent | null {
   const objectFirst = text.match(/^(?:请|请你|帮我)?\s*(?:先)?(?:把|将|用)\s*([^，。！？!?；;\n]{1,80}?)\s*(?:先)?(打开|启动|运行|最大化|最小化|还原|关闭)(?:一下|吧)?[。！!]*$/u); // i18n-allow: Object-before-verb desktop instructions.
   if (!instrumented && !direct && !objectFirst) return null;
   const verb = trimSlot(instrumented?.[1] || instrumented?.[3] || objectFirst?.[2] || direct?.[1] || '');
-  const rawTarget = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '');
+  const rawTarget = trimSlot(instrumented?.[2] || instrumented?.[4] || objectFirst?.[1] || direct?.[2] || '')
+    // i18n-allow: existing-window qualifiers are not part of the application name.
+    .replace(/^(?:正在运行|当前运行|已经打开|已打开|现有)(?:着)?(?:的)?/u, '').trim();
   const target = rawTarget.match(/^https?:\/\/[^\s\u3002\uff0c\uff1b,;]+/iu)?.[0] || rawTarget;
-  if (!target || /^(?:什么|啥|哪个|why|what|which)$/iu.test(target)) return null; // i18n-allow: Chinese interrogative input recognition.
+  if (!target || /^(?:什么|啥|哪个|了|好了|完成了|why|what|which)$/iu.test(target)) return null; // i18n-allow: interrogatives and completion feedback are not app names.
   return {
     kind: 'desktop_operation',
     operation: /^(?:打开|启动|运行|切换到|聚焦|open|launch|start|focus)$/iu.test(verb) // i18n-allow: Chinese desktop navigation verb recognition.
@@ -1157,8 +1142,4 @@ export function normalizeActionIntent(value: string): NormalizedActionIntent {
   }
 
   return { ...EMPTY_INTENT };
-}
-
-export function isNonExecutingNormalizedIntent(intent: NormalizedActionIntent): boolean {
-  return intent.kind === 'correction_explanation' || intent.kind === 'status_query';
 }

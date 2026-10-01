@@ -13,88 +13,31 @@ import { getDataPath } from '../server/config/data_path';
 import { addMessage, getOrCreateActiveConversation, setConversationSummary } from '../server/conversation/manager';
 import { ToolRegistry, resetExternalCommitRuntimeCacheForTests } from '../server/tools/registry';
 
-function readIndexNames(): Promise<string[]> {
+// A separate connection verifies committed disk state, not the writer's transaction.
+function readPersistedRows<T = Record<string, any>>(sql: string, params: unknown[] = []): Promise<T[]> {
   return new Promise((resolve, reject) => {
     const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.all(
-      `SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name`,
-      (error, rows: Array<{ name: string }>) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(rows.map(row => row.name));
-      },
-    );
+    database.all(sql, params, (error, rows: T[]) => {
+      database.close(closeError => {
+        if (error || closeError) reject(error || closeError);
+        else resolve(rows);
+      });
+    });
   });
 }
 
-function readInteractionColumns(): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.all(
-      'PRAGMA table_info(interactions)',
-      (error, rows: Array<{ name: string }>) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(rows.map(row => row.name));
-      },
-    );
-  });
+async function readIndexNames(): Promise<string[]> {
+  return (await readPersistedRows("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name"))
+    .map(row => row.name);
 }
 
-function readConversationColumns(): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.all(
-      'PRAGMA table_info(conversations)',
-      (error, rows: Array<{ name: string }>) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(rows.map(row => row.name));
-      },
-    );
-  });
+async function readColumnNames(table: string): Promise<string[]> {
+  return (await readPersistedRows(`PRAGMA table_info(${table})`)).map(row => row.name);
 }
 
-function readActionTaskColumns(): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.all(
-      'PRAGMA table_info(conversation_action_tasks)',
-      (error, rows: Array<{ name: string }>) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(rows.map(row => row.name));
-      },
-    );
-  });
-}
-
-function readExternalCommitJournalColumns(): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.all(
-      'PRAGMA table_info(external_commit_journal)',
-      (error, rows: Array<{ name: string }>) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(rows.map(row => row.name));
-      },
-    );
-  });
-}
-
-function readActionLedgerRows(conversationId: string): Promise<{
-  taskCount: number;
-  receiptCount: number;
-  taskId: string;
-  status: string;
-  context: string;
-  receiptOutcome: string;
-}> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.get(
-      `SELECT
+async function readActionLedgerRows(conversationId: string) {
+  return (await readPersistedRows(
+    `SELECT
         (SELECT COUNT(*) FROM conversation_action_tasks WHERE conversationId = ?) AS taskCount,
         (SELECT COUNT(*) FROM conversation_action_receipts WHERE conversationId = ?) AS receiptCount,
         t.id AS taskId,
@@ -105,40 +48,15 @@ function readActionLedgerRows(conversationId: string): Promise<{
        WHERE t.conversationId = ?
        ORDER BY t.updatedAt DESC
        LIMIT 1`,
-      [conversationId, conversationId, conversationId],
-      (error, row: {
-        taskCount: number;
-        receiptCount: number;
-        taskId: string;
-        status: string;
-        context: string;
-        receiptOutcome: string;
-      }) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(row);
-      },
-    );
-  });
+    [conversationId, conversationId, conversationId],
+  ))[0];
 }
 
-function readConversationSummaryState(conversationId: string): Promise<{
-  summaryChain: string;
-  lastSummaryMessageCount: number;
-  actionContinuationState: string;
-}> {
-  return new Promise((resolve, reject) => {
-    const database = new sqlite3.Database(getDataPath('lumi.db'));
-    database.get(
-      'SELECT summaryChain, lastSummaryMessageCount, actionContinuationState FROM conversations WHERE id = ?',
-      [conversationId],
-      (error, row: { summaryChain: string; lastSummaryMessageCount: number; actionContinuationState: string }) => {
-        database.close();
-        if (error) reject(error);
-        else resolve(row);
-      },
-    );
-  });
+async function readConversationSummaryState(conversationId: string) {
+  return (await readPersistedRows(
+    'SELECT summaryChain, lastSummaryMessageCount, actionContinuationState FROM conversations WHERE id = ?',
+    [conversationId],
+  ))[0];
 }
 
 describe('SQLite persistence indexes', () => {
@@ -185,8 +103,23 @@ describe('SQLite persistence indexes', () => {
     ]));
   });
 
+  it('keeps legacy founder timestamps stable across unrelated flushes', async () => {
+    const db = readDB(), before = db.founderVision, beforeTime = db.founderVisionUpdatedAt, avatars = [...db.memoryAvatars];
+    try {
+      db.founderVision = 'Synthetic durable founder text'; db.founderVisionUpdatedAt = '';
+      db.memoryAvatars.push({ id: 'legacy-time-avatar', userId: 'legacy-time-user', name: 'Legacy avatar' });
+      writeDB(db); await flushDB();
+      const rows = await readPersistedRows('SELECT content,updatedAt FROM founder_vision');
+      expect(rows).toEqual([{ content: db.founderVision, updatedAt: new Date(0).toISOString() }]);
+      expect(await readPersistedRows("SELECT createdAt,updatedAt FROM memory_avatars WHERE id='legacy-time-avatar'")).toEqual([{ createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }]);
+      writeDB(db); await flushDB();
+      expect(getDatabasePersistenceStatus().lastFlushTables).toEqual([]);
+      expect(await readPersistedRows('SELECT content,updatedAt FROM founder_vision')).toEqual(rows);
+    } finally { db.founderVision = before; db.founderVisionUpdatedAt = beforeTime; db.memoryAvatars = avatars; writeDB(db); await flushDB(); }
+  });
+
   it('creates the write-ahead journal required for external-commit restart safety', async () => {
-    expect(await readExternalCommitJournalColumns()).toEqual(expect.arrayContaining([
+    expect(await readColumnNames('external_commit_journal')).toEqual(expect.arrayContaining([
       'idempotencyKey',
       'taskId',
       'userId',
@@ -201,7 +134,7 @@ describe('SQLite persistence indexes', () => {
   });
 
   it('persists external message correlation fields across atomic snapshot writes', async () => {
-    const columns = await readInteractionColumns();
+    const columns = await readColumnNames('interactions');
     expect(columns).toEqual(expect.arrayContaining([
       'externalMessageId',
       'routeSequence',
@@ -210,7 +143,7 @@ describe('SQLite persistence indexes', () => {
   });
 
   it('persists conversation summary cadence and chain fields across atomic snapshot writes', async () => {
-    const columns = await readConversationColumns();
+    const columns = await readColumnNames('conversations');
     expect(columns).toEqual(expect.arrayContaining([
       'summaryChain',
       'lastSummaryMessageCount',
@@ -233,7 +166,7 @@ describe('SQLite persistence indexes', () => {
   });
 
   it('persists task identity and receipts only in the durable ledger across an atomic snapshot write', async () => {
-    expect(await readActionTaskColumns()).toEqual(expect.arrayContaining([
+    expect(await readColumnNames('conversation_action_tasks')).toEqual(expect.arrayContaining([
       'parentTaskId',
       'activeRequestId',
       'completionSource',

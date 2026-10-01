@@ -86,10 +86,6 @@ function compactText(value: string): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function includesAny(text: string, keywords: string[]): boolean {
-  return keywords.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()));
-}
-
 function scoreCategory(text: string, category: Exclude<WechatWorkCategory, 'unknown'>): number {
   const keywords = CATEGORY_KEYWORDS[category];
   let score = 0;
@@ -300,11 +296,4 @@ export function analyzeWechatIntake(input: WechatIntakeInput): WechatIntakeResul
     blockedBy,
     safety: 'Lumi can triage, draft, prepare files, copy drafts, and restore already logged-in app/browser sessions. First-time login, QR/OTP/biometric verification, account switching, sending messages, publishing, payment, signing, submitting, or making external commitments remains confirmation-gated.',
   };
-}
-
-export function isLikelyWechatTakeoverRequest(text: string): boolean {
-  const compact = compactText(text);
-  if (!compact) return false;
-  return includesAny(compact, ['微信', '消息', '聊天', '客户信息', '线索'])
-    && includesAny(compact, ['接管', '处理', '回复', '推进', '跟进', '分类']);
 }

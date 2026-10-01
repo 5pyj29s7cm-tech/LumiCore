@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPendingConfirmationPersistenceRecord,
-  buildConversationConfirmationChannelScope,
   buildTransportNeutralConfirmationScope,
-  buildVoiceConfirmationChannelScope,
   clearAllPendingConfirmationsForTests,
   confirmationArgumentsMatch,
-  consumePendingConfirmation,
+  consumePendingConfirmationDurably,
   formatPendingConfirmationPrompt,
   formatPendingConfirmationRequest,
   getPendingConfirmation,
@@ -24,7 +22,7 @@ describe('One-time pending tool confirmations', () => {
     clearAllPendingConfirmationsForTests();
   });
 
-  it('expires an approval boundary before it can authorize a stale external commit', () => {
+  it('expires an approval boundary before it can authorize a stale external commit', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     const pending = recordPendingConfirmation(
@@ -42,7 +40,7 @@ describe('One-time pending tool confirmations', () => {
       channelId: 'voice-expired',
       taskId: 'task-expired',
     })).toBeNull();
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'u-expired',
       pending.id,
       pending.toolName,
@@ -51,12 +49,12 @@ describe('One-time pending tool confirmations', () => {
     )).toBe(false);
   });
 
-  it('consumes only an exact tool and argument match once', () => {
+  it('consumes only an exact tool and argument match once', async () => {
     const pending = recordPendingConfirmation('u1', 'legal_submit_filing', { caseId: 'case-1', court: 'A' });
     expect(getPendingConfirmation('u1')?.id).toBe(pending.id);
-    expect(consumePendingConfirmation('u1', pending.id, 'legal_submit_filing', { caseId: 'case-2', court: 'A' })).toBe(false);
-    expect(consumePendingConfirmation('u1', pending.id, 'legal_submit_filing', { court: 'A', caseId: 'case-1' })).toBe(true);
-    expect(consumePendingConfirmation('u1', pending.id, 'legal_submit_filing', { court: 'A', caseId: 'case-1' })).toBe(false);
+    expect(await consumePendingConfirmationDurably('u1', pending.id, 'legal_submit_filing', { caseId: 'case-2', court: 'A' })).toBe(false);
+    expect(await consumePendingConfirmationDurably('u1', pending.id, 'legal_submit_filing', { court: 'A', caseId: 'case-1' })).toBe(true);
+    expect(await consumePendingConfirmationDurably('u1', pending.id, 'legal_submit_filing', { court: 'A', caseId: 'case-1' })).toBe(false);
   });
 
   it('redacts credentials before placing pending details in a model prompt', () => {
@@ -213,7 +211,7 @@ describe('One-time pending tool confirmations', () => {
     expect(replanned.exactArgs).toEqual({ recipient: '文件传输助手', text: '原始消息' });
   });
 
-  it('isolates confirmations by remote channel and data scope', () => {
+  it('isolates confirmations by remote channel and data scope', async () => {
     const personal = recordPendingConfirmation(
       'u1',
       'wechat_send_file',
@@ -235,14 +233,14 @@ describe('One-time pending tool confirmations', () => {
     expect(getPendingConfirmation('u1', {
       source: 'feishu_bot', domain: 'work', orgId: 'org-1', channelId: 'feishu-group',
     })?.id).toBe(work.id);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'u1',
       personal.id,
       'wechat_send_file',
       { filePath: 'D:\\personal.pdf' },
       { source: 'feishu_bot', domain: 'work', orgId: 'org-1', channelId: 'feishu-group' },
     )).toBe(false);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'u1',
       personal.id,
       'wechat_send_file',
@@ -251,7 +249,7 @@ describe('One-time pending tool confirmations', () => {
     )).toBe(true);
   });
 
-  it('does not let chat, voice, and task confirmations consume each other', () => {
+  it('does not let chat, voice, and task confirmations consume each other', async () => {
     const chat = recordPendingConfirmation(
       'u1',
       'desktop_open',
@@ -273,7 +271,7 @@ describe('One-time pending tool confirmations', () => {
       channelId: 'task-1',
       taskId: 'task-chat',
     })).toBeNull();
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'u1',
       chat.id,
       chat.toolName,
@@ -294,9 +292,9 @@ describe('One-time pending tool confirmations', () => {
     })?.id).toBe(voice.id);
   });
 
-  it('keeps a voice confirmation available across separate utterance request ids', () => {
-    const scope = buildVoiceConfirmationChannelScope({
-      domain: 'personal', orgId: '', channelId: 'voice-stable-channel', taskId: 'durable-task-id',
+  it('keeps a voice confirmation available across separate utterance request ids', async () => {
+    const scope = buildTransportNeutralConfirmationScope({
+      domain: 'personal', orgId: '', conversationId: 'voice-stable-channel', taskId: 'durable-task-id',
     });
     const pending = recordPendingConfirmation(
       'voice-stable-user',
@@ -307,14 +305,13 @@ describe('One-time pending tool confirmations', () => {
     );
 
     expect(getPendingConfirmation('voice-stable-user', scope)?.id).toBe(pending.id);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'voice-stable-user', pending.id, pending.toolName, pending.exactArgs, scope,
     )).toBe(true);
   });
 
   it('keeps chat confirmation scope stable across transport reconnects', () => {
-    const scope = buildConversationConfirmationChannelScope({
-      source: 'chat',
+    const scope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-1',
       taskId: 'task-1',
@@ -332,9 +329,8 @@ describe('One-time pending tool confirmations', () => {
     expect(getPendingConfirmation('chat-user', scope)?.id).toBe(pending.id);
   });
 
-  it('does not let a later unrelated request adopt a task-bound confirmation', () => {
-    const exactScope = buildConversationConfirmationChannelScope({
-      source: 'chat',
+  it('does not let a later unrelated request adopt a task-bound confirmation', async () => {
+    const exactScope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-confirmation-owner',
       taskId: 'task-owner',
@@ -347,32 +343,29 @@ describe('One-time pending tool confirmations', () => {
       'chat',
       exactScope,
     );
-    const wrongOrigin = buildConversationConfirmationChannelScope({
-      source: 'chat',
+    const wrongOrigin = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-confirmation-owner',
       taskId: 'task-owner',
       originRequestId: 'request-later-unrelated',
     });
-    const noTask = buildConversationConfirmationChannelScope({
-      source: 'chat',
+    const noTask = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-confirmation-owner',
     });
 
     expect(getPendingConfirmation('chat-owner', wrongOrigin)).toBeNull();
     expect(getPendingConfirmation('chat-owner', noTask)).toBeNull();
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'chat-owner', pending.id, pending.toolName, pending.exactArgs, wrongOrigin,
     )).toBe(false);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'chat-owner', pending.id, pending.toolName, pending.exactArgs, exactScope,
     )).toBe(true);
   });
 
-  it('keeps a fresh taskless confirmation consumable after its first receipt creates the task', () => {
-    const channelScope = buildConversationConfirmationChannelScope({
-      source: 'chat',
+  it('keeps a fresh taskless confirmation consumable after its first receipt creates the task', async () => {
+    const channelScope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-model-owned-task',
     });
@@ -383,8 +376,7 @@ describe('One-time pending tool confirmations', () => {
       'chat',
       { ...channelScope, originRequestId: 'request-that-proposed-command' },
     );
-    const laterTaskScope = buildConversationConfirmationChannelScope({
-      source: 'chat',
+    const laterTaskScope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-model-owned-task',
       taskId: 'task-created-from-blocked-receipt',
@@ -393,7 +385,7 @@ describe('One-time pending tool confirmations', () => {
 
     expect(getPendingConfirmation('chat-fresh-task', laterTaskScope)).toBeNull();
     expect(getPendingConfirmation('chat-fresh-task', channelScope)?.id).toBe(pending.id);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'chat-fresh-task', pending.id, pending.toolName, pending.exactArgs, channelScope,
     )).toBe(true);
   });
@@ -408,7 +400,7 @@ describe('One-time pending tool confirmations', () => {
     expect(isExplicitConfirmationReply('确认一下这个文件内容')).toBe(false);
   });
 
-  it('provides one transport-neutral conversation scope for voice-to-text confirmation', () => {
+  it('provides one transport-neutral conversation scope for voice-to-text confirmation', async () => {
     const scope = buildTransportNeutralConfirmationScope({
       domain: 'personal',
       conversationId: 'conversation-cross-channel',
@@ -426,7 +418,7 @@ describe('One-time pending tool confirmations', () => {
     expect(scope.source).toBeUndefined();
     expect(scope.channelId).toBe('conversation:conversation-cross-channel');
     expect(getPendingConfirmation('cross-channel-user', scope)?.id).toBe(pending.id);
-    expect(consumePendingConfirmation(
+    expect(await consumePendingConfirmationDurably(
       'cross-channel-user',
       pending.id,
       pending.toolName,

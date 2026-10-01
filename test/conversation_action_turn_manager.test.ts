@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
@@ -637,7 +638,7 @@ describe('manager conversation action-turn integration', () => {
       // A future debounced full snapshot sees the already-quarantined live
       // object. It cannot resurrect the text or completion projection staged
       // before the failed strict flush.
-      const delayedSnapshot = structuredClone(readDB());
+      const delayedSnapshot = cloneDatabaseValue(readDB());
       const serialized = JSON.stringify(delayedSnapshot);
       expect(serialized).not.toContain(`FALSE_${channel.toUpperCase()}_SUCCESS`);
       const assistant = delayedSnapshot.interactions.find((row: any) => (

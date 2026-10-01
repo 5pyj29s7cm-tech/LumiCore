@@ -3,13 +3,18 @@ import { serializedScopeRoute, sendDurableMutation } from "./durable_mutation";
 import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from "../persistence/durable_scope_mutation";
 import { readDB, writeDB } from "../../db_layer";
 import {
-  queryMemories, addMemory, removeMemory, updateMemoryLifecycle,
+  queryMemories,
+  addMemory,
+  removeMemory,
+  updateMemoryLifecycle,
   resolveMemoryConflict,
-  addReminder, fireReminder,
-  runBehavioralAnalysis, broadcastMemoryChange,
-  getDueReminders, getUnconsolidatedEpisodic,
+  addReminder,
+  fireReminder,
+  runBehavioralAnalysis,
+  broadcastMemoryChange,
+  getUnconsolidatedEpisodic,
 } from "../memory";
-import { buildTree, moveNode, flattenTree, ensureBranch } from "../memory/tree";
+import { buildTree, moveNode, ensureBranch } from "../memory/tree";
 import { consolidateEpisodic, selfReflect, ConsolidationContext } from "../memory/consolidator";
 import { buildNarrativeChain } from "../memory/narrative";
 import { makeLLMCall } from "../llm/providers";

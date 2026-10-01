@@ -1,5 +1,9 @@
 import './helpers';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { extractSourceExpression } from './source_expression';
+import { isCurrentScopeRequest } from '../src/components/scopeRequestGuard';
+import { normalizeTaskCompletionFeedback } from '../src/components/workflowTypes';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateAutonomousTaskOutcome,
@@ -11,15 +15,62 @@ import {
 import { isVerifiedAutonomousHistoryItem } from '../server/socket/ambient';
 import { finalizeScheduledDelivery } from '../server/scheduler';
 import {
-  classifyToolNotification,
-} from '../src/components/ProactiveNotifications';
-import {
   autonomousTaskCustomerSummary,
   isVerifiedAutonomousCompletionPayload,
   normalizeAutonomousHistoryTask,
+  mergeAutonomousTasks,
 } from '../src/components/AutonomousFeed';
 
 describe('remaining output bypass closure', () => {
+  it.each(['completed', 'failed', 'cancelled', 'unverified'] as const)('keeps %s task feedback scoped while sharing terminal updates', status => {
+    const file = fileURLToPath(new URL('../src/components/AutonomousFeed.tsx', import.meta.url));
+    let tasks: any[] = [{ id: 'current', status: 'running' }, { id: 'other', status: 'running' }];
+    let active = true; const notifications: any[] = [];
+    const deps: any = { normalizeTaskCompletionFeedback, autonomousTaskCustomerSummary, isVerifiedAutonomousCompletionPayload,
+      locale: 'en', uiMessage: (value: string) => value, eventIsCurrent: () => active,
+      setTasks: (update: any) => { tasks = update(tasks); }, mergeAutonomousTasks, revisionRef: { current: 0 },
+      addNotification: (value: any) => notifications.push(value) };
+    for (const name of ['recordTask', 'recordTerminalTask', 'recordFailedTask', 'onCompleted', 'onCancelled']) deps[name] = extractSourceExpression(file, name, deps);
+    const event = { taskId: 'current', title: 'Task', timestamp: '2026-10-01', result: 'Done', toolCallsCount: 1, tokensUsed: 2,
+      finalized: true, blocked: false, verified: status !== 'unverified' };
+    const handler = deps[status === 'cancelled' ? 'onCancelled' : status === 'failed' ? 'recordFailedTask' : 'onCompleted'];
+    active = false; handler(event); expect(tasks.every(task => task.status === 'running')).toBe(true); expect(tasks).toHaveLength(2);
+    active = true; handler(event); handler(event);
+    expect(tasks.filter(task => task.status === 'running').map(task => task.id)).toEqual(['other']);
+    expect(tasks).toHaveLength(2); expect(tasks.find(task => task.id === 'current').status).toBe(status === 'unverified' ? 'failed' : status);
+    expect(notifications.length).toBe(status === 'cancelled' ? 0 : 2);
+    if (status !== 'cancelled') expect(notifications[0].type).toBe(status === 'completed' ? 'success' : 'warning');
+  });
+
+  it('preserves terminal events over in-flight refreshes and rejects older refreshes and scopes', async () => {
+    const file = fileURLToPath(new URL('../src/components/AutonomousFeed.tsx', import.meta.url));
+    let tasks: any[] = [], loading = false;
+    const requests: Array<(data: any) => void> = [], errors: string[] = [];
+    const deps: any = { scopeKey: 'personal:', activeScopeKeyRef: { current: 'personal:' }, scopeGenerationRef: { current: 1 },
+      revisionRef: { current: 0 }, loadSequenceRef: { current: 0 }, isCurrentScopeRequest, mergeAutonomousTasks, normalizeAutonomousHistoryTask,
+      setTasks: (update: any) => { tasks = update(tasks); }, setLoading: (value: boolean) => { loading = value; },
+      setLoadError: () => {}, toast: { error: (message: string) => errors.push(message) },
+      apiFetch: () => new Promise(resolve => requests.push(data => resolve({ ok: true, json: async () => data }))) };
+    const recordTask = extractSourceExpression(file, 'recordTask', deps), loadTasks = extractSourceExpression(file, 'loadTasks', deps);
+    const live = { id: 'current', title: 'Task', status: 'running' }, completed = { ...live, status: 'completed', result: 'done',
+      toolCallsCount: 1, finalized: true, verified: true, blocked: false };
+    const pending = loadTasks();
+    recordTask(completed);
+    requests[0]({ queue: [live, { ...live, id: 'server-only' }] }); requests[1]({ tasks: [] }); await pending;
+    expect(tasks.find(task => task.id === 'current').status).toBe('completed');
+    expect(tasks.some(task => task.id === 'server-only')).toBe(true); expect(loading).toBe(false);
+    // A delayed cancel acknowledgement must not replace a newer terminal event.
+    recordTask({ ...live, status: 'cancelling' }, 0);
+    expect(tasks.find(task => task.id === 'current').status).toBe('completed');
+    const old = loadTasks(), fresh = loadTasks();
+    requests[4]({ queue: [] }); requests[5]({ tasks: [completed] }); await fresh;
+    requests[2]({ queue: [live] }); requests[3]({ tasks: [] }); await old;
+    expect(tasks.map(task => task.id)).toEqual(['current']); expect(tasks[0].status).toBe('completed');
+    const previousScope = loadTasks(); deps.activeScopeKeyRef.current = 'work:other'; deps.scopeGenerationRef.current++;
+    tasks = []; requests[6]({ queue: [live] }); requests[7]({ tasks: [completed] }); await previousScope;
+    expect(tasks).toEqual([]); expect(errors).toEqual([]);
+  });
+
   it('does not mark autonomous model text complete without successful tool evidence', () => {
     const outcome = evaluateAutonomousTaskOutcome(
       'Open WPS and create a document.',
@@ -346,26 +397,4 @@ describe('remaining output bypass closure', () => {
     }).status).toBe('failed');
   });
 
-  it('does not convert every tool result into a success notification', () => {
-    expect(classifyToolNotification({
-      name: 'desktop_open',
-      arguments: {},
-      result: 'Opened request returned',
-    }).state).toBe('result');
-    expect(classifyToolNotification({
-      name: 'desktop_open',
-      arguments: {},
-      result: JSON.stringify({ status: 'pending' }),
-    }).state).toBe('blocked');
-    expect(classifyToolNotification({
-      name: 'desktop_open',
-      arguments: {},
-      result: JSON.stringify({ ok: true, status: 'verified' }),
-    }).state).toBe('verified');
-    expect(classifyToolNotification({
-      name: 'desktop_open',
-      arguments: {},
-      error: 'not found',
-    }).state).toBe('failed');
-  });
 });

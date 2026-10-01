@@ -1,63 +1,17 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+import type { FileEntry, MemoryNode } from './MemoryTree/types';
 import { motion, AnimatePresence } from 'motion/react';
 import { useT, useLocale } from '../lib/useT';
 import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
 import { chatPreviewCopy } from '@/i18n/locales/chatPreview';
-import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, Sparkles, CheckCircle2, Loader2, MessageSquare, Eye, FileText, FolderOpen } from 'lucide-react';
+import { X, Trash2, Edit3, Brain, Shield, ShieldOff, File, Clock, Layers, CheckCircle2, Loader2, MessageSquare, Eye, FileText, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { uiMessage } from '../i18n/uiMessages';
 
-interface FileEntry {
-  id: string;
-  name: string;
-  displayName?: string;
-  path?: string;
-  domain?: 'personal' | 'work';
-  orgId?: string;
-  size?: string;
-  rawSize?: number;
-  source?: 'upload' | 'generated' | 'ingested' | 'obsidian';
-  agentIds?: string[];
-  status?: 'ready' | 'indexing' | 'indexed' | 'partial' | 'unsupported' | 'failed';
-  extractionStatus?: 'indexed' | 'partial' | 'unsupported' | 'failed';
-  extractionMethod?: string;
-  extractionWarning?: string;
-  extractionError?: string;
-  extractionProvider?: string;
-  extractionModel?: string;
-  contentChars?: number;
-  sourceTitle?: string;
-  sourceAliases?: string[];
-  sourceTags?: string[];
-  sourceLinks?: string[];
-  sourceBacklinks?: string[];
-  sourceProperties?: Record<string, unknown>;
-  obsidianVaultId?: string;
-  obsidianVaultName?: string;
-  obsidianVaultPath?: string;
-  obsidianRelativePath?: string;
-  obsidianSourcePath?: string;
-  updatedAt?: string;
-  createdAt?: string;
-}
-
-interface Memory {
-  id: string;
-  userId?: string;
-  type?: 'preference' | 'fact' | 'habit' | 'knowledge';
-  content: string;
-  keywords?: string[];
-  confidence?: number;
-  tier?: 'episodic' | 'internalized' | 'growth' | 'core_identity';
-  perspective?: string;
-  importance?: number;
-  nodeType?: 'branch' | 'leaf';
-  createdAt?: string;
-  updatedAt?: string;
+type Memory = Pick<MemoryNode, 'id' | 'content'> & Partial<Omit<MemoryNode, 'id' | 'content'>> & {
   lastRetrievedAt?: string | null;
   retrieveCount?: number;
-  parentId?: string | null;
-}
+};
 
 interface ConversationData {
   id: string;
@@ -96,13 +50,6 @@ const TIER_LABELS: Record<string, string> = {
   growth: 'Growth',
   internalized: 'Internalized',
   episodic: 'Episodic',
-};
-
-const TIER_HUES: Record<string, number> = {
-  core_identity: 42,
-  growth: 150,
-  internalized: 195,
-  episodic: 260,
 };
 
 export function NodeDetailPanel({

@@ -486,21 +486,6 @@ export function createStream(
 }
 
 /**
- * Backwards-compatible name kept for integrations compiled against the
- * previous buffered adapter.  The official route is now a real duplex stream;
- * retaining the export avoids a hard runtime break while giving callers the
- * corrected protocol and endpoint behavior.
- */
-export function createBufferedSession(
-  language = 'zh',
-  interimResults = false,
-  model?: string,
-  _fetchImpl?: typeof fetch,
-): StreamingSTTSession {
-  return createStream(language, interimResults, { model });
-}
-
-/**
  * One-utterance compatibility wrapper for callers that still submit an audio
  * buffer. The official service only documents streaming STT, so this uses the
  * same production WebSocket path instead of the removed REST fallback.

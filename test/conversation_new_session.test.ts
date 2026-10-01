@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
@@ -108,11 +109,11 @@ describe('explicit new conversation', () => {
     const settingKey = `isolated-e2e-setting-${userId}`;
     db.settings.push({ key: settingKey, value: 'must-remain-byte-identical' });
     writeDB(db);
-    const activeBefore = structuredClone(db.conversations.find((row: any) => row.id === active.id));
-    const interactionsBefore = structuredClone(
+    const activeBefore = cloneDatabaseValue(db.conversations.find((row: any) => row.id === active.id));
+    const interactionsBefore = cloneDatabaseValue(
       db.interactions.filter((row: any) => row.conversationId === active.id),
     );
-    const settingsBefore = structuredClone(db.settings);
+    const settingsBefore = cloneDatabaseValue(db.settings);
 
     const isolated = startIsolatedConversation(userId, 'lumi', 'personal', '');
     const bound = getOrCreateConversationForTurn(userId, 'lumi', 'personal', '', {

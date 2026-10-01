@@ -1,0 +1,325 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune28",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "src/components/Settings.tsx",
+      "beforeLines": 3638,
+      "afterLines": 3571,
+      "delta": -67,
+      "beforeSha256": "9ab23ac0adc0ce56d3501427d3d029c35ac27a234ea590291762bba9f24b88e8",
+      "afterSha256": "d8dae37a4a0068fffc26a9f52064d2c0b84b6be5290ee4d29749b42c0ee08b2e"
+    },
+    {
+      "file": "src/components/MediaGenerationStudio.tsx",
+      "beforeLines": 847,
+      "afterLines": 812,
+      "delta": -35,
+      "beforeSha256": "995cc8540b28ceec2252fba56647f8ad33b4e3d0f6bef55cdedb8e787118b2f2",
+      "afterSha256": "4a4b3114fcb3814305970b5860cd39d3fb79aa3476ffd24d27569e6b9f2ff0d4"
+    },
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "beforeLines": 5095,
+      "afterLines": 5076,
+      "delta": -19,
+      "beforeSha256": "e42db6dd9c13fd8ae319834b71dd8e4eb211d21befd1a882809ef62f06045cad",
+      "afterSha256": "5b7b39e7a942504f33f93027643b93b3de549269419143a763b5a0700e10fe96"
+    },
+    {
+      "file": "src/components/DesktopUI.tsx",
+      "beforeLines": 6216,
+      "afterLines": 6208,
+      "delta": -8,
+      "beforeSha256": "e39ed10e1ef77faa4041922cb19312e101632d60d3ece7304546ae650d3367db",
+      "afterSha256": "fa4f9d89e13c839254da186861a01072a717a3e1e1aa134d934b8c842c5707f4"
+    },
+    {
+      "file": "src/components/MediaGenerationStudio.test.tsx",
+      "beforeLines": 210,
+      "afterLines": 261,
+      "delta": 51,
+      "beforeSha256": "f98885f0643ed7951765303648f5ea81a47829ed2644d48caeebee3cf013f8c7",
+      "afterSha256": "7763044d8e00b87f6ce440639d3829f2762edae0bc6e15de7ea945c48261c37b"
+    },
+    {
+      "file": "test/chat_execution_recovery.test.ts",
+      "beforeLines": 157,
+      "afterLines": 172,
+      "delta": 15,
+      "beforeSha256": "698206de753b8dd21008b9289eb29f75f49cd67284b2a8c5fb80f1632e41349d",
+      "afterSha256": "46d987700d41f91d44d90e9065f293a93f1dc8700bffa77395bef5ba207b3107"
+    },
+    {
+      "file": "test/large_ui_state.test.tsx",
+      "beforeLines": 0,
+      "afterLines": 74,
+      "delta": 74,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "3cce085959b69344784f62d4099521e5ac6ffdae6868494ab42cd2f2b88ef642"
+    },
+    {
+      "file": "test/source_expression.ts",
+      "beforeLines": 42,
+      "afterLines": 43,
+      "delta": 1,
+      "beforeSha256": "8a46ce8a84e7bcdb4e9c1521c6fa491122527a78cfb9f67a7809ab23db26dd79",
+      "afterSha256": "d4d3a6038efeee270939ae08c27032f87832d6d0e66cfbeaaf709afceceeb8d5"
+    },
+    {
+      "file": "src/lib/chatEventReceipts.ts",
+      "beforeLines": 266,
+      "afterLines": 272,
+      "delta": 6,
+      "beforeSha256": "d2873e01139399277d1e23e056ac0bf5462be34089652014484d47c4c74aef2f",
+      "afterSha256": "632224b4072f6f71feaf18687fe2879b8bdb4948648adab4e11a56dc7ee67280"
+    },
+    {
+      "file": "test/chat_event_receipts.test.ts",
+      "beforeLines": 118,
+      "afterLines": 131,
+      "delta": 13,
+      "beforeSha256": "fc5a01d1a90f941a6b0ff6fd0258cf89ed3b20d8b1578b72caec0b9e896005d5",
+      "afterSha256": "12e001c28ec5b116b82d559fc38fd01d905036f982590c43e363fc2f6ac02739"
+    },
+    {
+      "file": "src/components/SkillCenter.tsx",
+      "beforeLines": 2002,
+      "afterLines": 1982,
+      "delta": -20,
+      "beforeSha256": "251dc61cf82cd56384fcf8514fddc0c258178fc80c102373a722ae203b7b4b0f",
+      "afterSha256": "f944e11c20a3574963c71cc14c5ffe8b0947bfbbfa776692d542e1486a5a4b35"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 367928
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159250
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527178
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 367785
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159404
+      },
+      "total": {
+        "files": 1823,
+        "lines": 527189
+      }
+    }
+  },
+  "tests": {
+    "files": 731,
+    "passed": 6584,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      [
+        "D:/lumiOS/src/components/MediaGenerationStudio.test.tsx::MediaGenerationStudio operations clears stale artifact identity when a image_edit source is replaced manually",
+        1
+      ],
+      [
+        "D:/lumiOS/src/components/MediaGenerationStudio.test.tsx::MediaGenerationStudio operations clears stale artifact identity when a image_to_video source is replaced manually",
+        1
+      ],
+      [
+        "D:/lumiOS/src/components/MediaGenerationStudio.test.tsx::MediaGenerationStudio operations uses the parent selection after recovery, clearing old source identities and supporting an optional reference",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_event_receipts.test.ts::native chat terminal event receipts keeps source identities bounded, aligned with nonempty references, and absent without a source",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_execution_recovery.test.ts::recovers all source identities atomically and clears the previous selection: image_edit",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_execution_recovery.test.ts::recovers all source identities atomically and clears the previous selection: image_to_video",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::persists and publishes the voice preference lumi_allow_proactive_voice independently",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::persists and publishes the voice preference lumi_wake_word_enabled independently",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::persists and publishes the voice preference lumi_always_on_voice independently",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::passes proactive text and its source together when opening the command center",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::keeps an open skill detail synchronized with toggles, refreshed data and external removal",
+        1
+      ]
+    ],
+    "removed": [],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "src/components/Settings.tsx": "d8dae37a4a0068fffc26a9f52064d2c0b84b6be5290ee4d29749b42c0ee08b2e",
+        "src/components/MediaGenerationStudio.tsx": "4a4b3114fcb3814305970b5860cd39d3fb79aa3476ffd24d27569e6b9f2ff0d4",
+        "src/components/AgentChatPage.tsx": "5b7b39e7a942504f33f93027643b93b3de549269419143a763b5a0700e10fe96",
+        "src/components/DesktopUI.tsx": "fa4f9d89e13c839254da186861a01072a717a3e1e1aa134d934b8c842c5707f4",
+        "src/components/MediaGenerationStudio.test.tsx": "7763044d8e00b87f6ce440639d3829f2762edae0bc6e15de7ea945c48261c37b",
+        "test/chat_execution_recovery.test.ts": "46d987700d41f91d44d90e9065f293a93f1dc8700bffa77395bef5ba207b3107",
+        "test/large_ui_state.test.tsx": "3cce085959b69344784f62d4099521e5ac6ffdae6868494ab42cd2f2b88ef642",
+        "test/source_expression.ts": "d4d3a6038efeee270939ae08c27032f87832d6d0e66cfbeaaf709afceceeb8d5",
+        "src/lib/chatEventReceipts.ts": "632224b4072f6f71feaf18687fe2879b8bdb4948648adab4e11a56dc7ee67280",
+        "test/chat_event_receipts.test.ts": "12e001c28ec5b116b82d559fc38fd01d905036f982590c43e363fc2f6ac02739",
+        "src/components/SkillCenter.tsx": "f944e11c20a3574963c71cc14c5ffe8b0947bfbbfa776692d542e1486a5a4b35"
+      },
+      "startedAt": "2026-10-01T13:09:42.167Z",
+      "finishedAt": "2026-10-01T13:16:34.479Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 5,
+    "passed": 49
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T13:08:42.141Z",
+      "end": "2026-10-01T13:09:18.006Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T13:09:18.009Z",
+      "end": "2026-10-01T13:09:27.423Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T13:09:27.423Z",
+      "end": "2026-10-01T13:09:36.865Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T13:09:36.866Z",
+      "end": "2026-10-01T13:09:37.288Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T13:09:37.288Z",
+      "end": "2026-10-01T13:09:42.119Z",
+      "exitCode": 0
+    }
+  ],
+  "scope": {
+    "media": [
+      "One parent-owned source selection; removed six mirrored child states and six fallback resolution branches",
+      "Atomic path and artifact-id selection, reset and authenticated recovery",
+      "Recovery metadata keeps bounded artifact identities paired with nonempty source paths",
+      "Internal component now requires controlled source fields; sole production caller and interactive tests updated"
+    ],
+    "settings": [
+      "Three voice toggle implementations and row templates share one implementation",
+      "All voice preferences publish the existing keyed setting-changed event",
+      "Removed a discarded vision-model cache copy; AppContext remains the persistence owner"
+    ],
+    "desktop": [
+      "Prefill text and source form one nullable value; seven reset sites clear it once"
+    ],
+    "skills": [
+      "Detail stores only a market id or installed name, resolving current data from the canonical list",
+      "Clear selection when the skill disappears, without reopening after reinstallation",
+      "Removed duplicate market-list alias, identical-language conditional branches and repetitive icon construction"
+    ],
+    "preserved": [
+      "Source upload scope and abort guards",
+      "Recovery account/org/source/request/view validation",
+      "Image edit, first frame, optional reference, gallery, song workflow draft, cancellation and exact-request retry"
+    ]
+  },
+  "intermediateFindings": {
+    "initialFailures": [
+      {
+        "name": "MediaGenerationStudio operations uses the parent selection after recovery, clearing old source identities and supporting an optional reference",
+        "reason": "AssertionError: expected { mode: 'image', …(6) } to match object { primaryArtifactId: 'image-1', …(1) }"
+      },
+      {
+        "name": "recovers all source identities atomically and clears the previous selection: image_edit",
+        "reason": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { …(6) } ]"
+      },
+      {
+        "name": "recovers all source identities atomically and clears the previous selection: image_to_video",
+        "reason": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { primaryImage: '', …(5) } ]"
+      },
+      {
+        "name": "persists and publishes the voice preference lumi_allow_proactive_voice independently",
+        "reason": "evalmachine.<anonymous>:1"
+      },
+      {
+        "name": "persists and publishes the voice preference lumi_wake_word_enabled independently",
+        "reason": "evalmachine.<anonymous>:1"
+      },
+      {
+        "name": "persists and publishes the voice preference lumi_always_on_voice independently",
+        "reason": "evalmachine.<anonymous>:1"
+      }
+    ],
+    "resolutions": [
+      "Two recovery tests exposed the existing metadata normalizer discarding artifact IDs; production normalizer repaired, assertions retained.",
+      "Optional reference fixture incorrectly tried selecting the already-selected primary, which is deliberately excluded; fixture now uses a distinct style artifact.",
+      "Existing expression test loader had no JSX transform; enabled React JSX with the actual source filename to mount the production settings component."
+    ],
+    "skillBeforeFix": {
+      "passed": 4,
+      "failed": 1,
+      "failures": [
+        {
+          "name": "keeps an open skill detail synchronized with toggles, refreshed data and external removal",
+          "reason": "Error: Unable to find role=\"button\" and name \"Enable\""
+        }
+      ]
+    },
+    "firstFullSuite": {
+      "passed": 6583,
+      "exit": 0,
+      "rerunReason": "Subsequent SkillCenter state correction and regression test required final builds and full-suite verification again."
+    }
+  },
+  "deferredReview": [
+    "SkillCenter asynchronous list refresh ownership is distinct from the repaired selected-detail copy; concurrent response ordering was not changed in this round.",
+    "SystemExplorer status and history are separate API snapshots, not safe to collapse solely by taking history[0].",
+    "ChatSongWorkbench drafts, saved snapshots, timing edits and server render status have distinct persistence roles; no blanket deletion."
+  ],
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "backendRestarted": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "realUserDataModified": false,
+    "realModelApiTested": false,
+    "performanceSpeedupMeasured": false,
+    "newBusinessModules": 0,
+    "wholeProjectSimplificationComplete": false
+  }
+}

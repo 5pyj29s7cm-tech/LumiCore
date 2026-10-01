@@ -9,13 +9,13 @@ import { pushNotification } from "../routes/notifications";
 import { NormalizedMessage, StreamCallback } from "../llm/providers";
 import { runConversationTurn } from '../llm/conversation_turn';
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
-import { LLMUsage, ToolExecutionRecord, type ToolContext } from "../tools/types";
+import { ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
 import { collectChatArtifacts } from '../conversation/chat_artifacts';
 import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';
-import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
+import { runtimeShutdownCancellation } from '../runtime/shutdown_work';
 import { captureChatAuthorization } from './chat_authorization';
-import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from '../conversation/lifecycle';
+import { captureConversationAuthorization, combineRequestAuthorizations } from '../conversation/lifecycle';
 import { readScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
   normalizeStructuredMediaRequest,
@@ -35,10 +35,7 @@ import { buildOperationModeMetaResponse } from "../cognition/capability_meta";
 import { LUMI_CLIENT_MODE_IDS, type LumiClientMode } from "../../shared/operation_modes";
 import {
   buildLumiCapabilitySelection,
-  buildModelCapabilityPolicy,
-  buildModelToolProjection,
 } from "../cognition/capability_selection";
-import { trustedContinuationEvidenceTools } from "../cognition/tool_router";
 import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
@@ -53,9 +50,7 @@ import {
 import {
   executionBoundaryPromptOverlay,
   restrictSystemPromptForExecutionBoundary,
-  restrictToolPolicyForExecutionBoundary,
   restrictVisibleToolNamesForExecutionBoundary,
-  restrictVisibleToolRouteForExecutionBoundary,
 } from "../tools/remote_policy";
 import {
   buildActionContract,
@@ -100,7 +95,7 @@ import {
   resolveAcceptedTurnConfirmation,
   runAfterAcceptedUserTurnAdmission,
 } from './action_turn_durability';
-import { queryMemories, queryMemoriesVector, addMemory, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
+import { queryMemoriesVector, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
 import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
 import { buildModeOverlay, generateSystemPrompt } from "../personality/engine";
 import { personalityRegistry } from "../personality";
@@ -154,8 +149,8 @@ import { findLatestRepeatableAssistantReply } from '../conversation/assistant_re
 
 import { retrieveChunks } from "../agents/rag";
 import { runRetrievalRequest } from "../llm/retrieval_request";
-import { getSensory } from "./shared";
-import { processInput, handleLLMFailure, extractSentiment, CognitiveContext } from "../cognition";
+import { extractSentiment } from "../cognition/sentiment";
+import { CN_DURABLE_EXECUTION_MESSAGES } from "../i18n/durable_execution_messages";
 import {
   buildRecentActionContinuationBridge,
   conversationActionRequiresFreshConfirmationReview,
@@ -169,7 +164,6 @@ import {
   buildStructuredMediaDeterministicToolRecoveryCall,
 } from '../cognition/deterministic_tool_recovery';
 import {
-  isPriorTurnToolReceiptQuestion,
   normalizeActionIntent,
 } from "../cognition/normalized_action_intent";
 import {
@@ -178,7 +172,6 @@ import {
   taskReceiptsToRecords,
   toolRecordSucceeded,
 } from "../cognition/task_execution_ledger";
-import { isUserCorrectionOrExplanationQuestion } from "../cognition/tool_intent";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import {
   buildDeterministicWorkTaskStatusCommand,
@@ -201,6 +194,7 @@ import { buildSocketNativeRequestBinding } from './native_request_binding';
 export { buildSocketNativeRequestBinding } from './native_request_binding';
 export type { SocketNativeRequestBinding } from './native_request_binding';
 import { createDesktopRelay } from "./desktop_relay";
+import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { normalizeVoiceHistoryRecord } from "./voice_history";
 import {
   buildSocketToolSecurityContext,
@@ -484,8 +478,6 @@ function shouldAllowLocalFileWriteForTurn(userText: string, attachments: ChatInc
   return explicitDeliverable || attachedArtifactRequest || directEnglishRequest;
 }
 
-const LOCAL_DOCUMENT_EXT_RE = /\.(?:docx?|pdf|rtf|txt|md|csv|xlsx?|pptx?)$/i;
-
 function getRecentHistoryText(history: any[] | undefined, maxLength = 6000): string {
   if (!Array.isArray(history) || history.length === 0) return '';
   const lines = history
@@ -619,15 +611,6 @@ export function buildClientSurfaceContinuationBridge(userText: string, history: 
     'Use client_get_state first unless a fresh client state is already available. For "中枢世界", "中枢", "Nexus", or "cloud canvas", use client_action with action=open_nexus.',
     'Do not claim that a client surface was opened, checked, or changed unless client_action verification is verified/not_applicable or fresh client state proves it. If verification is pending or failed, say the exact blocker and next retry.',
   ].join('\n');
-}
-
-export function shouldRunVisibleActionPreflight(userText: string, attachments: ChatIncomingAttachment[]): boolean {
-  void userText;
-  void attachments;
-  // Retained as a compatibility probe for callers/tests. Attachments and
-  // local-path prose are model inputs, not a pre-model domain router. Any
-  // extraction now begins only after the model selects a manifest capability.
-  return false;
 }
 
 function buildNaturalReplyStyleOverlay(source?: string): string {
@@ -815,6 +798,7 @@ export function registerChatHandler(
     // call is cancelled. Keep it reachable by the outer terminal boundary.
     const requestToolRecords: ToolExecutionRecord[] = [];
     let requestTaskId: string | undefined;
+    let receiptObserver: ReturnType<typeof createConversationReceiptObserver> | undefined;
     let collectRequestTerminalRecords = () => requestToolRecords;
     const rememberRequestToolRecord = (record: ToolExecutionRecord) => {
       if (!record?.name) return;
@@ -857,7 +841,10 @@ export function registerChatHandler(
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
     const allowAdaptiveLearning = !isMemoryAvatar && shouldPersistPostTurnLearningSource(eventSource);
-    const toolSecurityContext = buildSocketToolSecurityContext(socket, requestScope);
+    const toolSecurityContext = {
+      ...buildSocketToolSecurityContext(socket, requestScope),
+      onToolRecord: (record: ToolExecutionRecord) => receiptObserver?.onToolRecord(record),
+    };
     const ownerAuthorization = isMemoryAvatar
       ? captureMemoryAvatarAuthorization(uid, conversationAgentId)
       : captureChatAuthorization(uid, requestScope);
@@ -2878,10 +2865,6 @@ export function registerChatHandler(
       if (actionContinuationBridge) {
         effectiveSystemPrompt += '\n\n' + actionContinuationBridge;
       }
-      const effectiveRoutedVisibleUserText = [visibleUserText, chatContextBridge, actionContinuationBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
-      const routingText = attachments.length > 0
-        ? [effectiveRoutedVisibleUserText, attachmentContext].filter(Boolean).join('\n\n')
-        : (effectiveRoutedVisibleUserText || text);
       const currentTurnDecisionText = [
         visibleUserText || text,
         mediaRoutingEnvelope,
@@ -2919,9 +2902,11 @@ export function registerChatHandler(
         persistedConversationHistory,
         pendingAssistantOfferContext,
         isSanctuary: isMemoryAvatar,
+        executionBoundary: toolSecurityContext.executionBoundary,
         traceText: currentTurnDecisionText,
         source: eventSource,
       });
+      resolvedTaskRelation = executionPipeline.taskRelation;
       const turnDispatch = executionPipeline.turnIntent;
       const turnFlow = turnDispatch.flow;
       turnFlow.currentAttachmentPaths = attachments.map(item => item.path).filter((value): value is string => Boolean(value));
@@ -2933,7 +2918,6 @@ export function registerChatHandler(
       const completionTaskText = executionPipeline.trustedActionContinuation
         ? conversation?.actionContinuationState?.goal || executionTaskText
         : executionTaskText;
-      const turnSurface = turnDispatch.surface;
       if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
         effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
         effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
@@ -3023,8 +3007,6 @@ export function registerChatHandler(
         'desktop_cursor_glow_hide',
       ]);
       const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
-      const getTurnExecutionDecision = () => executionPipeline.execution;
-      const getTurnCapabilitySelection = () => executionPipeline.capabilityPlan;
       const persistChatLearning = (
         assistantText: string,
         options: {
@@ -3080,7 +3062,7 @@ export function registerChatHandler(
           domain: resolvedDomain,
           orgId: resolvedOrgId,
           flow: turnFlow,
-          capabilitySelection: options.capabilitySelection || getTurnCapabilitySelection(),
+          capabilitySelection: options.capabilitySelection || executionPipeline.capabilityPlan,
           toolRecords: currentToolRecords,
           finalizationBlocked: options.finalizationBlocked === true,
           assistantTextTrusted: options.assistantTextTrusted
@@ -3311,9 +3293,9 @@ export function registerChatHandler(
       const clientActionOnlyTurn = turnFlow.clientActionOnlyTurn;
       const workSurfaceRoute = turnFlow.workSurfaceRoute;
       const visionIntent = turnFlow.visionIntent;
-      const executionDecision = getTurnExecutionDecision();
+      const executionDecision = executionPipeline.execution;
       const intentTrace = executionPipeline.intentTrace;
-      const capabilitySelection = getTurnCapabilitySelection();
+      const capabilitySelection = executionPipeline.capabilityPlan;
       const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
         channel: 'chat',
         text: turnFlow.routeText,
@@ -3322,34 +3304,10 @@ export function registerChatHandler(
         capabilityExecutionPlan: executionPipeline.executionPlan,
       });
       const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
-      executionDecision.toolRoute = restrictVisibleToolRouteForExecutionBoundary(
-        executionDecision.toolRoute,
-        toolSecurityContext.executionBoundary,
-      );
       const toolRoute = executionDecision.toolRoute;
-      const modelCapabilityPolicy = restrictToolPolicyForExecutionBoundary(
-        buildModelCapabilityPolicy(executionDecision),
-        toolSecurityContext.executionBoundary,
-      );
-      // Keep the executor ceiling and the schema projection on the same
-      // boundary-filtered policy. Otherwise a remote entrance can advertise
-      // a locally authorized tool that the execution engine will later deny.
-      executionDecision.baseToolPolicy = modelCapabilityPolicy;
-      executionDecision.toolPolicy = modelCapabilityPolicy;
-      executionDecision.maxIterations = modelCapabilityPolicy.maxIterations;
+      const modelCapabilityPolicy = executionPipeline.authorizationPolicy;
+      const modelToolProjection = executionPipeline.modelToolProjection;
       const existingActionState = conversation?.actionContinuationState;
-      const pinnedContinuationTools = trustedContinuationEvidenceTools({
-        actionTaskState: existingActionState,
-        trustedActionContinuation: executionDecision.resumesPinnedTask === true,
-      }, new Set(toolRegistry.getToolDeclarations({
-        context: { userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource },
-      }).map(declaration => declaration.function.name)));
-      const modelToolProjection = buildModelToolProjection(executionDecision, {
-        lane: capabilitySelection.lane,
-        preferredTools: capabilitySelection.preferredTools,
-        pinnedTools: pinnedContinuationTools,
-        requiredTools: executionPipeline.modelToolProjection.requiredToolNames,
-      });
       const toolSessionActive = !isMemoryAvatar && executionPipeline.executionRequested
         && modelToolProjection.toolNames.length > 0;
       // The semantic execution plan owns durable task creation. Main Chat may
@@ -3471,6 +3429,10 @@ export function registerChatHandler(
       }
       const durableTaskId = actionTaskExecution.state?.taskId;
       requestTaskId = durableTaskId;
+      receiptObserver = createConversationReceiptObserver({
+        userId: uid, conversationId: conversation.id, taskId: durableTaskId,
+        requestId, domain: resolvedDomain, orgId: resolvedOrgId,
+      }, turnAuthorization.isCurrent);
       if (structuredMediaRequest && actionTaskExecution.state?.taskId) {
         const structuredMediaRecoveryCall = buildStructuredMediaDeterministicToolRecoveryCall(
           structuredMediaRequest,
@@ -3533,6 +3495,7 @@ export function registerChatHandler(
         requestId,
         requestSocket: socket,
         emitToolLifecycle,
+        onLateResult: receiptObserver.onDesktopLateResult,
         formatResultForLifecycle: formatToolResultForUi,
         // The foreground execution belongs to the durable task, not to this
         // transport connection. The relay still has its own bounded timeout.
@@ -3651,6 +3614,7 @@ export function registerChatHandler(
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: visibleUserText,
             acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+            currentAppTarget: turnFlow.currentAppEditTarget,
             requestConfirmation: requestToolConfirmation,
             executionSignal: abortController.signal,
             isCancelled: isChatCancelled,
@@ -3909,6 +3873,7 @@ export function registerChatHandler(
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: confirmedTask,
             acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+            currentAppTarget: turnFlow.currentAppEditTarget,
             toolPolicy: modelCapabilityPolicy,
             modelToolProjection,
           },
@@ -4024,6 +3989,7 @@ export function registerChatHandler(
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: confirmedTask,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+            currentAppTarget: turnFlow.currentAppEditTarget,
               toolPolicy: modelCapabilityPolicy,
               modelToolProjection,
               priorToolRecords: taskAwareRecords([confirmedRecord]),
@@ -4269,24 +4235,8 @@ export function registerChatHandler(
       // Natural-language chat has no deterministic quick-command path. Surface
       // recognition and legacy quick matches are advisory inputs to the shared
       // model/tool loop; structured UI events use their dedicated handlers.
-      // ── Lumi Cognitive Engine: classify intent BEFORE calling any LLM ──
-      const cognitiveCtx: CognitiveContext = {
-        userId: uid,
-        agentId: conversationAgentId,
-        personalityId: personality.id,
-        personalityName: personality.name,
-        llmProvider: activeProvider,
-        llmModel: activeModel,
-        isLLMAvailable: true,
-      };
-      // Match voice: local cognition is advisory; the shared model/tool loop
-      // owns the request. A second cloud classification adds latency and can
-      // disagree with the execution plan that has already been authorized.
-      const cognition = await processInput(text, cognitiveCtx);
       abortController.signal.throwIfAborted();
       turnAuthorization.assertCurrent();
-      console.log('[ChatHandler] cognition result:', cognition.intent.category, 'directToolExecuted:', cognition.directToolExecuted, 'responseText:', cognition.responseText?.slice(0, 100));
-
       // ── Sentiment analysis: detect emotional charge in user input ──
       const sentiment = extractSentiment(text);
       if (sentiment.valence !== 0 || sentiment.urgency > 0 || sentiment.frustration > 0) {
@@ -4460,6 +4410,7 @@ export function registerChatHandler(
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+            currentAppTarget: turnFlow.currentAppEditTarget,
               priorToolRecords: priorTaskRecords,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               desktopExecutionTracker,
@@ -4500,8 +4451,7 @@ export function registerChatHandler(
           console.error(`[Cognition] LLM '${activeProvider}/${activeModel}' failed: ${llmErr.message}`);
           // Automatic fallback exists only behind the explicit `auto` provider,
           // where the fallback provider and model are persisted user choices.
-          const cf = handleLLMFailure(cognition.intent, llmErr);
-          responseText = cf.responseText;
+          responseText = CN_DURABLE_EXECUTION_MESSAGES.modelFailure;
         }
         // The tool loop may cooperatively return a cancellation summary rather
         // than throw. Do not feed that through ordinary completion guards: the
@@ -4654,6 +4604,7 @@ export function registerChatHandler(
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,
+            currentAppTarget: turnFlow.currentAppEditTarget,
               ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
               priorToolRecords,
               desktopExecutionTracker,
@@ -4845,7 +4796,7 @@ export function registerChatHandler(
             source: eventSource,
             channel: 'chat',
             toolCalls: allToolRecords.length ? allToolRecords : undefined,
-            cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : cognition.intent.category,
+            cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind,
             llmWasCalled,
             requestId,
             completionFeedback: responseCompletionFeedback,

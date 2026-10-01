@@ -1044,24 +1044,6 @@ export function persistFirstBootExploration(snapshot: SystemSnapshot): SystemSna
   return snapshot;
 }
 
-export function runFirstBootExploration(): SystemSnapshot {
-  if (!isSystemExplorationAllowed()) {
-    throw new Error('Local computer exploration requires an explicit local-admin grant.');
-  }
-  console.log("[Explorer] First-boot exploration starting...");
-  return persistFirstBootExploration(collectFirstBootSnapshot());
-}
-
-export function runDailyScan(): SystemSnapshot | null {
-  if (!isSystemExplorationAllowed()) {
-    console.log('[Explorer] Scan skipped because local computer exploration is not authorized.');
-    return null;
-  }
-  console.log("[Explorer] Daily scan starting...");
-
-  return persistDailyExploration(collectFirstBootSnapshot());
-}
-
 /** Persist an already-collected worker snapshot as a daily refresh. */
 export function persistDailyExploration(collected: SystemSnapshot): SystemSnapshot {
   if (!isSystemExplorationAllowed()) {

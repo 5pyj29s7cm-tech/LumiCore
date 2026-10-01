@@ -1,3 +1,4 @@
+import { SECRET_DETAIL, STRUCTURED_SECRET_DETAIL, BEARER_SECRET, INTERNAL_GUARD_DETAIL, INTERNAL_EXECUTION_REPORT, redactReceiptDetail } from '../client/diagnostic_sanitizer';
 import type { ToolExecutionRecord } from '../tools/types';
 import { MISSING_TASK_INPUT_REASON } from './missing_task_input';
 import type { CompletionGuardResult } from '../work_product/completion_guard';
@@ -18,6 +19,7 @@ import { formatUserVisibleReplyForReadability } from './reply_style';
 import { containsInternalExecutionLanguage } from '../../shared/public_execution_language';
 import { DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
 import { isModelConfigurationReadRequest } from './model_configuration_intent';
+import { mergeToolExecutionRecords } from './task_execution_ledger';
 
 export type ExecutionGuardIntent = 'conversation' | 'status_query' | 'action_execution';
 
@@ -118,15 +120,6 @@ const PROTOCOL_LEAK_REASON = /tool-call protocol leaked|internal tool request/i;
 const INVENTED_RUNTIME_REASON = /fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|unsupported current-turn real-world claim: (?:playback|open|runtime_configuration)/i;
 // i18n-allow -- Chinese confirmation input recognition; not user-visible copy.
 const CONFIRMATION_BLOCK = /requires? (?:explicit )?(?:user )?confirmation|waiting_confirmation|confirmation step|需要(?:用户)?确认|等待确认/i;
-const SECRET_DETAIL = /((?:password|passphrase|secret|token|api.?key|authorization|cookie|credential))\s*[:=]\s*\S+/gi;
-const STRUCTURED_SECRET_DETAIL = /("(?:password|passphrase|secret|token|api.?key|authorization|cookie|credential)"\s*:\s*")[^"]+/gi;
-const BEARER_SECRET = /\bBearer\s+\S+/gi;
-// i18n-allow -- Chinese internal execution-guard recognition; not user-visible copy.
-const INTERNAL_GUARD_DETAIL = /No successful (?:current-turn )?tool execution|without a current-turn tool receipt|No tool execution started|execution-status claim|Missing (?:verified in-app UI mutation|in-app UI mutation|core|verified|current-turn|in-app|desktop|client|content-read|action) evidence|tool-call protocol leaked|internal tool request|fictional tool-mode|fictional user-switchable tool availability|claimed tool execution without matching tool records|Internal execution recovery|我还不能说正在执行|这一轮没有记录到成功的真实工具执行|这一轮没有成功执行任何工具|我需要先真正调用对应工具|再按当前轮回执汇报进度/iu;
-// Old builds rendered the verifier's internal report as assistant prose. Keep
-// recognizing that shape at the final boundary so replayed history or a model
-// imitation cannot put protocol vocabulary back into customer chat.
-const INTERNAL_EXECUTION_REPORT = /(?:(?:^|\n)\s*(?:状态\s*[:：]\s*(?:受阻|失败|已完成)|Status\s*:\s*(?:blocked|failed|completed))[\s\S]{0,800}(?:^|\n)\s*(?:证据|Evidence)\s*[:：])|(?:^|\n)\s*(?:具体阻塞|执行回馈)\s*[:：]?|(?:^|\n)\s*(?:Concrete blocker|Execution feedback)\s*:|(?:原目标|已有进度|已执行步骤).{0,80}(?:回执|目标状态)/imu; // i18n-allow: reviewed legacy execution-report recognition; not user-visible copy.
 const PUBLIC_RECOVERY_FAILURE_REASON = 'execution_recovery_incomplete';
 const MAX_RECEIPTS_IN_RECOVERY_PROMPT = 40;
 const PUBLIC_REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
@@ -157,34 +150,6 @@ const CONVERSATION_ONLY = /^(?:hi|hello|hey|thanks|thank you|who are you|what ca
 const ACTION_IMPERATIVE = /\b(?:open|close|start|stop|run|execute|repair|fix|check|inspect|read|write|create|generate|save|delete|move|copy|send|install|uninstall|click|type|search|download|upload)\b|\u6253\u5f00|\u5173\u95ed|\u542f\u52a8|\u505c\u6b62|\u6267\u884c|\u4fee\u590d|\u68c0\u67e5|\u8bfb\u53d6|\u5199\u5165|\u521b\u5efa|\u751f\u6210|\u4fdd\u5b58|\u5220\u9664|\u79fb\u52a8|\u590d\u5236|\u53d1\u9001|\u5b89\u88c5|\u5378\u8f7d|\u70b9\u51fb|\u8f93\u5165|\u641c\u7d22|\u4e0b\u8f7d|\u4e0a\u4f20/iu;
 // i18n-allow -- recognizes a truthful but still non-terminal recovery result.
 const RECOVERY_REPORTS_INCOMPLETE = /\b(?:could not|couldn't|unable to|failed to|not (?:yet )?(?:completed|finished|done|verified)|still (?:waiting|blocked)|no (?:verified|verifiable).{0,40}result)\b|\u4ecd\u672a|\u5c1a\u672a|\u8fd8\u6ca1\u6709|\u8fd8\u6ca1|\u672a\u80fd|\u65e0\u6cd5|\u5931\u8d25|\u6ca1\u6709.{0,20}(?:\u7ed3\u679c|\u56de\u6267|\u8bc1\u636e)/iu;
-
-function redactReceiptDetail(value: unknown, maxLength = 180): string {
-  const detail = typeof value === 'string'
-    ? value
-    : (() => {
-        try { return JSON.stringify(value) ?? ''; } catch { return String(value ?? ''); }
-      })();
-  const redacted = detail
-    .replace(STRUCTURED_SECRET_DETAIL, '$1[redacted]')
-    .replace(SECRET_DETAIL, '$1=[redacted]')
-    .replace(BEARER_SECRET, 'Bearer [redacted]')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!redacted || INTERNAL_GUARD_DETAIL.test(redacted) || INTERNAL_EXECUTION_REPORT.test(redacted)) return '';
-  return redacted.slice(0, maxLength);
-}
-
-/**
- * Shared final-boundary sanitizer for compact user-visible diagnostics.
- * Internal verifier prose is an implementation signal for automatic recovery,
- * never a task blocker that should enter chat history or task feedback.
- */
-export function sanitizeExecutionDiagnosticForPublicFeedback(
-  value: unknown,
-  maxLength = 500,
-): string {
-  return redactReceiptDetail(value, Math.max(1, Math.min(500, maxLength)));
-}
 
 function receiptTerminalLabel(record: ToolExecutionRecord): string {
   if (String(record.error || '').trim()) return 'failed';
@@ -671,39 +636,6 @@ export function formatExecutionRecoveryFailure(
     : 'That step did not finish because no result confirmed the operation. The target can be checked again and work can continue from here.';
 }
 
-function mergeRecoveryToolRecords(
-  priorRecords: ToolExecutionRecord[],
-  recoveryRecords: ToolExecutionRecord[],
-): ToolExecutionRecord[] {
-  const merged = [...priorRecords];
-  for (const record of recoveryRecords) {
-    const duplicateIndex = record.id
-      ? merged.findIndex(item => item.id === record.id)
-      : -1;
-    // A desktop-plan record is a turn-local aggregate snapshot. Recovery can
-    // add observations or actions to the same tracker, so the newer snapshot
-    // must replace the stale pre-recovery one before the task is finalized.
-    // Ordinary tool receipts remain immutable and are still only appended.
-    if (
-      duplicateIndex >= 0
-      && record.name === 'desktop_execution_plan_receipt'
-      && merged[duplicateIndex]?.name === record.name
-    ) {
-      merged[duplicateIndex] = record;
-      continue;
-    }
-    const duplicate = record.id
-      ? duplicateIndex >= 0
-      : merged.some(item => (
-          item.name === record.name
-          && item.result === record.result
-          && item.error === record.error
-        ));
-    if (!duplicate) merged.push(record);
-  }
-  return merged;
-}
-
 /**
  * Runs at most one internal recovery pass for a finalizer-blocked execution.
  * The channel owns the actual model/tool invocation; this helper owns the
@@ -790,7 +722,7 @@ export async function recoverBlockedExecutionOnce<
       // a late provider/adapter failure cannot erase a side effect or its
       // uncertain outcome from the durable channel ledger.
       recordTool: record => {
-        observedRecoveryRecords = mergeRecoveryToolRecords(
+        observedRecoveryRecords = mergeToolExecutionRecords(
           observedRecoveryRecords,
           [record],
         );
@@ -801,7 +733,7 @@ export async function recoverBlockedExecutionOnce<
       cancellation.name = 'AbortError';
       throw cancellation;
     }
-    const toolRecords = mergeRecoveryToolRecords(
+    const toolRecords = mergeToolExecutionRecords(
       priorToolRecords,
       [...observedRecoveryRecords, ...(recovery.toolRecords || [])],
     );
@@ -853,7 +785,7 @@ export async function recoverBlockedExecutionOnce<
       cancellation.name = 'AbortError';
       throw cancellation;
     }
-    const toolRecords = mergeRecoveryToolRecords(
+    const toolRecords = mergeToolExecutionRecords(
       priorToolRecords,
       observedRecoveryRecords,
     );

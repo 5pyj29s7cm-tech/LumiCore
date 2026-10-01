@@ -1,10 +1,6 @@
 import { ToolPolicy } from '../personality/types';
 import { isVideoPlaybackRequest } from './media_intent';
 import {
-  getRecoveredApplicationContinuationTarget,
-  isRecoveredCurrentAppEditingContinuation,
-} from './action_continuation';
-import {
   CURRENT_APP_FORBIDDEN_TOOLS,
   CURRENT_APP_MAX_ITERATIONS,
 } from './current_app_execution';
@@ -67,11 +63,8 @@ export function wantsDirectDesktopControl(text: string): boolean {
   return true;
 }
 
-export function resolveWorkSurfaceRoute(text: string): WorkSurfaceRoute {
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(text);
-  const recoveredAppTarget = recoveredCurrentAppEdit
-    ? getRecoveredApplicationContinuationTarget(text)
-    : '';
+export function resolveWorkSurfaceRoute(text: string, recoveredAppTarget = ''): WorkSurfaceRoute {
+  const recoveredCurrentAppEdit = Boolean(recoveredAppTarget);
   const artifactFirst = recoveredCurrentAppEdit ? false : isArtifactFirstTask(text);
   const directDesktop = recoveredCurrentAppEdit || wantsDirectDesktopControl(text);
   const forbidComputerUse = recoveredCurrentAppEdit || (artifactFirst && !directDesktop);

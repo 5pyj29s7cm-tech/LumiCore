@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Users, Plus, Phone, Mail, MapPin, MessageSquare, Edit3, Trash2, Search } from 'lucide-react';
 import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
@@ -13,7 +13,6 @@ interface Contact {
 export function ContactsPanel() {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);

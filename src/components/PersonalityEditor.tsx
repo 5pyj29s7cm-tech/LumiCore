@@ -5,61 +5,7 @@ import { PersonalityEvolution } from './PersonalityEvolution';
 import { ContactsPanel } from './ContactsPanel';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
-interface PersonalityConfig {
-  id: string;
-  name: string;
-  version: string;
-  coreMotivation: string;
-  behavioralBoundaries: string[];
-  expressionStyle: {
-    persona: string;
-    tone: string;
-    verbosity: string;
-    languages: string[];
-    vocabularyHints?: string[];
-  };
-  toolPolicy: {
-    allowedTools: string[];
-    requireConfirmation: string[];
-    forbiddenTools: string[];
-    maxIterations: number;
-    securityOverrides?: Record<string, string>;
-  };
-  memoryPolicy: {
-    retrieveLimit: number;
-    minConfidence: number;
-    includeTypes: string[];
-    autoExtract: boolean;
-  };
-  ttsVoiceId?: string;
-  personalityVector?: {
-    cognitiveStyle: { analytical: number; intuitive: number; systematic: number; creative: number };
-    socialStyle: { warmth: number; directness: number; playfulness: number; formality: number };
-  };
-  evolutionConfig?: {
-    plasticity: number;
-    minMemoriesForEvolution: number;
-    minConnectionForEvolution: number;
-    cooldownMs: number;
-    maxMutationsPerStep: number;
-  };
-  lastEvolvedAt?: string | null;
-  growthState?: {
-    version: number;
-    lastUpdatedAt: string;
-    ownerInterests: string[];
-    ownerExpressions: string[];
-    communicationPatterns: string[];
-    adaptationNotes: string[];
-    ownerProfile?: {
-      memoryCount: number;
-      dominantTone: string;
-      formalityLevel: number;
-      emotionalExpressiveness: number;
-    };
-  };
-  evolutionFrozenAt?: string | null;
-}
+import type { PersonalityConfig } from '../../server/personality/types';
 
 export function PersonalityEditor({ t }: { t?: any }) {
   const [tab, setTab] = useState<'personality' | 'contacts'>('personality');
@@ -74,8 +20,6 @@ export function PersonalityEditor({ t }: { t?: any }) {
     tools: false,
     memory: false,
   });
-  const isZh = t?.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
 
   const toggleSection = (s: string) => setExpandedSections(prev => ({ ...prev, [s]: !prev[s] }));
 
@@ -91,7 +35,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
+  if (loading || !config) {
     return (
       <div className="animate-in fade-in space-y-8 duration-500">
         <div className="lumi-panel flex items-center gap-3 p-5">
@@ -100,21 +44,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
           </span>
           <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
         </div>
-        <p className="lumi-panel p-5 text-sm text-white/40">{t?.loadingPersonalities || uiMessage('personality-editor.loading.586f5af819')}</p>
-      </div>
-    );
-  }
-
-  if (!config) {
-    return (
-      <div className="animate-in fade-in space-y-8 duration-500">
-        <div className="lumi-panel flex items-center gap-3 p-5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
-            <User size={20} />
-          </span>
-          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
-        </div>
-        <p className="lumi-panel p-5 text-sm text-white/40">{t?.noPersonalitiesDefined || uiMessage('personality-editor.no-configuration-found.7f74a3d38a')}</p>
+        <p className="lumi-panel p-5 text-sm text-white/40">{loading ? (t?.loadingPersonalities || uiMessage('personality-editor.loading.586f5af819')) : (t?.noPersonalitiesDefined || uiMessage('personality-editor.no-configuration-found.7f74a3d38a'))}</p>
       </div>
     );
   }

@@ -976,10 +976,3 @@ export async function enqueueSelfImprovementProposal(
   await writeState(state);
   return { proposal: JSON.parse(JSON.stringify(proposal)), task };
 }
-
-export function resetSelfImprovementStateForTests(): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) return;
-  db.settings = db.settings.filter((item: any) => item?.key !== SETTINGS_KEY);
-  writeDB(db);
-}

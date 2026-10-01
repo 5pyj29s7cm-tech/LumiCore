@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { MessagesSquare, Save, Key, ExternalLink, CheckCircle, AlertCircle, Copy, Unlink, Loader2, Radio, Webhook } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -30,7 +30,6 @@ interface ConnectionStatus {
 export function FeishuSettings({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   const [verificationToken, setVerificationToken] = useState('');

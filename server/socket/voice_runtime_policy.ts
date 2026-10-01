@@ -19,14 +19,3 @@ export function resolveVoiceModelInputBudget(input: {
     ? VOICE_MODEL_INPUT_BUDGET_TOKENS
     : VOICE_CHAT_INPUT_BUDGET_TOKENS;
 }
-
-export function canReuseSpeculativeVoiceSpeech(input: {
-  preparedVoiceId: string;
-  currentVoiceId: string;
-  preparedSwitchGeneration: number;
-  currentSwitchGeneration: number;
-}): boolean {
-  return Boolean(input.preparedVoiceId)
-    && input.preparedVoiceId === input.currentVoiceId
-    && input.preparedSwitchGeneration === input.currentSwitchGeneration;
-}

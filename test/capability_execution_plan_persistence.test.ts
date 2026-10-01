@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attachConversationExecutionPlan,
+  persistScheduledCapabilityExecution,
   type ConversationActionTaskRow,
 } from '../server/conversation/action_ledger';
 import {
@@ -113,5 +114,26 @@ describe('capability execution plan persistence', () => {
       userId: 'other-user',
       plan: rebound,
     })).toBeNull();
+  });
+
+  it.each(['chat', 'scheduler'])('stores each %s plan revision once and accepts the legacy duplicated history', kind => {
+    let db: any = { conversationActionTasks: [task()], conversationActionReceipts: [] };
+    const persist = (revision: number) => {
+      const next = { ...bindCapabilityExecutionPlanTask(plan(), 'task-durable'), planId: `revision-${revision}` };
+      if (kind === 'chat') return attachConversationExecutionPlan(db, { conversationId: 'conversation-1', userId: 'user-1', plan: next })!;
+      return persistScheduledCapabilityExecution(db, { scheduledTaskId: 'scheduled-1', plan: next, status: 'executing' });
+    };
+    const row = persist(0), legacy = JSON.parse(String(row.context));
+    legacy.executionPlans = [legacy.executionPlan]; row.context = JSON.stringify(legacy);
+    for (let revision = 1; revision <= 14; revision++) {
+      db = JSON.parse(JSON.stringify(db)); // Hydrate the persisted shape, including historical legacy rows.
+      persist(revision); persist(revision);
+    }
+    const current = persist(14), context = JSON.parse(String(current.context));
+    expect(context.executionPlan.planId).toBe('revision-14');
+    expect(context.executionPlans.map((entry: any) => entry.planId)).toEqual(Array.from({ length: 11 }, (_, i) => `revision-${i + 3}`));
+    expect(context.executionPlans.some((entry: any) => entry.planId === context.executionPlan.planId)).toBe(false);
+    expect(JSON.stringify(context)).not.toContain('the secret message body');
+    expect(context.executionPlan.risk.confirmationBinding.taskId).toBe('task-durable');
   });
 });

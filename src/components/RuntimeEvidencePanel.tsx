@@ -1,4 +1,3 @@
-import React from 'react';
 import { Activity, AlertTriangle, CheckCircle2, Clock3, ShieldCheck, XCircle } from 'lucide-react';
 import type { RuntimeEvidenceReceipt, RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { runtimeStatusCopy } from '@/i18n/locales/runtimeStatus';
@@ -141,7 +140,6 @@ export function RuntimeEvidencePanel({
           ...(variant === 'full' ? [
             [copy.verified, status.counts.verifiedReceipts],
             [copy.failed, status.counts.failedReceipts],
-            [copy.background, status.counts.backgroundActive],
             [copy.autonomous, status.counts.autonomousActive],
           ] : []),
         ].map(([label, value]) => (

@@ -28,8 +28,6 @@ export function OrgPortal({
   initialMode?: OrgPortalMode;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const { user, refreshUser, orgConnection, workDomain, switchDomain } = useApp();
   const [status, setStatus] = useState<OrgStatus | null>(null);
   const [loading, setLoading] = useState(true);

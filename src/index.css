@@ -1192,7 +1192,7 @@ html[data-mode="light"] .lumi-work-surface .custom-scrollbar::-webkit-scrollbar-
   background: rgba(32, 56, 43, 0.18);
 }
 
-/* ── Markdown body styles (ChatPanel) ── */
+/* ── Shared Markdown body styles ── */
 /* Dark islands: immersive workspaces keep their own contrast in global light mode. */
 html[data-mode="light"] [data-theme-scope="dark"] {
   color-scheme: dark;

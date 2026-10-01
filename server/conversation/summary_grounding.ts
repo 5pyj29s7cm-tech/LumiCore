@@ -1,3 +1,4 @@
+import { parseStoredArray as normalizeToolCalls } from '../tools/receipt_payload';
 import type { MessageRecord } from './manager';
 import { toolRecordVerifiedForCompletion } from '../cognition/task_execution_ledger';
 
@@ -74,24 +75,6 @@ function validateCompactToolEvidenceNote(value: unknown): string {
   return note;
 }
 
-/**
- * Extract only a trailing, strictly-shaped server receipt ledger. Assistant
- * prose before the marker is deliberately excluded and remains untrusted.
- */
-export function extractCompactToolEvidenceNote(value: unknown): string {
-  const text = String(value || '').trim();
-  if (!text) return '';
-  const starts = [
-    text.lastIndexOf(COMPACT_TOOL_EVIDENCE_PREFIX),
-    text.lastIndexOf(LEGACY_COMPACT_TOOL_EVIDENCE_PREFIX),
-  ].filter(index => index >= 0);
-  if (starts.length === 0) return '';
-  const start = Math.max(...starts);
-  if (start > 0 && !/[\r\n]/u.test(text[start - 1])) return '';
-  const candidate = text.slice(start).trim();
-  return validateCompactToolEvidenceNote(candidate);
-}
-
 /** Detect reserved markers in untrusted prose without treating them as evidence. */
 export function containsCompactToolEvidenceMarker(value: unknown): boolean {
   const text = String(value || '');
@@ -105,17 +88,6 @@ export function readCompactToolEvidenceNote(
 ): string {
   if (!record) return '';
   return validateCompactToolEvidenceNote(record[COMPACT_TOOL_EVIDENCE_FIELD]);
-}
-
-function normalizeToolCalls(value: unknown): any[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string' || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function verifiedToolNames(value: unknown): string[] {

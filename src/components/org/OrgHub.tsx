@@ -65,7 +65,6 @@ export function OrgHub() {
   const [orgModulesOpen, setOrgModulesOpen] = useState(false);
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
 
   const allNavItems: NavItem[] = useMemo(() => [
     { id: 'dashboard', label: t.orgDashboard, icon: <Home size={16} />, roles: ['owner', 'admin', 'member', 'viewer'] },

@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import './helpers';
 import React from 'react';
-import fs from 'node:fs';
-import vm from 'node:vm';
-import ts from 'typescript';
+import { extractSourceExpression } from './source_expression';
 import { EventEmitter } from 'node:events';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -72,12 +70,7 @@ function setup(overrides: Partial<NonNullable<Parameters<typeof useVoiceCall>[0]
   return { server, client, hook };
 }
 function returnDetection(socket: ClientSocket) {
-  const file = 'src/components/DesktopUI.tsx'; const source = fs.readFileSync(file, 'utf8');
-  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let expression = '';
-  function visit(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'onIdleReport') expression = node.initializer!.getText(ast); ts.forEachChild(node, visit); }
-  visit(ast); expect(expression).toContain('greeting:generate');
-  return vm.runInNewContext(ts.transpileModule(`(${expression})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+  return extractSourceExpression('src/components/DesktopUI.tsx', 'onIdleReport', {
     socket, localStorage, lastIdleRef: { current: 0 }, greetedRef: { current: false },
     IDLE_AWAY_SECONDS: 120, RETURN_IDLE_SECONDS: 10, callState: 'idle', isMuted: false, volume: 60, workDomain: 'personal',
   });
@@ -140,6 +133,22 @@ describe('proactive speech through production desktop, server and playback', () 
     expect(fixture.synthesize).toHaveBeenCalledWith('欢迎回来。', expect.objectContaining({ voiceId: 'selected-voice' }));
     expect(fixture.sources[0].start).toHaveBeenCalledOnce();
     expect(fixture.model).not.toHaveBeenCalled();
+  });
+
+  it('does not publish raw tool receipts as notifications or speech', async () => {
+    const { client } = setup(); const view = render(<ProactiveNotifications />);
+    await act(async () => {
+      for (const result of ['Opened request returned', '{"status":"pending"}', '{"ok":true,"status":"verified"}']) {
+        client.deliver('agent:tool_call', { name: 'desktop_open', arguments: {}, result });
+      }
+      client.deliver('agent:tool_call', { name: 'desktop_open', arguments: {}, error: 'not found' });
+      await client.drain();
+    });
+    expect(fixture.notify).not.toHaveBeenCalled();
+    expect(fixture.synthesize).not.toHaveBeenCalled();
+    view.unmount();
+    expect(client.listenerCount('agent:proactive')).toBe(0);
+    expect(client.listenerCount('autonomous:away_summary')).toBe(0);
   });
 
   it.each(['disabled', 'output-muted', 'quiet-hours', 'night', 'no-provider', 'foreign-owner'] as const)('suppresses automatic synthesis when %s', async reason => {

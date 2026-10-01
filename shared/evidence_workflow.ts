@@ -250,32 +250,6 @@ export function transitionEvidenceWorkflowStep(
   return recalculateEvidenceWorkflow(updated);
 }
 
-export function reopenEvidenceWorkflowStep(
-  workflow: EvidenceWorkflow,
-  stepId: string,
-  reason: string,
-  now = new Date().toISOString(),
-): EvidenceWorkflow {
-  const cleanReason = compact(reason, 1000);
-  if (!cleanReason) throw new Error('Reopening an evidence workflow step requires a reason.');
-  const current = workflow.steps.find(step => step.id === stepId);
-  if (!current) throw new Error(`Evidence workflow step not found: ${stepId}`);
-  const updated: EvidenceWorkflowStep = {
-    ...current,
-    status: 'pending',
-    verificationStatus: initialVerificationStatus(current),
-    receiptIds: [],
-    outputSummary: undefined,
-    blocker: cleanReason,
-    updatedAt: now,
-  };
-  return recalculateEvidenceWorkflow({
-    ...workflow,
-    steps: workflow.steps.map(step => step.id === stepId ? updated : step),
-    updatedAt: now,
-  });
-}
-
 export function promoteEvidenceWorkflowStages(
   workflow: EvidenceWorkflow,
   stages: string[],
@@ -341,15 +315,4 @@ export function normalizeEvidenceWorkflow(
     updatedAt: now,
   };
   return recalculateEvidenceWorkflow(workflow);
-}
-
-export function combineVerifiedEvidenceWorkflowOutputs(workflow: EvidenceWorkflow): string {
-  return getEvidenceWorkflowStepsInScope(workflow)
-    .filter(step => step.status === 'completed' && (!step.verificationRequired || step.verificationStatus === 'verified'))
-    .map(step => [
-      `## ${step.label}`,
-      step.outputSummary || '',
-      step.receiptIds.length ? `Receipts: ${step.receiptIds.join(', ')}` : '',
-    ].filter(Boolean).join('\n'))
-    .join('\n\n---\n\n');
 }

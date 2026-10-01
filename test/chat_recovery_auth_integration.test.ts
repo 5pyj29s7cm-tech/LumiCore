@@ -1,8 +1,6 @@
-import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
 import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import ts from 'typescript';
+import { extractSourceExpression as extract } from './source_expression';
+import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { readDB, writeDB } from '../db_layer';
@@ -13,27 +11,7 @@ import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
 import { mergeNotificationState, notificationClearStorageKey } from '../src/lib/notificationState';
 
 // Exercise the real auth response, context refresh and page recovery callbacks.
-function extract(file: string, name: string, dependencies: Record<string, unknown>) {
-  const source = fs.readFileSync(path.resolve(file), 'utf8');
-  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let expression = '';
-  function visit(node: ts.Node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name && node.initializer) {
-      const init = node.initializer;
-      expression = ts.isCallExpression(init) && ['useCallback', 'useMemo'].includes(init.expression.getText(ast))
-        ? init.arguments[0].getText(ast) : init.getText(ast);
-    }
-    if (ts.isFunctionDeclaration(node) && node.name?.text === name) {
-      expression = node.getText(ast).replace(/^export\s+/, '');
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(ast);
-  if (!expression) throw new Error(`Missing production expression ${file}:${name}`);
-  return vm.runInNewContext(ts.transpileModule(`(${expression})`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-  }).outputText, dependencies);
-}
+
 const page = 'src/components/AgentChatPage.tsx';
 const noop = () => {};
 let app: Awaited<ReturnType<typeof makeApp>>;
@@ -151,4 +129,39 @@ it('passes the context user through the shell and desktop to AgentChatPage', () 
   expect(shell).toMatch(/return\s*\{\s*user, loading/);
   expect(entry).toMatch(/<DesktopUI[^>]*user=\{shell.user\}/);
   expect(desktop).toMatch(/<AgentChatPage\s+t=\{t\}\s+user=\{user\}/);
+});
+
+it.each([
+  ['personal', 'known', true, { token: 'personal-token' }, true],
+  ['work', 'known', true, { token: 'work-token', orgId: 'server-org', orgRole: 'admin' }, true],
+  ['work', 'discover', true, { orgId: 'discovered-org', orgRole: 'member' }, true],
+  ['work', 'empty', true, {}, false],
+  ['work', 'known', true, {}, false],
+  ['work', 'known', false, { error: 'denied' }, false],
+  ['personal', 'known', false, { error: 'denied' }, false],
+] as const)('switches %s/%s only after the server accepts the scope (%s)', async (domain, initial, ok, response, success) => {
+  const orgConnection = initial === 'known' ? { orgId: 'known-org', orgRole: 'member', orgName: 'Known', connected: true } : null;
+  const stored = new Map<string, string>();
+  const apiFetch = vi.fn(async (route: string) => ({ ok, json: async () => route.endsWith('/orgs')
+    ? { orgs: initial === 'discover' ? [{ id: 'discovered-org', name: 'Discovered' }] : [] } : response }));
+  const setWorkDomain = vi.fn(), setOrgConnection = vi.fn(), dispatchEvent = vi.fn(), refreshAuth = vi.fn();
+  const switchDomain = extract('src/contexts/AppContext.tsx', 'switchDomain', {
+    orgConnection, apiFetch, setWorkDomain, setOrgConnection, CustomEvent,
+    translate: (key: string) => key, localStorage: { setItem: (key: string, value: string) => stored.set(key, value) },
+    socketService: { refreshAuth }, window: { dispatchEvent },
+  });
+  expect(await switchDomain(domain)).toMatchObject({ success, domain });
+  if (!success) {
+    expect(stored.size).toBe(0);
+    for (const callback of [setWorkDomain, setOrgConnection, dispatchEvent, refreshAuth]) expect(callback).not.toHaveBeenCalled();
+    return;
+  }
+  expect(setWorkDomain).toHaveBeenCalledExactlyOnceWith(domain);
+  expect(stored.get('lumi_work_domain')).toBe(domain);
+  expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  expect(dispatchEvent.mock.calls[0][0].detail).toMatchObject({ domain, orgId: domain === 'work' ? (response as any).orgId : null });
+  expect(refreshAuth).toHaveBeenCalledTimes('token' in response ? 1 : 0);
+  const request = (apiFetch.mock.calls.at(-1) as unknown as [string, RequestInit])[1];
+  expect(JSON.parse(String(request.body))).toEqual(domain === 'personal' ? { orgId: null } : { orgId: initial === 'known' ? 'known-org' : 'discovered-org', orgRole: 'member' });
+  if (domain === 'personal') expect(setOrgConnection).not.toHaveBeenCalled();
 });

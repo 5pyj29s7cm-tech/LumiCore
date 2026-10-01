@@ -1,3 +1,4 @@
+import { createModelTurnState } from '../llm/model_turn_state';
 /**
  * agent:task socket handler — multi-turn tool-augmented AI pipeline
  */
@@ -7,7 +8,7 @@ import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
-import { buildConfirmedStepContinuationMessages, runWithTools, LLMUsageRecord } from "../llm/adapter";
+import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
@@ -40,7 +41,8 @@ import {
   type FinalizeForegroundRequestResult,
   type ForegroundRequestDurabilityDependencies,
 } from "../conversation/manager";
-import { processInput, handleLLMFailure, extractSentiment, CognitiveContext, CognitiveResult } from "../cognition";
+import { extractSentiment } from "../cognition/sentiment";
+import { archiveBoundConversationActionReceipts } from '../conversation/action_ledger';
 import { loadHIMState, saveHIMState, updateEmotionalStateWithHIM } from "../personality/state";
 import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
@@ -83,8 +85,6 @@ import {
 import type { ToolExecutionRecord } from "../tools/types";
 import {
   buildRecentActionContinuationBridge,
-  classifyConversationActionFollowupIntent,
-  formatConversationActionTaskStatus,
 } from "../cognition/action_continuation";
 import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import {
@@ -94,6 +94,7 @@ import {
   toolRecordSucceeded,
 } from "../cognition/task_execution_ledger";
 import { createDesktopRelay } from "./desktop_relay";
+import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { getScopedPreferredLLM } from "../llm/user_preferences";
 import {
   buildSocketToolSecurityContext,
@@ -130,9 +131,7 @@ import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 import {
   executionBoundaryPromptOverlay,
   restrictSystemPromptForExecutionBoundary,
-  restrictToolPolicyForExecutionBoundary,
   restrictVisibleToolNamesForExecutionBoundary,
-  restrictVisibleToolRouteForExecutionBoundary,
 } from "../tools/remote_policy";
 
 const taskExecutionQueue = new SerialExecutionQueue();
@@ -294,7 +293,11 @@ export function registerTaskHandler(
     }
     try {
     const taskScope = authority.scope;
-    const toolSecurityContext = buildSocketToolSecurityContext(socket, taskScope);
+    let receiptObserver: ReturnType<typeof createConversationReceiptObserver> | undefined;
+    const toolSecurityContext = {
+      ...buildSocketToolSecurityContext(socket, taskScope),
+      onToolRecord: (record: ToolExecutionRecord) => receiptObserver?.onToolRecord(record),
+    };
     let taskConversationId = '';
     const executionScope: ChatExecutionScope = {
       userId: uid,
@@ -1047,6 +1050,7 @@ export function registerTaskHandler(
     let activeProvider = userLLMPrefs.provider || 'deepseek';
     let activeModel = userLLMPrefs.model;
     const reasoningRoutePolicy = {
+      modelTurnState: createModelTurnState(),
       selectionMode: userLLMPrefs.selectionMode,
       fallbackCandidates: userLLMPrefs.fallbackCandidates,
       allowCloudFallback: userLLMPrefs.allowCloudFallback,
@@ -1058,25 +1062,6 @@ export function registerTaskHandler(
     };
 
     // ── Load persisted conversation history (survives page reload) ──
-    const boundaryPersonalityToolPolicy = restrictToolPolicyForExecutionBoundary(
-      personality.toolPolicy,
-      toolSecurityContext.executionBoundary,
-    );
-    const boundaryAllowedToolNames = new Set(boundaryPersonalityToolPolicy.allowedTools || []);
-    const boundaryForbiddenTools = toolSecurityContext.executionBoundary === 'remote_restricted'
-      ? toolRegistry.getToolDeclarations({
-          context: {
-            ...toolSecurityContext,
-            userId: uid,
-            domain: taskScope.domain,
-            orgId: taskScope.orgId,
-            source: 'task',
-            autonomous: false,
-          },
-        })
-          .map(declaration => declaration.function.name)
-          .filter(name => !boundaryAllowedToolNames.has('*') && !boundaryAllowedToolNames.has(name))
-      : [];
     const executionPipeline = buildLumiExecutionPipeline({
       dispatch: {
         userId: uid,
@@ -1091,9 +1076,9 @@ export function registerTaskHandler(
         targetIsLumi: personality.id === 'lumi',
       },
       registry: toolRegistry,
-      personalityToolPolicy: boundaryPersonalityToolPolicy,
+      personalityToolPolicy: personality.toolPolicy,
+      executionBoundary: toolSecurityContext.executionBoundary,
       actionTaskState: convForHistory.actionContinuationState,
-      additionalForbiddenTools: boundaryForbiddenTools,
       pendingAssistantOfferContext,
       source: 'task',
     });
@@ -1105,18 +1090,13 @@ export function registerTaskHandler(
     const modelToolPolicy = executionPipeline.authorizationPolicy;
     const modelToolProjection = executionPipeline.modelToolProjection;
     const pipelineToolContext = {
+      currentAppTarget: turnFlow.currentAppEditTarget,
       currentTurnExecutionRequested: executionPipeline.executionRequested,
       trustedActionContinuation: executionPipeline.trustedActionContinuation,
     };
-    const visibleToolRoute = restrictVisibleToolRouteForExecutionBoundary(
-      executionDecision.toolRoute,
-      toolSecurityContext.executionBoundary,
-    );
+    const visibleToolRoute = executionDecision.toolRoute;
     const toolSessionActive = executionPipeline.executionRequested;
-    const actionFollowupIntent = classifyConversationActionFollowupIntent(
-      data.text,
-      convForHistory.actionContinuationState,
-    );
+    const actionFollowupIntent = executionPipeline.actionFollowupIntent;
     const actionTaskExecution = prepareConversationActionExecution({
       conversationId: convForHistory.id,
       userId: uid,
@@ -1368,12 +1348,17 @@ export function registerTaskHandler(
       ...taskHistory,
       { role: 'user', content: routedTaskText, sourceMessageId: taskUserMessageId },
     ];
+    receiptObserver = createConversationReceiptObserver({
+      userId: uid, conversationId: convForHistory.id, taskId: actionTaskExecution.state?.taskId,
+      requestId, domain: taskScope.domain, orgId: taskScope.orgId,
+    }, authority.isAuthorized);
     const desktopRelay = createDesktopRelay({
       io,
       userId: uid,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
       source: 'task',
+      onLateResult: receiptObserver.onDesktopLateResult,
       taskId: actionTaskExecution.state?.taskId,
       requestId,
       requestSocket: socket,
@@ -1739,135 +1724,39 @@ export function registerTaskHandler(
       return;
     }
 
-    let cognition: CognitiveResult | undefined;
+    // Retain completed actions independently of model-loop return/throw. The
+    // advisory classifier never owns tool receipts, including on cancellation.
+    const requestToolRecords: ToolExecutionRecord[] = [];
+    const cancelTaskWithReceipts = (text: string, records: ToolExecutionRecord[]) => {
+      cancelConversationActionExecution(convForHistory.id, uid, text, requestId);
+      // Cancellation clears active ownership. Archive against the original
+      // record identities afterward without reopening or completing the task.
+      const db = readDB();
+      archiveBoundConversationActionReceipts(db, {
+        userId: uid, conversationId: convForHistory.id, records, turnId: requestId,
+      });
+      writeDB(db);
+    };
 
     try {
       emitAgent("agent:status", { status: "thinking", agentName: personality.name });
 
-      // ── Lumi Cognitive Engine: classify intent BEFORE calling any LLM ──
-      const cognitiveCtx: CognitiveContext = {
-        userId: uid,
-        personalityId: personality.id,
-        personalityName: personality.name,
-        llmProvider: activeProvider,
-        llmModel: activeModel,
-        isLLMAvailable: true,
-      };
       authority.assertAuthorized();
-      cognition = await processInput(routedTaskText, cognitiveCtx);
       if (authority.isCancelled()) {
         const cancellationError = new Error('Task cancelled');
         cancellationError.name = 'AbortError';
         throw cancellationError;
       }
 
-      // Cognitive complexity may influence prompting and token budgets, but the
-      // exact model selected by the user must not be silently replaced.
-      console.log(`[Task] Using configured model: ${activeProvider}/${activeModel} for category: ${cognition.intent.category}`);
-
-      if (cognition.directToolExecuted && cognition.responseText) {
-        console.log(`[Cognition] Task handled directly: ${cognition.intent.category}/${cognition.intent.subIntent}`);
-        const directToolRecords = attachDesktopReceipt(
-          cognition.toolRecords || (cognition.toolRecord ? [cognition.toolRecord] : []),
-        );
-        const finalDirect = finalizeLumiResponse({
-          taskText: data.text,
-          responseText: cognition.responseText,
-          toolRecords: taskAwareRecords(directToolRecords),
-          source: 'task',
-          flow: turnFlow,
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
-        });
-        const directResponseText = finalDirect.text;
-        const terminalCommitted = await commitTaskTerminal({
-          payload: {
-            text: directResponseText,
-            agentName: personality.name,
-            source: 'task',
-            finalized: true,
-            blocked: finalDirect.blocked,
-            reason: finalDirect.reason,
-          },
-          persistTerminalState: () => {
-            const db = readDB();
-            db.interactions.push({
-              id: interactionId,
-              content: data.text,
-              response: directResponseText,
-              role: "user",
-              personality: personality.id,
-              timestamp: new Date().toISOString(),
-              mode: 'task',
-              cognitiveIntent: cognition!.intent.category,
-              llmWasCalled: false,
-              userId: uid,
-              conversationId: convForHistory.id,
-              domain: taskScope.domain,
-              orgId: taskScope.orgId,
-            } as any);
-            writeDB(db);
-            return persistTaskExecutionWriteback(
-              directResponseText,
-              directToolRecords,
-              `${interactionId}_direct`,
-              { blocked: finalDirect.blocked, reason: finalDirect.reason },
-            );
-          },
-          persistAssistantMessage: () => {
-            addMessageIdempotent({
-              userId: uid,
-              agentId: '',
-              conversationId: convForHistory.id,
-              role: 'assistant',
-              content: directResponseText,
-              personality: personality.id,
-              mode: 'task',
-              source: 'task',
-              channel: 'task',
-              domain: taskScope.domain,
-              orgId: taskScope.orgId,
-              toolCalls: directToolRecords.length ? directToolRecords : undefined,
-              cognitiveIntent: finalDirect.blocked ? 'work_product_guard' : cognition!.intent.category,
-              llmWasCalled: false,
-              requestId,
-              ...(finalDirect.blocked && actionTaskExecution.state?.taskId ? {
-                terminalTaskDisposition: {
-                  outcome: 'blocked' as const,
-                  taskId: actionTaskExecution.state.taskId,
-                  requestId,
-                  reason: finalDirect.reason
-                    || 'The direct task request ended without verified goal-level completion evidence.',
-                },
-              } : {}),
-            });
-          },
-          publishAfter: executionWriteback => {
-            if (finalDirect.notification) {
-              publishRecordedAgent(
-                'agent:notification',
-                normalizeAgentPayload('agent:notification', finalDirect.notification),
-              );
-            }
-            publishTaskExecutionWriteback(executionWriteback);
-            io.to(executionRoom).emit('chat:conversation_updated', { conversationId: convForHistory.id, agentId: '', source: 'task', requestId });
-          },
-          errorContext: 'Direct cognition terminal',
-        });
-        if (terminalCommitted) {
-          persistTaskLearning(directResponseText, {
-            toolRecords: directToolRecords,
-            logLabel: 'task direct cognition',
-          });
-        }
-        return;
-      }
+      // Reuse the shared decision and the exact configured model.
+      console.log(`[Task] Using configured model: ${activeProvider}/${activeModel} for category: ${executionPipeline.normalizedIntent.kind}`);
 
       const result = await runWithTools(
         messages,
         toolRegistry,
         { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy },
         (record) => {
+          requestToolRecords.push(record);
           emitAgent("agent:tool_call", {
             name: record.name,
             arguments: record.arguments,
@@ -1924,12 +1813,7 @@ export function registerTaskHandler(
             reason: 'cancelled',
           },
           persistTerminalState: () => {
-            cancelConversationActionExecution(
-              convForHistory.id,
-              uid,
-              cancelledText,
-              requestId,
-            );
+            cancelTaskWithReceipts(cancelledText, finalTaskToolRecords);
             return persistTaskExecutionWriteback(
               cancelledResponse.text,
               finalTaskToolRecords,
@@ -2023,6 +1907,7 @@ export function registerTaskHandler(
               ...reasoningRoutePolicy,
             },
             record => {
+              requestToolRecords.push(record);
               recordTool(record);
               emitAgent('agent:tool_call', {
                 name: record.name,
@@ -2174,7 +2059,7 @@ export function registerTaskHandler(
             domain: taskScope.domain,
             orgId: taskScope.orgId,
             toolCalls: finalTaskToolRecords.length ? finalTaskToolRecords : undefined,
-            cognitiveIntent: finalTaskResponse.blocked ? 'work_product_guard' : cognition!.intent.category,
+            cognitiveIntent: finalTaskResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind,
             llmWasCalled: true,
             requestId,
             ...(finalTaskResponse.blocked && actionTaskExecution.state?.taskId ? {
@@ -2284,8 +2169,7 @@ export function registerTaskHandler(
     } catch (err: any) {
       if (authority.isCancelled() || err?.name === 'AbortError') {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
-        const cancellationRecords = cognition?.toolRecords
-          || (cognition?.toolRecord ? [cognition.toolRecord] : []);
+        const cancellationRecords = attachDesktopReceipt(coalesceToolExecutionRecords(requestToolRecords));
         await commitTaskTerminal({
           payload: {
             text: cancelledText,
@@ -2295,12 +2179,7 @@ export function registerTaskHandler(
             reason: 'cancelled',
           },
           persistTerminalState: () => {
-            cancelConversationActionExecution(
-              convForHistory.id,
-              uid,
-              cancelledText,
-              requestId,
-            );
+            cancelTaskWithReceipts(cancelledText, cancellationRecords);
             return persistTaskExecutionWriteback(
               cancelledText,
               cancellationRecords,
@@ -2320,14 +2199,9 @@ export function registerTaskHandler(
         return;
       }
       console.error("[Agent Task Error]:", err);
-      handleLLMFailure(
-        cognition?.intent || { category: 'unknown', confidence: 0, entities: {}, needsLLM: true },
-        err,
-      );
       const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
       const failureReason = 'task_execution_failed';
-      const failureRecords = cognition?.toolRecords
-        || (cognition?.toolRecord ? [cognition.toolRecord] : []);
+      const failureRecords = attachDesktopReceipt(coalesceToolExecutionRecords(requestToolRecords));
       await commitTaskTerminal({
         payload: {
           text: failureText,
@@ -2430,6 +2304,5 @@ export function registerTaskHandler(
     }
   });
 }
-
 
 

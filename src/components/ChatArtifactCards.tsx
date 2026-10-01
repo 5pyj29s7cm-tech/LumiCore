@@ -1,4 +1,3 @@
-import React from 'react';
 import { FileText, Play } from 'lucide-react';
 import type { ChatArtifact } from '../../shared/chat_artifacts';
 import type { ChatPreviewFile } from './ChatFilePreview';

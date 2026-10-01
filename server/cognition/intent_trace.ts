@@ -78,6 +78,8 @@ export interface LumiIntentTrace {
 export interface BuildLumiIntentTraceInput {
   dispatch: LumiTurnDispatch;
   execution: LumiExecutionDecision;
+  /** The shared pipeline decision; text may contain only a short continuation. */
+  normalizedActionIntent?: NormalizedActionIntent;
   text: string;
   source?: string;
 }
@@ -157,7 +159,7 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput): LumiInte
   const flow = dispatch.flow;
   const source = input.source || dispatch.source || dispatch.channel;
   const text = input.text || '';
-  const normalizedActionIntent = normalizeActionIntent(text);
+  const normalizedActionIntent = input.normalizedActionIntent ?? normalizeActionIntent(text);
   const toolIntent = traceToolIntentDecision(text, source, flow.effectiveOperationMode);
   const toolRoute = compactRoute(execution.toolRoute);
   const routeSummary = toolRoute

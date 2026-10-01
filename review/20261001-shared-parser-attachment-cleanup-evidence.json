@@ -1,0 +1,464 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune29",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "src/lib/chatAttachmentReferences.ts",
+      "beforeLines": 222,
+      "afterLines": 265,
+      "delta": 43,
+      "beforeSha256": "5a529687528a3320a82353ffa72f8d0460b32d73271b53d2740ebd9859971e10",
+      "afterSha256": "0de0617a7161c524a6be4b198ab5220dcca6d47fb994877e09dc474c620f32a3"
+    },
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "beforeLines": 5076,
+      "afterLines": 5034,
+      "delta": -42,
+      "beforeSha256": "5b7b39e7a942504f33f93027643b93b3de549269419143a763b5a0700e10fe96",
+      "afterSha256": "eff290a5e9a0f699b859a7a40465e494dcb9f68a8a6185485f87193430f7d5a5"
+    },
+    {
+      "file": "src/components/org/CentralLumiChat.tsx",
+      "beforeLines": 990,
+      "afterLines": 948,
+      "delta": -42,
+      "beforeSha256": "9c20d22576ddbe57966f2cf6b3cc2949cb10655e5ff4c2e1f92a58f2581ca4c3",
+      "afterSha256": "d8b9f74ca96795751c32b1505623b9a6e55b2afe1778119be273452657cc53cd"
+    },
+    {
+      "file": "server/tools/receipt_payload.ts",
+      "beforeLines": 165,
+      "afterLines": 192,
+      "delta": 27,
+      "beforeSha256": "96eb45fd66adb509693cd5da7e0ddc9f8d9baf3bf8db5e2587deb620347f942a",
+      "afterSha256": "acdf966364e7a646fd0322b766eb3988a2b2dee25ddcdaf845505d4ce2a420fa"
+    },
+    {
+      "file": "server/conversation/manager.ts",
+      "beforeLines": 4689,
+      "afterLines": 4675,
+      "delta": -14,
+      "beforeSha256": "abffd8160d82f7ac864ce529447460be965428567a839f8fd41bffd351e4e0e9",
+      "afterSha256": "b40c2576d33cb38be0f74a152c67721af267a9495ff3df76b69400a159c48d9a"
+    },
+    {
+      "file": "server/evidence/control_sequence_truth_snapshot.ts",
+      "beforeLines": 738,
+      "afterLines": 713,
+      "delta": -25,
+      "beforeSha256": "88510fe91987d4f4379f1bb1050ac7004b6096d2d739bea28cc730fb9d87bac0",
+      "afterSha256": "ce5a43d13f9b3915f9b652876f3a4b3b8fd0832228e47dd0b9e6b9aff3cd94c5"
+    },
+    {
+      "file": "server/socket/chat_execution_registry.ts",
+      "beforeLines": 1397,
+      "afterLines": 1383,
+      "delta": -14,
+      "beforeSha256": "5b8a36191a6e57ad646d83858af3026ec541204fec65a04b27624c4c03b2730e",
+      "afterSha256": "63cf9b27d78b27ba70e74be705cbf018ff6de1be1d678b1b768d00b105e6c71d"
+    },
+    {
+      "file": "server/evidence/task_truth_snapshot.ts",
+      "beforeLines": 765,
+      "afterLines": 742,
+      "delta": -23,
+      "beforeSha256": "8fe12fba15e27c50f4fbacd8e3c4c22cd387efd3f6bfa997f92c0948a9b13ee6",
+      "afterSha256": "656fee0e03d82ff0b366d3fd16f871fe8a7be44612dfa952ed22524aeaf54ba0"
+    },
+    {
+      "file": "server/evidence/voice_text_continuation_truth.ts",
+      "beforeLines": 914,
+      "afterLines": 902,
+      "delta": -12,
+      "beforeSha256": "a317917715991f18b774cb52193fdf930fbabcee658878cbc5963811cccc6907",
+      "afterSha256": "655ffb9c67c88ef10460d9dcb7622f3ab99d0bcabbc1ad03c7ba0f381345e458"
+    },
+    {
+      "file": "server/desktop/execution_runtime.ts",
+      "beforeLines": 477,
+      "afterLines": 467,
+      "delta": -10,
+      "beforeSha256": "6e97627577306caea4f85ff88350bf6ae5ca88871b3cb72c83c70986675472ca",
+      "afterSha256": "05a1ed83fb0398850e94b67794b62047a0d2556a79a5e68489ef106b5d4e6af8"
+    },
+    {
+      "file": "server/monitor/runtime_status.ts",
+      "beforeLines": 282,
+      "afterLines": 272,
+      "delta": -10,
+      "beforeSha256": "60e436ad936287e93d006b4aa82ca4d99bfb40b11de030cbee1fbe2deedc155d",
+      "afterSha256": "393c32bf2239c3f42ef942b5af538dcf855c5b75fcf23ef7b904c7b35f15e4c6"
+    },
+    {
+      "file": "server/conversation/focus_threads.ts",
+      "beforeLines": 165,
+      "afterLines": 155,
+      "delta": -10,
+      "beforeSha256": "68837cd41dbdf07c888ef5a765897f69a6eddd8b484ea77551293593366befb9",
+      "afterSha256": "21fd13299121af9cfa6638426ddef6773e8b5fc50c6044b11a752f9a31b6d0e4"
+    },
+    {
+      "file": "server/conversation/summary_grounding.ts",
+      "beforeLines": 323,
+      "afterLines": 313,
+      "delta": -10,
+      "beforeSha256": "34d60e09dbc2253f7b8ed6de895b94258448158644de53687cc4de64d8a65837",
+      "afterSha256": "6830984ffe873db6800757f1f825d67ac1bc51f3678ef37b0587d28238af24a4"
+    },
+    {
+      "file": "server/regions/packs/cn/business/workflow_service.ts",
+      "beforeLines": 1196,
+      "afterLines": 1186,
+      "delta": -10,
+      "beforeSha256": "653556e3e60ff6c2c339005ac3615363276b84db66671cf257d598481021470c",
+      "afterSha256": "2de82292ab6df0893731d1ce9a91f771c845f765e89660c2f6ce45c92f9f04c4"
+    },
+    {
+      "file": "server/legal/kb.ts",
+      "beforeLines": 931,
+      "afterLines": 931,
+      "delta": 0,
+      "beforeSha256": "b723c7d323b01b13f94812d0a1145b9dc47bb007ad9bcfcd6c1a277f497afaa0",
+      "afterSha256": "b4f7001dfc37b3a48e426058dc18d673c69f9a9eec2636943a15977778e30884"
+    },
+    {
+      "file": "server/legal/statute_authority_refresh.ts",
+      "beforeLines": 481,
+      "afterLines": 448,
+      "delta": -33,
+      "beforeSha256": "12a50f778261da96a24404e397c01bf2bd1ce858d91c9ec407917a28e0d13c88",
+      "afterSha256": "34acdbaa293b2c1e34f0c389436f2f80c31bee1fe1748ddb481c90fb26bd7765"
+    },
+    {
+      "file": "src/components/org/FeedbackBanner.tsx",
+      "beforeLines": 0,
+      "afterLines": 16,
+      "delta": 16,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "46dc0b88d46cc77007ae13ae8b3e0b675721a4a9f5401cd2baf43108ec5bed15"
+    },
+    {
+      "file": "src/components/org/OrgSettings.tsx",
+      "beforeLines": 295,
+      "afterLines": 280,
+      "delta": -15,
+      "beforeSha256": "f707de8fe21460754f1024813d912c6fe435962732dcf8b9aef4d3b9b1e2c331",
+      "afterSha256": "e0fd43cdebeae95db7fa48f91af9468406efd0127e86baad74e6aa7c89a363ba"
+    },
+    {
+      "file": "src/components/org/OrgMembers.tsx",
+      "beforeLines": 277,
+      "afterLines": 261,
+      "delta": -16,
+      "beforeSha256": "444a027a223fb5f739939b6436418c15a06b1c0f0a82ed0e4719490087f57094",
+      "afterSha256": "77cc55404190fa69924ce877ea1f8ca2ffc75843e5449af5ea7731795ce0abe4"
+    },
+    {
+      "file": "src/components/org/AuditLogViewer.tsx",
+      "beforeLines": 273,
+      "afterLines": 257,
+      "delta": -16,
+      "beforeSha256": "4c9424855a22ca52fb2c777b16916929571038eacad77126b5dbd6e9c1472999",
+      "afterSha256": "28dfc5ea88fa6a285fa1140c64e47d94aa67dcee86327d612041ff7a8ea6ca74"
+    },
+    {
+      "file": "test/chat_page_fixture.ts",
+      "beforeLines": 101,
+      "afterLines": 101,
+      "delta": 0,
+      "beforeSha256": "bf78a5c1023b8167636fd8650cfa21117aaf36eee1af031707839e78d96fc0a9",
+      "afterSha256": "4a5e9113fbf416941d85114f501d581379f1e694f95bd65d72c3dba8fc330d0a"
+    },
+    {
+      "file": "test/summary_grounding.test.ts",
+      "beforeLines": 263,
+      "afterLines": 281,
+      "delta": 18,
+      "beforeSha256": "70aa586b64ae389e75ebd15c73ea7fd8d185dc6b70955b42ef69b1e467a8eb08",
+      "afterSha256": "9690e049902872f7d523afdc56998d5db85b7e963065e3753fdedb88d7c8b4d5"
+    },
+    {
+      "file": "test/chat_attachment_references.test.ts",
+      "beforeLines": 91,
+      "afterLines": 112,
+      "delta": 21,
+      "beforeSha256": "0bc60157cb7fe5064edfc36994bca17d7c7b8388cacac8b3bdfd6951098a0131",
+      "afterSha256": "89aa770d494c5d5ffdef275c039285d4ad1bb1cc5b11115627dbb47908ce1fd0"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 367785
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159404
+      },
+      "total": {
+        "files": 1823,
+        "lines": 527189
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1084,
+        "lines": 367569
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159443
+      },
+      "total": {
+        "files": 1824,
+        "lines": 527012
+      }
+    }
+  },
+  "tests": {
+    "files": 731,
+    "passed": 6590,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      [
+        "D:/lumiOS/test/chat_attachment_references.test.ts::chat attachment references preserves attachment identity and transcript metadata without sending extra object fields",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_attachment_references.test.ts::chat attachment references uses the same attachment kind precedence for photo.PNG with application/octet-stream and undefined",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_attachment_references.test.ts::chat attachment references uses the same attachment kind precedence for voice.webm with undefined and undefined",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_attachment_references.test.ts::chat attachment references uses the same attachment kind precedence for photo.png with audio/wav and audio",
+        1
+      ],
+      [
+        "D:/lumiOS/test/chat_attachment_references.test.ts::chat attachment references uses the same attachment kind precedence for report.pdf with undefined and undefined",
+        1
+      ],
+      [
+        "D:/lumiOS/test/summary_grounding.test.ts::keeps stored rows single-layer and shape-checked while receipt parsing remains recursive",
+        1
+      ]
+    ],
+    "removed": [],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "src/lib/chatAttachmentReferences.ts": "0de0617a7161c524a6be4b198ab5220dcca6d47fb994877e09dc474c620f32a3",
+        "src/components/AgentChatPage.tsx": "eff290a5e9a0f699b859a7a40465e494dcb9f68a8a6185485f87193430f7d5a5",
+        "src/components/org/CentralLumiChat.tsx": "d8b9f74ca96795751c32b1505623b9a6e55b2afe1778119be273452657cc53cd",
+        "server/tools/receipt_payload.ts": "acdf966364e7a646fd0322b766eb3988a2b2dee25ddcdaf845505d4ce2a420fa",
+        "server/conversation/manager.ts": "b40c2576d33cb38be0f74a152c67721af267a9495ff3df76b69400a159c48d9a",
+        "server/evidence/control_sequence_truth_snapshot.ts": "ce5a43d13f9b3915f9b652876f3a4b3b8fd0832228e47dd0b9e6b9aff3cd94c5",
+        "server/socket/chat_execution_registry.ts": "63cf9b27d78b27ba70e74be705cbf018ff6de1be1d678b1b768d00b105e6c71d",
+        "server/evidence/task_truth_snapshot.ts": "656fee0e03d82ff0b366d3fd16f871fe8a7be44612dfa952ed22524aeaf54ba0",
+        "server/evidence/voice_text_continuation_truth.ts": "655ffb9c67c88ef10460d9dcb7622f3ab99d0bcabbc1ad03c7ba0f381345e458",
+        "server/desktop/execution_runtime.ts": "05a1ed83fb0398850e94b67794b62047a0d2556a79a5e68489ef106b5d4e6af8",
+        "server/monitor/runtime_status.ts": "393c32bf2239c3f42ef942b5af538dcf855c5b75fcf23ef7b904c7b35f15e4c6",
+        "server/conversation/focus_threads.ts": "21fd13299121af9cfa6638426ddef6773e8b5fc50c6044b11a752f9a31b6d0e4",
+        "server/conversation/summary_grounding.ts": "6830984ffe873db6800757f1f825d67ac1bc51f3678ef37b0587d28238af24a4",
+        "server/regions/packs/cn/business/workflow_service.ts": "2de82292ab6df0893731d1ce9a91f771c845f765e89660c2f6ce45c92f9f04c4",
+        "server/legal/kb.ts": "b4f7001dfc37b3a48e426058dc18d673c69f9a9eec2636943a15977778e30884",
+        "server/legal/statute_authority_refresh.ts": "34acdbaa293b2c1e34f0c389436f2f80c31bee1fe1748ddb481c90fb26bd7765",
+        "src/components/org/FeedbackBanner.tsx": "46dc0b88d46cc77007ae13ae8b3e0b675721a4a9f5401cd2baf43108ec5bed15",
+        "src/components/org/OrgSettings.tsx": "e0fd43cdebeae95db7fa48f91af9468406efd0127e86baad74e6aa7c89a363ba",
+        "src/components/org/OrgMembers.tsx": "77cc55404190fa69924ce877ea1f8ca2ffc75843e5449af5ea7731795ce0abe4",
+        "src/components/org/AuditLogViewer.tsx": "28dfc5ea88fa6a285fa1140c64e47d94aa67dcee86327d612041ff7a8ea6ca74",
+        "test/chat_page_fixture.ts": "4a5e9113fbf416941d85114f501d581379f1e694f95bd65d72c3dba8fc330d0a",
+        "test/summary_grounding.test.ts": "9690e049902872f7d523afdc56998d5db85b7e963065e3753fdedb88d7c8b4d5",
+        "test/chat_attachment_references.test.ts": "89aa770d494c5d5ffdef275c039285d4ad1bb1cc5b11115627dbb47908ce1fd0"
+      },
+      "startedAt": "2026-10-01T13:33:52.276Z",
+      "finishedAt": "2026-10-01T13:40:42.508Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 7,
+    "passed": 78
+  },
+  "parity": {
+    "success": true,
+    "results": [
+      {
+        "file": "server/conversation/manager.ts",
+        "name": "parsePersistedObject",
+        "cases": 35
+      },
+      {
+        "file": "server/evidence/control_sequence_truth_snapshot.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/evidence/control_sequence_truth_snapshot.ts",
+        "name": "parseArray",
+        "cases": 35
+      },
+      {
+        "file": "server/socket/chat_execution_registry.ts",
+        "name": "parsePayload",
+        "cases": 35
+      },
+      {
+        "file": "server/evidence/task_truth_snapshot.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/evidence/task_truth_snapshot.ts",
+        "name": "parseArray",
+        "cases": 35
+      },
+      {
+        "file": "server/evidence/voice_text_continuation_truth.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/desktop/execution_runtime.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/monitor/runtime_status.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/conversation/focus_threads.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/conversation/summary_grounding.ts",
+        "name": "normalizeToolCalls",
+        "cases": 35
+      },
+      {
+        "file": "server/regions/packs/cn/business/workflow_service.ts",
+        "name": "parseObject",
+        "cases": 35
+      },
+      {
+        "file": "server/legal/kb.ts",
+        "name": "parseArticleNumber",
+        "cases": 20
+      },
+      {
+        "file": "server/legal/statute_authority_refresh.ts",
+        "name": "parseChineseNumber",
+        "cases": 20
+      },
+      {
+        "file": "src/components/AgentChatPage.tsx",
+        "name": "attachment serialization and file-kind/transcript helpers",
+        "cases": 86
+      },
+      {
+        "file": "src/components/org/CentralLumiChat.tsx",
+        "name": "attachment serialization and file-kind/transcript helpers",
+        "cases": 86
+      }
+    ],
+    "cases": 632
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T13:32:51.391Z",
+      "end": "2026-10-01T13:33:27.864Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T13:33:27.866Z",
+      "end": "2026-10-01T13:33:37.591Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T13:33:37.591Z",
+      "end": "2026-10-01T13:33:46.845Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T13:33:46.845Z",
+      "end": "2026-10-01T13:33:47.258Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T13:33:47.258Z",
+      "end": "2026-10-01T13:33:52.229Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T13:32:51.351Z",
+      "end": "2026-10-01T13:33:52.238Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T13:33:52.240Z",
+      "end": "2026-10-01T13:40:42.518Z",
+      "status": 0
+    }
+  ],
+  "scope": {
+    "attachments": [
+      "Reuse the existing attachment-reference module in personal and organization chat",
+      "Single serializer with explicit field whitelist; retain original attachment id, nullable fields and transcript metadata",
+      "Shared accepted extensions, MIME/extension classification and transcript extraction; existing kind inference reuses those checks"
+    ],
+    "persistedRecords": [
+      "Twelve local object/array parsers across ten files now call two shared parsers in the existing receipt module",
+      "Preserve one-layer JSON semantics, object/array rejection, invalid JSON and BOM behavior, and existing object identity",
+      "Recursive receipt decoding and persistence sanitizers remain separate"
+    ],
+    "statutes": [
+      "Reuse the existing article-number parser through the pre-existing kb dependency; remove duplicated digit map and parser"
+    ],
+    "organizationUi": [
+      "Three feedback banner implementations and types share one small component with identical appearance and messages"
+    ],
+    "tests": [
+      "Existing chat page fixture injects shared production helpers instead of extracting removed local copies",
+      "Added explicit serializer whitelist/kind precedence and stored-row versus recursive-receipt boundary cases"
+    ]
+  },
+  "excludedCandidates": [
+    "Standalone bundled CAD/legal file extractors were not cross-imported: package copying and isolated execution require separate packaging work.",
+    "Other parse helpers with recursive decoding or privacy sanitization were not replaced merely because of similar names."
+  ],
+  "toolingCorrection": "Initial parity scan included an unrelated normalizeToolCalls privacy wrapper in manager.ts; narrowed the scan to declarations actually removed. Production privacy sanitization was unchanged.",
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "backendRestarted": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "realUserDataModified": false,
+    "officialModelApiTested": false,
+    "performanceSpeedupMeasured": false,
+    "newExecutionPaths": 0,
+    "newBusinessFiles": [
+      "src/components/org/FeedbackBanner.tsx"
+    ],
+    "wholeProjectSimplificationComplete": false
+  }
+}

@@ -1,0 +1,3982 @@
+{
+  "date": "2026-09-30",
+  "batch": "prune16; delta from turn-start working tree, not HEAD",
+  "before": {
+    "source": {
+      "files": 1082,
+      "lines": 368207
+    },
+    "tests": {
+      "files": 737,
+      "lines": 158596
+    },
+    "total": {
+      "files": 1819,
+      "lines": 526803
+    }
+  },
+  "after": {
+    "source": {
+      "files": 1082,
+      "lines": 368123
+    },
+    "tests": {
+      "files": 736,
+      "lines": 158674
+    },
+    "total": {
+      "files": 1818,
+      "lines": 526797
+    }
+  },
+  "files": [
+    {
+      "file": "src/hooks/useGeneratedLibrary.ts",
+      "before": 39,
+      "after": 38,
+      "delta": -1,
+      "kind": "source",
+      "beforeSha256": "c1e77ee31cf1b93252e2306379e0144c09a4f4b394649d0a0176d7a6d638bc2b",
+      "afterSha256": "2e87e2d11f16a86510db4b1466133d7dd5f31d378f215207a600766e655bcd5b"
+    },
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "before": 5173,
+      "after": 5131,
+      "delta": -42,
+      "kind": "source",
+      "beforeSha256": "f3128df26ed743483241cf0befc9c7e92246c0ab93d1552f0b01f5c13f770973",
+      "afterSha256": "640f9dc49d511a2e804dcf9e85e3720775810b1522755c45a9684b69014b4ce7"
+    },
+    {
+      "file": "db_layer.ts",
+      "before": 2614,
+      "after": 2617,
+      "delta": 3,
+      "kind": "source",
+      "beforeSha256": "ea8119dae8bcecb9495626cec63d3476b3f919b1fcff7368943b28a163a2ffa4",
+      "afterSha256": "535e0f2badfaf7ad249e5a000466164e2b2ff5ed3d9886290c4c2c7cfdea7001"
+    },
+    {
+      "file": "src/components/CommandCenterPlanner.tsx",
+      "before": 416,
+      "after": 387,
+      "delta": -29,
+      "kind": "source",
+      "beforeSha256": "29b40d5dc1b91e6bf52b3305d78cb6d3c1057f9f6cd4db056f80fd5308818a13",
+      "afterSha256": "325fd140091db9982d3fa7d55103b4dbff576b232680958ecaad42ad17cc5ba7"
+    },
+    {
+      "file": "src/hooks/useGeneratedLibrary.test.tsx",
+      "before": 35,
+      "after": 70,
+      "delta": 35,
+      "kind": "test",
+      "beforeSha256": "eb94f5f67efcf95382f602e954764ad48d0a9a60b12bb36b23d055c899465ca9",
+      "afterSha256": "0648d9624392d962026e17ead917d04f40938f16552724cfca3cde1bdc8a5281"
+    },
+    {
+      "file": "test/command_center_planner_mode.test.tsx",
+      "before": 70,
+      "after": 90,
+      "delta": 20,
+      "kind": "test",
+      "beforeSha256": "63d862b99a7bf6b6435921e9cb40b4f3ee9c74d5d2c4a8fe478051504209ac9b",
+      "afterSha256": "c36a7f0499243ff067bba63737e6db585641f5fcf274488a6245bf7236c169ca"
+    },
+    {
+      "file": "test/database_incremental_persistence.test.ts",
+      "before": 29,
+      "after": 0,
+      "delta": -29,
+      "kind": "test",
+      "beforeSha256": "4e76a965a6ab2d10c2586c33b3b334b26e33e83ea9e90e096c5fc48f5880ce77",
+      "afterSha256": null
+    },
+    {
+      "file": "test/db_indexes.test.ts",
+      "before": 271,
+      "after": 284,
+      "delta": 13,
+      "kind": "test",
+      "beforeSha256": "823f3d4f5ded54de5b83b3b036991008a78972d5324725c35c367acfa4a3d7e2",
+      "afterSha256": "36e9fd7030ff51a3e21ea6671cab74e75df25affa97c4a0c7057c224db71e2b2"
+    },
+    {
+      "file": "server/llm/adapter.ts",
+      "before": 2969,
+      "after": 2955,
+      "delta": -14,
+      "kind": "source",
+      "beforeSha256": "33d706c17f2e44f6af0d9eef1c88b016dbb2fe0e5a54d70782d68c2fded3b92c",
+      "afterSha256": "3491307134cac6c0a9dcd53333df6b8d9b74adca25c0e9f1fea54de0997ac438"
+    },
+    {
+      "file": "server/tools/definitions/workflow_tools.ts",
+      "before": 1658,
+      "after": 1657,
+      "delta": -1,
+      "kind": "source",
+      "beforeSha256": "be182f0b724a52e7d874065f0279d1e851a1e73eb333b02c8cfe1397e8189d87",
+      "afterSha256": "26cd10f1b9bb638b55728fdd75acb2adb02bea188cfa9f4e2cee80c60c37016c"
+    },
+    {
+      "file": "test/media_recovery_gallery.test.ts",
+      "before": 45,
+      "after": 84,
+      "delta": 39,
+      "kind": "test",
+      "beforeSha256": "26a3365e6285212a9343f0bd7c9276bf3342149553a96d88fb214ca7972e9c99",
+      "afterSha256": "88e4f3e2bf4970046142eabcf0c250caccb229dc3fb091363d31d6abded05d09"
+    },
+    {
+      "file": "test/voice_prompt_context_contract.test.ts",
+      "before": 42,
+      "after": 37,
+      "delta": -5,
+      "kind": "test",
+      "beforeSha256": "49def7bf655e8835dead53024666620303a6c1df35a518a35d53ceece1cc6ac1",
+      "afterSha256": "b6db6bc956a77923eaef96e42c1667bd45f5f4f25eb741748bf3c39f577f29ba"
+    },
+    {
+      "file": "test/model_tool_projection.test.ts",
+      "before": 1231,
+      "after": 1236,
+      "delta": 5,
+      "kind": "test",
+      "beforeSha256": "11b346436ebc158bb4558d89ec96f1ccf2250f32fc0c2f370a5c26f9beceb8a7",
+      "afterSha256": "021b91b24838148757d3434f2354134fa922f167bac8b912260841b8181ba42e"
+    }
+  ],
+  "changes": [
+    "A07/A11: one plan update/delete request and scoped failure path; list refresh and immediate run share the current blocker/feedback projection; removed duplicate weekly branch and duplicate GET response decoding.",
+    "A10/A11: generated library reuses reconciliation promise and coalesces same-turn refresh bursts; scoped callbacks, request revision, retry and account isolation retained. Chat no longer reloads the library for general UI-state/wallpaper notifications.",
+    "A11: tool receipts and recovery receipts use one local media artifact receiver; merge retains relevant preview/terminal state, recovery resets it. Empty prose/unverified payloads are rejected; preview readiness and finalized successful task remain required.",
+    "A10: reuse hot-table JSON strings within the current snapshot to avoid serializing changed rows again for row hashes. No reference-only cache, no asynchronous change to transaction authorization or rollback, no fingerprint advance before commit.",
+    "Model/workflow: removed unused effectiveProvider probe, duplicate required-tool resolution, and unused currentManifest lookup; actual dispatch and reviewed workflow contract rechecks remain.",
+    "A12: removed two source-string persistence checks; real SQLite tests retain no-change/index/rollback/atomicity checks and now verify stable legacy founder timestamp. Model schema checks execute the actual adapter with optional versus required tools instead of asserting duplicated source expressions."
+  ],
+  "verification": {
+    "full": {
+      "startedAt": "2026-09-30T15:09:34.385Z",
+      "finishedAt": "2026-09-30T15:11:27.235Z",
+      "status": 0,
+      "signal": null,
+      "report": ".codex-run/prune16-full-native.json",
+      "passed": 6529,
+      "failed": 0,
+      "pending": 0,
+      "files": [
+        {
+          "file": "src/components/BusinessWorkbench.test.tsx",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "src/components/ChatSongWorkbench.test.tsx",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "src/components/DesktopOnboarding.test.tsx",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "src/components/frontendBusinessContracts.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "src/components/MediaGenerationStudio.test.tsx",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "src/components/PrivacyModeSettings.test.tsx",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "src/contexts/frontendPreferenceContracts.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/acceptance_evidence.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/action_constitution_argument_scope.test.ts",
+          "status": "passed",
+          "tests": 22
+        },
+        {
+          "file": "test/action_continuation.test.ts",
+          "status": "passed",
+          "tests": 33
+        },
+        {
+          "file": "test/action_contract.test.ts",
+          "status": "passed",
+          "tests": 69
+        },
+        {
+          "file": "test/action_ledger_receipt_ids.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/action_receipt_restart_persistence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/action_turn_durability_fence.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/action_turn_ledger.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/active_task_widget.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/adaptation_report_truth.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/adapter_registry_external_tools.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/adapter_resilience.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/adaptive_compact_window.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/adaptive_voice_endpointing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/agent_status_truth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/aliyun_avatar_connection.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/aliyun_avatar_provider.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/aliyun_avatar_sessions.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/ambient_observation_silence.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/anticipatory_context.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/artifact_progress.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/artifact_progress_prompt.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/artifact_write_scope.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/audio_file_transcription.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/audio_transcription_boundaries.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/audit_session_file_boundaries.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/auth.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/authenticated_file_resources.test.tsx",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/auth_write_concurrency.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/autocad_draw_script.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/autocad_mcp_control.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_capability_pipeline.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_cycle_cancellation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_durable_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/autonomous_finalization.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/autonomous_output_closure.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/autonomous_playback_verification.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/autonomous_report_storage.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomous_task_generator_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomous_web_learning.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/autonomy_levels.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomy_queue_isolation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/autonomy_routes_projection.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/avatar_authoring_routing.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/avatar_live_history.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/avatar_live_inbox.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/avatar_live_playback.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/avatar_live_preview.test.tsx",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/avatar_live_routes.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/behavioral_evidence.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/biometric_capability_receipts.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/build_data_root_isolation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/bundled_skill_capability_metadata.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/bundled_weather.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/business_consolidation.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/business_legacy_archive.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/business_lifecycle_boundaries.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/business_ops_skills.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/business_remediation_contracts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/cad_geometry_verification.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/cad_real_folder_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cad_renovation_folder_workflow.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/calendar_target_identity.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/capability_context.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/capability_execution_plan_persistence.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/capability_gap_autofix.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/capability_learning_current_state.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_manifest.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/capability_meta.test.ts",
+          "status": "passed",
+          "tests": 35
+        },
+        {
+          "file": "test/capability_metrics.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_rollout.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/capability_selection.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "test/capability_state_receipts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/capability_verification.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_artifact_preview.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_attachment_references.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_attachment_upload_delivery.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/chat_attachment_upload_status.test.tsx",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_authorization_revocation.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_authorization_terminal.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_confirmation_terminal_consistency.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/chat_control_cancel_chain.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_conversation_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_conversation_transition.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_document_delivery_consistency.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/chat_event_receipts.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_execution_recovery.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/chat_execution_registry.test.ts",
+          "status": "passed",
+          "tests": 33
+        },
+        {
+          "file": "test/chat_file_preview_ui.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/chat_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_history_receive_order.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/chat_isolated_conversation_continuity.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_knowledge_terminal.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/chat_local_preflight.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/chat_new_artifact_status_routing.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_pending_cleanup_offer.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_post_cancel_durable_binding.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/chat_prior_action_status_handler.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_progress_finalization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/chat_public_error_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/chat_recovery_auth_integration.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/chat_retrieval_cancellation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_runtime_shutdown.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_song.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/chat_task_feedback_binding.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_task_model_failover_continuity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/chat_task_relation_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/chat_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_view_async_boundaries.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/chat_voice_response_delivery.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/chat_voice_tool_stability.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/client_action_external_work_routing.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/client_action_migration.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/client_diagnostic_plan.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/client_domain_ui_state.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/client_runtime_resources.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/client_self_model.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/client_self_repair_receipts.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/client_surface_render_commit.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/cloud_resilience.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/cloud_resilience_deadline.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/command_center_css_budget.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/command_center_customer_projection.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/command_center_execution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/command_center_membership_authorization.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/command_center_navigation_contract.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/command_center_office_scene.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/command_center_planner_mode.test.tsx",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/command_center_plans.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/command_center_plan_retry.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/command_center_scheduled_execution.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/command_platform_validation.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/commerce_tax_skills.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/completion_feedback_persistence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/completion_guard.test.ts",
+          "status": "passed",
+          "tests": 65
+        },
+        {
+          "file": "test/computer_capability_prompt_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/computer_exploration_ui_wiring.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/computer_use_verification.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/confirmed_save_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/control_sequence_truth_snapshot.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/conversation_action_continuation_state.test.ts",
+          "status": "passed",
+          "tests": 32
+        },
+        {
+          "file": "test/conversation_action_request_supersession.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_action_turn_manager.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/conversation_deletion_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/conversation_exact_correction.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/conversation_execution_facts.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/conversation_focus_threads.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_guard_history.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/conversation_latency_policy.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/conversation_new_session.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/conversation_prompt_context.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/conversation_receipt_archive.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/conversation_request_lease_convergence.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/conversation_rollover.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/conversation_routes.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_summary_scheduler.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/conversation_sync.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/conversation_terminal_task_disposition.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/conversation_turn.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/core_capability_boundaries.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cross_channel_action_turn_binding.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/cross_channel_task_request_identity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/cross_platform_capability_contract.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/customer_output_projection_surfaces.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/dashscope_async_task.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/database_health_status.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_migration_failure.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_query_contract.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/database_retention_policy.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/database_shutdown.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/database_snapshot_batch.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/data_root_process_lease.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/data_root_windows_process_probe.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/db_indexes.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/decision_continuity_regression.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/desktop_ai_tools.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_bootstrap_helper.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_bootstrap_security.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/desktop_build_receipt.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/desktop_bundle_budget_contract.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_capability_alignment.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/desktop_command_receipt.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_completion_review.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/desktop_control_lease.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/desktop_control_messages.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_control_pause_adjudication.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_display_scaling.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_exact_target.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_execution_plan.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/desktop_execution_runtime.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/desktop_execution_stability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_foreground_ownership.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/desktop_native_open_completion.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/desktop_observation.test.ts",
+          "status": "passed",
+          "tests": 40
+        },
+        {
+          "file": "test/desktop_optional_bundle_budget.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/desktop_relay.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/desktop_relay_recovery.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/desktop_resource_copy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/desktop_socket_recovery.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/desktop_text_file_capability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/desktop_wechat_watch.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/deterministic_runtime_routing.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/deterministic_tool_recovery.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/device_registry.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/diagnostic_secret_redaction.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/document_functional_regressions.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/domain_session_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/doubao_speech_api_key.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/doubao_streaming_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/doubao_streaming_protocol.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/duplicate_confirmation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/durable_control_plan_routes.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/durable_scope_mutation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/durable_task_queue.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/durable_task_recovery_state_machine.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/ecommerce_review_source.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/ecommerce_workbench.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/emotional_state.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/evidence_workflow.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/execution_decision.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/execution_guard_feedback_sequence.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/execution_guard_recovery.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/execution_pipeline.test.ts",
+          "status": "passed",
+          "tests": 50
+        },
+        {
+          "file": "test/explore_routes_isolated_scan.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/extension_registry.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/external_ai_history_sync.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/external_app_permission_boundaries.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/external_capability_credential_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/external_capability_deactivation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/external_capability_frontend_contract.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/external_capability_registry.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/external_capability_route_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/external_cli.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/external_cli_conversation.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/external_commit_unknown_outcome.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/external_control_candidates.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/failover_policy.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/file_home_paths.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/file_read_history_continuity.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/finance_delivery_e2e.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/finance_office_precision.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/floorplan_extraction_pipeline.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/floorplan_geometry_handoff.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/focus_client_projection.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/focus_socket_contract.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/foreground_activity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/foreground_request_finalization.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/formal_acceptance_evidence.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/formal_client_e2e_script.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/formal_client_restart_recovery_script.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/formal_model_failover_recovery.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/formal_native_client_binding.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/formal_stage9_adjudicator.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/formal_stage9_producer_evidence.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/formal_variant_acceptance.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/formal_wps_batch_acceptance.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/frontend_response_finalization.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/generated_library.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/generated_output_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/generated_skill_history.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/git_tool_boundaries.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/gptsovits_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/gptsovits_provider.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/http_fixture_database_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/image_edit_routing.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/image_generation_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/industry_ecommerce_customer_service_drafts.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_listing_action_queue.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_store_data_snapshot.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_ecommerce_today_snapshot.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_ecommerce_trend_discovery.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/industry_ecommerce_workbench_archive.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/industry_learning.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_research_constraints.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/industry_source_bound_arguments.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/javascript_sandbox_boundary.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/keys.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/knowledge_entry_navigation.test.tsx",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/knowledge_extraction_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/knowledge_ingestion_manifest.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/knowledge_late_ingestion.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/knowledge_protection_retry.test.tsx",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/knowledge_source_format_matrix.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/knowledge_source_revision.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/language.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lap_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lap_delegation_idempotency.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/lap_identity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/lap_pairing.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lap_policy.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/lap_transport.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/laya_shadow.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/learning_interface.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_authority_refresh.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_capability_receipts.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/legal_case_client_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/legal_case_folder_workflow.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/legal_citation_verification.test.ts",
+          "status": "passed",
+          "tests": 29
+        },
+        {
+          "file": "test/legal_retrieval_identity.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/legal_semiauto_workflows.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/legal_tool_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/live_conversation_regression.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/live_conversation_regressions.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/live_task_regressions.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/llm_completion_status.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/llm_desktop_pause_boundary.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/llm_legacy_tool_protocol.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_reasoning.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/llm_stream_supervision.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/llm_tool_context_compaction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_tool_invocation_budget.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/llm_tool_lifecycle_persistence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/llm_tool_loop_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/llm_tool_loop_recovery.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/llm_tool_loop_turn_deadline.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/llm_tool_protocol_integrity.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/local_model_capacity.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/local_model_context_budget.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/local_model_probe_isolation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/local_model_runtime.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/local_security_boundary.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/local_whisper_cancellation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/local_whisper_privacy.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/lumi-client-action-routing.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/lumicore_branding.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_august_voice_replay.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/lumi_autonomous_chain_pressure.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_call_stability_replay.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/lumi_character_motion.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_continuous_action_pressure.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/lumi_core_integrity_pressure.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/lumi_layered_motion.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/lumi_real_failure_replay.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/lumi_requirement_matrix_pressure.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/lumi_runtime_action_pressure.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/lumi_scene_protocol.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/lumi_systematic_naturalness_regression.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/macos_action_receipt.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/macos_wallpaper_mode.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mac_system_explorer.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/make_llm_call_arity.test.ts",
+          "status": "passed",
+          "tests": 42
+        },
+        {
+          "file": "test/manifest_driven_consumers.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/markdown_knowledge.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/marketplace_official_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/marketplace_route_projection_security.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/marketplace_skill_install.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_config_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/mcp_desktop_filesystem_migration.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/mcp_output_finalization.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/mcp_public_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mcp_remote_devices.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_route_security.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/mcp_runtime_cleanup.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/mcp_shutdown.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/mcp_skill_install_resilience.test.ts",
+          "status": "passed",
+          "tests": 40
+        },
+        {
+          "file": "test/mcp_tool_annotations.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mcp_websocket_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/mediapipe_face_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/media_artifact.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/media_artifact_socket_receipt.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/media_delivery_recovery.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/media_generation_artifacts.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/media_playback_evidence.test.ts",
+          "status": "passed",
+          "tests": 81
+        },
+        {
+          "file": "test/media_recovery_gallery.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/media_request_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/media_workbench_chat_contract.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/meeting_speakers.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_auto_organize.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_authoring.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_call_hook.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/memory_avatar_chat_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_conversation.test.tsx",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_distill_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_avatar_editor.test.tsx",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/memory_avatar_entry_lifecycle.test.tsx",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_media.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/memory_avatar_media_service.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/memory_avatar_media_ui.test.tsx",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/memory_avatar_portrait.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/memory_avatar_portrait_audio_contract.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/memory_avatar_portrait_connection.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/memory_avatar_portrait_service.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/memory_avatar_portrait_settings.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_avatar_portrait_voice_integration.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_stage.test.tsx",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_avatar_territory.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/memory_avatar_voice.test.ts",
+          "status": "passed",
+          "tests": 27
+        },
+        {
+          "file": "test/memory_conflict_evidence.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/memory_derived_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/memory_device_sync_durability.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/memory_entity_grounding.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_index_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/memory_learning_provenance.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/memory_operational_trace_filter.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_recall_negated_lookup.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/memory_route_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/memory_route_security.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/memory_territory_navigation.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/memory_territory_surface.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/memory_tier_priority.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/messaging_adapters.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/messaging_attachment_context.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/messaging_authorization_revocation.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_connections_and_routing.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/messaging_execution_receipts.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/messaging_feishu_governance.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_file_transfer.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/messaging_inbox_admission.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/messaging_legal_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/messaging_legal_notice_intake.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/messaging_organization_work_routing.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/messaging_personal_org_scope.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/messaging_remote_learning_authorization.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/messaging_remote_reply_durability.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/messaging_turn_integrity.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/missing_task_input.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_auto_routing_constraints.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/model_configuration_tools.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/model_execution_self_awareness.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/model_failover_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/model_failover_tool_continuity.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/model_media_cancellation.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/model_owned_chat_dispatch.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/model_provider_access.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/model_request_context_budget.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/model_request_tool_protection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/model_role_preferences.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_routing_outbound_evidence.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/model_service_settings.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/model_streaming_routing.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/model_switching_stability.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/model_tool_projection.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/model_turn_latency.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/native_build_boundaries.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/native_client_identity.test.ts",
+          "status": "passed",
+          "tests": 25
+        },
+        {
+          "file": "test/native_invocation_failure.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/native_request_binding_persistence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/new_artifact_task_relation.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/normalized_desktop_intent.test.ts",
+          "status": "passed",
+          "tests": 106
+        },
+        {
+          "file": "test/notifications.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/notification_state.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/no_mutation_policy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/ocr_coordinate_handoff.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/office_broadcast_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/office_presentation_receipts.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/official_api_apply.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/official_api_role_settings_contract.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/official_api_transport.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/official_model_catalog_migration.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/official_model_configuration_concurrency.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/official_reasoning_defaults_migration.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/official_sdk_error_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/official_stt_stream.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/official_tts_adapter.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/official_wake_detector.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/operating_kernel.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/operation_mode_autonomy_sync.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/operation_mode_commands.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/operation_mode_taxonomy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/organization_branch_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/organization_branch_commit_concurrency.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/organization_branch_recovery.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/organization_branch_sync.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/organization_resource_acl.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/organization_resource_acl_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/organization_work_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/organization_work_routing_routes.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/organization_ws_security.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_authorization.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_kb.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/org_legal_case_deletion.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/org_profile.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/org_workspace_information_architecture.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/output_finalization_paths.test.ts",
+          "status": "passed",
+          "tests": 21
+        },
+        {
+          "file": "test/password_pdf.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/pending_cleanup_offer_task_relation.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/pending_confirmation.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/pending_confirmation_repository.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/personality_evolution_cost_guard.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/personality_growth.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/personal_client_surface_coverage.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/pet_preference_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/playback_crop.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/playback_entry_routing.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/playback_observation_delivery.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/playback_verification.test.ts",
+          "status": "passed",
+          "tests": 59
+        },
+        {
+          "file": "test/portable_evidence_comparison.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/portable_external_evidence.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/portable_paired_barrier.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/portable_paired_controller.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/portable_paired_runner.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/portable_task_regression_truth_v2_adapter.test.ts",
+          "status": "passed",
+          "tests": 29
+        },
+        {
+          "file": "test/pptx_extraction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/presence_owner_signal.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/privacy_execution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/privacy_mode.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/privacy_routes.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/privacy_speech.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/privacy_startup_order.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/proactive_notification_center_only.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/proactive_voice_delivery.test.tsx",
+          "status": "passed",
+          "tests": 36
+        },
+        {
+          "file": "test/process_resource_monitor.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/profession_skills.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/profile_voice_access_ui.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/provider_connection_test.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/provider_failure_backoff.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/provider_health_observation.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/provider_json_schema_format.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/public_agent_event_projection.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/python_process_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/python_terminal_receipts.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/qwen_stt_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/read_only_cache.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/read_only_tool_learning.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/region_capability_packs.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/registry.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/reminder_delivery_atomicity.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/remote_chat_route_boundary.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/remote_execution_boundary.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/reply_style.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/response_constraints.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/response_delivery.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/rest_workflow_receipts.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/result_finalizer.test.ts",
+          "status": "passed",
+          "tests": 156
+        },
+        {
+          "file": "test/result_finalizer_formatting.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/retrieval_model_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/retrieval_safety.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/root_review_file_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/route_security_hardening.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/routing_shadow_guard.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/rtf_extraction.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/runtime_build_metadata.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/runtime_data_isolation.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/runtime_file_logger.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/runtime_reliability_source_mode.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/runtime_shutdown.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/runtime_source_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/runtime_workflow_control.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/runtime_work_batch_cancel.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/safety_boundaries.test.ts",
+          "status": "passed",
+          "tests": 30
+        },
+        {
+          "file": "test/scheduler_capability_execution.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/scheduler_stability.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/scope_isolation.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/script_authority_boundary.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/self_improvement_program.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/self_improvement_staging.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/self_model_snapshot.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/sensor_permission_service.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/serial_execution_queue.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/server_entry_data_migration.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/settings.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/shared_loop_target_continuity.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_authoring_chain.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/skill_authoring_completion.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/skill_authoring_pipeline.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/skill_generation_policy.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_generation_transport.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/skill_generation_validation.test.ts",
+          "status": "passed",
+          "tests": 50
+        },
+        {
+          "file": "test/skill_lifecycle_receipts.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/skill_profile_migration.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/skill_route_scope_security.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/skill_runtime_state_truth.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/socket_guard_history_paths.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/socket_history_membership.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/socket_legacy_history_roles.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/socket_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/socket_sidecar_idempotency_contract.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/speculative_tts_sentence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/speech_normalization.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/spreadsheet_tools.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/startup_shell.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/stockbot_trading.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/structured_media_execution.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/structured_media_request.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/structured_runtime_status.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/stt_adapter.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/stt_partial_transcript.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/stt_stream_resilience.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/summary_grounding.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/systemic_runtime_voice_and_window.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/system_app_detection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/system_exploration_worker_resolution.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/system_explorer_capability_profile.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/system_explorer_consent.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/system_stats_accuracy.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/task_assignment_handoff_regressions.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/task_cancel_durability.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/task_capsule.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/task_completion_feedback_ui.test.tsx",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/task_concurrency.test.ts",
+          "status": "passed",
+          "tests": 49
+        },
+        {
+          "file": "test/task_execution_ledger.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/task_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/task_membership_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/task_plan_reference.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/task_regression_black_box_runner.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/task_regression_build_identity.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/task_regression_desktop_relay_security.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/task_regression_matrix.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/task_regression_stale_receipt_evidence.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/task_regression_truth_v2.test.ts",
+          "status": "passed",
+          "tests": 34
+        },
+        {
+          "file": "test/task_regression_wps_semantic_relay_security.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_relation_matrix.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/task_runtime_real_sequence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/task_semantic_continuity.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/task_target_anchor_e2e.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/task_target_reference.test.ts",
+          "status": "passed",
+          "tests": 26
+        },
+        {
+          "file": "test/task_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_truth_snapshot_collector.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/task_truth_snapshot_provider_integration.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/task_truth_snapshot_route_security.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/tauri_dev_single_client.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/technical_architecture.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/text_file_format.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/time_calendar_boundary.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_confirmation_detection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_execution_engine.test.ts",
+          "status": "passed",
+          "tests": 20
+        },
+        {
+          "file": "test/tool_execution_envelope.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/tool_execution_timeout.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/tool_intent_audio.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/tool_output_security.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/tool_permission_enforcement.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/tool_planning.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/tool_receipt_observer.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/tool_record_status.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/tool_router.test.ts",
+          "status": "passed",
+          "tests": 112
+        },
+        {
+          "file": "test/translations.test.ts",
+          "status": "passed",
+          "tests": 37
+        },
+        {
+          "file": "test/tts_adapter.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/turn_continuation_authority.test.ts",
+          "status": "passed",
+          "tests": 22
+        },
+        {
+          "file": "test/turn_dispatch.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/turn_flow.test.ts",
+          "status": "passed",
+          "tests": 42
+        },
+        {
+          "file": "test/turn_memory_durability.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/unified_artifact_delivery.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/unified_core_policy.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/unified_lumi_workspace_scope.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/unified_org_workspace.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/unified_runtime_supervisor.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/user_identity_boundary.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/user_observed_media_completion.test.ts",
+          "status": "passed",
+          "tests": 41
+        },
+        {
+          "file": "test/variant_manager.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/verified_bounded_action_completion.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/video_container_validation.test.ts",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/video_generation_routing.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/video_measurements.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/vision_routing.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/vitest_inventory_diagnostics.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/vite_watch_policy.test.ts",
+          "status": "passed",
+          "tests": 24
+        },
+        {
+          "file": "test/voice.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voiceprint_sidecar_supervision.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/voice_audio_transport.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_call_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 11
+        },
+        {
+          "file": "test/voice_chat_accepted_stt_continuity.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/voice_cloning_capture_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_device_preferences.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_execution_receipts.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_fast_path.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_foreground_release_finalization.test.ts",
+          "status": "passed",
+          "tests": 10
+        },
+        {
+          "file": "test/voice_hot_switch.test.ts",
+          "status": "passed",
+          "tests": 19
+        },
+        {
+          "file": "test/voice_input_guard.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_latency_store.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_live_regressions.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voice_media_routes_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_meeting_authorization.test.ts",
+          "status": "passed",
+          "tests": 17
+        },
+        {
+          "file": "test/voice_parallel_work_and_cad_blank.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_playback_state.test.tsx",
+          "status": "passed",
+          "tests": 14
+        },
+        {
+          "file": "test/voice_preference_model.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/voice_preview_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_profile_persistence.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_prompt_context_contract.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_provenance.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_provenance_formal_chain.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/voice_reconnect_and_presence.test.ts",
+          "status": "passed",
+          "tests": 18
+        },
+        {
+          "file": "test/voice_runtime_stability.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/voice_scope.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_settings_window_activation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/voice_surface_state_sync.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/voice_terminal_durability.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/voice_text_continuation_truth_snapshot.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/voice_transcript_guard.test.ts",
+          "status": "passed",
+          "tests": 28
+        },
+        {
+          "file": "test/voice_turn_state.test.ts",
+          "status": "passed",
+          "tests": 13
+        },
+        {
+          "file": "test/voice_work_watchdog.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/wake_detector.test.ts",
+          "status": "passed",
+          "tests": 15
+        },
+        {
+          "file": "test/wake_official_frontend.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/wake_socket_readiness.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wallpaper_surface_projection.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/web_login_key_protection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/web_login_scope.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/web_login_state.test.ts",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "test/web_response_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wechat_connection.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/wechat_routes.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/wechat_shutdown.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/windows_calendar_target_identity.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/windows_deploy_failure.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/windows_uia_rectangles.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/workflow_attached_reconciliation.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_calculation_capture.test.ts",
+          "status": "passed",
+          "tests": 2
+        },
+        {
+          "file": "test/workflow_capture_turn.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_conversation_binding.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/workflow_execution_ledger.test.ts",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "test/workflow_fresh_input_execution.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/workflow_live_control.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "test/workflow_membership_lifecycle.test.ts",
+          "status": "passed",
+          "tests": 7
+        },
+        {
+          "file": "test/workflow_progress_completion.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/workflow_reference_encoding.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/workflow_runtime.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "test/workflow_shutdown_tracking.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/work_product_evidence.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "test/work_takeover_account_sessions.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/work_takeover_cancellation.test.ts",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "test/work_takeover_capability_reuse_probe.test.ts",
+          "status": "passed",
+          "tests": 1
+        },
+        {
+          "file": "test/work_takeover_continuity.test.ts",
+          "status": "passed",
+          "tests": 16
+        },
+        {
+          "file": "test/work_takeover_evidence_connection.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/work_takeover_execution_writeback.test.ts",
+          "status": "passed",
+          "tests": 23
+        },
+        {
+          "file": "test/work_takeover_industry_parameters.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "test/wps_current_app_e2e_regression.test.ts",
+          "status": "passed",
+          "tests": 12
+        },
+        {
+          "file": "src/hooks/frontendScopeContracts.test.tsx",
+          "status": "passed",
+          "tests": 8
+        },
+        {
+          "file": "src/hooks/useGeneratedLibrary.test.tsx",
+          "status": "passed",
+          "tests": 4
+        },
+        {
+          "file": "src/i18n/runtime.test.ts",
+          "status": "passed",
+          "tests": 5
+        },
+        {
+          "file": "src/lib/audioContextLifecycle.test.ts",
+          "status": "passed",
+          "tests": 3
+        },
+        {
+          "file": "src/lib/externalNavigation.test.tsx",
+          "status": "passed",
+          "tests": 6
+        },
+        {
+          "file": "src/services/apiClient.test.ts",
+          "status": "passed",
+          "tests": 9
+        },
+        {
+          "file": "src/services/frontendWriteContracts.test.ts",
+          "status": "passed",
+          "tests": 4
+        }
+      ]
+    },
+    "checks": [
+      "lint with i18n/hooks/types: exit 0",
+      "all-target frontend build: exit 0",
+      "desktop-specific build and compact CSS verification: exit 0",
+      "server build: exit 0",
+      "test inventory: exit 0; threshold remains 6473",
+      "CRLF-aware diff check: exit 0"
+    ],
+    "initialFailures": {
+      "passed": 6524,
+      "failed": 5,
+      "files": [
+        "D:/lumiOS/test/memory_avatar_voice.test.ts",
+        "D:/lumiOS/test/messaging_authorization_revocation.test.ts",
+        "D:/lumiOS/test/voice_prompt_context_contract.test.ts",
+        "D:/lumiOS/test/workflow_membership_lifecycle.test.ts"
+      ],
+      "resolution": "One source-expression contract was migrated to actual model call arguments. Four asynchronous failures in three files passed isolated rerun and final full run without concurrent builds/lint; concurrency sensitivity is suspected, not proven. No timeout raised and no failed case skipped. First failed report retained.",
+      "isolation": ".codex-run/prune16-failure-isolation.json"
+    },
+    "toolingCorrection": "The compact CSS verifier initially ran after all-target build (dist/assets), but expects desktop-target assets (dist/desktop/assets). Ran the actual desktop build then verified it; no verifier bypass."
+  },
+  "performance": {
+    "scope": "Actual before/after digestPersistenceRows + keyedPersistenceRows extracted from db_layer.ts; not full SQLite flush, not client latency.",
+    "samples": 20,
+    "warmup": 2,
+    "checks": "All table and row digests equal on every sample including in-place edits; legacy non-text keys and duplicate-key rejection preserved.",
+    "sourceSha256": {
+      "before": "ea8119dae8bcecb9495626cec63d3476b3f919b1fcff7368943b28a163a2ffa4",
+      "after": "535e0f2badfaf7ad249e5a000466164e2b2ff5ed3d9886290c4c2c7cfdea7001"
+    },
+    "measurements": [
+      {
+        "count": 1000,
+        "changed": false,
+        "name": "before",
+        "p50Ms": 2.175800000000038,
+        "p95Ms": 2.3023000000000025,
+        "maxObservedHeapDeltaBytes": 1615016,
+        "jsonStringifyCalls": 1000
+      },
+      {
+        "count": 1000,
+        "changed": false,
+        "name": "after",
+        "p50Ms": 2.2076000000000136,
+        "p95Ms": 2.342899999999986,
+        "maxObservedHeapDeltaBytes": 1644072,
+        "jsonStringifyCalls": 1000
+      },
+      {
+        "count": 1000,
+        "changed": true,
+        "name": "before",
+        "p50Ms": 5.203200000000038,
+        "p95Ms": 5.448700000000031,
+        "maxObservedHeapDeltaBytes": 3491272,
+        "jsonStringifyCalls": 2000
+      },
+      {
+        "count": 1000,
+        "changed": true,
+        "name": "after",
+        "p50Ms": 4.509800000000041,
+        "p95Ms": 4.711399999999912,
+        "maxObservedHeapDeltaBytes": 2261040,
+        "jsonStringifyCalls": 1000
+      },
+      {
+        "count": 10000,
+        "changed": false,
+        "name": "before",
+        "p50Ms": 20.43619999999987,
+        "p95Ms": 21.11869999999999,
+        "maxObservedHeapDeltaBytes": 15199984,
+        "jsonStringifyCalls": 10000
+      },
+      {
+        "count": 10000,
+        "changed": false,
+        "name": "after",
+        "p50Ms": 20.687599999999975,
+        "p95Ms": 21.02729999999997,
+        "maxObservedHeapDeltaBytes": 15453456,
+        "jsonStringifyCalls": 10000
+      },
+      {
+        "count": 10000,
+        "changed": true,
+        "name": "before",
+        "p50Ms": 49.09530000000041,
+        "p95Ms": 49.66330000000016,
+        "maxObservedHeapDeltaBytes": 33842176,
+        "jsonStringifyCalls": 20000
+      },
+      {
+        "count": 10000,
+        "changed": true,
+        "name": "after",
+        "p50Ms": 40.88740000000007,
+        "p95Ms": 42.33669999999984,
+        "maxObservedHeapDeltaBytes": 21303984,
+        "jsonStringifyCalls": 10000
+      },
+      {
+        "count": 30000,
+        "changed": false,
+        "name": "before",
+        "p50Ms": 62.45139999999992,
+        "p95Ms": 64.24290000000019,
+        "maxObservedHeapDeltaBytes": 46593656,
+        "jsonStringifyCalls": 30000
+      },
+      {
+        "count": 30000,
+        "changed": false,
+        "name": "after",
+        "p50Ms": 63.424700000000485,
+        "p95Ms": 64.42810000000009,
+        "maxObservedHeapDeltaBytes": 47423072,
+        "jsonStringifyCalls": 30000
+      },
+      {
+        "count": 30000,
+        "changed": true,
+        "name": "before",
+        "p50Ms": 150.66990000000078,
+        "p95Ms": 153.14429999999993,
+        "maxObservedHeapDeltaBytes": 36265696,
+        "jsonStringifyCalls": 60000
+      },
+      {
+        "count": 30000,
+        "changed": true,
+        "name": "after",
+        "p50Ms": 123.57990000000063,
+        "p95Ms": 128.8716999999997,
+        "maxObservedHeapDeltaBytes": 63747984,
+        "jsonStringifyCalls": 30000
+      }
+    ]
+  },
+  "tradeoffs": [
+    "Measured only the real table/row digest functions with synthetic snapshots, not full SQLite flush or actual client latency. 20 measured samples after 2 warmups, alternating before/after order, no concurrent test/build during the probe.",
+    "30k changed rows: observed heap delta increased from about 36 MB to 64 MB. This is not peak memory or a production measurement. Temporary JSON strings are discarded per table before SQL awaits; full snapshot construction and first serialization remain.",
+    "An earlier prototype that hashed every row even for unchanged tables was rejected because unchanged-table digest work became slower. Prototype data is not used as final performance proof."
+  ],
+  "scan": {
+    "files": 1059,
+    "pathAreas": 76,
+    "zeroInboundCandidates": 46,
+    "unreachable": [],
+    "limitation": "Literal imports including types plus declared entry roots; not full dynamic coverage or proof of no dead code."
+  },
+  "remaining": [
+    "A07 other task/receipt projections; different identities/lifecycles cannot be blindly merged",
+    "A10 full snapshot construction, synchronous first serialization and archive JSON reads",
+    "A11 remaining complex live UI state and client acceptance",
+    "A12 remaining source-string checks, to migrate by behavioral value rather than simply delete"
+  ],
+  "limits": [
+    "Overall simplification is not complete",
+    "No real model API calls, live client/media acceptance, restart, commit or push",
+    "Counts exclude audit evidence and ignored measurement scripts; test increases are explicitly included separately"
+  ]
+}

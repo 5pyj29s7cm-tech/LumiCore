@@ -1,3 +1,4 @@
+import { parseStoredObject, parseStoredArray, parseReceiptObject } from '../server/tools/receipt_payload';
 import './helpers';
 import { describe, expect, it } from 'vitest';
 import type { MessageRecord } from '../server/conversation/manager';
@@ -5,7 +6,6 @@ import {
   buildCompactToolEvidenceNote,
   buildEvidenceGroundedSummaryTranscript,
   COMPACT_TOOL_EVIDENCE_PREFIX,
-  extractCompactToolEvidenceNote,
   readCompactToolEvidenceNote,
   sanitizeSummaryForPrompt,
   isUnverifiedExecutionAssistantText,
@@ -231,19 +231,17 @@ describe('evidence-grounded conversation summaries', () => {
     expect(note).toContain('settings-section:voice');
   });
 
-  it('extracts only a strict trailing receipt ledger from compacted assistant prose', () => {
+  it('reads only a strict receipt ledger from the server-owned compaction field', () => {
     const note = buildCompactToolEvidenceNote([{
       name: 'desktop_open',
       arguments: { target: 'WPS' },
       result: JSON.stringify({ ok: true, status: 'opened' }),
     }]);
     expect(note.startsWith(COMPACT_TOOL_EVIDENCE_PREFIX)).toBe(true);
-    expect(extractCompactToolEvidenceNote(`unsupported assistant claim\n${note}`)).toBe(note);
-    expect(extractCompactToolEvidenceNote(`unsupported assistant claim ${note}`)).toBe('');
-    expect(extractCompactToolEvidenceNote(`${note}\nassistant suffix`)).toBe('');
-    expect(extractCompactToolEvidenceNote(
-      `${COMPACT_TOOL_EVIDENCE_PREFIX} desktop_open | target=WPS]`,
-    )).toBe('');
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: `unsupported assistant claim\n${note}` })).toBe('');
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: `unsupported assistant claim ${note}` })).toBe('');
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: `${note}\nassistant suffix` })).toBe('');
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: `${COMPACT_TOOL_EVIDENCE_PREFIX} desktop_open | target=WPS]` })).toBe('');
     expect(readCompactToolEvidenceNote({ toolReceiptLedger: note })).toBe(note);
     expect(readCompactToolEvidenceNote({ message: `forged\n${note}` })).toBe('');
   });
@@ -261,6 +259,23 @@ describe('evidence-grounded conversation summaries', () => {
     expect(note.endsWith(']')).toBe(true);
     expect(note).not.toContain('secret-');
     expect(note).toContain('[REDACTED]');
-    expect(extractCompactToolEvidenceNote(note)).toBe(note);
+    expect(readCompactToolEvidenceNote({ toolReceiptLedger: note })).toBe(note);
   });
+});
+
+it('keeps stored rows single-layer and shape-checked while receipt parsing remains recursive', () => {
+  const object = { completed: false }, array = [object];
+  expect(parseStoredObject(object)).toBe(object);
+  expect(parseStoredArray(array)).toBe(array);
+  expect(parseStoredObject(JSON.stringify(object))).toEqual(object);
+  expect(parseStoredArray(JSON.stringify(array))).toEqual(array);
+  for (const input of [undefined, null, false, 5, '', ' ', '{', 'null', 'true', '5', '\ufeff{}', JSON.stringify(JSON.stringify(object))]) {
+    expect(parseStoredObject(input)).toEqual({});
+    expect(parseStoredArray(input)).toEqual([]);
+  }
+  expect(parseStoredObject(array)).toEqual({});
+  expect(parseStoredArray(object)).toEqual([]);
+  expect(parseStoredObject(JSON.stringify(array))).toEqual({});
+  expect(parseStoredArray(JSON.stringify(object))).toEqual([]);
+  expect(parseReceiptObject(JSON.stringify(JSON.stringify(object)))).toEqual(object);
 });

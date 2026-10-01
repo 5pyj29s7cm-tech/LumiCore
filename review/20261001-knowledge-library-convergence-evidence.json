@@ -1,0 +1,209 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune24",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "routes/files.ts",
+      "beforeLines": 2886,
+      "afterLines": 2883,
+      "delta": -3,
+      "beforeSha256": "30366d0d4fff7fd980cfec41d98bf5cedf00140655485a3cc3c0b06e6c952ab7",
+      "afterSha256": "7aee99b09192346685d31a22657958b79df22162bb0f71d4d086a97793aa6052"
+    },
+    {
+      "file": "src/components/MemoryTree/types.ts",
+      "beforeLines": 134,
+      "afterLines": 103,
+      "delta": -31,
+      "beforeSha256": "01e5958b2e8597b52f361876b1c3254c8c196f4991bdaf2f592ecf53f2b8201d",
+      "afterSha256": "7989d0c7824a8874cef4cf94c9873a5655440ec6e1d784572cc90967a075051b"
+    },
+    {
+      "file": "src/components/NodeDetailPanel.tsx",
+      "beforeLines": 517,
+      "afterLines": 471,
+      "delta": -46,
+      "beforeSha256": "f1566fcf7121a39774a78d03ca75c041a6f16c1404530ffa978342bed354afac",
+      "afterSha256": "b1e2e742f01c32a20fac16410f5386bc74ca1e09f114624e3fb84635f10236d9"
+    },
+    {
+      "file": "src/hooks/useGeneratedLibrary.ts",
+      "beforeLines": 38,
+      "afterLines": 37,
+      "delta": -1,
+      "beforeSha256": "2e87e2d11f16a86510db4b1466133d7dd5f31d378f215207a600766e655bcd5b",
+      "afterSha256": "6d00940f00f14bee231cc9ebc8bf93cd23846e55b315e916131f328161f024cb"
+    },
+    {
+      "file": "src/components/KnowledgeBase.tsx",
+      "beforeLines": 984,
+      "afterLines": 921,
+      "delta": -63,
+      "beforeSha256": "915e81b3f07b99c5e2b35138d8e1c0399991f343a717ac987c7eeec08f39db03",
+      "afterSha256": "cb95bcd0f86dee40fcc8347e634afa2fa1f82cbd2880a0e11f2c0e470e9aeb01"
+    },
+    {
+      "file": "test/knowledge_protection_retry.test.tsx",
+      "beforeLines": 99,
+      "afterLines": 143,
+      "delta": 44,
+      "beforeSha256": "10db805893f340fb8c7e94bb350bf3e9a0493377b5bf085adedce681d758f879",
+      "afterSha256": "54d865fbabd02990c1838cb81ed9b429f476fb25a58ba6d018f4e3c2b4cc1205"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1083,
+        "lines": 368235
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159042
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527277
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1083,
+        "lines": 368091
+      },
+      "tests": {
+        "files": 739,
+        "lines": 159086
+      },
+      "total": {
+        "files": 1822,
+        "lines": 527177
+      }
+    }
+  },
+  "tests": {
+    "files": 730,
+    "passed": 6559,
+    "failed": 0,
+    "skipped": 0,
+    "removed": [],
+    "added": [
+      [
+        "D:/lumiOS/test/knowledge_protection_retry.test.tsx::retains the newest files and memory tree after a late response during reload",
+        1
+      ],
+      [
+        "D:/lumiOS/test/knowledge_protection_retry.test.tsx::retains the newest files and memory tree after a late response during scope",
+        1
+      ],
+      [
+        "D:/lumiOS/test/knowledge_protection_retry.test.tsx::loads the memory tree while archive reconciliation is pending and reports invalid tree responses",
+        1
+      ]
+    ],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "routes/files.ts": "7aee99b09192346685d31a22657958b79df22162bb0f71d4d086a97793aa6052",
+        "src/components/MemoryTree/types.ts": "7989d0c7824a8874cef4cf94c9873a5655440ec6e1d784572cc90967a075051b",
+        "src/components/NodeDetailPanel.tsx": "b1e2e742f01c32a20fac16410f5386bc74ca1e09f114624e3fb84635f10236d9",
+        "src/hooks/useGeneratedLibrary.ts": "6d00940f00f14bee231cc9ebc8bf93cd23846e55b315e916131f328161f024cb",
+        "src/components/KnowledgeBase.tsx": "cb95bcd0f86dee40fcc8347e634afa2fa1f82cbd2880a0e11f2c0e470e9aeb01",
+        "test/knowledge_protection_retry.test.tsx": "54d865fbabd02990c1838cb81ed9b429f476fb25a58ba6d018f4e3c2b4cc1205"
+      },
+      "startedAt": "2026-10-01T11:03:27.214Z",
+      "finishedAt": "2026-10-01T11:08:56.776Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 4,
+    "passed": 29
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T11:02:38.851Z",
+      "end": "2026-10-01T11:03:07.272Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T11:03:07.273Z",
+      "end": "2026-10-01T11:03:15.125Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T11:03:15.125Z",
+      "end": "2026-10-01T11:03:22.882Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T11:03:22.882Z",
+      "end": "2026-10-01T11:03:23.195Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T11:03:23.196Z",
+      "end": "2026-10-01T11:03:27.177Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T11:02:38.820Z",
+      "end": "2026-10-01T11:03:27.184Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T11:03:27.186Z",
+      "end": "2026-10-01T11:08:56.782Z",
+      "status": 0
+    }
+  ],
+  "typeEmission": {
+    "runtimeServerImport": false,
+    "output": "import * as THREE from 'three';\n"
+  },
+  "initialFocusedFailures": [
+    {
+      "file": "D:/lumiOS/test/knowledge_protection_retry.test.tsx",
+      "name": "retains the newest files and memory tree after a late response during reload",
+      "reason": [
+        "Error: Unable to find an element with the text: current document. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      ]
+    },
+    {
+      "file": "D:/lumiOS/test/knowledge_protection_retry.test.tsx",
+      "name": "retains the newest files and memory tree after a late response during scope",
+      "reason": [
+        "Error: Unable to find an element with the text: current document. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      ]
+    }
+  ],
+  "initialFailureResolution": "New component tests caught displayName precedence lost after removing the list mapping. The visible filename now reads displayName before name directly, without restoring a duplicated transformation. The new assertions and all existing assertions remain unchanged.",
+  "boundaries": {
+    "sharedLibraryImplementation": true,
+    "perViewLibraryStateRetained": true,
+    "crossViewGlobalRequestCacheAdded": false,
+    "knowledgeFilesShapeOwnedByBackend": true,
+    "filenameRepairAndBaseOrderingOnServer": true,
+    "knowledgeIngestionPriorityOrderingRetained": true,
+    "lateTreeResponsesIgnored": true,
+    "treeNoLongerWaitsForArchiveReconciliation": true,
+    "persistenceAndArchiveQueryUnchanged": true,
+    "desktopUITestedInJsdomOnly": true,
+    "performanceSpeedupClaimed": false,
+    "backendRestarted": false,
+    "realUserDataModified": false,
+    "commit": false,
+    "push": false
+  }
+}

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { withoutNegatedLookupClauses, normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { hasExplicitToolIntent } from '../server/cognition/tool_intent';
-import { classifyIntent } from '../server/cognition/intent';
 import { buildActionContract } from '../server/cognition/action_contract';
 
 describe('memory recall must not execute a forbidden lookup', () => {
@@ -11,14 +10,12 @@ describe('memory recall must not execute a forbidden lookup', () => {
     "Do you remember the project marker? If not, say you do not know. Don't guess or search chat history.",
   ])('preserves a recall question as conversation: %s', text => {
     expect(normalizeActionIntent(text).kind).not.toBe('messaging_read');
-    expect(classifyIntent(text).category).not.toBe('web');
     expect(hasExplicitToolIntent(text)).toBe(false);
     expect(buildActionContract(text).applies).toBe(false);
   });
   it('keeps an affirmative search in another clause', () => {
     const text = '搜索公开项目资料，不要读取聊天记录。';
     expect(hasExplicitToolIntent(text)).toBe(true);
-    expect(classifyIntent(text).category).toBe('web');
     expect(buildActionContract(text).kind).not.toBe('messaging_read');
   });
   it('keeps an affirmative operation after a contrast', () => {

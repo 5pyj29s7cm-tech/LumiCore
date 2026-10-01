@@ -18,14 +18,6 @@ export interface WorkTakeoverContinuityContext {
   promptOverlay: string;
 }
 
-export interface WorkTakeoverContinuationCommand {
-  intent: WorkTakeoverContinuationIntent;
-  task: WorkTakeoverTask;
-  toolCall: { name: string; arguments: Record<string, any> };
-  responseText: string;
-  formatToolResult: (raw: string, error?: string) => string;
-}
-
 const MUSIC_CONTINUATION_RE = /继续播放|继续.*音乐|继续.*歌|resume\s+(music|song|playback)/i;
 const STATUS_RE = /^(做完了吗|好了没|好了嘛|完成了吗|跑完了吗|结束了吗|结果呢|结果怎么样|进度呢|现在什么进度|状态呢|状态怎么样|怎么样了|现在怎么样|成功了吗|失败了吗|有没有成功|卡在哪|哪里卡了|哪里卡住了|为什么没做完|为什么失败|怎么回事)[。！？?!?]*$/u;
 const ACTION_RE = /^(继续|继续做|继续推进|继续执行|继续处理|接着|接着做|往下|往下走|下一步|下一步呢|接下来呢|做下一步|跑下一步|再跑一步|然后呢|然后|开始吧|来吧|继续吧|继续一下|推进一下)[。！？?!?]*$/u;
@@ -91,10 +83,6 @@ function normalizeText(text: string): string {
   return compact(text).replace(/\s+/g, '');
 }
 
-function unique<T>(values: T[]): T[] {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
 function executionState(task?: WorkTakeoverTask | null): Record<string, any> | null {
   const state = task?.metadata?.workTakeoverExecution;
   return state && typeof state === 'object' ? state as Record<string, any> : null;
@@ -119,13 +107,6 @@ function isShortFollowUp(clean: string, original: string): boolean {
     || EN_WORK_STATUS_RE.test(original)
     || EN_WORK_ACTION_RE.test(original)
     || AFFIRMATIVE_RE.test(clean);
-}
-
-export function classifyWorkTakeoverContinuation(
-  text: string,
-  latestTask?: WorkTakeoverTask | null,
-): WorkTakeoverContinuationIntent | null {
-  return classifyWorkTakeoverContinuationSignal(text, latestTask, 'work').intent;
 }
 
 function normalizeSurface(surface?: WorkTakeoverTurnSurface): WorkTakeoverTurnSurface {
@@ -345,112 +326,5 @@ export function buildWorkTakeoverContinuityContext(
     shouldResumeTask,
     routeText,
     promptOverlay,
-  };
-}
-
-function parseJson(raw: string): any | null {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function formatList(prefix: string, values: unknown, limit = 3): string {
-  if (!Array.isArray(values)) return '';
-  const items = unique(values.map(compact)).slice(0, limit);
-  return items.length ? `${prefix}${items.join('；')}` : '';
-}
-
-function formatArtifacts(task: any): string {
-  const artifacts = Array.isArray(task?.artifacts)
-    ? task.artifacts
-      .filter((artifact: any) => artifact?.status === 'prepared' || artifact?.status === 'needs_review')
-      .map((artifact: any) => compact(artifact?.label))
-      .filter(Boolean)
-      .slice(0, 4)
-    : [];
-  return artifacts.length ? `已准备：${artifacts.join('；')}` : '';
-}
-
-function formatNext(task: any, progress?: any): string {
-  const currentIndex = Number(task?.currentActionIndex) || 0;
-  const nextFromTask = Array.isArray(task?.nextActions) ? compact(task.nextActions[currentIndex]) || compact(task.nextActions[currentIndex + 1]) : '';
-  const nextFromProgress = compact(progress?.nextStep?.title || progress?.nextStep?.goal);
-  const next = nextFromProgress || nextFromTask;
-  return next ? `下一步：${next}` : '';
-}
-
-export function formatWorkTakeoverContinuationResult(
-  intent: WorkTakeoverContinuationIntent,
-  raw: string,
-  error?: string,
-): string {
-  if (error) {
-    return `我没能接上这个任务：${error}`;
-  }
-  const data = parseJson(raw);
-  if (!data) {
-    return raw ? raw.slice(0, 800) : '我已经尝试接上任务，但没有拿到可读的结果。';
-  }
-
-  if (intent === 'status') {
-    const task = data.task || {};
-    return [
-      `这个任务还在${statusLabel(task.status || 'in_progress')}。`,
-      formatArtifacts(task),
-      formatList('卡住：', task.blockedBy),
-      formatList('需要你确认：', data.confirmationRequired || task.confirmationRequired),
-      formatNext(task),
-    ].filter(Boolean).join('\n');
-  }
-
-  const task = data.task || {};
-  const execution = data.execution || {};
-  const packet = data.packet;
-  const action = data.action;
-  const headline = action === 'exported_packet' || packet
-    ? '安全部分已经整理成任务包。'
-    : execution.status === 'blocked'
-      ? '我继续推进了一步，但这里卡住了。'
-      : execution.status === 'waiting_confirmation'
-        ? '我继续推进了一步，现在停在确认边界。'
-        : '我继续推进了一步。';
-
-  return [
-    headline,
-    execution.summary ? `完成：${compact(execution.summary)}` : '',
-    formatArtifacts(task),
-    formatList('卡住：', task.blockedBy),
-    formatList('需要你确认：', task.confirmationRequired),
-    formatNext(task, data.progress),
-  ].filter(Boolean).join('\n');
-}
-
-export function getWorkTakeoverContinuationQuickCommand(
-  text: string,
-  userId: string,
-  scope: { domain?: string; orgId?: string; surface?: WorkTakeoverTurnSurface } = {},
-): WorkTakeoverContinuationCommand | null {
-  const latestTask = getActiveWorkTakeoverTasksForContinuity(userId, { ...scope, limit: 1 })[0] || null;
-  if (!latestTask) return null;
-  const signal = classifyWorkTakeoverContinuationSignal(text, latestTask, normalizeSurface(scope.surface));
-  const intent = signal.intent;
-  if (!intent || signal.strength !== 'direct') return null;
-  const toolName = intent === 'status' ? 'work_takeover_task_continue' : 'work_takeover_task_advance';
-  return {
-    intent,
-    task: latestTask,
-    toolCall: {
-      name: toolName,
-      arguments: {
-        id: latestTask.id,
-        ...(intent === 'advance' ? { mode: 'prepare_work', exportWhenComplete: true } : {}),
-      },
-    },
-    responseText: intent === 'status'
-      ? '我看一下这个任务现在卡在哪里。'
-      : '我接着推进这个任务。',
-    formatToolResult: (raw, error) => formatWorkTakeoverContinuationResult(intent, raw, error),
   };
 }

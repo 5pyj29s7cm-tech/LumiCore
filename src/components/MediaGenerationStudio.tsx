@@ -61,7 +61,15 @@ export type MediaGenerationSourceChange = {
   artifact?: MediaGenerationArtifact;
 };
 
-export type MediaGenerationStudioProps = {
+export type MediaGenerationSources = Required<Pick<MediaGenerationRequest,
+  'primaryImage' | 'referenceImages' | 'referenceImage' | 'primaryArtifactId' | 'referenceArtifactIds' | 'referenceArtifactId'
+>>;
+export const EMPTY_MEDIA_GENERATION_SOURCES: MediaGenerationSources = {
+  primaryImage: '', referenceImages: [], referenceImage: '',
+  primaryArtifactId: '', referenceArtifactIds: [], referenceArtifactId: '',
+};
+
+export type MediaGenerationStudioProps = MediaGenerationSources & {
   /** Legacy image/video surface selection. `operation` selects the exact tool lane. */
   mode: MediaGenerationKind;
   operation?: MediaGenerationOperation;
@@ -76,16 +84,10 @@ export type MediaGenerationStudioProps = {
   onRefreshLibrary?: () => void;
   onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
   sourceArtifacts?: MediaGenerationArtifact[];
-  primaryImage?: string;
-  referenceImages?: string[];
-  referenceImage?: string;
-  primaryArtifactId?: string;
-  referenceArtifactIds?: string[];
-  referenceArtifactId?: string;
   retryRequest?: MediaGenerationRequest | null;
   onModeChange: (mode: MediaGenerationKind) => void;
   onOperationChange?: (operation: MediaGenerationOperation) => void;
-  onSourceChange?: (change: MediaGenerationSourceChange) => void;
+  onSourceChange: (change: MediaGenerationSourceChange) => void;
   onRequestSourceImage?: (
     operation: MediaGenerationSourceOperation,
     slot: MediaGenerationSourceSlot,
@@ -271,37 +273,17 @@ export function MediaGenerationStudio({
   const [size, setSize] = useState<string>(activeKind === 'image' ? IMAGE_SIZE_VALUES[0] : VIDEO_SIZE_VALUES[0]);
   const [count, setCount] = useState(1);
   const [duration, setDuration] = useState(6);
-  const [localPrimaryImage, setLocalPrimaryImage] = useState(primaryImage || '');
-  const [localReferenceImages, setLocalReferenceImages] = useState<string[]>(referenceImages || []);
-  const [localReferenceImage, setLocalReferenceImage] = useState(referenceImage || '');
-  const [localPrimaryArtifactId, setLocalPrimaryArtifactId] = useState(primaryArtifactId || '');
-  const [localEditReferenceArtifactId, setLocalEditReferenceArtifactId] = useState(referenceArtifactIds?.[0] || '');
-  const [localVideoReferenceArtifactId, setLocalVideoReferenceArtifactId] = useState(referenceArtifactId || '');
   const [lastRequest, setLastRequest] = useState<MediaGenerationRequest | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
-  const resolvedPrimaryImage = primaryImage === undefined ? localPrimaryImage : primaryImage;
-  const resolvedReferenceImages = referenceImages === undefined ? localReferenceImages : referenceImages;
-  const resolvedReferenceImage = referenceImage === undefined ? localReferenceImage : referenceImage;
-  const resolvedPrimaryArtifactId = primaryArtifactId === undefined
-    ? resolvedPrimaryImage === localPrimaryImage ? localPrimaryArtifactId : ''
-    : primaryArtifactId;
-  const resolvedEditReferenceArtifactId = referenceArtifactIds === undefined
-    ? (resolvedReferenceImages[0] || '') === (localReferenceImages[0] || '')
-      ? localEditReferenceArtifactId
-      : ''
-    : referenceArtifactIds[0] || '';
-  const resolvedVideoReferenceArtifactId = referenceArtifactId === undefined
-    ? resolvedReferenceImage === localReferenceImage ? localVideoReferenceArtifactId : ''
-    : referenceArtifactId;
-  const editReferenceImage = resolvedReferenceImages[0] || '';
+  const editReferenceImage = referenceImages[0] || '';
   const selectableImageArtifacts = sourceArtifacts.filter(artifact => artifact.kind === 'image');
   const isWorking = busy || status === 'submitting' || status === 'generating' || status === 'cancelling';
   const sourceRequired = activeOperation === 'image_edit' || activeOperation === 'image_to_video';
   const hasRequiredSource = activeOperation === 'image_edit'
-    ? Boolean(resolvedPrimaryImage.trim())
+    ? Boolean(primaryImage.trim())
     : activeOperation === 'image_to_video'
-      ? Boolean(resolvedReferenceImage.trim())
+      ? Boolean(referenceImage.trim())
       : true;
   const requestToRetry = retryRequest || lastRequest;
 
@@ -343,31 +325,14 @@ export function MediaGenerationStudio({
     if (nextKind !== mode) onModeChange(nextKind);
   };
 
-  const notifySourceChange = (
-    targetOperation: MediaGenerationSourceOperation,
-    slot: MediaGenerationSourceSlot,
-    value: string,
-    artifact?: MediaGenerationArtifact,
-  ) => {
-    onSourceChange?.({ operation: targetOperation, slot, value, artifact });
-  };
-
   const setPrimarySource = (value: string, artifact?: MediaGenerationArtifact) => {
-    setLocalPrimaryImage(value);
-    setLocalPrimaryArtifactId(artifact?.id || '');
-    notifySourceChange('image_edit', 'primary', value, artifact);
+    onSourceChange({ operation: 'image_edit', slot: 'primary', value, artifact });
   };
-
   const setEditReferenceSource = (value: string, artifact?: MediaGenerationArtifact) => {
-    setLocalReferenceImages(value.trim() ? [value] : []);
-    setLocalEditReferenceArtifactId(artifact?.id || '');
-    notifySourceChange('image_edit', 'reference', value, artifact);
+    onSourceChange({ operation: 'image_edit', slot: 'reference', value, artifact });
   };
-
   const setVideoReferenceSource = (value: string, artifact?: MediaGenerationArtifact) => {
-    setLocalReferenceImage(value);
-    setLocalVideoReferenceArtifactId(artifact?.id || '');
-    notifySourceChange('image_to_video', 'first_frame', value, artifact);
+    onSourceChange({ operation: 'image_to_video', slot: 'first_frame', value, artifact });
   };
 
   const options = activeKind === 'image'
@@ -412,14 +377,14 @@ export function MediaGenerationStudio({
     } as const;
     if (activeOperation === 'text_to_image') return { ...base, count };
     if (activeOperation === 'image_edit') {
-      const boundedReferences = resolvedReferenceImages.map(value => value.trim()).filter(Boolean).slice(0, 1);
+      const boundedReferences = referenceImages.map(value => value.trim()).filter(Boolean).slice(0, 1);
       return {
         ...base,
-        primaryImage: resolvedPrimaryImage.trim(),
+        primaryImage: primaryImage.trim(),
         referenceImages: boundedReferences,
-        ...(resolvedPrimaryArtifactId ? { primaryArtifactId: resolvedPrimaryArtifactId } : {}),
-        ...(resolvedEditReferenceArtifactId
-          ? { referenceArtifactIds: [resolvedEditReferenceArtifactId] }
+        ...(primaryArtifactId ? { primaryArtifactId } : {}),
+        ...(referenceArtifactIds[0]
+          ? { referenceArtifactIds: [referenceArtifactIds[0]] }
           : {}),
       };
     }
@@ -427,9 +392,9 @@ export function MediaGenerationStudio({
       return {
         ...base,
         duration,
-        referenceImage: resolvedReferenceImage.trim(),
-        ...(resolvedVideoReferenceArtifactId
-          ? { referenceArtifactId: resolvedVideoReferenceArtifactId }
+        referenceImage: referenceImage.trim(),
+        ...(referenceArtifactId
+          ? { referenceArtifactId }
           : {}),
       };
     }
@@ -633,9 +598,9 @@ export function MediaGenerationStudio({
                 required
                 requiredText={copy.primaryImageRequired}
                 placeholder={copy.sourceImagePlaceholder}
-                value={resolvedPrimaryImage}
+                value={primaryImage}
                 artifacts={selectableImageArtifacts}
-                selectedArtifactId={resolvedPrimaryArtifactId}
+                selectedArtifactId={primaryArtifactId}
                 disabled={isWorking}
                 uploadLabel={copy.uploadSourceImage}
                 chooseLabel={copy.chooseFromArtifacts}
@@ -653,8 +618,8 @@ export function MediaGenerationStudio({
                 requiredText=""
                 placeholder={copy.sourceImagePlaceholder}
                 value={editReferenceImage}
-                artifacts={selectableImageArtifacts.filter(artifact => artifact.id !== resolvedPrimaryArtifactId)}
-                selectedArtifactId={resolvedEditReferenceArtifactId}
+                artifacts={selectableImageArtifacts.filter(artifact => artifact.id !== primaryArtifactId)}
+                selectedArtifactId={referenceArtifactIds[0]}
                 disabled={isWorking}
                 uploadLabel={copy.uploadSourceImage}
                 chooseLabel={copy.chooseFromArtifacts}
@@ -675,9 +640,9 @@ export function MediaGenerationStudio({
               required
               requiredText={copy.videoReferenceRequired}
               placeholder={copy.sourceImagePlaceholder}
-              value={resolvedReferenceImage}
+              value={referenceImage}
               artifacts={selectableImageArtifacts}
-              selectedArtifactId={resolvedVideoReferenceArtifactId}
+              selectedArtifactId={referenceArtifactId}
               disabled={isWorking}
               uploadLabel={copy.uploadSourceImage}
               chooseLabel={copy.chooseFromArtifacts}

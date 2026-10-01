@@ -3,16 +3,14 @@ import { CheckCircle2, CircleAlert, Loader2, ShieldAlert } from 'lucide-react';
 import {
   customerVisibleTaskBlocker,
   customerVisibleTaskDetail,
-  type WorkflowTask,
 } from './workflowTypes';
-import type { ConversationFocusThread } from '@/hooks/useFocusThreads';
 import type { RuntimeTaskProjection, StructuredRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { uiMessage } from '@/i18n/uiMessages';
 import type { Locale } from '@/i18n/runtime';
 import { taskCompletionFeedbackCopy } from '@/i18n/locales/taskCompletionFeedback';
 
 const ACTIVE_TASK_STATUSES = new Set(['created', 'planning', 'executing', 'verifying', 'waiting_confirmation']);
-const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'running', 'pausing', 'cancelling']);
+const ACTIVE_WORKFLOW_STATUSES = new Set(['queued', 'pending', 'running', 'pausing', 'cancelling']);
 
 export interface ActiveTaskWidgetState {
   visible: boolean;
@@ -29,18 +27,8 @@ function activeRuntimeTasks(status: StructuredRuntimeStatus | null): RuntimeTask
   return (status?.tasks || []).filter(task => ACTIVE_TASK_STATUSES.has(task.status));
 }
 
-function activeFocusThreads(threads: ConversationFocusThread[] | undefined): ConversationFocusThread[] {
-  return (threads || []).filter(thread => ACTIVE_TASK_STATUSES.has(thread.status));
-}
-
-function activeWorkflowTasks(tasks: WorkflowTask[] | undefined): WorkflowTask[] {
-  return (tasks || []).filter(task => ACTIVE_WORKFLOW_STATUSES.has(task.status));
-}
-
 export function selectActiveTaskWidgetState(input: {
   status: StructuredRuntimeStatus | null;
-  focusThreads: ConversationFocusThread[];
-  tasks: WorkflowTask[];
   workflowActive: boolean;
   workflowStatus: string;
   progressText: string;
@@ -49,14 +37,13 @@ export function selectActiveTaskWidgetState(input: {
 }): ActiveTaskWidgetState {
   const locale = input.locale || 'en';
   const runtimeTasks = activeRuntimeTasks(input.status);
-  const threads = activeFocusThreads(input.focusThreads);
-  const tasks = activeWorkflowTasks(input.tasks);
+  const tasks = (input.status?.durableWork || []).filter(task => ACTIVE_WORKFLOW_STATUSES.has(task.status));
   const primaryRuntimeTask = runtimeTasks[0];
   // Pick one identity first. Evidence from another task must not fill this
   // task's title, blocker or next action just because its own detail is empty.
-  const primaryTaskId = primaryRuntimeTask?.taskId || threads[0]?.taskId || tasks[0]?.id;
-  const primaryThread = threads.find(thread => thread.taskId === primaryTaskId);
-  const primaryWorkflowTask = tasks.find(task => task.id === primaryTaskId);
+  const primaryTaskId = primaryRuntimeTask?.taskId || tasks[0]?.taskId;
+  const primaryThread = primaryRuntimeTask?.focus?.taskId === primaryTaskId ? primaryRuntimeTask?.focus : undefined;
+  const primaryWorkflowTask = tasks.find(task => task.taskId === primaryTaskId);
   const visible = Boolean(primaryRuntimeTask || primaryThread || primaryWorkflowTask || input.workflowActive);
   const status = primaryRuntimeTask?.status
     || primaryThread?.status
@@ -69,19 +56,16 @@ export function selectActiveTaskWidgetState(input: {
   const rawDetail = primaryRuntimeTask?.blocker
     || primaryThread?.waitingFor
     || primaryThread?.nextAction
-    || primaryWorkflowTask?.error
-    || primaryWorkflowTask?.completionFeedback?.blockers[0]
-    || primaryWorkflowTask?.completionFeedback?.incomplete[0]
-    || primaryWorkflowTask?.completionFeedback?.nextSteps[0]
     || (!primaryTaskId ? input.progressText : '');
   const title = customerVisibleTaskDetail(rawTitle, locale, input.fallbackTitle);
   const detail = customerVisibleTaskBlocker(rawDetail, locale);
   const activeTaskIds = new Set([
     ...runtimeTasks.map(task => task.taskId),
-    ...threads.map(thread => thread.taskId),
-    ...tasks.map(task => task.id),
+    ...tasks.map(task => task.taskId),
   ].filter(Boolean));
-  const activeCount = Math.max(activeTaskIds.size, input.workflowActive ? 1 : 0);
+  const counts = input.status?.counts;
+  const activeCount = Math.max(activeTaskIds.size, input.workflowActive ? 1 : 0,
+    (counts?.activeTasks || 0) + (counts?.waitingConfirmation || 0) + (counts?.autonomousActive || 0));
 
   return {
     visible,
@@ -105,16 +89,12 @@ function statusCopy(status: string, locale: Locale): string {
 
 export function ActiveTaskWidget({
   status,
-  focusThreads,
-  tasks,
   workflowActive,
   workflowStatus,
   progressText,
   isZh,
 }: {
   status: StructuredRuntimeStatus | null;
-  focusThreads: ConversationFocusThread[];
-  tasks: WorkflowTask[];
   workflowActive: boolean;
   workflowStatus: string;
   progressText: string;
@@ -124,8 +104,6 @@ export function ActiveTaskWidget({
   const feedbackCopy = taskCompletionFeedbackCopy(locale);
   const view = selectActiveTaskWidgetState({
     status,
-    focusThreads,
-    tasks,
     workflowActive,
     workflowStatus,
     progressText,

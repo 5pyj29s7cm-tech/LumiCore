@@ -115,4 +115,17 @@ describe('native chat terminal event receipts', () => {
     });
     expect(JSON.stringify(state)).not.toContain('prompt');
   });
+  it('keeps source identities bounded, aligned with nonempty references, and absent without a source', () => {
+    const row = { requestId: 'media', startedAt: '2026-10-01T00:00:00Z', mediaGeneration: {
+      mode: 'image', operation: 'image_edit', size: '1024x1024', primaryArtifactId: 'orphan',
+      referenceImages: ['', 'D:/style.png', 'D:/extra.png'], referenceArtifactIds: ['wrong', 's'.repeat(600), 'extra'],
+    } };
+    const media = normalizePersistedPendingChatExecutions(row)[0].mediaGeneration!;
+    expect(media).not.toHaveProperty('primaryArtifactId');
+    expect(media.referenceImages).toEqual(['D:/style.png']);
+    expect(media.referenceArtifactIds).toEqual(['s'.repeat(512)]);
+    row.mediaGeneration.referenceImages = [];
+    expect(normalizePersistedPendingChatExecutions(row)[0].mediaGeneration).not.toHaveProperty('referenceArtifactIds');
+  });
+
 });

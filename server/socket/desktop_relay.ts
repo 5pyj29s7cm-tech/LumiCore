@@ -1,5 +1,7 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { createHash, randomUUID } from "crypto";
 import type { Server, Socket } from "socket.io";
+import { logger } from '../../logger';
 import { deviceRegistry, nativeClientIdentitiesEqual } from "../devices";
 import { resolveSocketScope } from './scope';
 import { captureOrganizationMembershipAuthorization, isOrganizationMembershipAuthorizationCurrent, type OrganizationMembershipAuthorization } from '../org/membership_authorization';
@@ -45,6 +47,8 @@ type PendingDesktopRelay = {
   cancelTimeout?: ReturnType<typeof setTimeout>;
   abandoned?: boolean;
   completed?: boolean;
+  persistLateResult?: (data: DesktopRelayResult) => Promise<void>;
+  resultPersistence?: Promise<boolean>;
   stop?: (reason: string) => void;
 };
 
@@ -64,6 +68,8 @@ export type DesktopRelayOptions = {
   source: 'chat' | 'task' | 'voice' | 'autonomous' | string;
   requestSocket?: Socket;
   emitToolLifecycle?: DesktopRelayLifecycle;
+  /** Separate from live UI events; acknowledged only after durable archival. */
+  onLateResult?: (event: Parameters<DesktopRelayLifecycle>[0]) => Promise<void>;
   formatResultForLifecycle?: (output: string) => string;
   timeoutMs?: number;
   deliveryAckTimeoutMs?: number;
@@ -149,8 +155,12 @@ export function registerDesktopRelayRecoveryHandlers(socket: Socket, userId: () 
       ? 'outcome_unknown: user confirmed original physical operation stopped; old scope result remains unavailable and unverified.'
       : 'Original desktop scope is no longer authorized. Physical stop confirmed; no result was delivered.' }, socket.id);
   };
-  socket.on('tool:desktop_drain_result', (data: any, acknowledge?: (result: any) => void) => acknowledge?.({ ok: drain(data, false) }));
-  socket.on('tool:desktop_drain_confirm_stopped', (data: any, acknowledge?: (result: any) => void) => acknowledge?.({ ok: drain(data, true) }));
+  const acknowledgeResult = (result: boolean | Promise<boolean>, acknowledge?: (result: any) => void) => {
+    if (typeof result === 'boolean') acknowledge?.({ ok: result });
+    else void result.then(ok => acknowledge?.({ ok }));
+  };
+  socket.on('tool:desktop_drain_result', (data: any, acknowledge?: (result: any) => void) => acknowledgeResult(drain(data, false), acknowledge));
+  socket.on('tool:desktop_drain_confirm_stopped', (data: any, acknowledge?: (result: any) => void) => acknowledgeResult(drain(data, true), acknowledge));
   socket.on('tool:desktop_authorize_stop_ack', (data: { correlationId?: string; drainOnly?: boolean } = {}, acknowledge?: (result: any) => void) => {
     const pending = pendingDesktopRelays.get(String(data.correlationId || ''));
     const allowed = Boolean(pending?.abandoned && pending.binding && (data.drainOnly
@@ -167,7 +177,7 @@ export function registerDesktopRelayRecoveryHandlers(socket: Socket, userId: () 
     // This releases only the concurrency hold. The already published durable
     // outcome remains unknown; a human statement is never a verified artifact.
     const accepted = handleDesktopRelayResult(id, { error: 'outcome_unknown: user confirmed the original desktop action has stopped; no task result was verified.' }, socket.id);
-    acknowledge?.({ ok: accepted });
+    acknowledgeResult(accepted, acknowledge);
   });
 }
 const LOCAL_DESKTOP_UI_TOOLS = new Set([
@@ -301,7 +311,7 @@ export function getPreferredDesktopSocketId(userId: string, domain?: 'personal' 
   return devices[0]?.socketId || null;
 }
 
-export function handleDesktopRelayResult(correlationId: string, data: DesktopRelayResult = {}, senderSocketId?: string): boolean {
+export function handleDesktopRelayResult(correlationId: string, data: DesktopRelayResult = {}, senderSocketId?: string): boolean | Promise<boolean> {
   const pending = pendingDesktopRelays.get(correlationId);
   if (!pending) {
     const receipt = completedDesktopRelays.get(correlationId);
@@ -323,6 +333,26 @@ export function handleDesktopRelayResult(correlationId: string, data: DesktopRel
     return false;
   }
 
+  if (pending.abandoned && pending.persistLateResult) {
+    if (pending.resultPersistence) return pending.resultPersistence;
+    const result = { ...data };
+    pending.resultPersistence = Promise.resolve().then(() => pending.persistLateResult!(result)).then(() => {
+      completeDesktopRelay(correlationId, pending, result);
+      return true;
+    }).catch(error => {
+      // Keep both the native hold and the sender's retryable terminal until
+      // the receipt crosses persistence. Never ACK a discarded late result.
+      pending.resultPersistence = undefined;
+      logger.error('[DesktopRelay] Late result persistence failed:', error);
+      return false;
+    });
+    return pending.resultPersistence;
+  }
+  completeDesktopRelay(correlationId, pending, data);
+  return true;
+}
+
+function completeDesktopRelay(correlationId: string, pending: PendingDesktopRelay, data: DesktopRelayResult): void {
   pendingDesktopRelays.delete(correlationId);
   pending.completed = true;
   if (pending.binding) {
@@ -341,7 +371,6 @@ export function handleDesktopRelayResult(correlationId: string, data: DesktopRel
 
   if (data.error) pending.reject(new Error(data.error));
   else pending.resolve(data.output || '');
-  return true;
 }
 
 export function getPendingDesktopRelayCount(): number {
@@ -523,6 +552,7 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
       const uiCid = `desktop-${cid}`;
       const room = desktopRelayRoomForUser(options.userId, scope.domain, scope.orgId);
       const payload: DesktopRelayPayload = { correlationId: cid, name: toolName, arguments: args };
+      const receiptArguments = options.onLateResult ? cloneDatabaseValue(args) : args;
       let settled = false;
 
       options.emitToolLifecycle?.({ correlationId: uiCid, name: toolName, arguments: args });
@@ -599,6 +629,10 @@ export function createDesktopRelay(options: DesktopRelayOptions): DesktopRelay {
         requestSocket: cancelOnDisconnect ? options.requestSocket : undefined,
         binding: { userId: options.userId, domain: scope.domain, orgId: scope.orgId, nativeIdentity: null, io: options.io },
         name: toolName,
+        persistLateResult: options.onLateResult ? data => options.onLateResult!({
+          correlationId: uiCid, name: toolName, arguments: receiptArguments,
+          result: data.output, error: data.error,
+        }) : undefined,
         stop: requestStop,
       });
 

@@ -1,8 +1,8 @@
 import sqlite3 from 'sqlite3';
-import { migrateSchema, PERFORMANCE_INDEX_SQL } from './server/db/migrations';
+import { migrateSchema } from './server/db/migrations';
 import fs from 'fs';
 import path from 'path';
-import { createHash } from 'node:crypto';
+import { DatabaseSnapshots, databaseTarget, type SnapshotProjection } from './server/db/snapshot_changes';
 import { hasCurrentMemoryEmbedding, parsePersistedMemoryEmbedding } from './server/memory/embedding_identity';
 import bcrypt from 'bcryptjs';
 import {
@@ -286,17 +286,6 @@ function parseJsonSetting<T>(settings: any[], key: string, fallback: T): T {
   }
 }
 
-function parseJsonArrayValue(value: unknown): any[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string' || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 function parsePayloadRows(rows: any[]): any[] {
   return (rows || []).flatMap((row: any) => {
     try {
@@ -326,21 +315,24 @@ function parsePayloadRows(rows: any[]): any[] {
   });
 }
 
-function settingsRowsWithSystemState(): any[][] {
-  const settings = Array.isArray(memoryDB?.settings) ? memoryDB.settings : [];
-  const rows = settings
-    .filter((s: any) => s?.key !== SYSTEM_FLAGS_SETTING && s?.key !== SYSTEM_SNAPSHOTS_SETTING)
-    .map((s: any) => [s.key, s.value]);
+function* settingsRowsWithSystemState(items?: any[]): Iterable<any[]> {
+  const settings = items || (Array.isArray(memoryDB?.settings) ? memoryDB.settings : []);
+  for (const setting of settings) {
+    if (setting?.key !== SYSTEM_FLAGS_SETTING && setting?.key !== SYSTEM_SNAPSHOTS_SETTING) yield [setting.key, setting.value];
+  }
 
+  if (!items) yield* systemStateRows();
+}
+
+function* systemStateRows(): Iterable<any[]> {
   if (memoryDB?.systemFlags && Object.keys(memoryDB.systemFlags).length > 0) {
-    rows.push([SYSTEM_FLAGS_SETTING, JSON.stringify(memoryDB.systemFlags)]);
+    yield [SYSTEM_FLAGS_SETTING, JSON.stringify(memoryDB.systemFlags)];
   }
 
   if (Array.isArray(memoryDB?.systemSnapshots) && memoryDB.systemSnapshots.length > 0) {
-    rows.push([SYSTEM_SNAPSHOTS_SETTING, JSON.stringify(memoryDB.systemSnapshots.slice(-120))]);
+    yield [SYSTEM_SNAPSHOTS_SETTING, JSON.stringify(memoryDB.systemSnapshots.slice(-120))];
   }
 
-  return rows;
 }
 
 /**
@@ -1652,7 +1644,7 @@ export function readDB(): any {
   if (!memoryDB) {
     throw new Error('Database not initialized. Call initDatabase() first.');
   }
-  return memoryDB;
+  return databaseSnapshots!.view;
 }
 
 export function requireDatabaseStartupQuickCheck(): 'ok' {
@@ -1671,7 +1663,7 @@ export function pruneOldData(): void {
   const limits: Record<string, number> = { interactions: 20000, tokenUsage: 5000 };
   const tableMap: Record<string, string> = { interactions: 'interactions', tokenUsage: 'token_usage' };
   for (const [key, max] of Object.entries(limits)) {
-    const arr = memoryDB[key];
+    const arr = readDB()[key];
     if (arr && arr.length > max) {
       const excess = arr.length - max;
       const removed = arr.splice(0, excess); // trim oldest entries
@@ -1726,11 +1718,8 @@ let writeInFlight = false;
 let dirtySinceMs = 0;
 let lastSuccessfulFlushAt = '';
 let lastPersistenceError = '';
-let persistenceTableDigests = new Map<string, string>();
-// These high-volume tables have stable text primary keys and no secondary
-// uniqueness rules. Keep committed row fingerprints, never speculative writes.
-const ROW_INCREMENTAL_TABLES = new Set(['interactions', 'memories', 'token_usage']);
-let persistenceRowDigests = new Map<string, Map<string, string>>();
+let databaseSnapshots: DatabaseSnapshots | null = null;
+const UPSERT_PERSISTENCE_TABLES = new Set(['interactions', 'memories', 'token_usage']);
 let lastFlushTables: string[] = [];
 let totalTableWrites = 0;
 let totalSkippedTableWrites = 0;
@@ -1760,23 +1749,13 @@ function scheduleDatabaseFlush(delayMs = 100): void {
     writeDebounceTimer = null;
     if (writeInFlight || persistedRevision >= writeRevision) return;
 
-    const targetRevision = writeRevision;
     writeInFlight = true;
     const ready = writeLock.catch((err) => {
       console.error('[DB] Previous write failed:', err);
     });
     writeLock = ready
-      .then(() => persistMemoryDB())
-      .then(() => {
-        persistedRevision = Math.max(persistedRevision, targetRevision);
-        recordSuccessfulDatabaseFlush();
-      })
+      .then(flushPendingDatabaseLocked)
       .catch((err) => {
-        // persistMemoryDB writes through a transaction and does not mutate the
-        // in-memory source of truth. Keeping that live object is both safer and
-        // dramatically cheaper than cloning the complete database on every
-        // chat/voice event (large tool receipts previously exhausted V8 heap).
-        recordDatabaseFlushFailure(err);
         console.error('[DB] Failed to persist database:', err);
       })
       .finally(() => {
@@ -1860,13 +1839,13 @@ export function writeDB(data: any): void {
   if (!db) {
     throw new Error('Database not initialized.');
   }
-  memoryDB = data;
+  databaseSnapshots!.adopt(data);
+  memoryDB = databaseTarget(data);
   recordDatabaseDirty();
   writeRevision += 1;
 
-  // Keep at most one full snapshot write in flight. Rapid message, memory and
-  // voice updates are coalesced into the next revision instead of queuing a
-  // chain of expensive whole-database rewrites behind SQLite.
+  // Coalesce rapid message, memory and voice updates into the next durable
+  // revision instead of queuing parallel SQLite writes.
   scheduleDatabaseFlush(100);
 }
 
@@ -1936,6 +1915,8 @@ export function getDatabasePersistenceStatus(nowMs = Date.now()): {
   lastSuccessfulFlushAt: string;
   lastError: string;
   lastFlushTables: string[];
+  lastComparedRows: number;
+  lastScannedRows: number;
   totalTableWrites: number;
   totalSkippedTableWrites: number;
 } {
@@ -1949,6 +1930,8 @@ export function getDatabasePersistenceStatus(nowMs = Date.now()): {
     lastSuccessfulFlushAt,
     lastError: lastPersistenceError,
     lastFlushTables: [...lastFlushTables],
+    lastComparedRows: databaseSnapshots?.comparedRows || 0,
+    lastScannedRows: databaseSnapshots?.scannedRows || 0,
     totalTableWrites,
     totalSkippedTableWrites,
   };
@@ -1984,8 +1967,7 @@ export function closeDatabase(): Promise<void> {
     dirtySinceMs = 0;
     lastSuccessfulFlushAt = '';
     lastPersistenceError = '';
-    persistenceTableDigests = new Map();
-    persistenceRowDigests = new Map();
+    databaseSnapshots = null;
     lastFlushTables = [];
     totalTableWrites = 0;
     totalSkippedTableWrites = 0;
@@ -2004,16 +1986,9 @@ export function closeDatabase(): Promise<void> {
   return databaseClosePromise;
 }
 
-/**
- * Persist all in-memory data to SQLite using an atomic write-via-temp-table pattern.
- * Data is written to temp tables first, then the original tables are atomically
- * replaced. If the process crashes mid-write, the original data is preserved.
- */
-interface PersistenceTableSpec {
-  name: string;
-  createSQL: string;
+/** Table projections share one transaction; schema belongs to initialization/migrations. */
+interface PersistenceTableSpec extends SnapshotProjection {
   insertSQL: string;
-  rows: () => any[][];
 }
 
 const STABLE_PERSISTENCE_TIMESTAMP = new Date(0).toISOString();
@@ -2030,30 +2005,30 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
   const specs: PersistenceTableSpec[] = [
     {
       name: 'users',
-      createSQL: `CREATE TABLE _temp_users (uid TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT DEFAULT 'user', balance REAL DEFAULT 0, phone TEXT DEFAULT '', createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_users (uid, username, password, role, balance, phone, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.users.map((u: any) => [u.uid, u.username, u.password, u.role, u.balance, u.phone || '', u.createdAt]),
+      insertSQL: `INSERT INTO users (uid, username, password, role, balance, phone, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'users',
+      *rows(items = memoryDB.users || []) { for (const u of items) { yield [u.uid, u.username, u.password, u.role, u.balance, u.phone || '', u.createdAt]; } },
     },
     {
       name: 'interactions',
-      createSQL: `CREATE TABLE _temp_interactions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, module TEXT, message TEXT NOT NULL, response TEXT, role TEXT DEFAULT '', personality TEXT DEFAULT '', mode TEXT DEFAULT '', toolCalls TEXT DEFAULT '', conversationId TEXT DEFAULT '', cognitiveIntent TEXT DEFAULT '', llmWasCalled INTEGER DEFAULT 0, completionFeedback TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', source TEXT DEFAULT '', channel TEXT DEFAULT '', externalMessageId TEXT DEFAULT '', routeSequence INTEGER, receivedAt TEXT DEFAULT '', requestId TEXT DEFAULT '', nativeDeviceId TEXT DEFAULT '', executionSessionId TEXT DEFAULT '', nativeClientIdentitySha256 TEXT DEFAULT '', audioInputKind TEXT DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT DEFAULT '', sttReceiptId TEXT DEFAULT '', contextChainId TEXT DEFAULT '', previousRequestId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.interactions.map((i: any) => [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls, i.mode), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.requestId || i.externalMessageId || '', i.nativeDeviceId || '', i.executionSessionId || '', i.nativeClientIdentitySha256 || '', i.audioInputKind || '', i.syntheticAudio === true ? 1 : i.syntheticAudio === false ? 0 : null, i.captureSessionId || '', i.sttReceiptId || '', i.contextChainId || '', i.previousRequestId || '', i.timestamp]),
+      insertSQL: `INSERT INTO interactions (id, userId, agentId, module, message, response, role, personality, mode, toolCalls, conversationId, cognitiveIntent, llmWasCalled, completionFeedback, domain, orgId, source, channel, externalMessageId, routeSequence, receivedAt, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'interactions',
+      *rows(items = memoryDB.interactions || []) { for (const i of items) { yield [i.id, i.userId || 'unknown', i.agentId || null, i.personality || i.module || null, i.content || i.message || '', i.response || '', i.role || '', i.personality || '', i.mode || '', serializeStoredToolCalls(i.toolCalls, i.mode), i.conversationId || '', i.cognitiveIntent || '', i.llmWasCalled ? 1 : 0, serializeCompletionFeedbackForPersistence(i.completionFeedback), i.domain || 'personal', i.orgId || '', i.source || '', i.channel || '', i.externalMessageId || '', Number.isFinite(i.routeSequence) ? i.routeSequence : null, i.receivedAt || '', i.requestId || i.externalMessageId || '', i.nativeDeviceId || '', i.executionSessionId || '', i.nativeClientIdentitySha256 || '', i.audioInputKind || '', i.syntheticAudio === true ? 1 : i.syntheticAudio === false ? 0 : null, i.captureSessionId || '', i.sttReceiptId || '', i.contextChainId || '', i.previousRequestId || '', i.timestamp]; } },
     },
     {
       name: 'memories',
-      createSQL: `CREATE TABLE _temp_memories (id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, keywords TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5, sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, lastRetrievedAt TEXT, retrieveCount INTEGER NOT NULL DEFAULT 0, tier TEXT NOT NULL DEFAULT 'episodic', perspective TEXT NOT NULL DEFAULT 'owner_trait', importance REAL NOT NULL DEFAULT 0.3, parentId TEXT, agentId TEXT DEFAULT '', nodeType TEXT NOT NULL DEFAULT 'leaf', location TEXT DEFAULT '', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', embedding TEXT, embeddingNamespace TEXT, embeddingContentHash TEXT)`,
-      insertSQL: `INSERT INTO _temp_memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, location, domain, orgId, embedding, embeddingNamespace, embeddingContentHash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.memories || []).map((m: any) => {
+      insertSQL: `INSERT INTO memories (id, userId, type, content, keywords, confidence, sourceInteractionId, createdAt, updatedAt, lastRetrievedAt, retrieveCount, tier, perspective, importance, parentId, agentId, nodeType, location, domain, orgId, embedding, embeddingNamespace, embeddingContentHash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'memories',
+      *rows(items = memoryDB.memories || []) { for (const m of items) {
         const indexed = hasCurrentMemoryEmbedding(m);
-        return [m.id, m.userId, m.type, m.content, JSON.stringify(m.keywords || []), m.confidence || 0.5, m.sourceInteractionId || '', m.createdAt, m.updatedAt, m.lastRetrievedAt, m.retrieveCount || 0, m.tier || 'episodic', m.perspective || 'owner_trait', m.importance ?? 0.3, m.parentId || null, m.agentId || '', m.nodeType || 'leaf', m.location || '', m.domain || 'personal', m.orgId || '', indexed ? JSON.stringify(m.embedding) : null, indexed ? JSON.stringify(m.embeddingNamespace) : null, indexed ? m.embeddingContentHash : null];
-      }),
+        yield [m.id, m.userId, m.type, m.content, JSON.stringify(m.keywords || []), m.confidence || 0.5, m.sourceInteractionId || '', m.createdAt, m.updatedAt, m.lastRetrievedAt, m.retrieveCount || 0, m.tier || 'episodic', m.perspective || 'owner_trait', m.importance ?? 0.3, m.parentId || null, m.agentId || '', m.nodeType || 'leaf', m.location || '', m.domain || 'personal', m.orgId || '', indexed ? JSON.stringify(m.embedding) : null, indexed ? JSON.stringify(m.embeddingNamespace) : null, indexed ? m.embeddingContentHash : null];
+      } },
     },
     {
       name: 'memory_avatars',
-      createSQL: `CREATE TABLE _temp_memory_avatars (id TEXT PRIMARY KEY, userId TEXT NOT NULL, name TEXT NOT NULL, relationshipType TEXT NOT NULL DEFAULT 'close_friend', status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_memory_avatars (id, userId, name, relationshipType, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.memoryAvatars || []).map((avatar: any) => [
+      insertSQL: `INSERT INTO memory_avatars (id, userId, name, relationshipType, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'memoryAvatars',
+      *rows(items = memoryDB.memoryAvatars || []) { for (const avatar of items) { yield [
         avatar.id,
         avatar.userId,
         avatar.name || 'Memory',
@@ -2067,45 +2042,45 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
           narrative: avatar.narrative || avatar.payload?.narrative || '',
           isFrozen: avatar.isFrozen !== false,
         }),
-        avatar.createdAt || new Date().toISOString(),
-        avatar.updatedAt || avatar.createdAt || new Date().toISOString(),
-      ]),
+        persistenceTimestamp(avatar.createdAt),
+        persistenceTimestamp(avatar.updatedAt, avatar.createdAt),
+      ]; } },
     },
     {
       name: 'reminders',
-      createSQL: `CREATE TABLE _temp_reminders (id TEXT PRIMARY KEY, userId TEXT NOT NULL, content TEXT NOT NULL, dueAt TEXT, status TEXT NOT NULL DEFAULT 'pending', sourceInteractionId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, firedAt TEXT, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_reminders (id, userId, content, dueAt, status, sourceInteractionId, createdAt, firedAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.reminders || []).map((r: any) => [r.id, r.userId, r.content, r.dueAt || null, r.status || 'pending', r.sourceInteractionId || '', r.createdAt, r.firedAt || null, r.domain || 'personal', r.orgId || '']),
+      insertSQL: `INSERT INTO reminders (id, userId, content, dueAt, status, sourceInteractionId, createdAt, firedAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'reminders',
+      *rows(items = memoryDB.reminders || []) { for (const r of items) { yield [r.id, r.userId, r.content, r.dueAt || null, r.status || 'pending', r.sourceInteractionId || '', r.createdAt, r.firedAt || null, r.domain || 'personal', r.orgId || '']; } },
     },
     {
       name: 'conversations',
-      createSQL: `CREATE TABLE _temp_conversations (id TEXT PRIMARY KEY, userId TEXT NOT NULL, agentId TEXT, title TEXT DEFAULT '', status TEXT DEFAULT 'active', summary TEXT DEFAULT '', summaryChain TEXT DEFAULT '[]', lastSummaryMessageCount INTEGER DEFAULT -1, actionContinuationState TEXT DEFAULT '{}', messageCount INTEGER DEFAULT 0, lastActiveAt TEXT NOT NULL, createdAt TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_conversations (id, userId, agentId, title, status, summary, summaryChain, lastSummaryMessageCount, actionContinuationState, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversations || []).map((c: any) => [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(legacyActionContinuationStates.get(c)), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']),
+      insertSQL: `INSERT INTO conversations (id, userId, agentId, title, status, summary, summaryChain, lastSummaryMessageCount, actionContinuationState, messageCount, lastActiveAt, createdAt, domain, orgId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'conversations',
+      *rows(items = memoryDB.conversations || []) { for (const c of items) { yield [c.id, c.userId, c.agentId || '', c.title || '', c.status || 'active', c.summary || '', JSON.stringify(Array.isArray(c.summaryChain) ? c.summaryChain : []), Number.isFinite(Number(c.lastSummaryMessageCount)) ? Math.floor(Number(c.lastSummaryMessageCount)) : -1, serializeStoredActionContinuationState(legacyActionContinuationStates.get(c)), c.messageCount || 0, c.lastActiveAt, c.createdAt, c.domain || 'personal', c.orgId || '']; } },
     },
     {
       name: 'conversation_action_tasks',
-      createSQL: `CREATE TABLE _temp_conversation_action_tasks (id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL, domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', parentTaskId TEXT DEFAULT '', rootUserMessageId TEXT DEFAULT '', intentKind TEXT NOT NULL DEFAULT 'none', operation TEXT NOT NULL DEFAULT 'read', goal TEXT NOT NULL, target TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'planning', blocker TEXT DEFAULT '', activeRequestId TEXT DEFAULT '', completionSource TEXT DEFAULT '', context TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, completedAt TEXT DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_conversation_action_tasks (id, conversationId, userId, domain, orgId, parentTaskId, rootUserMessageId, intentKind, operation, goal, target, status, blocker, activeRequestId, completionSource, context, revision, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversationActionTasks || []).map((t: any) => [t.id, t.conversationId, t.userId, t.domain || 'personal', t.orgId || '', t.parentTaskId || '', t.rootUserMessageId || '', t.intentKind || 'none', t.operation || 'read', t.goal || '', t.target || '', t.status || 'planning', t.blocker || '', t.activeRequestId || '', t.completionSource || '', typeof t.context === 'string' ? t.context : JSON.stringify(t.context || {}), Number(t.revision) || 1, t.createdAt, t.updatedAt, t.completedAt || '']),
+      insertSQL: `INSERT INTO conversation_action_tasks (id, conversationId, userId, domain, orgId, parentTaskId, rootUserMessageId, intentKind, operation, goal, target, status, blocker, activeRequestId, completionSource, context, revision, createdAt, updatedAt, completedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'conversationActionTasks',
+      *rows(items = memoryDB.conversationActionTasks || []) { for (const t of items) { yield [t.id, t.conversationId, t.userId, t.domain || 'personal', t.orgId || '', t.parentTaskId || '', t.rootUserMessageId || '', t.intentKind || 'none', t.operation || 'read', t.goal || '', t.target || '', t.status || 'planning', t.blocker || '', t.activeRequestId || '', t.completionSource || '', typeof t.context === 'string' ? t.context : JSON.stringify(t.context || {}), Number(t.revision) || 1, t.createdAt, t.updatedAt, t.completedAt || '']; } },
     },
     {
       name: 'conversation_action_turns',
-      createSQL: `CREATE TABLE _temp_conversation_action_turns (id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL, userMessageId TEXT NOT NULL, taskId TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'accepted', leaseOwnerId TEXT NOT NULL DEFAULT '', leaseEpoch TEXT NOT NULL DEFAULT '', leaseAcquiredAt TEXT NOT NULL DEFAULT '', leaseHeartbeatAt TEXT NOT NULL DEFAULT '', leaseExpiresAt TEXT NOT NULL DEFAULT '', terminalMessageId TEXT NOT NULL DEFAULT '', terminalReason TEXT NOT NULL DEFAULT '', recoveryReason TEXT NOT NULL DEFAULT '', recoveredAt TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, terminalAt TEXT NOT NULL DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_conversation_action_turns (id, conversationId, userId, domain, orgId, requestId, userMessageId, taskId, channel, source, status, leaseOwnerId, leaseEpoch, leaseAcquiredAt, leaseHeartbeatAt, leaseExpiresAt, terminalMessageId, terminalReason, recoveryReason, recoveredAt, revision, createdAt, updatedAt, terminalAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversationActionTurns || []).map((turn: any) => [turn.id, turn.conversationId, turn.userId, turn.domain || 'personal', turn.orgId || '', turn.requestId || '', turn.userMessageId || '', turn.taskId || '', turn.channel || '', turn.source || '', turn.status || 'accepted', turn.leaseOwnerId || '', turn.leaseEpoch || '', turn.leaseAcquiredAt || '', turn.leaseHeartbeatAt || '', turn.leaseExpiresAt || '', turn.terminalMessageId || '', turn.terminalReason || '', turn.recoveryReason || '', turn.recoveredAt || '', Number(turn.revision) || 1, turn.createdAt, turn.updatedAt, turn.terminalAt || '']),
+      insertSQL: `INSERT INTO conversation_action_turns (id, conversationId, userId, domain, orgId, requestId, userMessageId, taskId, channel, source, status, leaseOwnerId, leaseEpoch, leaseAcquiredAt, leaseHeartbeatAt, leaseExpiresAt, terminalMessageId, terminalReason, recoveryReason, recoveredAt, revision, createdAt, updatedAt, terminalAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'conversationActionTurns',
+      *rows(items = memoryDB.conversationActionTurns || []) { for (const turn of items) { yield [turn.id, turn.conversationId, turn.userId, turn.domain || 'personal', turn.orgId || '', turn.requestId || '', turn.userMessageId || '', turn.taskId || '', turn.channel || '', turn.source || '', turn.status || 'accepted', turn.leaseOwnerId || '', turn.leaseEpoch || '', turn.leaseAcquiredAt || '', turn.leaseHeartbeatAt || '', turn.leaseExpiresAt || '', turn.terminalMessageId || '', turn.terminalReason || '', turn.recoveryReason || '', turn.recoveredAt || '', Number(turn.revision) || 1, turn.createdAt, turn.updatedAt, turn.terminalAt || '']; } },
     },
     {
       name: 'conversation_action_receipts',
-      createSQL: `CREATE TABLE _temp_conversation_action_receipts (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, conversationId TEXT NOT NULL, turnId TEXT DEFAULT '', requestId TEXT DEFAULT '', modelRoutingReceiptId TEXT NOT NULL DEFAULT '', executionOrigin TEXT NOT NULL DEFAULT '', idempotencyKey TEXT NOT NULL, toolName TEXT NOT NULL, targetIdentity TEXT DEFAULT '', inputDigest TEXT DEFAULT '', envelope TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL, createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_conversation_action_receipts (id, taskId, conversationId, turnId, requestId, modelRoutingReceiptId, executionOrigin, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.conversationActionReceipts || []).map((r: any) => [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.modelRoutingReceiptId || '', r.executionOrigin || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]),
+      insertSQL: `INSERT INTO conversation_action_receipts (id, taskId, conversationId, turnId, requestId, modelRoutingReceiptId, executionOrigin, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'conversationActionReceipts',
+      *rows(items = memoryDB.conversationActionReceipts || []) { for (const r of items) { yield [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.modelRoutingReceiptId || '', r.executionOrigin || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]; } },
     },
     {
       name: 'model_routing_receipts',
-      createSQL: `CREATE TABLE _temp_model_routing_receipts (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', requestId TEXT NOT NULL DEFAULT '', nativeDeviceId TEXT NOT NULL DEFAULT '', executionSessionId TEXT NOT NULL DEFAULT '', nativeClientIdentitySha256 TEXT NOT NULL DEFAULT '', audioInputKind TEXT NOT NULL DEFAULT '', syntheticAudio INTEGER, captureSessionId TEXT NOT NULL DEFAULT '', sttReceiptId TEXT NOT NULL DEFAULT '', contextChainId TEXT NOT NULL DEFAULT '', previousRequestId TEXT NOT NULL DEFAULT '', interactionId TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, requestedProvider TEXT NOT NULL, requestedModel TEXT NOT NULL, selectionMode TEXT NOT NULL, selectedProvider TEXT NOT NULL DEFAULT '', selectedModel TEXT NOT NULL DEFAULT '', fallbackReason TEXT NOT NULL DEFAULT '', attempts TEXT NOT NULL DEFAULT '[]', startedAt TEXT NOT NULL, completedAt TEXT NOT NULL, durationMs INTEGER NOT NULL DEFAULT 0)`,
-      insertSQL: `INSERT INTO _temp_model_routing_receipts (id, userId, domain, orgId, conversationId, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, interactionId, source, status, requestedProvider, requestedModel, selectionMode, selectedProvider, selectedModel, fallbackReason, attempts, startedAt, completedAt, durationMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.modelRoutingReceipts || []).map((receipt: any) => [
+      insertSQL: `INSERT INTO model_routing_receipts (id, userId, domain, orgId, conversationId, requestId, nativeDeviceId, executionSessionId, nativeClientIdentitySha256, audioInputKind, syntheticAudio, captureSessionId, sttReceiptId, contextChainId, previousRequestId, interactionId, source, status, requestedProvider, requestedModel, selectionMode, selectedProvider, selectedModel, fallbackReason, attempts, startedAt, completedAt, durationMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'modelRoutingReceipts',
+      *rows(items = memoryDB.modelRoutingReceipts || []) { for (const receipt of items) { yield [
         receipt.id,
         receipt.userId || 'anonymous',
         receipt.domain || 'personal',
@@ -2134,13 +2109,13 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         receipt.startedAt,
         receipt.completedAt,
         Number(receipt.durationMs) || 0,
-      ]),
+      ]; } },
     },
     {
       name: 'read_only_tool_patterns',
-      createSQL: `CREATE TABLE _temp_read_only_tool_patterns (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0, successCount INTEGER NOT NULL DEFAULT 0, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_read_only_tool_patterns (id, userId, domain, orgId, confidence, successCount, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.readOnlyToolPatterns || []).map((pattern: any) => [
+      insertSQL: `INSERT INTO read_only_tool_patterns (id, userId, domain, orgId, confidence, successCount, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'readOnlyToolPatterns',
+      *rows(items = memoryDB.readOnlyToolPatterns || []) { for (const pattern of items) { yield [
         pattern.id,
         pattern.userId,
         pattern.domain || 'personal',
@@ -2149,13 +2124,13 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         Number(pattern.successCount) || 0,
         persistenceTimestamp(pattern.updatedAt, pattern.createdAt),
         JSON.stringify(pattern),
-      ]),
+      ]; } },
     },
     {
       name: 'command_center_plans',
-      createSQL: `CREATE TABLE _temp_command_center_plans (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', conversationId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, title TEXT NOT NULL, instruction TEXT NOT NULL, cadence TEXT NOT NULL DEFAULT 'none', timeOfDay TEXT NOT NULL DEFAULT '09:00', dayOfWeek INTEGER NOT NULL DEFAULT 1, dayOfMonth INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', nextRunAt TEXT NOT NULL DEFAULT '', lastRunAt TEXT NOT NULL DEFAULT '', lastRuntimeTaskId TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, membershipAuthorization TEXT NOT NULL DEFAULT '', authorizationBlockedReason TEXT NOT NULL DEFAULT '')`,
-      insertSQL: `INSERT INTO _temp_command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt, membershipAuthorization, authorizationBlockedReason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.commandCenterPlans || []).map((plan: any) => [
+      insertSQL: `INSERT INTO command_center_plans (id, userId, domain, orgId, conversationId, kind, title, instruction, cadence, timeOfDay, dayOfWeek, dayOfMonth, status, nextRunAt, lastRunAt, lastRuntimeTaskId, createdAt, updatedAt, membershipAuthorization, authorizationBlockedReason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'commandCenterPlans',
+      *rows(items = memoryDB.commandCenterPlans || []) { for (const plan of items) { yield [
         plan.id,
         plan.userId,
         plan.domain || 'personal',
@@ -2176,26 +2151,26 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         plan.updatedAt,
         plan.membershipAuthorization ? JSON.stringify(plan.membershipAuthorization) : '',
         plan.authorizationBlockedReason || '',
-      ]),
+      ]; } },
     },
     {
       name: 'autonomous_tasks',
-      createSQL: `CREATE TABLE _temp_autonomous_tasks (id TEXT PRIMARY KEY, userId TEXT NOT NULL, status TEXT NOT NULL, leaseExpiresAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_autonomous_tasks (id, userId, status, leaseExpiresAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.autonomousTasks || []).map((task: any) => [
+      insertSQL: `INSERT INTO autonomous_tasks (id, userId, status, leaseExpiresAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      source: 'autonomousTasks',
+      *rows(items = memoryDB.autonomousTasks || []) { for (const task of items) { yield [
         task.id,
         task.userId,
         task.status || 'pending',
         task.leaseExpiresAt || '',
         persistenceTimestamp(task.updatedAt, task.createdAt),
         JSON.stringify(task),
-      ]),
+      ]; } },
     },
     {
       name: 'external_ai_history_sources',
-      createSQL: `CREATE TABLE _temp_external_ai_history_sources (id TEXT PRIMARY KEY, userId TEXT NOT NULL, domain TEXT NOT NULL DEFAULT 'personal', orgId TEXT NOT NULL DEFAULT '', sourceKind TEXT NOT NULL, status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_ai_history_sources (id, userId, domain, orgId, sourceKind, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiHistorySources || []).map((source: any) => [
+      insertSQL: `INSERT INTO external_ai_history_sources (id, userId, domain, orgId, sourceKind, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalAiHistorySources',
+      *rows(items = memoryDB.externalAiHistorySources || []) { for (const source of items) { yield [
         source.id,
         source.userId,
         source.domain || 'personal',
@@ -2204,13 +2179,13 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         source.status || 'active',
         persistenceTimestamp(source.updatedAt, source.createdAt),
         JSON.stringify(source),
-      ]),
+      ]; } },
     },
     {
       name: 'external_ai_history_sync_jobs',
-      createSQL: `CREATE TABLE _temp_external_ai_history_sync_jobs (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, userId TEXT NOT NULL, status TEXT NOT NULL, nextCursor TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_ai_history_sync_jobs (id, sourceId, userId, status, nextCursor, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiHistorySyncJobs || []).map((job: any) => [
+      insertSQL: `INSERT INTO external_ai_history_sync_jobs (id, sourceId, userId, status, nextCursor, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalAiHistorySyncJobs',
+      *rows(items = memoryDB.externalAiHistorySyncJobs || []) { for (const job of items) { yield [
         job.id,
         job.sourceId,
         job.userId,
@@ -2218,26 +2193,26 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         job.nextCursor || '',
         persistenceTimestamp(job.updatedAt, job.createdAt),
         JSON.stringify(job),
-      ]),
+      ]; } },
     },
     {
       name: 'external_ai_history_conversations',
-      createSQL: `CREATE TABLE _temp_external_ai_history_conversations (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, userId TEXT NOT NULL, externalConversationId TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalConversationId))`,
-      insertSQL: `INSERT INTO _temp_external_ai_history_conversations (id, sourceId, userId, externalConversationId, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiHistoryConversations || []).map((conversation: any) => [
+      insertSQL: `INSERT INTO external_ai_history_conversations (id, sourceId, userId, externalConversationId, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      source: 'externalAiHistoryConversations',
+      *rows(items = memoryDB.externalAiHistoryConversations || []) { for (const conversation of items) { yield [
         conversation.id,
         conversation.sourceId,
         conversation.userId,
         conversation.externalConversationId,
         persistenceTimestamp(conversation.updatedAt, conversation.createdAt),
         JSON.stringify(conversation),
-      ]),
+      ]; } },
     },
     {
       name: 'external_ai_history_messages',
-      createSQL: `CREATE TABLE _temp_external_ai_history_messages (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, conversationId TEXT NOT NULL, userId TEXT NOT NULL, externalMessageId TEXT NOT NULL, contentDigest TEXT NOT NULL, messageAt TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalMessageId))`,
-      insertSQL: `INSERT INTO _temp_external_ai_history_messages (id, sourceId, conversationId, userId, externalMessageId, contentDigest, messageAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiHistoryMessages || []).map((message: any) => [
+      insertSQL: `INSERT INTO external_ai_history_messages (id, sourceId, conversationId, userId, externalMessageId, contentDigest, messageAt, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalAiHistoryMessages',
+      *rows(items = memoryDB.externalAiHistoryMessages || []) { for (const message of items) { yield [
         message.id,
         message.sourceId,
         message.conversationId,
@@ -2247,13 +2222,13 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         message.messageAt || '',
         persistenceTimestamp(message.updatedAt, message.createdAt),
         JSON.stringify(message),
-      ]),
+      ]; } },
     },
     {
       name: 'external_ai_history_attachments',
-      createSQL: `CREATE TABLE _temp_external_ai_history_attachments (id TEXT PRIMARY KEY, sourceId TEXT NOT NULL, messageId TEXT NOT NULL, userId TEXT NOT NULL, externalAttachmentId TEXT NOT NULL, contentDigest TEXT NOT NULL DEFAULT '', updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(sourceId, externalAttachmentId))`,
-      insertSQL: `INSERT INTO _temp_external_ai_history_attachments (id, sourceId, messageId, userId, externalAttachmentId, contentDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalAiHistoryAttachments || []).map((attachment: any) => [
+      insertSQL: `INSERT INTO external_ai_history_attachments (id, sourceId, messageId, userId, externalAttachmentId, contentDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalAiHistoryAttachments',
+      *rows(items = memoryDB.externalAiHistoryAttachments || []) { for (const attachment of items) { yield [
         attachment.id,
         attachment.sourceId,
         attachment.messageId,
@@ -2262,25 +2237,25 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         attachment.contentDigest || '',
         persistenceTimestamp(attachment.updatedAt, attachment.createdAt),
         JSON.stringify(attachment),
-      ]),
+      ]; } },
     },
     {
       name: 'extension_publishers',
-      createSQL: `CREATE TABLE _temp_extension_publishers (fingerprint TEXT PRIMARY KEY, publisherId TEXT NOT NULL, status TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_extension_publishers (fingerprint, publisherId, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.extensionPublishers || []).map((publisher: any) => [
+      insertSQL: `INSERT INTO extension_publishers (fingerprint, publisherId, status, updatedAt, payload) VALUES (?, ?, ?, ?, ?)`,
+      source: 'extensionPublishers',
+      *rows(items = memoryDB.extensionPublishers || []) { for (const publisher of items) { yield [
         publisher.fingerprint,
         publisher.publisherId,
         publisher.status || 'trusted',
         persistenceTimestamp(publisher.updatedAt, publisher.createdAt),
         JSON.stringify(publisher),
-      ]),
+      ]; } },
     },
     {
       name: 'extension_revisions',
-      createSQL: `CREATE TABLE _temp_extension_revisions (id TEXT PRIMARY KEY, extensionId TEXT NOT NULL, userId TEXT NOT NULL, version TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, manifestDigest TEXT NOT NULL, signerFingerprint TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', UNIQUE(extensionId, version))`,
-      insertSQL: `INSERT INTO _temp_extension_revisions (id, extensionId, userId, version, kind, status, manifestDigest, signerFingerprint, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.extensionRevisions || []).map((revision: any) => [
+      insertSQL: `INSERT INTO extension_revisions (id, extensionId, userId, version, kind, status, manifestDigest, signerFingerprint, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'extensionRevisions',
+      *rows(items = memoryDB.extensionRevisions || []) { for (const revision of items) { yield [
         revision.id,
         revision.extensionId,
         revision.userId,
@@ -2291,26 +2266,26 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         revision.signerFingerprint,
         persistenceTimestamp(revision.updatedAt, revision.createdAt),
         JSON.stringify(revision),
-      ]),
+      ]; } },
     },
     {
       name: 'extension_activation_receipts',
-      createSQL: `CREATE TABLE _temp_extension_activation_receipts (id TEXT PRIMARY KEY, extensionId TEXT NOT NULL, revisionId TEXT NOT NULL, status TEXT NOT NULL, createdAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_extension_activation_receipts (id, extensionId, revisionId, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.extensionActivationReceipts || []).map((receipt: any) => [
+      insertSQL: `INSERT INTO extension_activation_receipts (id, extensionId, revisionId, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+      source: 'extensionActivationReceipts',
+      *rows(items = memoryDB.extensionActivationReceipts || []) { for (const receipt of items) { yield [
         receipt.id,
         receipt.extensionId,
         receipt.revisionId,
         receipt.status || 'unknown',
         persistenceTimestamp(receipt.createdAt),
         JSON.stringify(receipt),
-      ]),
+      ]; } },
     },
     {
       name: 'external_capability_packages',
-      createSQL: `CREATE TABLE _temp_external_capability_packages (id TEXT PRIMARY KEY, ownerUserId TEXT NOT NULL, capabilityId TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, packageDigest TEXT NOT NULL, updatedAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_capability_packages (id, ownerUserId, capabilityId, version, status, packageDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalCapabilityPackages || []).map((capability: any) => [
+      insertSQL: `INSERT INTO external_capability_packages (id, ownerUserId, capabilityId, version, status, packageDigest, updatedAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalCapabilityPackages',
+      *rows(items = memoryDB.externalCapabilityPackages || []) { for (const capability of items) { yield [
         capability.id,
         capability.ownerUserId,
         capability.capabilityId,
@@ -2319,13 +2294,13 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         capability.packageDigest,
         persistenceTimestamp(capability.updatedAt, capability.createdAt),
         JSON.stringify(capability),
-      ]),
+      ]; } },
     },
     {
       name: 'external_capability_receipts',
-      createSQL: `CREATE TABLE _temp_external_capability_receipts (id TEXT PRIMARY KEY, packageRowId TEXT NOT NULL, ownerUserId TEXT NOT NULL, capabilityId TEXT NOT NULL, actionId TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, status TEXT NOT NULL, createdAt TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_external_capability_receipts (id, packageRowId, ownerUserId, capabilityId, actionId, kind, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.externalCapabilityReceipts || []).map((receipt: any) => [
+      insertSQL: `INSERT INTO external_capability_receipts (id, packageRowId, ownerUserId, capabilityId, actionId, kind, status, createdAt, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'externalCapabilityReceipts',
+      *rows(items = memoryDB.externalCapabilityReceipts || []) { for (const receipt of items) { yield [
         receipt.id,
         receipt.packageRowId,
         receipt.ownerUserId,
@@ -2335,161 +2310,159 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
         receipt.status || 'unknown',
         persistenceTimestamp(receipt.createdAt),
         JSON.stringify(receipt),
-      ]),
+      ]; } },
     },
     {
       name: 'canvas_sessions',
-      createSQL: `CREATE TABLE _temp_canvas_sessions (id TEXT PRIMARY KEY, userId TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', cards TEXT NOT NULL DEFAULT '[]', edges TEXT NOT NULL DEFAULT '[]', taskText TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', domain TEXT DEFAULT 'personal', orgId TEXT DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_canvas_sessions (id, userId, title, cards, edges, taskText, status, domain, orgId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.canvas_sessions || []).map((s: any) => [s.id, s.userId, s.title || '', s.cards || '[]', s.edges || '[]', s.taskText || '', s.status || 'active', s.domain || 'personal', s.orgId || '', s.createdAt, s.updatedAt]),
+      insertSQL: `INSERT INTO canvas_sessions (id, userId, title, cards, edges, taskText, status, domain, orgId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'canvas_sessions',
+      *rows(items = memoryDB.canvas_sessions || []) { for (const s of items) { yield [s.id, s.userId, s.title || '', s.cards || '[]', s.edges || '[]', s.taskText || '', s.status || 'active', s.domain || 'personal', s.orgId || '', s.createdAt, s.updatedAt]; } },
     },
     {
       name: 'marketplace_skills',
-      createSQL: `CREATE TABLE _temp_marketplace_skills (id TEXT PRIMARY KEY, name TEXT NOT NULL, author TEXT NOT NULL, price REAL NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_marketplace_skills (id, name, author, price, description, category) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => memoryDB.marketplaceSkills.map((s: any) => [s.id, s.name, s.author, s.price, s.description, s.category]),
+      insertSQL: `INSERT INTO marketplace_skills (id, name, author, price, description, category) VALUES (?, ?, ?, ?, ?, ?)`,
+      source: 'marketplaceSkills',
+      *rows(items = memoryDB.marketplaceSkills || []) { for (const s of items) { yield [s.id, s.name, s.author, s.price, s.description, s.category]; } },
     },
     {
       name: 'skills',
-      createSQL: `CREATE TABLE _temp_skills (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_skills (id, name, description) VALUES (?, ?, ?)`,
-      rows: () => memoryDB.skills.map((s: any) => [s.id, s.name, s.description]),
+      insertSQL: `INSERT INTO skills (id, name, description) VALUES (?, ?, ?)`,
+      source: 'skills',
+      *rows(items = memoryDB.skills || []) { for (const s of items) { yield [s.id, s.name, s.description]; } },
     },
     {
       name: 'settings',
-      createSQL: `CREATE TABLE _temp_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_settings (key, value) VALUES (?, ?)`,
+      insertSQL: `INSERT INTO settings (key, value) VALUES (?, ?)`,
+      source: 'settings',
+      dependencies: ['systemFlags', 'systemSnapshots'],
+      extraRows: systemStateRows,
       rows: settingsRowsWithSystemState,
     },
     {
       name: 'voice_profiles',
-      createSQL: `CREATE TABLE _temp_voice_profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, userId TEXT NOT NULL, voiceId TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_voice_profiles (userId, voiceId, name, provider, createdAt) VALUES (?, ?, ?, ?, ?)`,
-      rows: () => {
-        const rows: any[][] = [];
+      dependencies: ['voiceProfiles'],
+      insertSQL: `INSERT INTO voice_profiles (userId, voiceId, name, provider, createdAt) VALUES (?, ?, ?, ?, ?)`,
+      *rows() {
         for (const [userId, profiles] of Object.entries(memoryDB.voiceProfiles || {})) {
-          for (const vp of profiles as any[]) {
-            rows.push([userId, vp.voiceId, vp.name, vp.provider, vp.createdAt]);
-          }
+          for (const vp of profiles as any[]) yield [userId, vp.voiceId, vp.name, vp.provider, vp.createdAt];
         }
-        return rows;
       },
     },
     {
       name: 'token_usage',
-      createSQL: `CREATE TABLE _temp_token_usage (id TEXT PRIMARY KEY, userId TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, promptTokens INTEGER NOT NULL, completionTokens INTEGER NOT NULL, totalTokens INTEGER NOT NULL, mode TEXT DEFAULT 'chat', interactionId TEXT DEFAULT '', timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_token_usage (id, userId, provider, model, promptTokens, completionTokens, totalTokens, mode, interactionId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.tokenUsage || []).map((u: any) => [u.id, u.userId, u.provider, u.model, u.promptTokens, u.completionTokens, u.totalTokens, u.mode || 'chat', u.interactionId || '', u.timestamp]),
+      insertSQL: `INSERT INTO token_usage (id, userId, provider, model, promptTokens, completionTokens, totalTokens, mode, interactionId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'tokenUsage',
+      *rows(items = memoryDB.tokenUsage || []) { for (const u of items) { yield [u.id, u.userId, u.provider, u.model, u.promptTokens, u.completionTokens, u.totalTokens, u.mode || 'chat', u.interactionId || '', u.timestamp]; } },
     },
     {
       name: 'organizations',
-      createSQL: `CREATE TABLE _temp_organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL, ownerUid TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_organizations (id, name, slug, ownerUid, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.organizations || []).map((o: any) => [o.id, o.name, o.slug, o.ownerUid, o.settings || '{}', o.createdAt, o.updatedAt]),
+      insertSQL: `INSERT INTO organizations (id, name, slug, ownerUid, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'organizations',
+      *rows(items = memoryDB.organizations || []) { for (const o of items) { yield [o.id, o.name, o.slug, o.ownerUid, o.settings || '{}', o.createdAt, o.updatedAt]; } },
     },
     {
       name: 'departments',
-      createSQL: `CREATE TABLE _temp_departments (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, name TEXT NOT NULL, parentId TEXT, createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_departments (id, orgId, name, parentId, createdAt) VALUES (?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.departments || []).map((d: any) => [d.id, d.orgId, d.name, d.parentId || null, d.createdAt]),
+      insertSQL: `INSERT INTO departments (id, orgId, name, parentId, createdAt) VALUES (?, ?, ?, ?, ?)`,
+      source: 'departments',
+      *rows(items = memoryDB.departments || []) { for (const d of items) { yield [d.id, d.orgId, d.name, d.parentId || null, d.createdAt]; } },
     },
     {
       name: 'org_memberships',
-      createSQL: `CREATE TABLE _temp_org_memberships (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, userId TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', departmentId TEXT, status TEXT NOT NULL DEFAULT 'active', invitedBy TEXT, joinedAt TEXT, createdAt TEXT NOT NULL, UNIQUE(orgId, userId))`,
-      insertSQL: `INSERT INTO _temp_org_memberships (id, orgId, userId, role, departmentId, status, invitedBy, joinedAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgMemberships || []).map((m: any) => [m.id, m.orgId, m.userId, m.role || 'member', m.departmentId || null, m.status || 'active', m.invitedBy || null, m.joinedAt || null, m.createdAt]),
+      insertSQL: `INSERT INTO org_memberships (id, orgId, userId, role, departmentId, status, invitedBy, joinedAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgMemberships',
+      *rows(items = memoryDB.orgMemberships || []) { for (const m of items) { yield [m.id, m.orgId, m.userId, m.role || 'member', m.departmentId || null, m.status || 'active', m.invitedBy || null, m.joinedAt || null, m.createdAt]; } },
     },
     {
       name: 'org_positions',
-      createSQL: `CREATE TABLE _temp_org_positions (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, departmentId TEXT, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_positions (id, orgId, departmentId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgPositions || []).map((item: any) => [item.id, item.orgId, item.departmentId || null, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_positions (id, orgId, departmentId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgPositions',
+      *rows(items = memoryDB.orgPositions || []) { for (const item of items) { yield [item.id, item.orgId, item.departmentId || null, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_work_routing_rules',
-      createSQL: `CREATE TABLE _temp_org_work_routing_rules (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_work_routing_rules (id, orgId, enabled, priority, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgWorkRoutingRules || []).map((item: any) => [item.id, item.orgId, item.enabled === false ? 0 : 1, Number(item.priority) || 0, JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_work_routing_rules (id, orgId, enabled, priority, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgWorkRoutingRules',
+      *rows(items = memoryDB.orgWorkRoutingRules || []) { for (const item of items) { yield [item.id, item.orgId, item.enabled === false ? 0 : 1, Number(item.priority) || 0, JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_work_items',
-      createSQL: `CREATE TABLE _temp_org_work_items (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, idempotencyKey TEXT NOT NULL, requestId TEXT NOT NULL, source TEXT NOT NULL, requesterUserId TEXT NOT NULL, conversationId TEXT NOT NULL DEFAULT '', taskId TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE(orgId, idempotencyKey))`,
-      insertSQL: `INSERT INTO _temp_org_work_items (id, orgId, idempotencyKey, requestId, source, requesterUserId, conversationId, taskId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgWorkItems || []).map((item: any) => [item.id, item.orgId, item.idempotencyKey, item.requestId, item.source, item.requesterUserId, item.conversationId || '', item.taskId || '', item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_work_items (id, orgId, idempotencyKey, requestId, source, requesterUserId, conversationId, taskId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgWorkItems',
+      *rows(items = memoryDB.orgWorkItems || []) { for (const item of items) { yield [item.id, item.orgId, item.idempotencyKey, item.requestId, item.source, item.requesterUserId, item.conversationId || '', item.taskId || '', item.status, JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_work_approvals',
-      createSQL: `CREATE TABLE _temp_org_work_approvals (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, workItemId TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_work_approvals (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgWorkApprovals || []).map((item: any) => [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_work_approvals (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgWorkApprovals',
+      *rows(items = memoryDB.orgWorkApprovals || []) { for (const item of items) { yield [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_work_handoffs',
-      createSQL: `CREATE TABLE _temp_org_work_handoffs (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, workItemId TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_work_handoffs (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgWorkHandoffs || []).map((item: any) => [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_work_handoffs (id, orgId, workItemId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgWorkHandoffs',
+      *rows(items = memoryDB.orgWorkHandoffs || []) { for (const item of items) { yield [item.id, item.orgId, item.workItemId, item.status, JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_resource_policies',
-      createSQL: `CREATE TABLE _temp_org_resource_policies (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, resourceType TEXT NOT NULL, resourceId TEXT NOT NULL, classification TEXT NOT NULL DEFAULT 'organization', status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE(orgId, resourceType, resourceId))`,
-      insertSQL: `INSERT INTO _temp_org_resource_policies (id, orgId, resourceType, resourceId, classification, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgResourcePolicies || []).map((item: any) => [item.id, item.orgId, item.resourceType, item.resourceId, item.classification || 'organization', item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_resource_policies (id, orgId, resourceType, resourceId, classification, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgResourcePolicies',
+      *rows(items = memoryDB.orgResourcePolicies || []) { for (const item of items) { yield [item.id, item.orgId, item.resourceType, item.resourceId, item.classification || 'organization', item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_resource_grants',
-      createSQL: `CREATE TABLE _temp_org_resource_grants (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, resourceType TEXT NOT NULL, resourceId TEXT NOT NULL, subjectType TEXT NOT NULL, subjectId TEXT NOT NULL, effect TEXT NOT NULL DEFAULT 'allow', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_resource_grants (id, orgId, resourceType, resourceId, subjectType, subjectId, effect, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgResourceGrants || []).map((item: any) => [item.id, item.orgId, item.resourceType, item.resourceId, item.subjectType, item.subjectId, item.effect || 'allow', JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_resource_grants (id, orgId, resourceType, resourceId, subjectType, subjectId, effect, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgResourceGrants',
+      *rows(items = memoryDB.orgResourceGrants || []) { for (const item of items) { yield [item.id, item.orgId, item.resourceType, item.resourceId, item.subjectType, item.subjectId, item.effect || 'allow', JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_credential_references',
-      createSQL: `CREATE TABLE _temp_org_credential_references (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_credential_references (id, orgId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgCredentialReferences || []).map((item: any) => [item.id, item.orgId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_credential_references (id, orgId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)`,
+      source: 'orgCredentialReferences',
+      *rows(items = memoryDB.orgCredentialReferences || []) { for (const item of items) { yield [item.id, item.orgId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_devices',
-      createSQL: `CREATE TABLE _temp_org_devices (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, branchId TEXT NOT NULL UNIQUE, userId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', payload TEXT NOT NULL DEFAULT '{}', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_devices (id, orgId, branchId, userId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgDevices || []).map((item: any) => [item.id, item.orgId, item.branchId, item.userId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]),
+      insertSQL: `INSERT INTO org_devices (id, orgId, branchId, userId, status, payload, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgDevices',
+      *rows(items = memoryDB.orgDevices || []) { for (const item of items) { yield [item.id, item.orgId, item.branchId, item.userId, item.status || 'active', JSON.stringify(item), item.createdAt, item.updatedAt]; } },
     },
     {
       name: 'org_invitations',
-      createSQL: `CREATE TABLE _temp_org_invitations (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, code TEXT UNIQUE NOT NULL, createdBy TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', departmentId TEXT, maxUses INTEGER DEFAULT 0, useCount INTEGER DEFAULT 0, expiresAt TEXT, createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_invitations (id, orgId, code, createdBy, role, departmentId, maxUses, useCount, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgInvitations || []).map((inv: any) => [inv.id, inv.orgId, inv.code, inv.createdBy, inv.role || 'member', inv.departmentId || null, inv.maxUses || 0, inv.useCount || 0, inv.expiresAt || null, inv.createdAt]),
+      insertSQL: `INSERT INTO org_invitations (id, orgId, code, createdBy, role, departmentId, maxUses, useCount, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgInvitations',
+      *rows(items = memoryDB.orgInvitations || []) { for (const inv of items) { yield [inv.id, inv.orgId, inv.code, inv.createdBy, inv.role || 'member', inv.departmentId || null, inv.maxUses || 0, inv.useCount || 0, inv.expiresAt || null, inv.createdAt]; } },
     },
     {
       name: 'org_kb_articles',
-      createSQL: `CREATE TABLE _temp_org_kb_articles (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, category TEXT DEFAULT 'general', tags TEXT DEFAULT '[]', authorId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'published', viewCount INTEGER DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, ingestionManifest TEXT NOT NULL DEFAULT '{}')`,
-      insertSQL: `INSERT INTO _temp_org_kb_articles (id, orgId, title, content, category, tags, authorId, status, viewCount, createdAt, updatedAt, ingestionManifest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgKbArticles || []).map((a: any) => [a.id, a.orgId, a.title, a.content, a.category || 'general', a.tags || '[]', a.authorId, a.status || 'published', a.viewCount || 0, a.createdAt, a.updatedAt, a.ingestionManifest || '{}']),
+      insertSQL: `INSERT INTO org_kb_articles (id, orgId, title, content, category, tags, authorId, status, viewCount, createdAt, updatedAt, ingestionManifest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgKbArticles',
+      *rows(items = memoryDB.orgKbArticles || []) { for (const a of items) { yield [a.id, a.orgId, a.title, a.content, a.category || 'general', a.tags || '[]', a.authorId, a.status || 'published', a.viewCount || 0, a.createdAt, a.updatedAt, a.ingestionManifest || '{}']; } },
     },
     {
       name: 'org_kb_embeddings',
-      createSQL: `CREATE TABLE _temp_org_kb_embeddings (id TEXT PRIMARY KEY, articleId TEXT NOT NULL, chunkIndex INTEGER NOT NULL, embedding TEXT NOT NULL, content TEXT NOT NULL, modelName TEXT NOT NULL DEFAULT 'text-embedding-3-small', createdAt TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_org_kb_embeddings (id, articleId, chunkIndex, embedding, content, modelName, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.orgKbEmbeddings || []).map((e: any) => [e.id, e.articleId, e.chunkIndex, e.embedding, e.content, e.modelName || 'text-embedding-3-small', e.createdAt]),
+      insertSQL: `INSERT INTO org_kb_embeddings (id, articleId, chunkIndex, embedding, content, modelName, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'orgKbEmbeddings',
+      *rows(items = memoryDB.orgKbEmbeddings || []) { for (const e of items) { yield [e.id, e.articleId, e.chunkIndex, e.embedding, e.content, e.modelName || 'text-embedding-3-small', e.createdAt]; } },
     },
     {
       name: 'notifications',
-      createSQL: `CREATE TABLE _temp_notifications (id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'info', title TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', read INTEGER NOT NULL DEFAULT 0, timestamp INTEGER NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_notifications (id, userId, type, title, message, read, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.notifications || []).map((n: any) => [n.id, n.userId, n.type || 'info', n.title || '', n.message || '', n.read ? 1 : 0, n.timestamp]),
+      insertSQL: `INSERT INTO notifications (id, userId, type, title, message, read, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      source: 'notifications',
+      *rows(items = memoryDB.notifications || []) { for (const n of items) { yield [n.id, n.userId, n.type || 'info', n.title || '', n.message || '', n.read ? 1 : 0, n.timestamp]; } },
     },
     {
       name: 'audit_log',
-      createSQL: `CREATE TABLE _temp_audit_log (id TEXT PRIMARY KEY, orgId TEXT NOT NULL, userId TEXT NOT NULL, action TEXT NOT NULL, resourceType TEXT NOT NULL, resourceId TEXT NOT NULL, details TEXT DEFAULT '{}', ipAddress TEXT, userAgent TEXT, timestamp TEXT NOT NULL)`,
-      insertSQL: `INSERT INTO _temp_audit_log (id, orgId, userId, action, resourceType, resourceId, details, ipAddress, userAgent, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      rows: () => (memoryDB.auditLog || []).map((l: any) => [l.id, l.orgId, l.userId, l.action, l.resourceType, l.resourceId, l.details || '{}', l.ipAddress || null, l.userAgent || null, l.timestamp]),
+      insertSQL: `INSERT INTO audit_log (id, orgId, userId, action, resourceType, resourceId, details, ipAddress, userAgent, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source: 'auditLog',
+      *rows(items = memoryDB.auditLog || []) { for (const l of items) { yield [l.id, l.orgId, l.userId, l.action, l.resourceType, l.resourceId, l.details || '{}', l.ipAddress || null, l.userAgent || null, l.timestamp]; } },
     },
   ];
 
   // Special handling: founder_vision is a single row
   const founderSpec: PersistenceTableSpec = {
     name: 'founder_vision',
-    createSQL: `CREATE TABLE _temp_founder_vision (id INTEGER PRIMARY KEY CHECK (id = 1), content TEXT NOT NULL, updatedAt TEXT NOT NULL)`,
-    insertSQL: `INSERT INTO _temp_founder_vision (id, content, updatedAt) VALUES (?, ?, ?)`,
+    dependencies: ['founderVision', 'founderVisionUpdatedAt'],
+    insertSQL: `INSERT INTO founder_vision (id, content, updatedAt) VALUES (?, ?, ?)`,
     rows: () => memoryDB.founderVision
       ? [[1, memoryDB.founderVision, persistenceTimestamp(memoryDB.founderVisionUpdatedAt)]]
       : [],
@@ -2498,134 +2471,47 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
   return [...specs, founderSpec];
 }
 
-function digestPersistenceRows(rows: any[][]): string {
-  const hash = createHash('sha256');
-  hash.update(String(rows.length));
-  for (const row of rows) {
-    hash.update('\n');
-    hash.update(JSON.stringify(row));
-  }
-  return hash.digest('hex');
-}
-
-function keyedPersistenceRows(rows: any[][]): Map<string, string> | null {
-  const digests = new Map<string, string>();
-  for (const row of rows) {
-    const id = row[0];
-    // Preserve the old snapshot path for any legacy non-text/null key.
-    if (typeof id !== 'string' || !id) return null;
-    if (digests.has(id)) throw new Error('UNIQUE constraint failed in snapshot primary key');
-    digests.set(id, createHash('sha256').update(JSON.stringify(row)).digest('hex'));
-  }
-  return digests;
-}
-
 function seedPersistenceTableDigests(): void {
-  const next = new Map<string, string>();
-  const rowDigests = new Map<string, Map<string, string>>();
-  for (const spec of buildPersistenceTableSpecs()) {
-    const rows = spec.rows();
-    next.set(spec.name, digestPersistenceRows(rows));
-    if (ROW_INCREMENTAL_TABLES.has(spec.name)) {
-      const keyed = keyedPersistenceRows(rows);
-      if (keyed) rowDigests.set(spec.name, keyed);
-    }
-  }
-  persistenceTableDigests = next;
-  persistenceRowDigests = rowDigests;
+  databaseSnapshots = new DatabaseSnapshots(memoryDB, buildPersistenceTableSpecs());
 }
 
-/**
- * Persist only tables whose exact serialized rows changed since the last
- * durable snapshot. Hot keyed tables update only changed rows; other tables
- * retain atomic replacement. All changes share the same transaction and
- * publish their fingerprints only after COMMIT.
- */
+/** Capture only changed/externally aliased rows; publish changes after the shared COMMIT. */
 async function persistMemoryDB(): Promise<void> {
-  const allSpecs = buildPersistenceTableSpecs();
-  const changed: Array<{ spec: PersistenceTableSpec; rows: any[][]; digest: string }> = [];
-  for (const spec of allSpecs) {
-    const rows = spec.rows();
-    const digest = digestPersistenceRows(rows);
-    if (persistenceTableDigests.get(spec.name) !== digest) changed.push({ spec, rows, digest });
-  }
-  totalSkippedTableWrites += allSpecs.length - changed.length;
+  const snapshot = databaseSnapshots!.capture();
+  const changed = snapshot.tables;
+  totalSkippedTableWrites += snapshot.total - changed.length;
   if (changed.length === 0) {
-    lastFlushTables = [];
-    return;
+    snapshot.commit(); lastFlushTables = []; return;
   }
 
-  const rowChanges = new Map<string, { digests: Map<string, string>; upserts: any[][]; deletions: any[][]; sql: string }>();
-  for (const { spec, rows } of changed) {
-    if (!ROW_INCREMENTAL_TABLES.has(spec.name)) continue;
-    const before = persistenceRowDigests.get(spec.name);
-    const after = keyedPersistenceRows(rows);
-    const columns = spec.insertSQL.match(/\(([^)]+)\)\s+VALUES/i)?.[1].split(',').map(column => column.trim());
-    if (!before || !after || !columns || columns[0] !== 'id') continue;
-    const sql = spec.insertSQL.replace(`_temp_${spec.name}`, spec.name)
-      + ' ON CONFLICT(id) DO UPDATE SET '
-      + columns.slice(1).map(column => `${column}=excluded.${column}`).join(', ');
-    rowChanges.set(spec.name, {
-      digests: after,
-      upserts: rows.filter(row => before.get(row[0]) !== after.get(row[0])),
-      deletions: [...before.keys()].filter(id => !after.has(id)).map(id => [id]),
-      sql,
-    });
-  }
-
-  await run('BEGIN IMMEDIATE TRANSACTION');
   try {
-    // Phase 1: Create temp tables and populate them
-    for (const { spec, rows } of changed) {
-      const delta = rowChanges.get(spec.name);
-      if (delta) {
-        await insertSnapshotRows(`DELETE FROM ${spec.name} WHERE id = ?`, delta.deletions);
-        await insertSnapshotRows(delta.sql, delta.upserts);
+    await run('BEGIN IMMEDIATE TRANSACTION');
+    // Preserve schema, indexes and constraints; all data changes commit together.
+    for (const { spec: projection, rows, deletions } of changed) {
+      const spec = projection as PersistenceTableSpec;
+      if (deletions) {
+        const columns = spec.insertSQL.match(/\(([^)]+)\)\s+VALUES/i)![1].split(',').map(column => column.trim());
+        const upsert = UPSERT_PERSISTENCE_TABLES.has(spec.name);
+        // Delete changed rows together so secondary unique values can be exchanged.
+        const removed = upsert ? deletions : [...deletions, ...rows.map(row => [row[0]])];
+        await insertSnapshotRows(`DELETE FROM ${spec.name} WHERE ${columns[0]} = ?`, removed);
+        await insertSnapshotRows(spec.insertSQL + (upsert
+          ? ' ON CONFLICT(id) DO UPDATE SET ' + columns.slice(1).map(column => `${column}=excluded.${column}`).join(', ') : ''), rows);
         continue;
       }
-      await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
-      await run(spec.createSQL);
+      await run(`DELETE FROM ${spec.name}`);
       await insertSnapshotRows(spec.insertSQL, rows);
     }
 
-    // Phase 2: Drop original tables
-    for (const { spec } of changed) {
-      if (rowChanges.has(spec.name)) continue;
-      await run(`DROP TABLE IF EXISTS ${spec.name}`);
-    }
-
-    // Phase 3: Rename temp tables to original names (atomic in SQLite within a transaction)
-    for (const { spec } of changed) {
-      if (rowChanges.has(spec.name)) continue;
-      await run(`ALTER TABLE _temp_${spec.name} RENAME TO ${spec.name}`);
-    }
-
-    // Replacing tables drops their indexes. Recreate all query indexes in the
-    // same transaction so no persisted snapshot is left unindexed.
-    for (const sql of PERFORMANCE_INDEX_SQL) {
-      await run(sql);
-    }
-
     await run('COMMIT');
-    for (const { spec, rows, digest } of changed) {
-      persistenceTableDigests.set(spec.name, digest);
-      if (ROW_INCREMENTAL_TABLES.has(spec.name)) {
-        const committed = rowChanges.get(spec.name)?.digests || keyedPersistenceRows(rows);
-        if (committed) persistenceRowDigests.set(spec.name, committed);
-        else persistenceRowDigests.delete(spec.name);
-      }
-    }
+    snapshot.commit();
     lastFlushTables = changed.map(({ spec }) => spec.name);
     totalTableWrites += changed.length;
   } catch (err) {
+    snapshot.rollback();
     // Preserve the original failure. A failed/externally interrupted BEGIN or
     // COMMIT must not be replaced by "no transaction is active" from cleanup.
     try { await run('ROLLBACK'); } catch {}
-    try {
-      for (const { spec } of changed) {
-        await run(`DROP TABLE IF EXISTS _temp_${spec.name}`);
-      }
-    } catch {}
     throw err;
   }
 }

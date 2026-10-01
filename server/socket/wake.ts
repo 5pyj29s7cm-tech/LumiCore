@@ -1,5 +1,5 @@
 import { Socket } from "socket.io";
-import { createWakeDetector, isWakeWord } from "../stt/wake_detector";
+import { createWakeDetector } from "../stt/wake_detector";
 import { isEchoText, isTtsPlaying } from "./voice";
 import { logger } from "../../logger";
 

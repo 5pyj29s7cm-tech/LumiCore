@@ -761,6 +761,7 @@ describe('Lumi execution decision', () => {
       userId: 'execution_decision_wps_exact_replay_user',
       text,
       continuationContext,
+      continuationAppTarget: 'WPS',
       channel: 'chat',
       source: 'chat',
       operationMode: 'assistant',

@@ -1,7 +1,7 @@
 // First-launch setup wizard — detects local Ollama, guides API key setup, voice test
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Cpu, Cloud, Mic, CheckCircle, Loader2, ArrowRight, Download, Key, Volume2, Sparkles } from 'lucide-react';
+import { Cpu, Mic, CheckCircle, Loader2, ArrowRight, Download, Key, Volume2, Sparkles } from 'lucide-react';
 import { useT } from '../lib/useT';
 import { toast } from 'sonner';
 import { saveServerKeys } from '../services/settingsKeys';
@@ -18,8 +18,6 @@ interface Props {
 export function SetupWizard({ onFinish }: Props) {
   const { updateAIConfig } = useApp();
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [step, setStep] = useState<Step>('detect');
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'available' | 'not-found'>('checking');
   const [ollamaUrl, setOllamaUrl] = useState(() => {

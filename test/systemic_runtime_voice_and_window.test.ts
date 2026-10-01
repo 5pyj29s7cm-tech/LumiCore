@@ -6,11 +6,10 @@ import {
 } from '../server/cognition/action_contract';
 import {
   buildRecentActionContinuationBridge,
-  getRecoveredApplicationContinuationTarget,
   type ConversationActionContinuationState,
 } from '../server/cognition/action_continuation';
-import { guardCurrentAppToolCall, isRecoveredWpsCreateTask } from '../server/cognition/current_app_execution';
-import { matchQuickCommand } from '../server/cognition/quick_commands';
+import { guardCurrentAppToolCall, isWpsCreateTask } from '../server/cognition/current_app_execution';
+import { buildDesktopObservationPlan, formatDesktopObservationResult } from '../server/cognition/desktop_observation';
 import { routeToolsForTurn } from '../server/cognition/tool_router';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../server/tools/types';
@@ -39,28 +38,25 @@ const persistedWps: ConversationActionContinuationState = {
 };
 
 describe('receipt-backed current application control', () => {
-  it('uses one bounded process snapshot for a running-software question', async () => {
-    const quick = await matchQuickCommand('\u540e\u53f0\u6709\u591a\u5c11\u8f6f\u4ef6\u5728\u8fd0\u884c', 'process-test');
-    expect(quick?.toolCall).toEqual({ name: 'desktop_running_processes', arguments: { top: 50 } });
-    const reply = quick?.formatToolResult?.(JSON.stringify([
-      { name: 'chrome.exe' },
-      { name: 'chrome.exe' },
-      { name: 'WeChat.exe' },
-    ]));
-    expect(reply).toContain('3 \u4e2a\u8fdb\u7a0b\u6761\u76ee');
-    expect(reply).toContain('2 \u4e2a\u4e0d\u540c\u8fdb\u7a0b\u540d');
-    expect(reply).toContain('\u4e0d\u7b49\u540c\u4e8e\u6253\u5f00\u7684\u8f6f\u4ef6\u6570');
+
+  it('uses one bounded process snapshot for a running-software question', () => {
+    const text = '后台有多少软件在运行';
+    expect(buildDesktopObservationPlan(text)).toEqual([{ name: 'desktop_running_processes', arguments: { top: 20 } }]);
+    const reply = formatDesktopObservationResult([{
+      name: 'desktop_running_processes', arguments: { top: 20 },
+      result: JSON.stringify([{ name: 'chrome.exe' }, { name: 'chrome.exe' }, { name: 'WeChat.exe' }]),
+      terminalVerification: { status: 'verified', strategy: 'terminal_receipt', reason: 'Synthetic process snapshot' },
+    }], text);
+    expect(reply).toContain('3 个活跃进程条目');
+    expect(reply).toContain('2 个进程名称');
+    expect(reply).toContain('当前采样');
   });
 
   it('recovers a verified app target for a terse window command', async () => {
     const bridge = buildRecentActionContinuationBridge('\u6700\u5927\u5316', [], persistedWps);
-    expect(getRecoveredApplicationContinuationTarget(bridge)).toBe('WPS');
+    expect(bridge).toContain('- appTarget: WPS');
     expect(requestedDesktopWindowAction('\u6700\u5927\u5316')).toBe('maximize');
-    const quick = await matchQuickCommand('\u6700\u5927\u5316', 'window-test', { currentAppTarget: 'WPS' });
-    expect(quick?.toolCall).toEqual({
-      name: 'desktop_window_control',
-      arguments: { action: 'maximize', expectedTarget: 'WPS' },
-    });
+
   });
 
   it('requires the native verified window receipt', () => {
@@ -78,9 +74,10 @@ describe('receipt-backed current application control', () => {
     const instruction = '\u65b0\u5efa\u4e00\u4e2a\u7a7a\u767dWord\u6587\u6863';
     const bridge = buildRecentActionContinuationBridge(instruction, [], persistedWps);
     const taskText = `${instruction}\n\n${bridge}`;
-    expect(isRecoveredWpsCreateTask(taskText)).toBe(true);
+    expect(isWpsCreateTask(taskText, persistedWps.appTarget)).toBe(true);
     expect(guardCurrentAppToolCall({
       taskText,
+      currentAppTarget: persistedWps.appTarget,
       toolName: 'wps_create_document_with_text',
       arguments: { text: 'model invented text' },
       toolRecords: [],
@@ -99,7 +96,7 @@ describe('receipt-backed current application control', () => {
     const route = routeToolsForTurn(instruction, tools);
 
     expect(buildActionContract(instruction).kind).toBe('desktop_operation');
-    expect(isRecoveredWpsCreateTask(instruction)).toBe(true);
+    expect(isWpsCreateTask(instruction)).toBe(true);
     expect(route.toolNames).toContain('wps_create_document_with_text');
     expect(route.toolNames).not.toContain('create_docx');
     expect(guardCurrentAppToolCall({
@@ -114,7 +111,7 @@ describe('receipt-backed current application control', () => {
     const instruction = '\u65b0\u5efa\u6211\u7684\u6587\u6863';
     const bridge = buildRecentActionContinuationBridge(instruction, [], persistedWps);
     expect(bridge).toContain('Recent action continuation context');
-    expect(isRecoveredWpsCreateTask(`${instruction}\n\n${bridge}`)).toBe(true);
+    expect(isWpsCreateTask(`${instruction}\n\n${bridge}`, persistedWps.appTarget)).toBe(true);
   });
 
   it('reports verified partial progress instead of erasing a successful open', () => {

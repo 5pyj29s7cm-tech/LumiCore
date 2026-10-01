@@ -1,4 +1,5 @@
 import { readDB } from '../../db_layer';
+import { projectConversationReceiptHistory } from './receipt_history';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from '../regions/packs/cn/conversation_execution_facts_messages';
 import { hasMixedStatusExecutionIntent, isPriorArtifactDeliveryQuestion, isPriorWorkDeliveryFactQuestion, isPriorTurnToolReceiptQuestion } from '../cognition/normalized_action_intent';
@@ -78,7 +79,7 @@ export function isConversationExecutionFactQuestion(text: string): boolean {
   return (conversationScope && asksWhether && executionSubject) || asksVerifiedClientNavigation;
 }
 
-function parseRecordArguments(value: unknown): Record<string, unknown> {
+function parseRecordArguments(value: unknown): Record<string, any> {
   let parsed = value;
   if (typeof parsed === 'string') {
     try { parsed = JSON.parse(parsed); } catch { return {}; }
@@ -154,27 +155,13 @@ function isPriorFailureExplanationQuestion(text: string): boolean {
     || /^why\s+(?:did\s+)?(?:it|that|the\s+(?:task|request))?\s*(?:fail|failed|not\s+(?:finish|complete|succeed))[?!.\s]*$/iu.test(text);
 }
 
-function parseRecordResult(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, any>;
-  }
-  try {
-    const parsed = JSON.parse(String(value || '{}'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, any>
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 function interactionRequestId(item: any): string {
   return String(item?.requestId || item?.externalMessageId || '').trim();
 }
 
 function verifiedPriorOpen(record: ConversationExecutionFacts['toolCalls'][number]): boolean {
   if (!/^(?:desktop_open|browser_open_task)$/i.test(record.name) || record.error) return false;
-  const payload = parseRecordResult(record.result);
+  const payload = parseRecordArguments(record.result);
   const status = String(payload.status || payload.verification?.status || '').trim().toLowerCase();
   const targetMatched = payload.targetMatched === true || payload.verification?.targetMatched === true;
   if (payload.ok === false || payload.success === false || payload.opened === false) return false;
@@ -191,7 +178,7 @@ function verifiedPriorOpen(record: ConversationExecutionFacts['toolCalls'][numbe
 }
 
 function priorOpenTarget(record: ConversationExecutionFacts['toolCalls'][number]): string {
-  const payload = parseRecordResult(record.result);
+  const payload = parseRecordArguments(record.result);
   const invoked = String(
     record.arguments?.target
     || record.arguments?.path
@@ -260,12 +247,12 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
   const db = readDB();
   const domain = scope.domain === 'work' ? 'work' : 'personal';
   const orgId = domain === 'work' ? String(scope.orgId || '') : '';
-  const interactions = (db.interactions || []).filter((item: any) => (
+  const interactions: any[] = projectConversationReceiptHistory(db, (db.interactions || []).filter((item: any) => (
     String(item.conversationId || '') === scope.conversationId
     && String(item.userId || '') === scope.userId
     && String(item.domain || 'personal') === domain
     && (domain !== 'work' || String(item.orgId || '') === orgId)
-  ));
+  )));
   const mapInteractionToolCalls = (item: any): ConversationExecutionToolFact[] => (
     parseToolCalls(item.toolCalls).map((record: any) => ({
       name: String(record?.name || record?.toolName || '').trim(),
@@ -292,7 +279,8 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
         : undefined,
     })).filter((record: ConversationExecutionToolFact) => Boolean(record.name))
   );
-  const toolCalls = interactions.flatMap(mapInteractionToolCalls);
+  const interactionToolCalls = interactions.map(mapInteractionToolCalls);
+  const toolCalls = interactionToolCalls.flat();
   const currentUserIndex = (() => {
     const exactRequestId = String(scope.currentRequestId || '').trim();
     if (!exactRequestId) return -1;
@@ -324,9 +312,9 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
         // foreground lease. A queued transcript can therefore be ordered as
         // user1, user2, assistant1. Bind receipts to user1's immutable request
         // id instead of assuming assistant1 must sit between the two users.
-        ? interactions.flatMap((item: any) => {
+        ? interactions.flatMap((item: any, index: number) => {
             const itemRequestId = interactionRequestId(item);
-            return mapInteractionToolCalls(item).filter(record => (
+            return interactionToolCalls[index].filter(record => (
               itemRequestId === previousUserRequestId
               || record.requestId === previousUserRequestId
             ));
@@ -334,9 +322,9 @@ export function getConversationExecutionFacts(scope: ConversationExecutionFactSc
         // Legacy rows may predate durable request ids. Preserve the original
         // adjacency fallback only for those rows; a modern request with no
         // matching receipt must remain an authoritative empty result.
-        : interactions
+        : interactionToolCalls
           .slice(previousUserIndex + 1, currentUserIndex >= 0 ? currentUserIndex : interactions.length)
-          .flatMap(mapInteractionToolCalls)
+          .flat()
       : []
     : undefined;
   const tasks = (db.conversationActionTasks || []).filter((task: any) => (
@@ -456,10 +444,10 @@ function priorReadResult(record: ConversationExecutionToolFact): Record<string, 
   const envelopeVerified = record.envelope?.status === 'verified_success'
     && record.envelope.verification?.status === 'verified';
   if (envelopeVerified) {
-    const envelopeResult = parseRecordResult(record.envelope?.result);
+    const envelopeResult = parseRecordArguments(record.envelope?.result);
     if (Object.keys(envelopeResult).length > 0) return envelopeResult;
   }
-  return parseRecordResult(record.result);
+  return parseRecordArguments(record.result);
 }
 
 function resultFieldRequested(text: string, fieldName: string): boolean {
@@ -530,7 +518,7 @@ function priorSingleFileReadFacts(facts: ConversationExecutionFacts): {
 
 function failedReceiptDetail(record: ConversationExecutionToolFact): string {
   if (record.errorDetail) return record.errorDetail;
-  const payload = parseRecordResult(record.result);
+  const payload = parseRecordArguments(record.result);
   const verification = payload.verification && typeof payload.verification === 'object'
     ? payload.verification
     : {};
@@ -548,7 +536,7 @@ function failedReceiptDetail(record: ConversationExecutionToolFact): string {
 
 function receiptFailed(record: ConversationExecutionToolFact): boolean {
   if (record.error || record.terminalVerification?.status === 'failed') return true;
-  const payload = parseRecordResult(record.result);
+  const payload = parseRecordArguments(record.result);
   const status = String(payload.status || payload.verification?.status || '').trim().toLowerCase();
   return payload.ok === false
     || payload.success === false
@@ -657,7 +645,7 @@ export function formatConversationExecutionFactAnswer(
       ? [...records].reverse().find(record => /^(?:desktop_active_window|get_active_window_info)$/i.test(record.name))
       : undefined;
     const observedWindowResult = observedWindowRecord
-      ? parseRecordResult(observedWindowRecord.result)
+      ? parseRecordArguments(observedWindowRecord.result)
       : {};
     const observedWindowTitle = String(
       observedWindowResult.windowTitle

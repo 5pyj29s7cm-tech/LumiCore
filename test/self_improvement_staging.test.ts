@@ -18,8 +18,9 @@ import {
   activateSelfImprovementStage,
   extractUnifiedPatchPaths,
   stageSelfImprovementPatch,
+  replayVerifiedSelfImprovementStage,
 } from '../server/self_extension/staging';
-import { markFailed, markRunning } from '../server/autonomy/task_queue';
+import { markCancelled, markRunning } from '../server/autonomy/task_queue';
 import { registerSelfExtensionTools } from '../server/tools/definitions/self_extension_tools';
 import { ToolRegistry } from '../server/tools/registry';
 import { executeToolCall } from '../server/tools/execution_engine';
@@ -756,8 +757,34 @@ describe('isolated self-improvement staging', () => {
         [record],
         runningTask!,
       )).toMatchObject({ verified: true, blocked: false });
+      const options = { repoRoot: fixture.repo, worktreeParent: fixture.worktrees };
+      const input = { proposalId: proposal.id, taskId: runningTask!.id };
+      const recovered = JSON.parse(record.result);
+      const replay = () => replayVerifiedSelfImprovementStage(scope, input, options);
+      const restage = () => stageSelfImprovementPatch(scope, { proposalId: proposal.id, patch }, options);
+      expect(await restage()).toEqual(await replay());
+      expect(await replay()).toMatchObject({
+        activated: false, pushed: false, treeDigest: recovered.treeDigest,
+        verification: recovered.verification, worktreePath: recovered.worktreePath,
+      });
+      await expect(replayVerifiedSelfImprovementStage(scope, { ...input, taskId: 'unrelated-task' }, options))
+        .rejects.toThrow(/exact task-bound/);
+      await expect(replayVerifiedSelfImprovementStage(scope, input, { ...options, isCancelled: () => true }))
+        .rejects.toThrow(/cancelled/);
+      const stagedFile = path.join(recovered.worktreePath, 'docs', 'guide.md');
+      const original = fs.readFileSync(stagedFile);
+      fs.writeFileSync(stagedFile, '# Changed after verification\n');
+      for (const entry of [restage, replay]) await expect(entry()).rejects.toThrow(/no longer matches the verified commit/);
+      fs.writeFileSync(stagedFile, original);
+      const ref = 'refs/heads/' + recovered.branch;
+      git(fixture.repo, 'update-ref', ref, recovered.baseCommit);
+      for (const entry of [restage, replay]) await expect(entry()).rejects.toThrow(/branch moved after staging/);
+      git(fixture.repo, 'update-ref', ref, recovered.commit);
+      expect(await restage()).toEqual(await replay());
+      expect(git(fixture.repo, 'rev-parse', 'HEAD')).toBe(recovered.baseCommit);
+      expect(git(fixture.repo, 'status', '--porcelain')).toBe('');
     } finally {
-      if (runningTask?.leaseId) markFailed(runningTask.id, 'test cleanup', runningTask.leaseId);
+      if (runningTask?.leaseId) markCancelled(runningTask.id, 'test cleanup');
       cleanupRepository(fixture);
     }
   });

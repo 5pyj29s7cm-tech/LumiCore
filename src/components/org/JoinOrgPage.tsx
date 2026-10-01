@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Building2, ArrowRight, CheckCircle, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -10,8 +10,6 @@ import { uiMessage } from '../../i18n/uiMessages';
 export function JoinOrgPage() {
   const t = useT();
   const { refreshUser, switchDomain } = useApp();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [code, setCode] = useState('');
   const [step, setStep] = useState<'input' | 'preview' | 'joining' | 'done' | 'error'>('input');
   const [orgInfo, setOrgInfo] = useState<any>(null);

@@ -138,9 +138,6 @@ function discoverBundledSkills(_scope?: MarketplaceAgentScope): MarketplaceSkill
   return skills;
 }
 
-/** Community skill registry stored in DB */
-const COMMUNITY_REGISTRY: MarketplaceSkill[] = [];
-
 /** Get community registry from DB */
 function getCommunityRegistry(_scope?: MarketplaceAgentScope): MarketplaceSkill[] {
   const db = readDB();

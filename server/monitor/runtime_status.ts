@@ -1,5 +1,6 @@
+import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
-import { isDelegatedActionEvidenceArchive } from '../cognition/task_execution_ledger';
+import { groupTaskReceipts, isDelegatedActionEvidenceArchive } from '../cognition/task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import type {
   ConversationActionReceiptRow,
@@ -102,17 +103,6 @@ function compact(value: unknown, limit = 700): string {
     .slice(0, limit);
 }
 
-function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function projectReceipt(row: ConversationActionReceiptRow): RuntimeEvidenceReceipt {
   const envelope = parseObject(row.envelope);
   const verification = String(envelope.verification?.status || 'unverified');
@@ -149,7 +139,6 @@ function outcomeIsUnknown(outcome: string): boolean {
 
 function projectTask(task: ConversationActionTaskRow, receipts: ConversationActionReceiptRow[]): RuntimeTaskProjection {
   const evidence = receipts
-    .filter(receipt => receipt.taskId === task.id)
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .map(projectReceipt);
   return {
@@ -166,7 +155,7 @@ function projectTask(task: ConversationActionTaskRow, receipts: ConversationActi
     revision: Math.max(1, Number(task.revision) || 1),
     updatedAt: compact(task.updatedAt, 80),
     focus: readConversationFocusThread(task),
-    ...(projectPlan(task) ? { plan: projectPlan(task) } : {}),
+    plan: projectPlan(task),
     evidence: {
       total: evidence.length,
       verified: evidence.filter(receipt => receipt.outcome === 'verified_success' && receipt.verification === 'verified').length,
@@ -207,14 +196,13 @@ export function buildStructuredRuntimeStatus(
       && (task.domain || 'personal') === input.domain
       && (input.domain !== 'work' || task.orgId === orgId)
     )) as ConversationActionTaskRow[];
-  const actionReceipts = (Array.isArray(db?.conversationActionReceipts) ? db.conversationActionReceipts : [])
-    .filter((receipt: ConversationActionReceiptRow) => actionTasks.some(task => task.id === receipt.taskId)) as ConversationActionReceiptRow[];
+  const receiptsByTask = groupTaskReceipts<ConversationActionReceiptRow>(actionTasks, Array.isArray(db?.conversationActionReceipts) ? db.conversationActionReceipts : []);
   const allTaskProjections = actionTasks
     .sort((left, right) => {
       const activeDifference = Number(isActionActiveStatus(right.status)) - Number(isActionActiveStatus(left.status));
       return activeDifference || String(right.updatedAt).localeCompare(String(left.updatedAt));
     })
-    .map(task => projectTask(task, actionReceipts));
+    .map(task => projectTask(task, receiptsByTask.get(task.id)!));
   const tasks = allTaskProjections.slice(0, 12);
 
   const autonomous = input.domain === 'personal'
@@ -234,30 +222,31 @@ export function buildStructuredRuntimeStatus(
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
     .slice(0, 12);
 
-  const activeTasks = allTaskProjections.filter(task => ['created', 'planning', 'executing', 'verifying'].includes(task.status)).length;
-  const waitingConfirmation = allTaskProjections.filter(task => task.status === 'waiting_confirmation').length;
-  const blockedTasks = allTaskProjections.filter(task => task.status === 'blocked').length;
-  const verifiedReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.verified, 0);
-  const failedReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.failed, 0);
-  const unknownReceipts = allTaskProjections.reduce((sum, task) => sum + task.evidence.unknown, 0);
-  const autonomousActive = autonomous.filter(task => isDurableActiveStatus(task.status)).length;
-  const durableBlocked = durableWork.filter(task => task.status === 'blocked' || task.status === 'failed').length;
-  const attentionReasons = [
-    ...(waitingConfirmation > 0 ? ['waiting_confirmation'] : []),
-    ...(blockedTasks > 0 ? ['blocked_task'] : []),
-    ...(failedReceipts > 0 ? ['failed_receipt'] : []),
-    ...(unknownReceipts > 0 ? ['unknown_or_unverified_outcome'] : []),
-    ...(durableBlocked > 0 ? ['durable_work_blocked'] : []),
-  ];
+  const counts = {
+    activeTasks: allTaskProjections.filter(task => ['created', 'planning', 'executing', 'verifying'].includes(task.status)).length,
+    waitingConfirmation: allTaskProjections.filter(task => task.status === 'waiting_confirmation').length,
+    blockedTasks: allTaskProjections.filter(task => task.status === 'blocked').length,
+    verifiedReceipts: allTaskProjections.reduce((sum, task) => sum + task.evidence.verified, 0),
+    failedReceipts: allTaskProjections.reduce((sum, task) => sum + task.evidence.failed, 0),
+    unknownReceipts: allTaskProjections.reduce((sum, task) => sum + task.evidence.unknown, 0),
+    autonomousActive: autonomous.filter(task => isDurableActiveStatus(task.status)).length,
+    durableBlocked: autonomous.filter(task => task.status === 'blocked' || task.status === 'failed').length,
+  };
+  const attentionReasons = Object.entries({
+    waiting_confirmation: counts.waitingConfirmation,
+    blocked_task: counts.blockedTasks,
+    failed_receipt: counts.failedReceipts,
+    unknown_or_unverified_outcome: counts.unknownReceipts,
+    durable_work_blocked: counts.durableBlocked,
+  }).filter(([, count]) => count > 0).map(([reason]) => reason);
   const level: RuntimeAttentionLevel = attentionReasons.length > 0
     ? 'attention'
-    : activeTasks + autonomousActive > 0
-      ? 'working'
-      : 'ready';
+    : counts.activeTasks + counts.autonomousActive > 0 ? 'working' : 'ready';
   const structuralState = {
     scope: { domain: input.domain, orgId },
     level,
     attentionReasons,
+    counts,
     tasks,
     durableWork,
   };
@@ -269,16 +258,7 @@ export function buildStructuredRuntimeStatus(
     scope: structuralState.scope,
     level,
     attentionReasons,
-    counts: {
-      activeTasks,
-      waitingConfirmation,
-      blockedTasks,
-      verifiedReceipts,
-      failedReceipts,
-      unknownReceipts,
-      autonomousActive,
-      durableBlocked,
-    },
+    counts,
     tasks,
     durableWork,
     runtime: input.runtime || {},

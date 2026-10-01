@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildDesktopExecutionPlan, resolveDesktopApplicationIdentity } from '../server/desktop/execution_plan';
 import { createDesktopExecutionTracker } from '../server/desktop/execution_runtime';
-import { buildDeterministicLocalDesktopNavigationCommand, isQuickCommand, matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildDeterministicLocalDesktopNavigationCommand } from '../server/cognition/quick_commands';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 
 describe('natural playback reaches the actual player and the full execution loop', () => {
@@ -38,13 +38,10 @@ describe('natural playback reaches the actual player and the full execution loop
     '打开网易云并播放秋天不回来',
   ])('does not let an open-only shortcut consume the complete playback goal: %s', async task => {
     expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(task), task)).toBeNull();
-    expect(isQuickCommand(task)).toBe(false);
-    expect(await matchQuickCommand(task, 'synthetic-playback-user')).toBeNull();
   });
   it('retains the existing quick command for an actual open-only request', async () => {
     const task = '打开爱奇艺';
     expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(task), task)?.toolCall)
       .toMatchObject({ name: 'desktop_open', arguments: { target: '爱奇艺' } });
-    expect(await matchQuickCommand(task, 'synthetic-playback-user')).toMatchObject({ toolCall: { name: 'desktop_open', arguments: { target: '爱奇艺' } } });
   });
 });

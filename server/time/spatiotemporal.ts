@@ -1,7 +1,7 @@
 // Spatiotemporal unification — cross-analyze time + location for pattern detection
 
 import { readDB } from '../../db_layer';
-import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, getMonthDay, isWeekend, hoursSince, formatDuration } from './utils';
+import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, isWeekend, hoursSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
 
 export interface SpatiotemporalPattern {
@@ -208,11 +208,4 @@ export function generateSpatiotemporalContext(userId: string, domain = 'personal
   } catch {}
 
   return lines.join('\n');
-}
-
-export function generateSpatiotemporalContextBrief(userId: string): string {
-  const dateStr = getDateString(userId);
-  const dow = getDayOfWeekCN(userId);
-  const season = getSeasonInfo(userId);
-  return `${dateStr} ${dow} ${season.emoji} ${season.seasonCN}`;
 }

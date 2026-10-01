@@ -1,10 +1,10 @@
+import { extractSourceExpression } from './source_expression';
 // Real voice/meeting handlers with isolated models, PCM and DesktopUI callbacks.
 import './helpers';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import * as ts from 'typescript';
 
 const mocks = vi.hoisted(() => ({
   stream: vi.fn(), model: vi.fn(), transcribe: vi.fn(), learning: vi.fn(),
@@ -130,24 +130,13 @@ afterEach(async () => {
 
 // Extract and execute the exact callbacks from the currently mounted DesktopUI.
 // React rendering and the OS media devices are intentionally not simulated here.
-const desktopSource = fs.readFileSync(new URL('../src/components/DesktopUI.tsx', import.meta.url), 'utf8');
-const desktopAst = ts.createSourceFile('DesktopUI.tsx', desktopSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function realDesktopCallback(name: string, context: Record<string, any>): any {
-  let callback: ts.Expression | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(desktopAst) === name && node.initializer && ts.isCallExpression(node.initializer)) callback = node.initializer.arguments[0];
-    ts.forEachChild(node, visit);
-  };
-  visit(desktopAst);
-  if (!callback || !ts.isArrowFunction(callback)) throw new Error(`Missing actual DesktopUI callback ${name}`);
-  const code = ts.transpileModule(`return (${callback.getText(desktopAst)});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(...Object.keys(context), code)(...Object.values(context));
-}
+const realDesktopCallback = extractSourceExpression.bind(null, 'src/components/DesktopUI.tsx');
 function meetingUi(socket: FixtureSocket) {
   const state = { notes: [] as any[], persisted: [] as any[], report: '', startedAt: 1000, paused: false };
   const writes = new Map<string, string>();
   const events = new EventTarget();
   const common: Record<string, any> = {
+    crypto, Date,
     lang: 'en', meetingPreferenceScopeKey: 'fixture-scope', meetingStartedAt: state.startedAt, meetingStorageKeys: { report: 'report', notes: 'notes', startedAt: 'started' },
     setMeetingNotes: (value: any) => { state.notes = typeof value === 'function' ? value(state.notes) : value; },
     setMeetingSpeakerCount: vi.fn(), setMeetingReport: (value: string) => { state.report = value; },

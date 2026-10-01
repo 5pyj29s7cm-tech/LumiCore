@@ -93,10 +93,3 @@ export function getExtensionRuntimeStates(
     return { ...base, status: runtimeStatus(base) };
   });
 }
-
-export function getExtensionRuntimeState(
-  name: string,
-  manifest: CapabilityManifestEntry[] = [],
-): ExtensionRuntimeState | undefined {
-  return getExtensionRuntimeStates(manifest).find(state => state.name === name);
-}

@@ -134,7 +134,7 @@ export function buildToolExecutionEnvelope(
     : {};
   const rawError = String(record.error || '').trim();
   const timeout = /timed?\s*out|timeout/i.test(rawError);
-  const unknownOutcome = /unknown (?:prior )?(?:external commit )?outcome|external commit outcome is unknown|automatic resend was stopped/i.test(rawError);
+  const unknownOutcome = /outcome_unknown|unknown (?:prior )?(?:external commit )?outcome|external commit outcome is unknown|automatic resend was stopped/i.test(rawError);
   const forbidden = /forbidden|not exposed|outside .*policy|permission denied|adapter circuit is open/i.test(rawError);
   const targetMismatch = payload.targetMatched === false
     || payload.conversationVerified === false
@@ -161,7 +161,7 @@ export function buildToolExecutionEnvelope(
   if (waitingConfirmation) status = 'waiting_confirmation';
   else if (targetMismatch) status = 'target_mismatch';
   else if (forbidden) status = 'forbidden';
-  else if (((timeout || unknownOutcome) && externalCommit) || unverifiedExternalResult) status = 'unknown_outcome';
+  else if (unknownOutcome || (timeout && externalCommit) || unverifiedExternalResult) status = 'unknown_outcome';
   else if (timeout) status = 'timeout';
   else status = succeeded && (terminalVerified || compatibilitySuccess) ? 'verified_success' : 'failed';
 

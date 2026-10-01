@@ -9,6 +9,14 @@ import {
 } from '../shared/lumi_scene';
 import { resetRuntimeSceneStoreForTests, syncRuntimeScene } from '../server/scene/runtime_scene';
 
+it('rebuilds a full scene after cache eviction instead of sending a patch without its base', () => {
+  resetRuntimeSceneStoreForTests();
+  const first = syncRuntimeScene({}, { userId: 'evicted', domain: 'personal' });
+  if (first.kind !== 'snapshot') throw new Error('Expected initial snapshot');
+  for (let i = 0; i < 256; i++) syncRuntimeScene({}, { userId: `viewer-${i}`, domain: 'personal' });
+  expect(syncRuntimeScene({}, { userId: 'evicted', domain: 'personal', currentRevision: first.snapshot.revision, currentDigest: first.snapshot.digest }).kind).toBe('snapshot');
+});
+
 function scene(revision: number, value: string) {
   return createLumiSceneSnapshot({
     sceneId: 'runtime-status',

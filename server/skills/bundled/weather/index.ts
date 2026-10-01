@@ -3,10 +3,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 async function handler(args: any) {
-  const city = String(args.city || 'Beijing');
+  const city = String(args.city || '').trim();
+  if (!city) return { content: [{ type: 'text' as const, text: 'A city is required.' }], isError: true };
   try {
     const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'LumiCore/3.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'LumiCore/3.0' }, signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`Weather API returned ${res.status}`);
     const data: any = await res.json();
     const current = data.current_condition?.[0];

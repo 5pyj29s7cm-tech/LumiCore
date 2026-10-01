@@ -1,30 +1,7 @@
 import React from 'react';
-import { motion } from 'motion/react';
-import { Loader2, LucideIcon } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Card } from './ui/card';
 import { cn } from '@/lib/utils';
-
-interface FeatureItemProps {
-  icon: React.ReactNode;
-  title: string;
-  desc: string;
-  className?: string;
-  iconClassName?: string;
-}
-
-export function FeatureItem({ icon, title, desc, className, iconClassName }: FeatureItemProps) {
-  return (
-    <div className={cn("flex gap-4 items-start", className)}>
-      <div className={cn("p-2 rounded-lg bg-white/5 text-celestial-saturn shrink-0", iconClassName)}>
-        {icon}
-      </div>
-      <div className="space-y-1">
-        <h4 className="font-bold text-sm">{title}</h4>
-        <p className="text-xs text-white/40 leading-relaxed">{desc}</p>
-      </div>
-    </div>
-  );
-}
 
 interface GlassCardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
@@ -49,24 +26,6 @@ export function GlassCard({ children, className, hoverEffect = true, ...props }:
         {children}
       </div>
     </Card>
-  );
-}
-
-export function PulseCounter({ label, value, colorClass = "text-celestial-saturn" }: { label: string; value: string; colorClass?: string }) {
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <div className={cn("text-xl md:text-3xl font-black tracking-tighter tabular-nums", colorClass)}>
-        {value}
-      </div>
-      <div className="text-xs md:text-[12px] uppercase tracking-[0.2em] md:tracking-[0.3em] text-white/45 font-bold text-center">
-        {label}
-      </div>
-      <motion.div 
-        animate={{ scaleX: [0, 1, 0], opacity: [0, 1, 0] }}
-        transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-        className={cn("h-px w-full", colorClass.replace('text-', 'bg-'))}
-      />
-    </div>
   );
 }
 

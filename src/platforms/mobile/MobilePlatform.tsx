@@ -1,25 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
-import { 
-  Smartphone, 
-  Orbit, 
-  Globe, 
-  Settings, 
-  User, 
-  ShieldCheck, 
-  Activity, 
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Smartphone,
+  Orbit,
+  Globe,
+  User,
+  ShieldCheck,
+  Activity,
   Zap,
-  Battery,
-  Wifi,
-  Signal,
   LayoutGrid,
   ChevronDown,
-  Volume2,
-  VolumeX,
-  Moon,
-  Sun,
-  Bluetooth,
-  Maximize2,
   LogOut,
   Cpu,
   Radio,
@@ -29,7 +19,6 @@ import { sounds } from '../../services/soundService';
 
 import { useSocket } from '../../hooks/useSocket';
 import { useVoiceCall } from '../../hooks/useVoiceCall';
-import { useApp } from '../../contexts/AppContext';
 
 interface MobilePlatformProps {
   t: any;
@@ -43,23 +32,12 @@ interface MobilePlatformProps {
 
 export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, renderTabContent }: MobilePlatformProps) {
   const [activeScreen, setActiveScreen] = useState<'home' | 'core' | 'factory' | 'skills' | 'profile'>('home');
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
 
   const socket = useSocket();
   const { callState, startCall, endCall } = useVoiceCall({
     socket,
-    onResponse: (text) => {
-      // Logic to show response in mobile UI if needed
-    }
   });
 
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   const triggerHaptic = (pattern: number | number[] = 10) => {
     if ('vibrate' in navigator) {
@@ -70,15 +48,10 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
   const handleNavClick = (screen: any) => {
     if (activeScreen === screen) return;
     triggerHaptic(5);
-    if (!isMuted) sounds.playClick();
+    sounds.playClick();
     setActiveScreen(screen);
   };
 
-  const toggleControlCenter = () => {
-    triggerHaptic(15);
-    if (!isMuted) sounds.playClick();
-    setIsControlCenterOpen(!isControlCenterOpen);
-  };
 
   const navItems = [
     { id: 'home', icon: LayoutGrid, label: t.navHome || 'Home' },
@@ -192,7 +165,7 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
               whileTap={{ scale: 0.9 }}
               onClick={() => {
                 triggerHaptic(20);
-                if (!isMuted) sounds.playPulse();
+                sounds.playPulse();
               }}
               className="relative"
             >
@@ -299,7 +272,7 @@ export function MobilePlatform({ t, user, lang, setLang, onLogin, onExit, render
                 <button 
                   onClick={() => {
                     triggerHaptic(5);
-                    if (!isMuted) sounds.playClick();
+                    sounds.playClick();
                     onExit();
                   }}
                   className="w-full p-6 glass-dark rounded-[2.5rem] border border-white/5 flex items-center justify-center gap-3 text-white/40 hover:text-white transition-colors"

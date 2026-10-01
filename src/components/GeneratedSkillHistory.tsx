@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import { apiFetch } from '@/services/apiClient';
 import { useSocket } from '@/hooks/useSocket';

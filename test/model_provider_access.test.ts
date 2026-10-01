@@ -40,7 +40,6 @@ describe('model provider access', () => {
       'src/components/DesktopUI.tsx',
       'src/components/Profile.tsx',
       'src/components/TokenDashboard.tsx',
-      'src/components/NeuralSynthesisMonitor.tsx',
     ].map(readRepoFile).join('\n');
 
     expect(serverEntry).not.toMatch(/subscriptionRoutes|server\/subscription/);

@@ -1,3 +1,4 @@
+import { isConfirmationCancellation, isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import {
   classifyConversationActionFollowupIntent,
   conversationActionRequiresFreshConfirmationReview,
@@ -119,11 +120,6 @@ export function bindPreparedTaskMessageRelation(
     binding: 'active_task', taskId: state.taskId, revision: state.revision, targetRequestId: state.activeRequestId };
 }
 
-// These are task-control utterances, not domain intents. Keeping them here
-// prevents every socket surface from inventing a different cancellation rule.
-// i18n-allow: multilingual task-control recognition; not user-visible copy.
-const CANCEL_ONLY_RE =
-  /^(?:(?:等一下|等等|先别急)[，,\s]*)?(?:你)?(?:先)?(?:取消|停止|停下|别做了|不要做了|终止)(?:这个|那个|当前)?(?:任务|操作|工作)?(?:[，,。.\s]+(?:不要|别|无需|不必)(?:再|继续)?(?:写入|创建|发送|发布|执行|继续)[^\r\n]{0,180})?[。！？.!?]*$|^(?:(?:wait|hold\s+on)[,!\s]*)?(?:please\s+)?(?:cancel|stop|abort|terminate)(?:\s+(?:this|that|the current)\s+(?:task|operation|work))?(?:[.!?\s]+(?:do\s+not|don['’]?t|never)\s+(?:write|create|send|publish|execute|run|continue)\b[^\r\n]{0,180})?[.!?]*$/iu; // i18n-allow: multilingual task-control recognition; not user-visible copy.
 // i18n-allow: multilingual task-replacement recognition; not user-visible copy.
 const REPLACE_RE =
   /(?:取消|停止|停下|别做|不要做|终止|放弃).{0,24}(?:改成|换成|改做|转去|重新做|而是)|\b(?:cancel|stop|abort|drop)\b.{0,40}\b(?:instead|replace|switch|change\s+to|do(?!\s+not\b|n['’]?t\b))\b/iu; // i18n-allow: multilingual task-replacement recognition; not user-visible copy.
@@ -138,14 +134,7 @@ const RETRY_ONLY_RE =
 // a fix. Generic referents bind to that action; concrete new objects do not.
 // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 const CONTINUE_ONLY_RE =
-  /^(?:(?:请|现在|那就|赶紧|快点)\s*)?(?:修|修复|处理|清理|继续|接着|推进|执行|完成|做)(?:一下)?(?:它|这个|这些|上述|当前)?(?:问题|任务|工作|操作)?[了吧啊呀。！？.!?]*$|^(?:(?:please|now|then)\s+)?(?:fix|clean(?:\s+it)?|continue|resume|proceed|execute|finish|do)(?:\s+(?:it|this|these|that|the\s+(?:current\s+)?(?:issue|task|work)))?[.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
-
-// Keep acceptance narrow. Longer action-bearing messages such as “好的，帮我
-// 写一份报告” are new work, while these terse replies bind to the adjacent
-// pending action or root-task verification.
-// i18n-allow: multilingual task-feedback recognition; not user-visible copy.
-const ACCEPT_ONLY_RE =
-  /^(?:(?:我)?(?:确认|同意|允许|接受|批准|授权)(?:(?:这个|该|上述|当前|刚才的)?(?:操作|方案|修改|执行|权限扩张))?了?|(?:嗯|好|好的|可以|行|没问题|就这样|按这个做|开始吧)|(?:yes|ok|okay|confirmed?|approved?|accepted?|go\s+ahead|looks\s+good))[。！？.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
+  /^(?:(?:请|现在|那就|赶紧|快点)\s*)?(?:修|修复|处理|清理|继续(?:执行)?|接着|推进|执行|完成|做)(?:一下)?(?:它|这个|这些|上述|当前)?(?:问题|任务|工作|操作)?[了吧啊呀。！？.!?]*$|^(?:(?:please|now|then)\s+)?(?:fix|clean(?:\s+it)?|continue|resume|proceed|execute|finish|do)(?:\s+(?:it|this|these|that|the\s+(?:current\s+)?(?:issue|task|work)))?[.!?]*$/iu; // i18n-allow: multilingual task-feedback recognition; not user-visible copy.
 
 // A bare acknowledgement is conversational unless the durable state proves
 // that the immediately adjacent action is actually waiting for confirmation.
@@ -177,7 +166,7 @@ function feedbackKind(
   assistantOfferContext?: PendingAssistantOfferContext,
 ): ActiveTaskFeedbackKind {
   if (REPLACE_RE.test(normalized)) return 'replace';
-  if (CANCEL_ONLY_RE.test(normalized)) return 'cancel';
+  if (isConfirmationCancellation(normalized)) return 'cancel';
   const acceptedCleanupOffer = resolvePendingRuntimeCleanupOffer(
     normalized,
     assistantOfferContext,
@@ -232,7 +221,8 @@ function feedbackKind(
     && followup !== 'execute'
   ) return 'new_task';
   if (RETRY_ONLY_RE.test(normalized)) return 'retry';
-  if (ACCEPT_ONLY_RE.test(normalized)) {
+  if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
+  if (isExplicitConfirmationReply(normalized)) {
     if (conversationActionRequiresFreshConfirmationReview(state)) return 'status';
     const hasPendingAcceptance = Boolean(
       acceptedCleanupOffer
@@ -243,7 +233,6 @@ function feedbackKind(
     }
     return 'accept';
   }
-  if (CONTINUE_ONLY_RE.test(normalized)) return 'continue';
 
   // Long path-bearing corrections frequently exceed the deliberately terse
   // language patterns below. Reuse the task capsule's target-aware parser so
@@ -258,7 +247,6 @@ function feedbackKind(
     || (state?.unfinished && TERSE_TARGET_CORRECTION_RE.test(normalized))
   ) return 'correction';
 
-  if (followup === 'status') return 'status';
   if (followup === 'execute') return 'continue';
   return 'new_task';
 }

@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune33",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "server/memory_avatar/distiller.ts",
+      "beforeLines": 706,
+      "afterLines": 679,
+      "delta": -27,
+      "beforeSha256": "ab50a433d04db110358087f54adf8851cf9fc71f997117deec41819c6289e24d",
+      "afterSha256": "c35f029abca83d4dd8bb7a9ce3a053a61f3b4140e5813e923fb5ebb0085684df"
+    },
+    {
+      "file": "test/memory_avatar_distill_cancellation.test.ts",
+      "beforeLines": 29,
+      "afterLines": 43,
+      "delta": 14,
+      "beforeSha256": "7bcbf212263e343efa25524db75c8df0700fd19002704a6908b4848bb472fcf6",
+      "afterSha256": "5676c8e1ea9d8e59e6d1ff2ff7499407b4f4189f71ab638b6911eb9d8150a723"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1085,
+        "lines": 367247
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159650
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526897
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1085,
+        "lines": 367220
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159664
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526884
+      }
+    }
+  },
+  "tests": {
+    "files": 4,
+    "passed": 64,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      [
+        "D:/lumiOS/test/memory_avatar_distill_cancellation.test.ts::chat log import formats preserves multiline wechat messages and skips empty headers",
+        1
+      ],
+      [
+        "D:/lumiOS/test/memory_avatar_distill_cancellation.test.ts::chat log import formats preserves multiline qq messages and skips empty headers",
+        1
+      ],
+      [
+        "D:/lumiOS/test/memory_avatar_distill_cancellation.test.ts::chat log import formats keeps the QQ [图片] marker inside the current message",
+        1
+      ],
+      [
+        "D:/lumiOS/test/memory_avatar_distill_cancellation.test.ts::chat log import formats keeps the QQ [语音] marker inside the current message",
+        1
+      ]
+    ],
+    "removed": [],
+    "scope": "four affected parser/avatar/provider-contract test files; full suite not rerun"
+  },
+  "parity": {
+    "passed": true,
+    "inputs": 2225,
+    "formats": 3,
+    "comparisons": 6675,
+    "modelCalls": [
+      {
+        "line": 241,
+        "arguments": 15,
+        "sha256": "60b1edb8cab4c1937b4929d52f83fe9c58dcb5378af214eb1dcc9e58d756ddd6",
+        "afterLine": 214
+      }
+    ],
+    "otherDeclarationsUnchanged": true
+  },
+  "verification": {
+    "fingerprints": {
+      "server/memory_avatar/distiller.ts": "c35f029abca83d4dd8bb7a9ce3a053a61f3b4140e5813e923fb5ebb0085684df",
+      "test/memory_avatar_distill_cancellation.test.ts": "5676c8e1ea9d8e59e6d1ff2ff7499407b4f4189f71ab638b6911eb9d8150a723"
+    },
+    "receipts": [
+      {
+        "step": "parity",
+        "startedAt": "2026-10-01T15:45:51.107Z",
+        "finishedAt": "2026-10-01T15:45:51.421Z",
+        "status": 0
+      },
+      {
+        "step": "focused",
+        "startedAt": "2026-10-01T15:45:51.423Z",
+        "finishedAt": "2026-10-01T15:45:55.624Z",
+        "status": 0
+      },
+      {
+        "step": "lint",
+        "startedAt": "2026-10-01T15:45:55.624Z",
+        "finishedAt": "2026-10-01T15:46:27.568Z",
+        "status": 0
+      },
+      {
+        "step": "build:server",
+        "startedAt": "2026-10-01T15:46:27.569Z",
+        "finishedAt": "2026-10-01T15:46:32.330Z",
+        "status": 0
+      }
+    ]
+  },
+  "changes": [
+    "WeChat and QQ use one message accumulation/flush loop while keeping their exact separate header regular expressions.",
+    "QQ alone excludes image/voice-marked lines from header recognition; these lines still remain in the previous message body.",
+    "Removed the unreachable QQ timestamp length >= 16 check: a match has a minimum of 18 characters.",
+    "Plain-text parsing, blank-line filtering, minimum message length, speaker assignment and subsequent distillation declarations are unchanged.",
+    "Existing cancellation assertions remain; four cases cover multiline/empty-header behavior, single-digit hour differences and both media markers."
+  ],
+  "boundaries": {
+    "fullSuiteRerun": false,
+    "frontendRebuilt": false,
+    "commit": false,
+    "push": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "officialModelApiTested": false,
+    "realUserDataChanged": false,
+    "newBusinessFiles": [],
+    "wholeProjectSimplificationComplete": false
+  }
+}

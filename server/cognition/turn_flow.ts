@@ -1,3 +1,4 @@
+import { isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import { isStoredMemoryRecallQuestion } from './normalized_action_intent';
 import { withoutLocationLiterals } from './location_literals';
 import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
@@ -13,9 +14,7 @@ import {
   hasClientActionOnlyIntent,
   hasExplicitNoMutationInstruction,
   hasExplicitNoToolInstruction,
-  hasExplicitToolIntent,
   isConversationalProductFeedback,
-  isCurrentClientDiagnosticRequest,
   isDiagnosticOrRepairRequest,
   shouldAllowToolUseForTurn,
 } from './tool_intent';
@@ -31,7 +30,7 @@ import {
 import { buildActionContract } from './action_contract';
 import {
   classifyRecentActionFollowupIntent,
-  isRecoveredCurrentAppEditingContinuation,
+  isCurrentAppEditingRequest,
   needsRecentActionContinuationContext,
 } from './action_continuation';
 import { isCapabilityMetaQuestion } from './capability_meta';
@@ -52,6 +51,8 @@ export interface LumiTurnFlowInput {
   continuationContext?: string;
   /** The shared pipeline already resolved the current turn against its task. */
   actionFollowupIntent?: import('./action_continuation').RecentActionFollowupIntent;
+  /** Exact server-bound application, never recovered from model prose. */
+  continuationAppTarget?: string;
   channel: LumiTurnChannel;
   source?: string;
   category?: string;
@@ -64,6 +65,8 @@ export interface LumiTurnFlowInput {
 }
 
 export interface LumiTurnFlow {
+  actionFollowupIntent?: import('./action_continuation').RecentActionFollowupIntent;
+  currentAppEditTarget?: string;
   /** User-authored root goal from the exact server-bound continuation task. */
   rootTaskText?: string;
   /** A prerequisite step must not complete the retained root goal. */
@@ -109,11 +112,8 @@ export interface LumiExecutionGovernance {
   shouldInspectCapabilitiesFirst: boolean;
 }
 
-const QUESTION_RE = /[?？]\s*$|是不是|为什么|怎么回事|有没有|找到了吗|听见了吗/u;
-const WORK_ACTION_RE = /桌面|文件|文件夹|目录|草稿图|图纸|平面图|施工图|设计图|cad|CAD|DXF|运行日志|日志|生成|创建|画一|画个|按照.*画|找|搜索|打开|执行|运行|去干活|开始干活|开始处理|继续处理|继续做|接着做/u;
 const WORK_SOURCE_RE = /(?:work|task|takeover|org|organization|job|workflow|workspace|任务|工作|接管|组织)/i;
 const WORK_PRODUCT_RE = /交付|方案|报告|PPT|PDF|CAD|DXF|DWG|文档|文件|报价|视频|发布|草稿|微信|回复|账号|店铺|立案|装修|设计|图纸|素材|脚本|表格|合同|起诉状|诉状|包\b|\b(package|deliverable|draft|publish|export|file|document|cad|dxf|ppt|pdf)\b/i;
-const MULTI_STEP_WORK_RE = /完整流程|闭环|多步|批量|行业|客户|店铺|账号管理|短视频|电商|装修|立案|发布|交付包|内容矩阵|自动生成|自动处理|接管|推进|编排|产出结果/u;
 const CAPABILITY_CONTEXT_RE = /lumi|能力|技能|工具|接入|集成|mcp|网页登录|自动登录|外部软件|桌面感知|屏幕|客户端|任务中心|agent|adapter|适配器|沉淀|学会|复用|脚本|内置|通用化/i;
 const CAPABILITY_ACTION_RE = /沉淀|学会|记住|优化|完善|做实|稳定|接入|集成|拆|复用|通用|自学习|自动登录|控制|能力提升|补齐|修好|别写死|不要写死/u;
 const CAPABILITY_REUSE_AUDIT_RE = /重复|复用|够不够稳定|是不是.*写进|写进.*程序|内置|脚本|固定|白改|之前.*做过|已有能力|拆|不要写死|别写死/u;
@@ -216,7 +216,7 @@ function taskContextText(workTakeover: WorkTakeoverContinuityContext): string {
 
 function classifyCapabilityLearningIntent(
   text: string,
-  input: Pick<LumiTurnFlowInput, 'targetIsLumi'>,
+  input: Pick<LumiTurnFlowInput, 'targetIsLumi' | 'continuationAppTarget' | 'actionFollowupIntent'>,
 ): Pick<LumiExecutionGovernance, 'capabilityLearningIntent' | 'capabilityLearningReason' | 'shouldInspectCapabilitiesFirst'> {
   text = withoutLocationLiterals(text);
   if (mediaCreationInstruction(text) || isAvatarAuthoringRequest(text)) {
@@ -229,7 +229,7 @@ function classifyCapabilityLearningIntent(
       shouldInspectCapabilitiesFirst: false,
     };
   }
-  if (isRecoveredCurrentAppEditingContinuation(text)) {
+  if (input.continuationAppTarget && isCurrentAppEditingRequest(text)) {
     return {
       capabilityLearningIntent: 'none',
       capabilityLearningReason: 'current-app editing continues through visible UI controls instead of capability learning',
@@ -350,27 +350,17 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const conceptualCapabilityQuestion = isCapabilityMetaQuestion(input.text);
   const continuationContext = String(input.continuationContext || '').trim();
   const hasContinuationContext = Boolean(continuationContext);
-  const directActionFollowupIntent = input.actionFollowupIntent ?? classifyRecentActionFollowupIntent(input.text);
-  const recoveredActionFollowupIntent = input.actionFollowupIntent !== undefined
-    ? input.actionFollowupIntent
-    : /(?:^|\n)- followupIntent:\s*status(?:\s|$)/i.test(continuationContext)
-    ? 'status' as const
-    : /(?:^|\n)- followupIntent:\s*execute(?:\s|$)/i.test(continuationContext)
-      ? 'execute' as const
-      : /(?:^|\n)- followupIntent:\s*repeat(?:\s|$)/i.test(continuationContext)
-        ? 'repeat' as const
-      : 'none' as const;
-  const actionFollowupIntent = directActionFollowupIntent !== 'none'
-    ? directActionFollowupIntent
-    : recoveredActionFollowupIntent;
+  const actionFollowupIntent = input.actionFollowupIntent ?? classifyRecentActionFollowupIntent(input.text);
+  const currentAppEditTarget = isCurrentAppEditingRequest(input.text)
+    ? input.continuationAppTarget || '' : '';
   const immediateAssistantRestatement = actionFollowupIntent === 'repeat';
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const explicitContinuationConfirmation =
     (input.actionFollowupIntent === undefined || input.actionFollowupIntent === 'execute')
-    && /^(?:确认|确定|允许|同意|嗯|好|好的|可以|行|开始|yes|ok|okay|confirm|go)[。！？.!?]*$/iu.test(input.text.trim()); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+    && isExplicitConfirmationReply(input.text);
   const currentAcceptsContinuationContext = needsRecentActionContinuationContext(input.text)
     || explicitContinuationConfirmation
-    || recoveredActionFollowupIntent !== 'none';
+    || actionFollowupIntent !== 'none';
   const continuationMayDriveAction = !conceptualCapabilityQuestion && hasContinuationContext
     && (actionFollowupIntent === 'execute' || explicitContinuationConfirmation);
   const statusOnlyContinuation = !conceptualCapabilityQuestion && hasContinuationContext && actionFollowupIntent === 'status';
@@ -419,7 +409,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     : buildActionContract(routingText);
   const actionContractRequiresTools = actionContract.applies && actionContract.kind !== 'none' && !clientActionIntent;
   const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(input.text);
-  const directWorkTakeoverExecution = workTakeover.shouldResumeTask && workTakeover.intent === 'advance';
   const taskEntryTurn = input.channel === 'task';
   // All legacy postures share one execution policy. Task intent and explicit
   // no-tool/confirmation boundaries decide execution, never a mode promotion.
@@ -442,8 +431,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     && isDiagnosticOrRepairRequest(input.text);
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(routingText);
-  const workSurfaceRoute = resolveWorkSurfaceRoute(routingText);
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routingText);
+  const workSurfaceRoute = resolveWorkSurfaceRoute(routingText, currentAppEditTarget);
+  const recoveredCurrentAppEdit = Boolean(currentAppEditTarget);
   const allowToolUseForTurn = immediateAssistantRestatement || explicitNoToolInstruction || readOnlyConversationTurn
     ? false
     : conceptualCapabilityQuestion || statusOnlyContinuation
@@ -517,6 +506,8 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     : derivedExecution;
 
   const flowWithoutPrompt: Omit<LumiTurnFlow, 'promptOverlay'> = {
+    actionFollowupIntent,
+    currentAppEditTarget,
     channel: input.channel,
     source: input.source,
     surface,

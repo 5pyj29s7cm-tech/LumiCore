@@ -1,11 +1,12 @@
 import './helpers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs } from '../server/agents/nl_chainer';
+import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foreground_wechat_intent';
 import { buildActionContract, type LumiActionContractKind } from '../server/cognition/action_contract';
 import { buildLumiCapabilitySelection } from '../server/cognition/capability_selection';
 import { buildLumiExecutionDecision } from '../server/cognition/execution_decision';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { ToolRegistry } from '../server/tools/registry';
 import { registerAllTools } from '../server/tools/definitions';
 
@@ -173,9 +174,8 @@ describe('Lumi continuous real-action pressure', () => {
       expect(result.execution.toolPolicy.requireConfirmation || [], item.id).not.toContain('wechat_send_message');
     }
 
-    expect(buildForegroundWeChatReadArgs(cases[0].text)).toMatchObject({
-      contact: '\u963f\u9646',
-      useSearch: true,
+    expect(normalizeActionIntent(cases[0].text)).toMatchObject({
+      kind: 'messaging_read', target: '\u963f\u9646',
     });
     const inboundRead = evaluate(cases[0].text, { userId: 'continuous_inbound_read_guard' });
     expect(inboundRead.route?.toolNames).not.toContain('wechat_send_message');

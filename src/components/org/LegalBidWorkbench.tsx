@@ -34,8 +34,6 @@ export function LegalBidWorkbench({
   orgId?: string;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [requirements, setRequirements] = useState('');
   const [projectName, setProjectName] = useState(() => caseFile?.title || caseFile?.cause || '');
   const [result, setResult] = useState('');

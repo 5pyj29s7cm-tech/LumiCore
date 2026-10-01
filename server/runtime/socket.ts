@@ -210,10 +210,10 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
     registerDesktopRelayRecoveryHandlers(socket, () => getUserId(socket));
 
     // Optional diagnostics. Event payloads may contain private user content.
-    socket.onAny((event, ...args) => {
+    socket.onAny(async (event, ...args) => {
       if (event.startsWith('tool:desktop_result:')) {
         const correlationId = event.slice('tool:desktop_result:'.length);
-        const accepted = handleDesktopRelayResult(correlationId, args[0] || {}, socket.id);
+        const accepted = await handleDesktopRelayResult(correlationId, args[0] || {}, socket.id);
         const acknowledge = args.at(-1);
         if (typeof acknowledge === 'function') acknowledge({ accepted });
       }

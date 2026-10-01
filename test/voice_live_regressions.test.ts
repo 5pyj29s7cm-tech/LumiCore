@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuickCommandToolPolicy, matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildQuickCommandToolPolicy, buildDeterministicLocalDesktopNavigationCommand, buildDeterministicKnowledgeInspectionCommand } from '../server/cognition/quick_commands';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
-import { classifyIntent } from '../server/cognition/intent';
 import { traceToolIntentDecision } from '../server/cognition/tool_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { parseWeChatConversationReadyVerification } from '../server/tools/definitions/external_app_tools';
 import { describeRecentActionsFromHistory } from '../server/socket/voice_action_history';
-import { resolveWeChatRecipientFromHistory } from '../server/socket/voice_messaging_context';
 import { reservePriorityVoiceHandoff } from '../server/socket/voice';
 
 describe('live voice regression cases', () => {
@@ -55,20 +54,14 @@ describe('live voice regression cases', () => {
   });
 
   it('keeps combined WeChat inquiry out of the generic app-open quick path', async () => {
-    expect(await matchQuickCommand('打开微信，问一下阿陆在干嘛。', 'u1')).toBeNull();
-    expect(await matchQuickCommand('打开微信看下我有多少个联系人，把这些联系人的名字都记住。', 'u1')).toBeNull();
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开微信，问一下阿陆在干嘛。'), '打开微信，问一下阿陆在干嘛。')).toBeNull();
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开微信看下我有多少个联系人，把这些联系人的名字都记住。'), '打开微信看下我有多少个联系人，把这些联系人的名字都记住。')).toBeNull();
     expect(buildActionContract('打开微信，问一下阿陆在干嘛。').kind).toBe('messaging_send');
     expect(buildActionContract('我没有户型图发给你。').kind).toBe('none');
   });
 
-  it('does not swallow a compound AutoCAD workflow as one app name', () => {
-    expect(classifyIntent('打开微信')).toMatchObject({
-      directToolCall: { name: 'desktop_open', args: { target: '微信' } },
-      needsLLM: false,
-    });
-    const compound = classifyIntent('打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来');
-    expect(compound.directToolCall).toBeUndefined();
-    expect(compound.needsLLM).toBe(true);
+  it('does not swallow a compound AutoCAD workflow as one app name', async () => {
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来'), '打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来')).toBeNull();
   });
 
   it('treats criticism of client navigation as feedback, not another navigation command', () => {
@@ -89,15 +82,12 @@ describe('live voice regression cases', () => {
     expect(buildRecentActionContinuationBridge('切换到联系人页面', history)).toBe('');
   });
 
-  it('focuses an existing app without treating the rest of the sentence as its name', async () => {
-    expect(await matchQuickCommand('打开正在运行的微信，不要启动新的微信。', 'u1')).toMatchObject({
+  it('focuses an existing app without treating the rest of the sentence as its name', () => {
+    const text = '打开正在运行的微信，不要启动新的微信。';
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toMatchObject({
       toolCall: { name: 'desktop_open', arguments: { target: '微信' } },
     });
-    const feedback = await matchQuickCommand('打开了。', 'u1');
-    expect(feedback).toMatchObject({
-      responseText: '好，已经打开了。',
-    });
-    expect(feedback?.toolCall).toBeUndefined();
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开了。'), '打开了。')).toBeNull();
   });
 
   it('never lets a deterministic quick hint widen the authorized route policy', () => {
@@ -112,42 +102,14 @@ describe('live voice regression cases', () => {
       .toMatchObject({ forbiddenTools: ['browser_open_task'] });
   });
 
-  it('uses dedicated browser and knowledge tools for the exact spoken requests', async () => {
-    expect(await matchQuickCommand('你能听到我吗？', 'u1')).toMatchObject({
-      responseText: '能听见。你说。',
-      matched: true,
+  it('uses dedicated browser and knowledge tools for the exact spoken requests', () => {
+    const text = '打开中国裁判文书网。';
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toMatchObject({
+      toolCall: { name: 'browser_open_task', arguments: { url: 'https://wenshu.court.gov.cn/', open: true } },
     });
-    expect(await matchQuickCommand('打开浏览器。', 'u1')).toMatchObject({
-      toolCall: { name: 'browser_open_task' },
-    });
-    expect(await matchQuickCommand('打开中国裁判文书网。', 'u1')).toMatchObject({
-      toolCall: {
-        name: 'browser_open_task',
-        arguments: { url: 'https://wenshu.court.gov.cn/', open: true },
-      },
-    });
-    expect(await matchQuickCommand('看一下现在知识库里有多少的文件内容。', 'u1')).toMatchObject({
+    expect(buildDeterministicKnowledgeInspectionCommand('看一下现在知识库里有多少的文件内容。')).toMatchObject({
       toolCall: { name: 'knowledge_file_stats' },
     });
-  });
-
-  it('answers the current operation mode without running the full voice pipeline', async () => {
-    expect(await matchQuickCommand('你现在是什么模式？', 'u1')).toMatchObject({
-      responseText: expect.stringMatching(/^当前是(?:聊天|助理|自主|会议)模式。$/),
-      matched: true,
-    });
-  });
-
-  it('resolves a recipient pronoun from the latest real WeChat tool call', () => {
-    const resolved = resolveWeChatRecipientFromHistory({ contact: '他', message: '在干嘛？' }, [{
-      role: 'assistant',
-      toolCalls: JSON.stringify([{
-        name: 'wechat_send_message',
-        arguments: { contact: '阿陆', message: '在干嘛？' },
-        result: '{"sent":false}',
-      }]),
-    }]);
-    expect(resolved.contact).toBe('阿陆');
   });
 
   it('requires strong visible evidence before treating a searched chat as ready', () => {

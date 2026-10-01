@@ -13,9 +13,9 @@ describe('focus thread client projection', () => {
   it('projects active durable focus into the transient task widget instead of the chat stream', () => {
     const chat = source('src/components/AgentChatPage.tsx');
     const widget = source('src/components/ActiveTaskWidget.tsx');
-    expect(chat).toContain('useFocusThreads({');
+    expect(chat).not.toContain('useFocusThreads');
     expect(chat).toContain('<ActiveTaskWidget');
-    expect(chat).toContain('focusThreads={focusThreads}');
+    expect(chat).toContain('status={runtimeStatus}');
     expect(chat).not.toContain('<FocusThreadPanel');
     expect(widget).toContain('primaryThread?.goal');
     expect(widget).toContain('primaryThread?.waitingFor');

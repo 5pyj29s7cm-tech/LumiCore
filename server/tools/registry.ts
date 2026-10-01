@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 import { isDefiniteOfficialImageRejection } from '../llm/official_api';
 import {
@@ -632,7 +633,7 @@ export class ToolRegistry {
     if (!tool) throw new Error(`Tool "${name}" not found in registry`);
     assertToolPermission(tool, context);
     const bound = tool.serverOwnedArgumentBinder
-      ? tool.serverOwnedArgumentBinder(structuredClone(args || {}), context)
+      ? tool.serverOwnedArgumentBinder(cloneDatabaseValue(args || {}), context)
       : args || {};
     if (!bound || typeof bound !== 'object' || Array.isArray(bound)) {
       throw new Error(`Tool "${name}" produced invalid server-owned arguments.`);
@@ -1053,7 +1054,7 @@ export class ToolRegistry {
     let executionArgs = args || {};
     if (pinnedArgumentBinder) {
       try {
-        executionArgs = pinnedArgumentBinder(structuredClone(executionArgs), context);
+        executionArgs = pinnedArgumentBinder(cloneDatabaseValue(executionArgs), context);
       } catch (error) {
         finishMetric('forbidden');
         throw error;

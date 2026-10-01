@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -478,7 +479,7 @@ function validateManifest(input: unknown): LumiExtensionManifest {
   const serialized = JSON.stringify(input);
   if (Buffer.byteLength(serialized, 'utf8') > MAX_MANIFEST_BYTES) throw new Error('Extension manifest exceeds the 256 KiB limit.');
   assertNoEmbeddedCredentials(input);
-  const manifest = structuredClone(input) as LumiExtensionManifest;
+  const manifest = cloneDatabaseValue(input) as LumiExtensionManifest;
   for (const key of Object.keys(manifest)) {
     if (!ALLOWED_MANIFEST_KEYS.has(key)) throw new Error(`Unsupported extension manifest field: ${key}`);
   }
@@ -1242,7 +1243,7 @@ export function getRegisteredProviderDefaultModel(providerId: string, userId?: s
 export function getRegisteredProviderManifest(providerId: string, userId?: string): OpenAICompatibleProviderManifest | null {
   const revision = runtimeRevision(providerId);
   if (!revision?.manifest.provider || (userId && revision.userId !== userId)) return null;
-  return structuredClone(revision.manifest.provider);
+  return cloneDatabaseValue(revision.manifest.provider);
 }
 
 export function isRegisteredProviderLocal(providerId: string, userId?: string): boolean {
@@ -1263,7 +1264,7 @@ export function assertRegisteredProviderModel(
   if (options.needsTools && model.capabilities.tools !== true) throw new Error(`Model ${modelId} does not declare tool-calling capability.`);
   if (options.needsJson && model.capabilities.json !== true) throw new Error(`Model ${modelId} does not declare JSON response capability.`);
   if (options.needsStreaming && model.capabilities.streaming !== true) throw new Error(`Model ${modelId} does not declare streaming capability.`);
-  return structuredClone(model);
+  return cloneDatabaseValue(model);
 }
 
 function providerClientFetch(revision: ExtensionRevision): typeof fetch {
@@ -1725,9 +1726,9 @@ export async function installAndActivateExtension(
 
     const oldActive = store.revisions.find(item => item.extensionId === manifest.id && item.status === 'active');
     const arraySnapshot = {
-      publishers: structuredClone(store.publishers),
-      revisions: structuredClone(store.revisions),
-      receipts: structuredClone(store.receipts),
+      publishers: cloneDatabaseValue(store.publishers),
+      revisions: cloneDatabaseValue(store.revisions),
+      receipts: cloneDatabaseValue(store.receipts),
     };
     try {
       unregisterExtensionTools(targetRegistry, manifest.id);
@@ -1846,8 +1847,8 @@ export async function rollbackExtension(
     const current = store.revisions.find(item => item.extensionId === input.extensionId && item.status === 'active');
     if (current) verifyPersistedRevision(current, store);
     const currentDefinitions = current ? buildDefinitions(current) : [];
-    const currentSnapshot = current ? structuredClone(current) : null;
-    const targetSnapshot = structuredClone(target);
+    const currentSnapshot = current ? cloneDatabaseValue(current) : null;
+    const targetSnapshot = cloneDatabaseValue(target);
     try {
       unregisterExtensionTools(targetRegistry, input.extensionId);
       registerRevisionTools(targetRegistry, target);
@@ -1922,7 +1923,7 @@ export async function disableExtension(
     const revision = store.revisions.find(item => item.extensionId === extensionId && item.status === 'active' && item.userId === (context?.userId || 'anonymous'));
     if (!revision) throw new Error('Active extension was not found in this user scope.');
     verifyPersistedRevision(revision, store);
-    const revisionSnapshot = structuredClone(revision);
+    const revisionSnapshot = cloneDatabaseValue(revision);
     const definitions = buildDefinitions(revision);
     try {
       unregisterExtensionTools(targetRegistry, extensionId);

@@ -20,7 +20,6 @@ import {
 import {
   buildActionContract,
   extractDesktopLaunchTarget,
-  isSimpleDesktopOpenRequest,
   requestsBlankAutoCadDocument,
   requiresExternalAiHistory,
   requiresCurrentAuthoringDocumentInspection,
@@ -33,7 +32,7 @@ import {
   isDocumentOpenAndReviewRequest,
 } from './action_contract';
 import {
-  isRecoveredCurrentAppEditingContinuation,
+  isCurrentAppEditingRequest,
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { detectRequestedOperationMode, isPureOperationModeSwitchRequest } from './operation_modes';
@@ -346,10 +345,6 @@ function isLocalCadImageSourceRequest(text: string): boolean {
     && (hasExplicitImageFile || (hasImageNoun && !hasFolderSource));
 }
 
-function isRecoveredApplicationContinuation(text: string): boolean {
-  return /Recovered structured action state:[\s\S]{0,900}- appTarget:\s*[^\n]+/i.test(String(text || ''));
-}
-
 function hasPersistentTaskCenterEvidence(text: string): boolean {
   // i18n-allow: Chinese task-center marker recognition; not user-visible copy.
   return /(?:work_takeover_task_|Latest task id:|任务中心\s+工作接管|task[_ -]?id\s*[:=])/i.test(String(text || ''));
@@ -444,8 +439,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
     priorities.push(...buildDesktopObservationPlan(instructionText).map(call => call.name));
   }
   if (
-    isRecoveredCurrentAppEditingContinuation(instructionText)
-    || requiresCurrentAppUiMutation(instructionText)
+    requiresCurrentAppUiMutation(instructionText)
   ) {
     priorities.push(
       'desktop_active_window',
@@ -915,8 +909,8 @@ export function routeToolsForTurn(
   const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(instructionText);
   const confirmationOnlyExternalCommit = actionContract.kind === 'messaging_send'
     && isExternalCommitConfirmationOnlyRequest(instructionText);
-  const recoveredApplicationContinuation = isRecoveredApplicationContinuation(instructionText);
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(instructionText);
+  const recoveredApplicationContinuation = Boolean(options?.trustedActionContinuation && options.actionTaskState?.appTarget);
+  const recoveredCurrentAppEdit = recoveredApplicationContinuation && isCurrentAppEditingRequest(primaryInstructionText);
   const currentAppEdit = recoveredCurrentAppEdit
     || (actionContract.kind === 'desktop_operation' && requiresCurrentAppUiMutation(instructionText));
   const requestedMode = detectRequestedOperationMode(instructionText);
@@ -1573,7 +1567,6 @@ export function routeToolsForTurn(
 }
 
 export function mergeToolPolicyWithRoute(policy: ToolPolicy, route: ToolRoute): ToolPolicy {
-  const routeAllowed = new Set(route.toolNames);
   const baseAllowed = new Set(policy.allowedTools || []);
   const routeForbidden = new Set(route.forbiddenToolNames || []);
   const allowedTools = baseAllowed.has('*')

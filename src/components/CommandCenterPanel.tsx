@@ -41,25 +41,18 @@ export type CommandCenterTask = {
   title: string;
   status: string;
   phase: string;
-  updatedAt?: string;
   blocker?: string;
   nextAction?: string;
   cancellationRequested?: boolean;
-  pauseRequested?: boolean;
   controls?: { canPause: boolean; canResume: boolean; canCancel: boolean };
   progress?: {
-    checkpoint: string;
     completedUnits: number;
     totalUnits: number;
     receiptCount: number;
-    toolCallCount: number;
   };
   evidence?: {
-    terminal: boolean;
     verification: string;
     evidenceCount: number;
-    toolCount: number;
-    reasonCode: string;
   };
   completionFeedback?: TaskCompletionFeedback;
 };
@@ -87,20 +80,15 @@ export function normalizeCommandCenterTask(value: unknown, locale?: 'zh' | 'en')
     : undefined;
   const progress = task.progress && typeof task.progress === 'object'
     ? {
-        checkpoint: String(task.progress.checkpoint || ''),
         completedUnits: numeric(task.progress.completedUnits),
         totalUnits: numeric(task.progress.totalUnits),
         receiptCount: numeric(task.progress.receiptCount),
-        toolCallCount: numeric(task.progress.toolCallCount),
       }
     : undefined;
   const evidence = task.evidence && typeof task.evidence === 'object'
     ? {
-        terminal: task.evidence.terminal === true,
         verification: String(task.evidence.verification || 'pending'),
         evidenceCount: numeric(task.evidence.evidenceCount),
-        toolCount: numeric(task.evidence.toolCount),
-        reasonCode: String(task.evidence.reasonCode || ''),
       }
     : undefined;
   return {
@@ -111,7 +99,6 @@ export function normalizeCommandCenterTask(value: unknown, locale?: 'zh' | 'en')
       : String(task.title || '').trim(),
     status,
     phase,
-    updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : undefined,
     blocker: typeof task.blocker === 'string'
       ? locale ? customerVisibleTaskBlocker(task.blocker, locale) : task.blocker
       : undefined,
@@ -119,7 +106,6 @@ export function normalizeCommandCenterTask(value: unknown, locale?: 'zh' | 'en')
       ? locale ? customerVisibleTaskNextAction(task.nextAction, locale) : task.nextAction
       : undefined,
     cancellationRequested: task.cancellationRequested === true || task.cancelRequested === true,
-    pauseRequested: task.pauseRequested === true,
     controls,
     progress,
     evidence,
@@ -187,7 +173,8 @@ export function CommandCenterPanel({
   const [loading, setLoading] = useState(true);
   const scopeGenerationRef = useRef(0);
   const activeScopeKeyRef = useRef(scopeKey);
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  activeScopeKeyRef.current = scopeKey;
+  const refreshRevisionRef = useRef(0);
   const localRuntimeStatus = useRuntimeStatus({ enabled: runtimeStatusOverride === undefined && Boolean(user), scopeKey: runtimeScopeKey, userId: user?.uid });
   const {
     status,
@@ -213,34 +200,32 @@ export function CommandCenterPanel({
   }, [scopeKey]);
 
   const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+    if (activeScopeKeyRef.current !== scopeKey) return;
     const request = { scopeKey, generation: scopeGenerationRef.current };
+    const revision = ++refreshRevisionRef.current;
+    const current = () => revision === refreshRevisionRef.current
+      && isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current);
     setLoading(true);
-    const promise = (async () => {
-      try {
-        const response = await apiFetch('/api/autonomy/work');
-        if (!response.ok) throw new Error(`Task status request failed (${response.status})`);
-        const payload = await response.json();
-        if (!isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
-        const items = Array.isArray(payload?.items) ? payload.items : [];
-        setTasks(items
-          .map(item => normalizeCommandCenterTask(item, isZh ? 'zh' : 'en'))
-          .filter((task): task is CommandCenterTask => Boolean(task)));
-        setTaskError(payload?.degraded ? copy.degradedTaskState : '');
-      } catch (error: any) {
-        if (isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) {
-          setTaskError(copy.degradedTaskState);
-        }
-      } finally {
-        if (isCurrentScopeRequest(request, activeScopeKeyRef.current, scopeGenerationRef.current)) setLoading(false);
-        refreshInFlightRef.current = null;
-      }
-    })();
-    refreshInFlightRef.current = promise;
-    return promise;
+    try {
+      const response = await apiFetch('/api/autonomy/work');
+      if (!response.ok) throw new Error('Task status unavailable');
+      const payload = await response.json();
+      if (!current()) return;
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setTasks(items.map(item => normalizeCommandCenterTask(item, isZh ? 'zh' : 'en'))
+        .filter((task): task is CommandCenterTask => Boolean(task)));
+      setTaskError(payload?.degraded ? copy.degradedTaskState : '');
+    } catch {
+      if (current()) setTaskError(copy.degradedTaskState);
+    } finally {
+      if (current()) setLoading(false);
+    }
   }, [copy.degradedTaskState, isZh, scopeKey]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    return () => { refreshRevisionRef.current++; };
+  }, [refresh]);
 
   useEffect(() => {
     const socket = socketService.getSocket();

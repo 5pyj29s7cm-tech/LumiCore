@@ -1,4 +1,3 @@
-import { readDB, writeDB } from '../../db_layer';
 import { DeviceInfo, DeviceType, DeviceCapabilities, DeviceScope } from './types';
 import type { NativeClientIdentity } from '../../shared/native_client_identity';
 import { nativeClientIdentitySha256 } from './native_identity';

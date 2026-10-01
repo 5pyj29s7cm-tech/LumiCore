@@ -50,12 +50,6 @@ export function getSession(sessionId: string): LAPSession | undefined {
   return sessions.get(sessionId);
 }
 
-export function getPeerSessions(agentId: string): LAPSession[] {
-  const sessionIds = agentPeers.get(agentId);
-  if (!sessionIds) return [];
-  return Array.from(sessionIds).map(id => sessions.get(id)!).filter(Boolean);
-}
-
 export function removeSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
   if (!session) return false;

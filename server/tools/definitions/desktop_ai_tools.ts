@@ -389,10 +389,6 @@ function resolveTargets(value: unknown, customTargets: DesktopAiTarget[] = []): 
   return resolved;
 }
 
-export function isDesktopAiTargetRegistered(value: unknown, userId = 'anonymous'): boolean {
-  return resolveTargets([value], storedTargetsFromDb(userId)).length > 0;
-}
-
 function parseJson(raw: string): any {
   try { return JSON.parse(raw); } catch { return raw; }
 }
@@ -640,20 +636,6 @@ function resolveVisionProvider(context?: ToolContext): VisionProvider | null {
   return null;
 }
 
-function fallbackVisionModel(provider: VisionProvider): string {
-  switch (provider) {
-    case 'qwen': return 'qwen-vl-max';
-    case 'ark': return 'doubao-1-5-vision-pro-32k';
-    case 'ollama': return 'qwen2.5vl:7b';
-    case 'lmstudio': return 'local-vision-model';
-    case 'relay': return DEFAULT_VISION_MODELS.relay;
-    case 'openai': return 'gpt-4o';
-    case 'gemini':
-    default:
-      return 'gemini-2.0-flash';
-  }
-}
-
 async function locateDesktopAiInput(
   desktopRelay: NonNullable<ToolContext['desktopRelay']>,
   target: DesktopAiTarget,
@@ -668,7 +650,7 @@ async function locateDesktopAiInput(
     const captureRaw = await desktopRelay('desktop_capture_screen', { quality: 78 });
     if (!String(captureRaw || '').trim()) return { point: null, evidence: null };
     const visionPref = getUserPreferredVision(context?.userId || 'anonymous');
-    const model = visionPref.model || fallbackVisionModel(provider);
+    const model = visionPref.model || DEFAULT_VISION_MODELS[provider];
     const expectedSurface = target.surface === 'developer_tool'
       ? 'the main task or instruction composer for this developer tool'
       : 'the main general chat composer for asking a new question';
@@ -969,7 +951,7 @@ export async function desktopAiCollectAnswer(args: Record<string, any>, context?
   }
 
   const visionPref = getUserPreferredVision(context?.userId || 'anonymous');
-  const model = visionPref.model || fallbackVisionModel(provider);
+  const model = visionPref.model || DEFAULT_VISION_MODELS[provider];
   const g = context?.llmGetters;
   if (!g) {
     return JSON.stringify({

@@ -323,6 +323,8 @@ export interface ToolContext {
   routedTaskText?: string;
   /** Resolved once by the shared pipeline from authorized server state. */
   acceptedTaskTarget?: import('../conversation/task_target_anchor').AcceptedTaskTarget;
+  /** Server-resolved application reference; this does not grant execution authority. */
+  currentAppTarget?: string;
   /** True only after the registry's confirmation callback approved this tool call. */
   userConfirmed?: boolean;
   /**

@@ -34,7 +34,6 @@ import {
   type LumiTechnicalArchitecture,
 } from '../../shared/technical_architecture';
 import {
-  LUMI_OPERATION_MODE_IDS,
   type LumiClientMode,
 } from '../../shared/operation_modes';
 import { toolRegistry } from '../tools/registry';
@@ -163,8 +162,6 @@ export interface ClientStateSnapshot {
   permissions?: Record<string, string | boolean | number | null | undefined>;
   tools?: {
     agentStatus?: string;
-    workflowStepCount?: number;
-    runningWorkflowSteps?: number;
     mcpActivityCount?: number;
   };
   runtime?: {
@@ -2134,7 +2131,7 @@ export function formatClientSelfPrompt(
     `- Meeting: active=${Boolean(state.meeting?.active)}, notes=${state.meeting?.noteCount || 0}, report=${Boolean(state.meeting?.hasReport)}, reportGenerating=${Boolean(state.meeting?.reportGenerating)}`,
     `- Runtime log: open=${Boolean(state.runtimeLog?.open)}, status=${state.runtimeLog?.status || 'ready'}${state.runtimeLog?.lastError ? `, error=${state.runtimeLog.lastError}` : ''}`,
     `- Permissions: ${formatStateObject(state.permissions)}`,
-    `- Tools: lumi=${state.tools?.agentStatus || 'idle'}, workflowSteps=${state.tools?.workflowStepCount || 0}, runningSteps=${state.tools?.runningWorkflowSteps || 0}`,
+    `- Tools: lumi=${state.tools?.agentStatus || 'idle'}`,
     `- Native runtime: autostartSupported=${Boolean(state.runtime?.autostartSupported)}, autostart=${Boolean(state.runtime?.autostartEnabled)}, closeToBackground=${Boolean(state.runtime?.closeToBackground)}, startedInBackground=${Boolean(state.runtime?.startedInBackground)}, backendNode=${state.runtime?.backendNodeRunning ? 'running' : 'dev/not-spawned'}, backendPython=${state.runtime?.backendPythonRunning ? 'running' : 'dev/not-spawned'}, nodeRestarts=${state.runtime?.nodeRestarts ?? 0}, pythonRestarts=${state.runtime?.pythonRestarts ?? 0}, shortcut=${state.runtime?.globalShortcut || 'Alt+Space'}${state.runtime?.lastError ? `, error=${state.runtime.lastError}` : ''}`,
     isWork
       ? '- The work workspace does not expose personal autonomy settings, autonomous workflows, private memories, or local learning records.'

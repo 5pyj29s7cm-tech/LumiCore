@@ -1,29 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { isQuickCommand, matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildDeterministicLocalDesktopNavigationCommand } from '../server/cognition/quick_commands';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 
-describe('voice/chat deterministic fast paths', () => {
-  it('answers microphone audibility checks without an LLM or tool', async () => {
-    expect(isQuickCommand('能不能听见我说话？')).toBe(true);
-    expect(isQuickCommand('你能听见我说话吗？')).toBe(true);
-    const result = await matchQuickCommand('能不能听见我说话？', 'test-user', { surface: 'voice' });
-    expect(result).toMatchObject({
-      matched: true,
-      responseText: '能听见。你说。',
-    });
-    expect(result?.toolCall).toBeUndefined();
-  });
-
-  it('opens exactly the requested app and does not invent a substitute', async () => {
-    const result = await matchQuickCommand('打开AutoCAD。', 'test-user', { surface: 'voice' });
-    expect(result?.toolCall).toEqual({
-      name: 'desktop_open',
-      arguments: { target: 'AutoCAD' },
-    });
+describe('bounded desktop navigation builders', () => {
+  it('opens exactly the requested app and does not invent a substitute', () => {
+    const text = '打开AutoCAD。';
+    const result = buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text);
+    expect(result?.toolCall).toEqual({ name: 'desktop_open', arguments: { target: 'AutoCAD' } });
     expect(result?.formatToolResult?.('Opened app AutoCAD')).toBe('已打开AutoCAD。');
   });
-
-  it('does not treat a latency complaint as a quick app launch', async () => {
-    const result = await matchQuickCommand('你怎么运行了这么久才回我？', 'test-user', { surface: 'voice' });
-    expect(result).toBeNull();
+  it.each(['你怎么运行了这么久才回我？', '能不能听见我说话？'])('does not turn a question into an app launch: %s', text => {
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toBeNull();
   });
 });

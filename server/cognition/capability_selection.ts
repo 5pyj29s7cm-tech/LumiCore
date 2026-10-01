@@ -13,10 +13,6 @@ import {
   requiresMediaPlaybackAction,
 } from './action_contract';
 import { isLegalEntryTurn } from './legal_entry';
-import {
-  getRecoveredApplicationContinuationTarget,
-  isRecoveredCurrentAppEditingContinuation,
-} from './action_continuation';
 import { CURRENT_APP_FORBIDDEN_TOOLS } from './current_app_execution';
 import {
   toolRegistry,
@@ -402,8 +398,8 @@ function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySel
     };
   }
 
-  if (input.execution.allowToolUse && isRecoveredCurrentAppEditingContinuation(text)) {
-    const appTarget = getRecoveredApplicationContinuationTarget(text);
+  if (input.execution.allowToolUse && input.dispatch.flow.currentAppEditTarget) {
+    const appTarget = input.dispatch.flow.currentAppEditTarget;
     return {
       lane: 'desktop_control',
       primary: appTarget ? `visible current-app control (${appTarget})` : 'visible current-app control',
@@ -581,6 +577,7 @@ function laneRule(
   selection: Pick<LumiCapabilitySelection, 'lane'>,
   text = '',
   preferredTools: readonly string[] = [],
+  currentAppEditTarget = '',
 ): string {
   switch (selection.lane) {
     case 'conversation':
@@ -617,7 +614,7 @@ function laneRule(
       }
       return 'Prefer structured design/CAD tools over raw cursor work; use desktop CAD only when the user asks to operate visible software or a tool needs it.';
     case 'desktop_control':
-      if (isRecoveredCurrentAppEditingContinuation(text)) {
+      if (currentAppEditTarget) {
         if (preferredTools.includes('wps_create_document_with_text')) {
           return 'Use wps_create_document_with_text as the single resumable owner of creating the real WPS document, entering the exact requested text, and verifying the editable document state. Use active-window/UIA tools only for explicit verification or recovery reported by that workflow; do not start a parallel manual New/Blank/type sequence while the composite capability is available.';
         }
@@ -652,7 +649,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
   const routeText = input.text || input.dispatch.flow.routeText || '';
   const actionContract = buildActionContract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(routeText);
+  const recoveredCurrentAppEdit = Boolean(input.dispatch.flow.currentAppEditTarget);
   const modelPolicy = buildModelCapabilityPolicy(input.execution);
   const hardAllowed = new Set((modelPolicy.allowedTools || []).filter(Boolean));
   const hardWildcard = hardAllowed.has('*');
@@ -720,7 +717,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     readOnlyPattern
       ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
       : '',
-    laneRule(selected, routeText, preferredTools),
+    laneRule(selected, routeText, preferredTools, input.dispatch.flow.currentAppEditTarget),
     executionBeforeWorkflowSave(routeText)
       ? 'The user requested a current task AND saving its workflow. First execute and verify the current task. Pass the complete reader result as code_execution input; parsing and calculation must both be executable JavaScript, never model-retyped rows or model arithmetic. Pass the calculation output to the writer unchanged. Then capture_recent_workflow can reuse those exact verified steps and bind fresh inputs without rewriting code. If a dataflow gap remains, use save_workflow to author that missing step. Do not replace the file task with generating a new Skill. Publishing remains a separate reviewed action.'
       : classifySkillAuthoringIntent(routeText) !== 'none'

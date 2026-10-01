@@ -156,7 +156,7 @@ function legalCaseHasSignal(caseFile: LegalCaseFile, patterns: RegExp[]): boolea
   return patterns.some(pattern => pattern.test(text));
 }
 
-function buildLegalCaseReadiness(caseFile: LegalCaseFile, ui: (zh: string, en: string) => string): LegalCaseReadinessItem[] {
+function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessItem[] {
   const materials = caseFile.materials || [];
   const hasIntake = Boolean(caseFile.notes.trim() || materials.length > 0);
   const hasIdentity = Boolean(caseFile.party.trim())
@@ -310,8 +310,6 @@ export function LegalHub() {
   const [caseMutation, setCaseMutation] = useState<'create' | 'delete' | ''>('');
   const { workDomain, orgConnection } = useApp();
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = useCallback((zh: string, en: string) => (isZh ? zh : en), [isZh]);
   const useOrgCases = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const canDeleteCases = !useOrgCases || ['owner', 'admin'].includes(String(orgConnection?.orgRole || '').toLowerCase());
 
@@ -339,7 +337,7 @@ export function LegalHub() {
     } finally {
       setOrgCasesLoading(false);
     }
-  }, [ui, useOrgCases]);
+  }, [useOrgCases]);
 
   useEffect(() => {
     const syncCases = () => {
@@ -392,7 +390,7 @@ export function LegalHub() {
     { id: 'verify', label: t.legalVerifyCitation, icon: <CheckCircle size={16} /> },
     { id: 'import', label: t.legalImportJudgment, icon: <Upload size={16} /> },
     { id: 'knowledge-sync', label: uiMessage('legal-hub.sync-to-kb.f5314698c5'), icon: <Archive size={16} /> },
-  ], [t, ui]);
+  ], [t]);
 
   const workflowNavItems = useMemo(() => {
     const order = new Map(LEGAL_WORKFLOW_ORDER.map((id, index) => [id, index]));
@@ -642,7 +640,6 @@ export function LegalHub() {
             canDeleteCases={canDeleteCases}
             orgId={legalOrgId}
             refreshing={orgCasesLoading}
-            ui={ui}
           />
       );
       case 'packet': return <LegalPacketView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
@@ -805,7 +802,6 @@ export function LegalHub() {
           busy={caseMutation === 'create'}
           onClose={() => !caseMutation && setCreateDialogOpen(false)}
           onSubmit={createCase}
-          ui={ui}
         />
       )}
       {deleteTarget && (
@@ -814,7 +810,6 @@ export function LegalHub() {
           busy={caseMutation === 'delete'}
           onClose={() => !caseMutation && setDeleteTarget(null)}
           onConfirm={deleteCase}
-          ui={ui}
         />
       )}
     </>
@@ -825,12 +820,10 @@ function LegalCaseCreateDialog({
   busy,
   onClose,
   onSubmit,
-  ui,
 }: {
   busy: boolean;
   onClose: () => void;
   onSubmit: (input: LegalCaseCreateInput) => void | Promise<void>;
-  ui: (zh: string, en: string) => string;
 }) {
   const [draft, setDraft] = useState<LegalCaseCreateInput>({
     title: '',
@@ -943,13 +936,11 @@ function LegalCaseDeleteDialog({
   busy,
   onClose,
   onConfirm,
-  ui,
 }: {
   caseFile: LegalCaseFile;
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
-  ui: (zh: string, en: string) => string;
 }) {
   return (
     <div data-wallpaper-modal="legal-case-delete" className="lumi-legal-modal fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -997,7 +988,6 @@ function LegalCaseWorkspace({
   canDeleteCases,
   orgId,
   refreshing,
-  ui,
 }: {
   cases: LegalCaseFile[];
   activeCase: LegalCaseFile | null;
@@ -1017,7 +1007,6 @@ function LegalCaseWorkspace({
   canDeleteCases: boolean;
   orgId?: string;
   refreshing: boolean;
-  ui: (zh: string, en: string) => string;
 }) {
   const [noticeText, setNoticeText] = useState('');
   const [noticeStatus, setNoticeStatus] = useState('');
@@ -1239,7 +1228,7 @@ function LegalCaseWorkspace({
 
   const caseTitle = activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9');
   const selectedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || (activeCase.materials || [])[0] || null;
-  const readinessItems = buildLegalCaseReadiness(activeCase, ui);
+  const readinessItems = buildLegalCaseReadiness(activeCase);
   const readinessDone = readinessItems.filter(item => item.done).length;
   const readinessNext = readinessItems.find(item => item.status === 'blocked')
     || readinessItems.find(item => item.status === 'ready')
@@ -1690,7 +1679,6 @@ function LegalPacketView({
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
   const defaultEvidence = useMemo(() => (
     (caseFile?.materials || [])
@@ -1782,7 +1770,6 @@ function LegalExternalResearchView({
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
   const [issues, setIssues] = useState(caseFile?.cause || '');
   const [companies, setCompanies] = useState(caseFile?.party || '');
@@ -1933,7 +1920,6 @@ function LegalStrategyView({
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
   const [facts, setFacts] = useState(defaultFacts);
   const [result, setResult] = useState('');
@@ -2041,7 +2027,6 @@ function LegalVerifyView({
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const defaultText = useMemo(() => (
     (caseFile?.materials || []).find(material => (
       Boolean(material.content) && (material.type === 'pleading' || material.type === 'contract')
@@ -2145,7 +2130,6 @@ function LegalVerifyView({
 function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const caseTitle = legalCaseTitle(caseFile);
@@ -2297,7 +2281,6 @@ function LegalImportView({
 }) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const [content, setContent] = useState('');
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);

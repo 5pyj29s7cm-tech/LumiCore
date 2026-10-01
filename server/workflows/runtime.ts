@@ -1581,11 +1581,6 @@ export function recordWorkflowReconciliation(input: {
     if (!committed && !notCommitted) {
       throw new WorkflowStateError('Read-only reconciliation did not prove whether the prior side effect committed.');
     }
-    const uncertain = [...run.receipts].reverse().find(receipt => (
-      receipt.stepId === input.stepId
-      && receipt.idempotencyKey === pending.idempotencyKey
-      && receipt.status === 'unknown_outcome'
-    ));
     if (committed) {
       run.receipts.push({
         stepId: step.stepId,
@@ -1687,13 +1682,6 @@ export function startWorkflowRuntimeMaintenance(intervalMs = 15_000): void {
     })();
   }, Math.max(5_000, intervalMs));
   workflowMaintenanceTimer.unref?.();
-}
-
-export function stopWorkflowRuntimeMaintenanceForTest(): void {
-  if (!workflowMaintenanceTimer) return;
-  clearInterval(workflowMaintenanceTimer);
-  workflowMaintenanceTimer = null;
-  workflowMaintenanceRunning = false;
 }
 
 /** Stop future sweeps and retain the running lease until the current save finishes. */

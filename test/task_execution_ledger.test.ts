@@ -8,6 +8,7 @@ import {
 import {
   applyTaskPolicySnapshot,
   coalesceToolExecutionRecords,
+  mergeToolExecutionRecords,
   confirmedStepNeedsContinuation,
   normalizeConversationTaskReceipt,
   recordsToTaskReceipts,
@@ -106,6 +107,18 @@ describe('durable conversation task execution ledger', () => {
     expect(records.filter(record => record.name === 'desktop_keyboard_press')).toHaveLength(1);
     expect(records.find(record => record.name === 'desktop_keyboard_press')?.error).toBeUndefined();
     expect(records.filter(record => record.name === 'desktop_ui_snapshot')).toHaveLength(2);
+  });
+
+  it('deduplicates repeated call delivery without losing distinct observations or other request owners', () => {
+    const first = { id: 'call-1', name: 'read_file', arguments: { path: 'fixture.txt' }, result: 'value', taskId: 'task-1', requestId: 'request-1' };
+    const second = { ...first, id: 'call-2' };
+    const foreign = { ...first, requestId: 'request-2' };
+    expect(mergeToolExecutionRecords([first], [{ ...first }, second, foreign])).toEqual([first, second, foreign]);
+    const snapshot = { ...first, name: 'desktop_execution_plan_receipt' };
+    const updated = { ...snapshot, result: 'new observations' };
+    expect(mergeToolExecutionRecords([snapshot], [updated])).toEqual([updated]);
+    const { id: _id, ...anonymous } = first;
+    expect(mergeToolExecutionRecords([anonymous], [{ ...anonymous }, { ...anonymous, arguments: { path: 'other.txt' } }])).toHaveLength(2);
   });
 
   it('creates state before tools run and preserves task identity and capability envelope on confirmation', () => {

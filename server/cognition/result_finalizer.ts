@@ -1046,7 +1046,6 @@ function formatCompactBlockedResponse(input: LumiResultFinalizerInput, reason?: 
   const contractBlocker = zh && contract.kind === 'messaging_send'
     ? formatCnMessagingContractBlocker(failure)
     : summarizeActionContractBlocker(contract, failure);
-  const source = String(input.source || '').toLowerCase();
   if (/External legal platform final action/i.test(reason || '')) {
     return zh
       ? [

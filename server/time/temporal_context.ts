@@ -1,6 +1,6 @@
 // Temporal context block generator — injects time-aware context into the system prompt
 
-import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, getMonthDay, isWeekend, hoursSince, daysSince, minutesSince, formatDuration } from './utils';
+import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, getMonthDay, isWeekend, minutesSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
 import { readDB } from '../../db_layer';
 import { getUserDayRange } from './utils';
@@ -127,13 +127,4 @@ export function generateTemporalContext(userId: string): string {
   }
 
   return lines.join('\n');
-}
-
-export function generateTemporalContextBrief(userId: string): string {
-  const ctx = buildTemporalContext(userId);
-  const parts: string[] = [ctx.dateString, ctx.dayOfWeek, ctx.season.seasonCN];
-  if (ctx.holiday?.isToday) {
-    parts.push(ctx.holiday.nameCN);
-  }
-  return parts.join(' — ');
 }

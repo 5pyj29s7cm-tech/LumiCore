@@ -1,9 +1,5 @@
 import type {
   LAPTask,
-  LAPTaskDelegateRequest,
-  LAPTaskDelegateResponse,
-  LAPTaskResultRequest,
-  LAPTaskResultResponse,
   LAPTaskStatus,
   LAPSession,
 } from './types';
@@ -34,77 +30,6 @@ function canonicalJson(value: unknown): string {
       ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, sort(entry[key])]))
       : entry;
   return JSON.stringify(sort(immutableJson(value)));
-}
-
-function acceptedTaskResponse(record: TaskRecord): LAPTaskDelegateResponse {
-  return {
-    accepted: true,
-    taskId: record.task.taskId,
-    status: record.status,
-    ...(record.result ? { result: immutableJson(record.result) } : {}),
-    ...(record.error ? { error: record.error } : {}),
-    ...(record.lateResultAt ? { lateResultAt: record.lateResultAt } : {}),
-  };
-}
-
-export function delegateTask(
-  request: LAPTaskDelegateRequest,
-  session: LAPSession,
-  fromAgentId: string = session.peerA.agentId,
-): LAPTaskDelegateResponse {
-  const { task } = request;
-
-  if (session.authorizationStatus !== 'approved') {
-    return { accepted: false, taskId: task.taskId || '', reason: 'Session is waiting for local user approval' };
-  }
-  if (request.sessionId !== session.sessionId) {
-    return { accepted: false, taskId: task.taskId || '', reason: 'Task session does not match the authenticated session' };
-  }
-
-  // Validate task
-  if (!task.type || !task.taskId) {
-    return { accepted: false, taskId: task.taskId || '', reason: 'Task requires type and taskId' };
-  }
-
-  // Check delegation is within session scope
-  if (!session.scope.includes('delegate_task')) {
-    return { accepted: false, taskId: task.taskId, reason: 'Session does not permit task delegation' };
-  }
-
-  const toAgentId = session.peerA.agentId === fromAgentId
-    ? session.peerB.agentId
-    : session.peerB.agentId === fromAgentId
-      ? session.peerA.agentId
-      : '';
-  if (!toAgentId) return { accepted: false, taskId: task.taskId, reason: 'Delegating peer is not part of this session' };
-  const key = taskKey(session.sessionId, task.taskId);
-  const existing = tasks.get(key);
-  if (existing) {
-    if (existing.from !== fromAgentId || existing.to !== toAgentId || canonicalJson(existing.task) !== canonicalJson(task)) {
-      return { accepted: false, taskId: task.taskId, reason: 'Task identity is already bound to another sender or immutable payload' };
-    }
-    // A retry is a lookup, including after its deadline. Preserve completed,
-    // failed and unknown receipts rather than accepting a fresh execution.
-    return acceptedTaskResponse(existing);
-  }
-  if (task.deadline) {
-    const deadlineMs = new Date(task.deadline).getTime();
-    if (!Number.isFinite(deadlineMs) || deadlineMs < Date.now()) {
-      return { accepted: false, taskId: task.taskId, reason: 'Task deadline is invalid or in the past' };
-    }
-  }
-
-  const record: TaskRecord = {
-    task: immutableJson(task),
-    sessionId: session.sessionId,
-    from: fromAgentId,
-    to: toAgentId,
-    status: 'accepted',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  tasks.set(key, record);
-  return acceptedTaskResponse(record);
 }
 
 export function registerOutboundTask(task: LAPTask, session: LAPSession, fromAgentId: string): TaskRecord {

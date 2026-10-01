@@ -1,6 +1,19 @@
+// @vitest-environment jsdom
+import { createElement } from 'react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const fixture = vi.hoisted(() => ({ uid: 'user-a', org: '', api: vi.fn(), on: vi.fn(), off: vi.fn() }));
+vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: fixture.uid }, workDomain: fixture.org ? 'work' : 'personal', orgConnection: { connected: true, orgId: fixture.org } }) }));
+vi.mock('../src/services/apiClient', () => ({ apiFetch: fixture.api }));
+vi.mock('../src/services/socketService', () => ({ socketService: { getSocket: () => fixture } }));
+vi.mock('../src/hooks/useRuntimeStatus', () => ({ useRuntimeStatus: () => ({ status: null, loading: false, error: '', refresh: async () => {} }) }));
+vi.mock('../src/hooks/useLumiScene', () => ({ useLumiScene: () => ({ scene: null, loading: false, error: '', refresh() {} }) }));
+vi.mock('../src/components/LumiCoreSphere', () => ({ LumiCoreSphere: ({ tasks }: any) => createElement('div', { 'data-testid': 'sphere' }, tasks.map((t: any) => t.title).join('|')) }));
+import { CommandCenterPanel } from '../src/components/CommandCenterPanel';
+afterEach(() => { cleanup(); fixture.api.mockReset(); fixture.on.mockReset(); fixture.off.mockReset(); fixture.uid = 'user-a'; fixture.org = ''; });
 
 function source(relativePath: string): string {
   return readFileSync(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -71,15 +84,32 @@ describe('single-core command center', () => {
     expect(panel).toContain("const coreState = hasAttention ? 'attention' : activeTasks.length > 0 ? 'working' : 'ready'");
   });
 
-  it('keeps the command center mounted while task state refreshes', () => {
-    const panel = source('src/components/CommandCenterPanel.tsx');
-
-    expect(panel).toContain('const refreshInFlightRef = useRef<Promise<void> | null>(null)');
-    expect(panel).toContain('if (refreshInFlightRef.current) return refreshInFlightRef.current');
-    expect(panel).toContain('<LumiCoreSphere');
-    expect(panel).not.toContain('loading ? (');
-    expect(panel).toContain("'autonomous:task_started'");
-    expect(panel).toContain('timer = setTimeout(() => { void refresh(); void refreshRuntime(); }, 100)');
+  it('keeps the command center mounted while task state refreshes', async () => {
+    const pending: Array<(value: any) => void> = [];
+    fixture.api.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+    const props = { t: { langCode: 'en' }, view: 'office' as const, onViewChange: () => {} };
+    const view = render(createElement(CommandCenterPanel, props));
+    const sphere = view.getByTestId('sphere');
+    const respond = (index: number, title: string) => pending[index]({ ok: true, json: async () => ({ items: [{ id: title, title, status: 'running' }] }) });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    for (const name of ['autonomous:task_started', 'autonomous:task_completed', 'autonomous:task_cancelled'])
+      act(() => fixture.on.mock.calls.find(([event]) => event === name)![1]());
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(view.getByTestId('sphere')).toBe(sphere);
+    await act(async () => { respond(1, 'Newest task'); });
+    await act(async () => { respond(0, 'Stale task'); });
+    expect(sphere.textContent).toBe('Newest task');
+    for (const owner of ['account', 'organization']) {
+      fireEvent.click(view.getAllByTitle('Refresh')[0]); const previous = pending.length - 1;
+      if (owner === 'account') fixture.uid = 'user-b'; else fixture.org = 'org-b';
+      view.rerender(createElement(CommandCenterPanel, props));
+      await waitFor(() => expect(pending).toHaveLength(previous + 2));
+      expect(sphere.textContent).toBe('');
+      await act(async () => { respond(previous + 1, owner); respond(previous, 'Old owner'); });
+      expect(sphere.textContent).toBe(owner);
+    }
+    view.unmount();
+    expect(fixture.off.mock.calls.map(([name]) => name)).toEqual(fixture.on.mock.calls.map(([name]) => name));
   });
 
   it('keeps the command-center core behind a left conversation and right navigation rail', () => {

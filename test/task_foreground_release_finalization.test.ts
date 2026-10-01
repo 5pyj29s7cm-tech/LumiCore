@@ -6,10 +6,86 @@ import { Server as SocketIOServer } from 'socket.io';
 import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io-client';
 
 const mocks = vi.hoisted(() => ({
-  processInputError: null as Error | null,
-  processInputDelayMs: 0,
+  loopError: null as Error | null,
+  loopDelayMs: 0,
   heartbeatError: null as Error | null,
+  loopFailure: null as 'error' | 'cancel' | 'cancel_return' | 'late_cancel' | null,
+  lateRelease: undefined as (() => void) | undefined,
+  lateExecution: undefined as Promise<unknown> | undefined,
+  budgetProbe: false,
+  budgetStates: [] as unknown[],
 }));
+
+vi.mock('../server/llm/adapter', async importOriginal => {
+  const actual = await importOriginal<typeof import('../server/llm/adapter')>();
+  return {
+    ...actual,
+    runWithTools: async (...args: Parameters<typeof actual.runWithTools>) => {
+      const delayMs = mocks.loopDelayMs;
+      mocks.loopDelayMs = 0;
+      if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
+      args[2].signal?.throwIfAborted();
+      if (mocks.budgetProbe) {
+        mocks.budgetStates.push(args[2].modelTurnState);
+        if (mocks.budgetStates.length % 2 === 1) return { text: '文件已经读取完成。', toolCalls: [], usageRecords: [] };
+        mocks.budgetProbe = false;
+        throw new Error('Fixture ends recovery without calling a provider');
+      }
+      const error = mocks.loopError;
+      mocks.loopError = null;
+      if (error) throw error;
+      const failure = mocks.loopFailure;
+      mocks.loopFailure = null;
+      if (!failure) throw new Error('Unexpected model call in isolated socket fixture');
+      const context = args[11]!;
+      if (failure === 'late_cancel') {
+        const { ToolRegistry } = await import('../server/tools/registry');
+        const { executeToolCall } = await import('../server/tools/execution_engine');
+        const registry = new ToolRegistry();
+        let started!: () => void;
+        const pending = new Promise<void>(resolve => { started = resolve; });
+        registry.register({
+          name: 'read_file', description: 'Isolated suspended read', permission: 'public', securityLevel: 'safe',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          handler: async () => {
+            started();
+            await new Promise<void>(resolve => { mocks.lateRelease = resolve; });
+            return 'Late read returned after the task transport finished.';
+          },
+        });
+        mocks.lateExecution = executeToolCall({ registry, id: `late-${context.requestId}`, name: 'read_file',
+          arguments: { path: 'D:/synthetic/completed-read.txt' }, context });
+        await Promise.race([pending, mocks.lateExecution.then(record => {
+          throw new Error(`Suspended-read fixture did not reach its handler: ${JSON.stringify(record)}`);
+        })]);
+        const signal = args[2].signal!;
+        if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+        throw new DOMException('Stopped waiting while the adapter is still pending', 'AbortError');
+      }
+      // Simulate a completed read followed by a model failure/cancellation.
+      // No provider or native desktop operation runs in this socket fixture.
+      const record = {
+        id: `completed-read-${context.requestId}`,
+        name: 'read_file',
+        arguments: { path: 'D:/synthetic/completed-read.txt' },
+        result: 'Completed read retained before the model loop failed.',
+        duration: 1,
+        taskId: context.taskId,
+        requestId: context.requestId,
+        turnId: context.turnId,
+        terminalVerification: { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'fixture_read' },
+      };
+      await args[3]?.(record);
+      if (failure !== 'error') {
+        const signal = args[2].signal!;
+        if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+        if (failure === 'cancel_return') return { text: 'Task cancelled after read.', toolCalls: [record], usageRecords: [] };
+        throw new DOMException('Fixture cancelled after completed read', 'AbortError');
+      }
+      throw new Error('Fixture model failed after completed read');
+    },
+  };
+});
 
 vi.mock('../server/conversation/manager', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/conversation/manager')>();
@@ -26,23 +102,6 @@ vi.mock('../server/conversation/manager', async importOriginal => {
   };
 });
 
-vi.mock('../server/cognition', async importOriginal => {
-  const actual = await importOriginal<typeof import('../server/cognition')>();
-  return {
-    ...actual,
-    processInput: async (...args: Parameters<typeof actual.processInput>) => {
-      if (mocks.processInputDelayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, mocks.processInputDelayMs));
-        mocks.processInputDelayMs = 0;
-      }
-      const error = mocks.processInputError;
-      mocks.processInputError = null;
-      if (error) throw error;
-      return actual.processInput(...args);
-    },
-  };
-});
-
 vi.mock('../server/memory', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/memory')>();
   return {
@@ -52,10 +111,11 @@ vi.mock('../server/memory', async importOriginal => {
   };
 });
 
-import { initDatabase, readDB, writeDB } from '../db_layer';
+import { flushDBOrThrow, initDatabase, readDB, writeDB } from '../db_layer';
 import {
   addMessageIdempotent,
   getOrCreateActiveConversation,
+  getMessages,
   prepareConversationActionExecution,
 } from '../server/conversation/manager';
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
@@ -65,6 +125,8 @@ import {
   type TaskForegroundRequestIdentity,
 } from '../server/socket/task';
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from '../server/regions/packs/cn/voice_fast_path_messages';
+import { registerAllTools } from '../server/tools/definitions';
+import { toolRegistry } from '../server/tools/registry';
 
 const TOOL_POLICY = {
   allowedTools: ['desktop_open'],
@@ -141,6 +203,7 @@ function waitForRequestEvent<T extends Record<string, any>>(
 describe('task foreground release manager convergence', () => {
   beforeAll(async () => {
     await initDatabase();
+    registerAllTools(toolRegistry);
   });
 
   it('blocks and quarantines a non-aborted Task executor before release', async () => {
@@ -358,7 +421,7 @@ describe('task foreground Socket terminal integration', () => {
       if (String(payload?.requestId || '') === requestId) errorFrames.push(payload);
     };
     client.on('agent:error', onAgentError);
-    mocks.processInputError = new Error('private Task failure detail');
+    mocks.loopError = new Error('private Task failure detail');
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
     const ack = await client.timeout(5_000).emitWithAck('agent:task', {
       text: '请打开当前前台窗口并告诉我窗口标题。',
@@ -405,6 +468,87 @@ describe('task foreground Socket terminal integration', () => {
     });
     const task = (db.conversationActionTasks || []).find((row: any) => row.id === actionTurn.taskId);
     expect(task).toMatchObject({ status: 'blocked', activeRequestId: '' });
+  });
+
+  it('shares the model budget with recovery and starts a fresh budget for the next request', async () => {
+    mocks.budgetStates = [];
+    for (let index = 0; index < 2; index++) {
+      const requestId = `task-budget-${index}-${suffix}`;
+      const conversationId = getOrCreateActiveConversation(userId, `budget-${index}`, 'personal', '').id;
+      mocks.budgetProbe = true;
+      const responsePromise = waitForRequestEvent(client, 'agent:response', requestId);
+      await client.timeout(5_000).emitWithAck('agent:task', {
+        text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
+        history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
+      });
+      await responsePromise;
+      expect(mocks.budgetStates).toHaveLength((index + 1) * 2);
+      expect(mocks.budgetStates[index * 2]).toBeDefined();
+      expect(mocks.budgetStates[index * 2]).toBe(mocks.budgetStates[index * 2 + 1]);
+    }
+    expect(mocks.budgetStates[0]).not.toBe(mocks.budgetStates[2]);
+  });
+
+  it.each(['error', 'cancel', 'cancel_return'] as const)('retains completed tool receipts when the task loop ends with %s', async failure => {
+    const conversationId = getOrCreateActiveConversation(userId, `receipt-fixture-${failure}`, 'personal', '').id;
+    const requestId = `task-receipt-${failure}-${suffix}`;
+    mocks.loopFailure = failure;
+    const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
+    const toolPromise = waitForRequestEvent<Record<string, any>>(client, 'agent:tool_call', requestId);
+    const ack = await client.timeout(5_000).emitWithAck('agent:task', {
+      text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
+      history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
+    });
+    expect(ack).toMatchObject({ ok: true, requestId });
+    await toolPromise;
+    if (failure !== 'error') {
+      const cancelAck = await client.timeout(5_000).emitWithAck('agent:task_cancel', { requestId, domain: 'personal' });
+      expect(cancelAck).toMatchObject({ ok: true, status: 'cancelling' });
+    }
+    const response = await responsePromise;
+    expect(response).toMatchObject({ finalized: true, requestId });
+    const db = readDB();
+    const assistant = db.interactions.find((row: any) => row.userId === userId
+      && row.conversationId === conversationId && row.role === 'assistant'
+      && (row.requestId || row.externalMessageId) === requestId);
+    expect(assistant?.toolCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'read_file', requestId, result: 'Completed read retained before the model loop failed.' }),
+    ]));
+    const turn = db.conversationActionTurns.find((row: any) => row.userId === userId
+      && row.conversationId === conversationId && row.requestId === requestId);
+    expect(turn).toBeDefined();
+    expect(assistant?.toolCalls?.[0]?.taskId).toBe(turn!.taskId);
+    const receipts = db.conversationActionReceipts.filter((row: any) => row.taskId === turn!.taskId && row.requestId === requestId);
+    expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'read_file' })]));
+    const task = db.conversationActionTasks.find((row: any) => row.id === turn!.taskId);
+    expect(task).toMatchObject({ status: failure === 'error' ? 'blocked' : 'cancelled', activeRequestId: '' });
+  });
+
+  it('archives the canonical tool result after the socket request has already ended cancelled', async () => {
+    const conversationId = getOrCreateActiveConversation(userId, 'late-receipt-fixture', 'personal', '').id;
+    const requestId = `task-late-receipt-${suffix}`;
+    mocks.loopFailure = 'late_cancel';
+    const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
+    await client.timeout(5_000).emitWithAck('agent:task', {
+      text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
+      history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
+    });
+    await vi.waitFor(() => expect(mocks.lateRelease).toBeTypeOf('function'));
+    await client.timeout(5_000).emitWithAck('agent:task_cancel', { requestId, domain: 'personal' });
+    await responsePromise;
+    const db = readDB();
+    const turn = db.conversationActionTurns.find((row: any) => row.requestId === requestId)!;
+    const taskBefore = JSON.stringify(db.conversationActionTasks.find((row: any) => row.id === turn.taskId));
+    mocks.lateRelease!();
+    await mocks.lateExecution;
+    await flushDBOrThrow();
+    expect(JSON.stringify(db.conversationActionTasks.find((row: any) => row.id === turn.taskId))).toBe(taskBefore);
+    expect(db.conversationActionReceipts.filter((row: any) => row.taskId === turn.taskId && row.requestId === requestId))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'read_file', requestId })]));
+    const reply = getMessages(conversationId).find(row => row.role === 'assistant' && row.requestId === requestId)!;
+    expect(reply.toolCalls).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read_file', result: 'Late read returned after the task transport finished.' })]));
+    mocks.lateRelease = undefined;
+    mocks.lateExecution = undefined;
   });
 
   it('converges a failure thrown immediately after immutable action binding', async () => {
@@ -457,7 +601,7 @@ describe('task foreground Socket terminal integration', () => {
 
   it('reports cancellation as cancelling until the exact executor settles cancelled', async () => {
     const requestId = `task-cancelled-${suffix}`;
-    mocks.processInputDelayMs = 150;
+    mocks.loopDelayMs = 150;
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
     const ack = await client.timeout(5_000).emitWithAck('agent:task', {
       text: '请打开当前前台窗口并告诉我窗口标题。',

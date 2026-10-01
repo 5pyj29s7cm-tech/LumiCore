@@ -5,7 +5,7 @@ import { registerLegalTools } from '../server/tools/definitions/legal_tools';
 import {
   classifyRemoteLegalNoticeIntakeIntent,
   handleRemoteLegalNoticeIntake,
-} from '../server/messaging/legal_notice_intake';
+} from '../server/regions/packs/cn/legal_notice_intake';
 import * as LegalCases from '../server/org/legal_cases';
 import { addMember, createOrg } from '../server/org/db';
 import { readDB } from '../db_layer';

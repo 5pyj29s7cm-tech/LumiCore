@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildForegroundWeChatReadArgs, buildForegroundWeChatSendArgs, shouldChainTask } from '../server/agents/nl_chainer';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
+import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foreground_wechat_intent';
 
 describe('chat and voice tool-call stability', () => {
   it('keeps text and voice on the shared routing and desktop execution path', () => {
@@ -33,7 +34,7 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('const routedToolPolicy = executionPipeline.authorizationPolicy');
     expect(voice).toContain('const modelToolProjection = executionPipeline.modelToolProjection');
     expect(voice).toContain('const toolSessionActive = requestedToolSession');
-    expect(voice).toContain('continuationContext: [actionContinuationBridge, proactiveContextPrompt, pendingConfirmationPrompt]');
+    expect(voice).toContain('continuationContext: [actionContinuationBridge, pendingConfirmationPrompt]');
     expect(voice).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
     expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
     expect(voice).toContain('|| executionPipeline.trustedActionContinuation');
@@ -91,7 +92,7 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('buildUnifiedLegalEntryPrompt');
     expect(restChat).toContain('buildRestChatSystemInstruction');
     expect(restChat).toContain('buildRestProviderMessages');
-    expect(restChat).toContain('buildRestAnthropicMessages');
+    expect(restChat).toContain('buildRestConversationMessages');
     expect(restChat).toContain('finalizeRestChatResponse');
     expect(restChat).toContain('finalizeLumiResponse');
     expect(restChat).toContain("source: 'rest_chat'");
@@ -202,11 +203,6 @@ describe('chat and voice tool-call stability', () => {
     expect(chat).toContain('for (const usage of continuation.usageRecords)');
   });
 
-  it('routes short foreground WeChat send follow-ups into the task chain', () => {
-    expect(shouldChainTask('\u76f4\u63a5\u53d1\u665a\u5b89')).toBe(true);
-    expect(shouldChainTask('\u5fae\u4fe1\u5e2e\u6211\u7f16\u8f91\u4e00\u6761\u665a\u5b89\u53d1\u7ed9\u963f\u9646')).toBe(true);
-  });
-
   it('keeps foreground WeChat parsing advisory while main chat remains model-owned', () => {
     const args = buildForegroundWeChatSendArgs('\u6253\u5f00\u5fae\u4fe1\u7ed9\u963f\u9646\u53d1\u665a\u5b89');
     expect(args).toMatchObject({
@@ -290,15 +286,13 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('extracts foreground WeChat chat reading as a generic contact task', () => {
-    expect(buildForegroundWeChatReadArgs('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toMatchObject({
-      contact: '\u963f\u9646',
-      applicationTarget: 'wechat',
-      useSearch: true,
-      maxMessages: 8,
+    expect(normalizeActionIntent('\u6253\u5f00\u5fae\u4fe1\u770b\u770b\u6211\u548c\u963f\u9646\u6700\u8fd1\u7684\u804a\u5929\u5185\u5bb9')).toMatchObject({
+      kind: 'messaging_read',
+      target: '\u963f\u9646',
+      operation: 'read',
     });
 
     const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
-    expect(chat).not.toContain('buildForegroundWeChatReadArgs');
     expect(chat).not.toContain("const toolName = 'wechat_read_recent_chat'");
     expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
   });

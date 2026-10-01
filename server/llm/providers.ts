@@ -1595,26 +1595,6 @@ export async function makeLLMCallDirect(
 
 export type StreamCallback = (chunk: string) => void;
 
-const STREAM_IDLE_TIMEOUT_MS = 20_000;
-
-export async function nextStreamItemWithIdleTimeout<T>(
-  iterator: AsyncIterator<T>,
-  timeoutMs: number,
-): Promise<{ timedOut: true } | { timedOut: false; item: IteratorResult<T> }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ timedOut: true }>(resolve => {
-    timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
-  });
-  try {
-    return await Promise.race([
-      iterator.next().then(item => ({ timedOut: false as const, item })),
-      timeout,
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 type AttemptDeadline = { stage: Exclude<ModelAttemptDeadlineStage, 'cancelled'>; dueAt: number; timeoutMs: number };
 
 /**
@@ -1756,39 +1736,6 @@ function stopIterator(iterator: AsyncIterator<unknown> | undefined): void {
 
 function isReasoningModel(model: string): boolean {
   return /reasoner|v4-(pro|flash)|gpt-5|o[134]|r1/i.test(model);
-}
-
-/**
- * A few OpenAI-compatible gateways accept `stream: true` but fail while
- * opening/terminating the SSE response (for example `chat_stream_error`).
- * Only those transport/protocol failures are eligible for the relay fallback;
- * authentication, quota, and ordinary network failures must still surface so
- * dispatch can make an informed routing decision instead of issuing a second
- * billable request blindly.
- */
-function isRelayStreamingFallbackError(error: unknown): boolean {
-  const messages: string[] = [];
-  let current: any = error;
-  for (let depth = 0; current && depth < 5; depth += 1) {
-    const values = [
-      current?.message,
-      current?.code,
-      current?.type,
-      current?.error?.message,
-      current?.error?.code,
-      current?.response?.data,
-      current?.body,
-    ];
-    for (const value of values) {
-      if (value === undefined || value === null) continue;
-      let message = '';
-      try { message = typeof value === 'string' ? value : JSON.stringify(value); } catch { /* ignore malformed provider metadata */ }
-      if (message?.trim()) messages.push(message.trim());
-    }
-    current = current?.cause;
-  }
-  const text = messages.join(' | ');
-  return /chat[_ -]?stream[_ -]?error|stream(?:ing)?\s+(?:error|failed|unsupported|unavailable|not supported)|(?:not|isn't)\s+(?:an?\s+)?async(?:\s+)?iterable|without semantic content|(?:could not|unable to|failed to)\s+(?:parse|decode).*json|json(?:\s+parse|\s+decod)|unexpected token|invalid\s+json/i.test(text);
 }
 
 /**

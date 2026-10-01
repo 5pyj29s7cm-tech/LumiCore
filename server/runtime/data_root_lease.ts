@@ -731,10 +731,6 @@ export function releaseDataRootLease(): boolean {
   }
 }
 
-export function getDataRootLeasePath(): string {
-  return path.join(getDataRoot(), 'runtime', 'backend-instance.lock');
-}
-
 export const __dataRootLeaseProcessProbeForTests = Object.freeze({
   probeWindowsProcess: (pid: number, runner: WindowsProcessProbeRunner): ProcessProbe => (
     probeWindowsProcess(pid, runner)

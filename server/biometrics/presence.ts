@@ -89,7 +89,3 @@ function detectOtherUsers(currentUserId: string): DetectedUser[] {
 
   return users;
 }
-
-export function isUserAway(userId: string): boolean {
-  return getPresence(userId).isAway;
-}

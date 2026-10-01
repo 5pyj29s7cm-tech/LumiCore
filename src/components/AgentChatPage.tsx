@@ -1,3 +1,4 @@
+import { useConversationAttachments } from '../hooks/useConversationAttachments';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSongWorkbenchHandle } from './ChatSongWorkbench';
 const ChatSongWorkbench = React.lazy(() => import('./ChatSongWorkbench'));
@@ -19,7 +20,7 @@ import { legacyChatArtifacts } from '@/lib/chatArtifactLinks';
 import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { GlassCard, PulseCounter } from './SharedUI';
+import { GlassCard } from './SharedUI';
 import { toast } from 'sonner';
 import { appConfirm } from '@/lib/appConfirm';
 import { FoundersSanctuary } from './FoundersSanctuary';
@@ -33,7 +34,6 @@ import {
   type CallState,
   type VoiceTranscriptEventDetail,
 } from '@/hooks/useVoiceCall';
-import { useVoiceCloning } from '@/hooks/useVoiceCloning';
 import { listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import {
   describeToolProgress,
@@ -45,7 +45,6 @@ import {
 } from '@/lib/chatProgress';
 import {
   normalizeTaskCompletionFeedback,
-  type WorkflowStep,
 } from './workflowTypes';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import { WeChatSettings } from './WeChatSettings';
@@ -54,12 +53,11 @@ import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { CN_FOUNDER_ALIASES } from '../i18n/regions/cn/recognition';
 import {
   MAX_CHAT_ATTACHMENTS,
+  isImageFileName, isAudioFileName, extractAudioTranscript, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
   chatAttachmentIdentity,
   chatAttachmentRequestMatchesScope,
   createChatAttachmentReference,
   mergeChatAttachmentReferences,
-  parseChatAttachmentContext,
-  serializeChatAttachmentContext,
   type ChatAttachmentReference,
   type ChatAttachmentRequest,
 } from '@/lib/chatAttachmentReferences';
@@ -92,7 +90,6 @@ import {
   ChatTaskRelationLedger,
   type ServerTaskRelationEvent,
 } from '@/lib/chatTaskRelations';
-import { useFocusThreads } from '@/hooks/useFocusThreads';
 import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
 import { ActiveTaskWidget } from './ActiveTaskWidget';
@@ -102,6 +99,7 @@ import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
 import {
   MediaGenerationStudio,
+  EMPTY_MEDIA_GENERATION_SOURCES,
   type MediaGenerationRequest,
   type MediaGenerationSourceChange,
   type MediaGenerationSourceSlot,
@@ -136,7 +134,6 @@ type ChatTurnUiMeta = {
   hadTool: boolean;
   needsEvidence: boolean;
   finalization: ChatResponseFinalization | null;
-  steps: WorkflowStep[];
 };
 
 export interface AgentChatVoiceSession {
@@ -259,43 +256,6 @@ export function buildChatHistoryPayload(messages: any[]) {
   }).slice(-80);
 }
 
-function isImageFileName(name: string, mimeType?: string): boolean {
-  return Boolean(mimeType?.startsWith('image/')) || /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(name || '');
-}
-
-function isAudioFileName(name: string, mimeType?: string): boolean {
-  return Boolean(mimeType?.startsWith('audio/')) || /\.(mp3|mpeg|wav|m4a|ogg|oga|flac|aac|wma|webm)$/i.test(name || '');
-}
-
-function extractAudioTranscript(value?: string | null): string | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  const marker = 'transcript:';
-  const index = raw.toLowerCase().indexOf(marker);
-  const transcript = index >= 0 ? raw.slice(index + marker.length).trim() : raw;
-  return transcript || null;
-}
-
-function serializeChatAttachment(item: ChatAttachment): ChatAttachment {
-  return {
-    id: item.id,
-    fileName: item.fileName,
-    path: item.path,
-    content: item.content || null,
-    preview: item.preview || null,
-    mimeType: item.mimeType || '',
-    size: item.size || 0,
-    kind: item.kind,
-    fileId: item.fileId || '',
-    downloadUrl: item.downloadUrl,
-    transcript: item.transcript || null,
-    transcriptionStatus: item.transcriptionStatus || '',
-    transcriptionError: item.transcriptionError || null,
-    transcriptionProvider: item.transcriptionProvider || '',
-    transcriptionModel: item.transcriptionModel || '',
-  };
-}
-
 function getSelectedTextWithin(container?: HTMLElement | null): string {
   if (typeof window === 'undefined') return '';
   const selection = window.getSelection?.();
@@ -307,81 +267,6 @@ function getSelectedTextWithin(container?: HTMLElement | null): string {
   if ((anchor && container.contains(anchor)) || (focus && container.contains(focus))) return text;
   return '';
 }
-
-const CHAT_ACCENT_THEMES = [
-  {
-    id: 'saturn',
-    label: 'Saturn',
-    saturn: '#ffcc00',
-    glow: '#00ffff',
-    nebula: '#ff2d55',
-    mars: '#ff4d4d',
-    background: 'radial-gradient(circle at 18% 12%, rgba(255,204,0,0.24) 0%, transparent 28%), radial-gradient(circle at 82% 22%, rgba(0,255,255,0.14) 0%, transparent 30%), linear-gradient(145deg, #11100a 0%, #060810 46%, #020205 100%)',
-    panel: 'linear-gradient(180deg, rgba(34,28,8,0.82) 0%, rgba(7,9,18,0.92) 100%)',
-    panelBorder: 'rgba(255, 204, 0, 0.32)',
-    panelShadow: '0 26px 80px rgba(255, 204, 0, 0.13), 0 0 0 1px rgba(255,255,255,0.04)',
-    header: 'linear-gradient(90deg, rgba(255,204,0,0.16), rgba(0,255,255,0.07))',
-    progress: 'linear-gradient(90deg, rgba(255,204,0,0.18), rgba(0,0,0,0.18))',
-    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.072), rgba(255,204,0,0.055))',
-    userBubble: 'linear-gradient(135deg, rgba(255,204,0,0.23), rgba(0,255,255,0.08))',
-    inputPanel: 'linear-gradient(90deg, rgba(255,204,0,0.12), rgba(0,0,0,0.32))',
-    input: 'rgba(18, 14, 4, 0.72)',
-  },
-  {
-    id: 'cyan',
-    label: 'Cyan',
-    saturn: '#22d3ee',
-    glow: '#a78bfa',
-    nebula: '#38bdf8',
-    mars: '#fb7185',
-    background: 'radial-gradient(circle at 20% 12%, rgba(34,211,238,0.30) 0%, transparent 30%), radial-gradient(circle at 84% 16%, rgba(167,139,250,0.22) 0%, transparent 32%), linear-gradient(145deg, #061924 0%, #07101f 48%, #020205 100%)',
-    panel: 'linear-gradient(180deg, rgba(5,35,49,0.84) 0%, rgba(5,9,20,0.92) 100%)',
-    panelBorder: 'rgba(34, 211, 238, 0.40)',
-    panelShadow: '0 26px 80px rgba(34, 211, 238, 0.16), 0 0 0 1px rgba(167,139,250,0.10)',
-    header: 'linear-gradient(90deg, rgba(34,211,238,0.18), rgba(167,139,250,0.12))',
-    progress: 'linear-gradient(90deg, rgba(34,211,238,0.20), rgba(20,9,44,0.20))',
-    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.07), rgba(34,211,238,0.06))',
-    userBubble: 'linear-gradient(135deg, rgba(34,211,238,0.24), rgba(167,139,250,0.13))',
-    inputPanel: 'linear-gradient(90deg, rgba(34,211,238,0.13), rgba(4,9,20,0.35))',
-    input: 'rgba(4, 22, 34, 0.76)',
-  },
-  {
-    id: 'emerald',
-    label: 'Emerald',
-    saturn: '#34d399',
-    glow: '#5eead4',
-    nebula: '#84cc16',
-    mars: '#f97316',
-    background: 'radial-gradient(circle at 18% 12%, rgba(52,211,153,0.28) 0%, transparent 30%), radial-gradient(circle at 82% 20%, rgba(249,115,22,0.15) 0%, transparent 30%), linear-gradient(145deg, #071d14 0%, #07130f 46%, #020205 100%)',
-    panel: 'linear-gradient(180deg, rgba(6,40,27,0.84) 0%, rgba(4,12,10,0.93) 100%)',
-    panelBorder: 'rgba(52, 211, 153, 0.40)',
-    panelShadow: '0 26px 80px rgba(52, 211, 153, 0.15), 0 0 0 1px rgba(249,115,22,0.08)',
-    header: 'linear-gradient(90deg, rgba(52,211,153,0.17), rgba(249,115,22,0.08))',
-    progress: 'linear-gradient(90deg, rgba(52,211,153,0.19), rgba(4,14,10,0.22))',
-    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.066), rgba(52,211,153,0.058))',
-    userBubble: 'linear-gradient(135deg, rgba(52,211,153,0.25), rgba(94,234,212,0.10))',
-    inputPanel: 'linear-gradient(90deg, rgba(52,211,153,0.13), rgba(4,12,10,0.36))',
-    input: 'rgba(4, 26, 18, 0.76)',
-  },
-  {
-    id: 'rose',
-    label: 'Rose',
-    saturn: '#fb7185',
-    glow: '#f0abfc',
-    nebula: '#f472b6',
-    mars: '#f97316',
-    background: 'radial-gradient(circle at 20% 12%, rgba(251,113,133,0.30) 0%, transparent 29%), radial-gradient(circle at 82% 18%, rgba(240,171,252,0.19) 0%, transparent 30%), linear-gradient(145deg, #2b0a17 0%, #130713 46%, #020205 100%)',
-    panel: 'linear-gradient(180deg, rgba(45,9,24,0.84) 0%, rgba(15,7,16,0.93) 100%)',
-    panelBorder: 'rgba(251, 113, 133, 0.42)',
-    panelShadow: '0 26px 80px rgba(251, 113, 133, 0.16), 0 0 0 1px rgba(240,171,252,0.09)',
-    header: 'linear-gradient(90deg, rgba(251,113,133,0.18), rgba(240,171,252,0.10))',
-    progress: 'linear-gradient(90deg, rgba(251,113,133,0.20), rgba(23,7,22,0.22))',
-    agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.068), rgba(251,113,133,0.060))',
-    userBubble: 'linear-gradient(135deg, rgba(251,113,133,0.26), rgba(240,171,252,0.12))',
-    inputPanel: 'linear-gradient(90deg, rgba(251,113,133,0.14), rgba(15,7,16,0.36))',
-    input: 'rgba(36, 8, 20, 0.76)',
-  },
-] as const;
 
 const CHAT_NEUTRAL_THEME = {
   id: 'neutral',
@@ -420,12 +305,6 @@ const CHAT_LIGHT_THEME = {
   inputPanel: 'linear-gradient(90deg, rgba(255,255,255,0.95), rgba(246,250,247,0.92))',
   input: 'rgba(255,255,255,0.98)',
 } as const;
-
-const CHAT_ATTACHMENT_ACCEPT = [
-  '.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff',
-  '.mp3,.mpeg,.wav,.m4a,.ogg,.oga,.flac,.aac,.wma,.webm',
-  '.txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.pptx,.ppt,.rtf,.ts,.tsx,.js,.jsx,.py,.html,.css,.yaml,.yml,.xml,.log',
-].join(',');
 
 const MEDIA_GENERATION_TOOL_NAMES = new Set(['generate_image', 'ai_edit_image', 'generate_video']);
 
@@ -559,7 +438,6 @@ export function AgentChatPage({
   const attachmentUploadText = chatAttachmentCopy(isZh);
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const mediaGenerationText = mediaGenerationCopy(isZh ? 'zh' : 'en');
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const { platform, isElectron } = usePlatform();
   const {
     orgConnection,
@@ -604,12 +482,6 @@ export function AgentChatPage({
   })();
   const OperationModeIcon = operationModeMeta.Icon;
   const socket = socketService.connect();
-  const { threads: focusThreads } = useFocusThreads({
-    userId: user?.uid,
-    domain: activeDomain,
-    orgId: activeOrgId,
-    enabled: isOpen && Boolean(user),
-  });
   const {
     status: runtimeStatus,
     loading: runtimeStatusLoading,
@@ -836,11 +708,7 @@ export function AgentChatPage({
       if (focusFrame !== null) cancelAnimationFrame(focusFrame);
     };
   }, [isOpen]);
-  const [conversationAttachments, setConversationAttachments] = useState<ChatAttachment[]>([]);
-  const conversationAttachmentsRef = useRef<ChatAttachment[]>([]);
-  const attachmentConversationIdRef = useRef('');
   const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
-  const [attachmentContextStorageKey, setAttachmentContextStorageKey] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const nativeDropHandledAtRef = useRef(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -867,17 +735,12 @@ export function AgentChatPage({
   const [mediaStudioMode, setMediaStudioMode] = useState<MediaGenerationKind | null>(null);
   const [chatSongOpen, setChatSongOpen] = useState(false);
   const chatSongWorkbenchRef = useRef<ChatSongWorkbenchHandle>(null);
-  const [mediaGenerationStatus, setMediaGenerationStatus] = useState<MediaGenerationStudioStatus>('idle');
-  const [mediaGenerationDetail, setMediaGenerationDetail] = useState('');
+  const [{ status: mediaGenerationStatus, detail: mediaGenerationDetail }, setMediaGeneration] =
+    useState<{ status: MediaGenerationStudioStatus; detail: string }>({ status: 'idle', detail: '' });
   const [mediaGenerationArtifacts, setMediaGenerationArtifacts] = useState<MediaGenerationArtifact[]>([]);
   const [mediaGenerationRetryRequest, setMediaGenerationRetryRequest] = useState<MediaGenerationRequest | null>(null);
   const [mediaSourceArtifacts, setMediaSourceArtifacts] = useState<MediaGenerationArtifact[]>([]);
-  const [mediaPrimaryImage, setMediaPrimaryImage] = useState('');
-  const [mediaPrimaryArtifactId, setMediaPrimaryArtifactId] = useState('');
-  const [mediaReferenceImages, setMediaReferenceImages] = useState<string[]>([]);
-  const [mediaReferenceArtifactIds, setMediaReferenceArtifactIds] = useState<string[]>([]);
-  const [mediaVideoReferenceImage, setMediaVideoReferenceImage] = useState('');
-  const [mediaVideoReferenceArtifactId, setMediaVideoReferenceArtifactId] = useState('');
+  const [mediaSources, setMediaSources] = useState(EMPTY_MEDIA_GENERATION_SOURCES);
   const [mediaSourceUploading, setMediaSourceUploading] = useState(false);
   const mediaSourceFileInputRef = useRef<HTMLInputElement>(null);
   const mediaSourceUploadTargetRef = useRef<{
@@ -901,7 +764,6 @@ export function AgentChatPage({
     terminalBlocked: boolean;
   } | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus>('idle');
-  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [chatProgressLines, setChatProgressLines] = useState<ChatProgressLine[]>([]);
   const recognition = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -931,27 +793,19 @@ export function AgentChatPage({
     mediaGenerationArtifactValidationRef.current = null;
     setMediaStudioMode(null);
     setMediaGenerationArtifacts([]);
-    setMediaGenerationStatus('idle');
-    setMediaGenerationDetail('');
+    setMediaGeneration({ status: 'idle', detail: '' });
     setMediaGenerationRetryRequest(null);
     setMediaSourceArtifacts([]);
-    setMediaPrimaryImage('');
-    setMediaPrimaryArtifactId('');
-    setMediaReferenceImages([]);
-    setMediaReferenceArtifactIds([]);
-    setMediaVideoReferenceImage('');
-    setMediaVideoReferenceArtifactId('');
+    setMediaSources(EMPTY_MEDIA_GENERATION_SOURCES);
     setMediaSourceUploading(false);
     mediaSourceUploadTargetRef.current = null;
   }, []);
 
   useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter) resetMediaGenerationSurface();
+    if (!isOpen || !isOfficeCommandCenter) {
+      resetMediaGenerationSurface();
+    }
   }, [isOfficeCommandCenter, isOpen, resetMediaGenerationSurface]);
-
-  useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter) setMediaStudioMode(null);
-  }, [isOfficeCommandCenter, isOpen]);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
@@ -1007,7 +861,6 @@ export function AgentChatPage({
   const scheduleWorkflowReset = useCallback((requestId?: string) => {
     chatTurnTimerGuardRef.current.schedule(String(requestId || ''), 5000, () => {
       setWorkflowStatus('idle');
-      setWorkflowSteps([]);
       seenWorkflowToolEvents.current.clear();
     });
   }, []);
@@ -1083,53 +936,13 @@ export function AgentChatPage({
     setMediaSourceUploading(false);
     mediaSourceUploadTargetRef.current = null;
   }, []);
-  const bindAttachmentContextToConversation = useCallback((
-    conversationId: string,
-    options: { carryCurrent?: boolean } = {},
-  ) => {
-    const nextConversationId = String(conversationId || '').trim();
-    if (attachmentConversationIdRef.current !== nextConversationId) invalidateChatViewWork();
-    if (attachmentConversationIdRef.current !== nextConversationId) setPreviewFile(null);
-    if (!nextConversationId) {
-      attachmentConversationIdRef.current = '';
-      setAttachmentContextStorageKey('');
-      conversationAttachmentsRef.current = [];
-      setConversationAttachments([]);
-      return;
-    }
-    if (attachmentConversationIdRef.current === nextConversationId) return;
-    const nextStorageKey = `${attachmentContextStoragePrefix}:${nextConversationId}`;
-    let nextAttachments = options.carryCurrent ? conversationAttachmentsRef.current : [];
-    if (!options.carryCurrent) {
-      try {
-        nextAttachments = parseChatAttachmentContext(localStorage.getItem(nextStorageKey));
-        if (nextAttachments.length === 0) localStorage.removeItem(nextStorageKey);
-      } catch {
-        nextAttachments = [];
-      }
-    }
-    attachmentConversationIdRef.current = nextConversationId;
-    setAttachmentContextStorageKey(nextStorageKey);
-    conversationAttachmentsRef.current = nextAttachments;
-    setConversationAttachments(nextAttachments);
-    if (options.carryCurrent && nextAttachments.length > 0) {
-      try {
-        localStorage.setItem(nextStorageKey, serializeChatAttachmentContext(nextAttachments));
-      } catch {}
-    }
-  }, [attachmentContextStoragePrefix, invalidateChatViewWork]);
-  useEffect(() => {
-    const onConversationClosed = (event: Event) => {
-      const closedConversationId = String((event as CustomEvent<{ conversationId?: string }>).detail?.conversationId || '');
-      if (!closedConversationId || closedConversationId !== attachmentConversationIdRef.current) return;
-      try {
-        localStorage.removeItem(`${attachmentContextStoragePrefix}:${closedConversationId}`);
-      } catch {}
-      bindAttachmentContextToConversation('');
-    };
-    window.addEventListener('lumi:conversation-closed', onConversationClosed);
-    return () => window.removeEventListener('lumi:conversation-closed', onConversationClosed);
-  }, [attachmentContextStoragePrefix, bindAttachmentContextToConversation]);
+  const resetAttachmentConversationView = useCallback(() => {
+    invalidateChatViewWork();
+    setPreviewFile(null);
+  }, [invalidateChatViewWork]);
+  const { conversationAttachments, conversationAttachmentsRef, attachmentConversationIdRef,
+    bindAttachmentContextToConversation, rememberConversationAttachments, clearConversationAttachments: clearStoredAttachments,
+  } = useConversationAttachments(attachmentContextStoragePrefix, resetAttachmentConversationView);
   const scopedConversationUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}`;
@@ -1279,7 +1092,7 @@ export function AgentChatPage({
       ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.fileId)}?inline=1`)
       : file.path ? makeChatArtifact(file.path, attachmentConversationIdRef.current).url : '');
     if (url) setPreviewFile({ fileName: file.fileName, path: file.path, url });
-  }, [scopedFileUrl]);
+  }, [attachmentConversationIdRef, scopedFileUrl]);
 
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
@@ -1368,10 +1181,8 @@ export function AgentChatPage({
     };
 
     window.addEventListener('lumi:knowledge-updated', onKnowledgeUpdated);
-    window.addEventListener('lumi:client-state-refresh', onKnowledgeUpdated);
     return () => {
       window.removeEventListener('lumi:knowledge-updated', onKnowledgeUpdated);
-      window.removeEventListener('lumi:client-state-refresh', onKnowledgeUpdated);
     };
   }, [activeDomain, activeOrgId, isFounder, isOpen, refreshKnowledgeFiles]);
 
@@ -1655,7 +1466,7 @@ export function AgentChatPage({
         setConversationTransitionPending(false);
       }
     };
-  }, [activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, resetMediaGenerationSurface, scopedConversationUrl, setMessages, user?.id, user?.username]);
+  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, resetMediaGenerationSurface, scopedConversationUrl, setMessages, user?.id, user?.username]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1731,7 +1542,7 @@ export function AgentChatPage({
         JSON.stringify(upsertPersistedPendingChatExecution(current, execution)),
       );
     } catch {}
-  }, [activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource, chatRecoveryUserId, recoveryOwner]);
+  }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource, chatRecoveryUserId, recoveryOwner]);
   const clearPersistedExecution = useCallback((requestId?: string) => {
     if (!activeExecutionStorageKey) return;
     try {
@@ -1778,7 +1589,7 @@ export function AgentChatPage({
       }
     }
     return true;
-  }, [bindAttachmentContextToConversation, chatExecutionSource, persistActiveExecution]);
+  }, [attachmentConversationIdRef, bindAttachmentContextToConversation, chatExecutionSource, persistActiveExecution]);
 
   useEffect(() => {
     if (isFounder || !socket) return;
@@ -1849,6 +1660,38 @@ export function AgentChatPage({
       }
     };
 
+    const receiveMediaArtifacts = (
+      receipt: unknown,
+      active: NonNullable<typeof activeMediaGenerationRef.current>,
+      merge = true,
+    ): boolean => {
+      const incoming = extractMediaGenerationArtifacts(receipt, active.mode)
+        .filter(artifact => artifact.kind === active.mode)
+        .map(artifact => ({ ...artifact, requestId: active.requestId, operation: resolveMediaGenerationOperation(active.request) }));
+      if (!incoming.length) return false;
+      const artifacts = merge ? [...mediaGenerationArtifactsRef.current, ...incoming].filter((artifact, index, all) => (
+        all.findIndex(candidate => candidate.kind === artifact.kind && candidate.url === artifact.url) === index
+      )) : incoming;
+      const prior = merge ? mediaGenerationArtifactValidationRef.current : null;
+      const expectedIds = new Set(artifacts.map(artifact => artifact.id));
+      const requiredCount = active.mode === 'image' ? Math.max(1, Number(active.request.count) || 1) : 1;
+      const contractValid = artifacts.length >= requiredCount;
+      mediaGenerationArtifactValidationRef.current = {
+        expectedIds,
+        readyIds: new Set([...(prior?.readyIds || [])].filter(id => expectedIds.has(id))),
+        failedIds: new Set([...(prior?.failedIds || [])].filter(id => expectedIds.has(id))),
+        requiredCount,
+        contractValid,
+        finalized: prior?.finalized || false,
+        terminalSucceeded: prior?.terminalSucceeded || false,
+        terminalBlocked: prior?.terminalBlocked || false,
+      };
+      mediaGenerationArtifactsRef.current = artifacts;
+      setMediaGenerationArtifacts(artifacts);
+      setMediaGeneration({ status: contractValid ? 'generating' : 'error', detail: contractValid ? mediaGenerationText.validatingArtifact : mediaGenerationText.artifactCountMismatch });
+      return true;
+    };
+
     const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; artifactReceipt?: unknown; error?: string; publicText?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
       if (!isCurrentChatEvent(data)) return;
       recordTaskRelation(data);
@@ -1875,8 +1718,7 @@ export function AgentChatPage({
         && !isExpectedMediaGenerationTool(activeMediaGeneration.request, data.name)
       ) {
         mediaGenerationArtifactValidationRef.current = null;
-        setMediaGenerationStatus('error');
-        setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
+        setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
       }
       if (
         mediaToolBelongsToActiveRequest
@@ -1885,61 +1727,17 @@ export function AgentChatPage({
       ) {
         if (data.error !== undefined) {
           mediaGenerationArtifactValidationRef.current = null;
-          setMediaGenerationStatus('error');
-          setMediaGenerationDetail(mediaGenerationText.toolFailed);
+          setMediaGeneration({ status: 'error', detail: mediaGenerationText.toolFailed });
         } else if (data.artifactReceipt !== undefined || data.result !== undefined) {
           if (!mediaGenerationArgumentsMatch(activeMediaGeneration.request, args)) {
             mediaGenerationArtifactValidationRef.current = null;
-            setMediaGenerationStatus('error');
-            setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
-          } else {
-            const nextArtifacts = extractMediaGenerationArtifacts(
-              data.artifactReceipt ?? data.result,
-              activeMediaGeneration.mode,
-            ).filter(artifact => artifact.kind === activeMediaGeneration.mode).map(artifact => ({
-              ...artifact,
-              requestId,
-              operation: resolveMediaGenerationOperation(activeMediaGeneration.request),
-            }));
-            if (nextArtifacts.length > 0) {
-              const existing = mediaGenerationArtifactsRef.current;
-              const merged = [...existing, ...nextArtifacts].filter((artifact, index, all) => (
-                all.findIndex(candidate => candidate.kind === artifact.kind && candidate.url === artifact.url) === index
-              ));
-              const requiredCount = activeMediaGeneration.mode === 'image'
-                ? Math.max(1, Number(activeMediaGeneration.request.count) || 1)
-                : 1;
-              const priorReady = mediaGenerationArtifactValidationRef.current?.readyIds || new Set<string>();
-              const priorFailed = mediaGenerationArtifactValidationRef.current?.failedIds || new Set<string>();
-              const expectedIds = new Set(merged.map(artifact => artifact.id));
-              mediaGenerationArtifactValidationRef.current = {
-                expectedIds,
-                readyIds: new Set([...priorReady].filter(id => expectedIds.has(id))),
-                failedIds: new Set([...priorFailed].filter(id => expectedIds.has(id))),
-                requiredCount,
-                contractValid: merged.length >= requiredCount,
-                finalized: mediaGenerationArtifactValidationRef.current?.finalized || false,
-                terminalSucceeded: mediaGenerationArtifactValidationRef.current?.terminalSucceeded || false,
-                terminalBlocked: mediaGenerationArtifactValidationRef.current?.terminalBlocked || false,
-              };
-              mediaGenerationArtifactsRef.current = merged;
-              setMediaGenerationArtifacts(merged);
-              if (merged.length < requiredCount) {
-                setMediaGenerationStatus('error');
-                setMediaGenerationDetail(mediaGenerationText.artifactCountMismatch);
-              } else {
-                setMediaGenerationStatus('generating');
-                setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
-              }
-            } else {
-              mediaGenerationArtifactValidationRef.current = null;
-              setMediaGenerationStatus('generating');
-              setMediaGenerationDetail(mediaGenerationText.toolReturnedNoArtifact);
-            }
+            setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
+          } else if (!receiveMediaArtifacts(data.artifactReceipt ?? data.result, activeMediaGeneration)) {
+            mediaGenerationArtifactValidationRef.current = null;
+            setMediaGeneration({ status: 'generating', detail: mediaGenerationText.toolReturnedNoArtifact });
           }
         } else {
-          setMediaGenerationStatus('generating');
-          setMediaGenerationDetail('');
+          setMediaGeneration({ status: 'generating', detail: '' });
         }
       }
 
@@ -1949,41 +1747,11 @@ export function AgentChatPage({
       if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
         currentRequestHadToolRef.current = true;
       }
-      const appendTurnStep = (step: WorkflowStep) => {
-        if (turnMeta) {
-          turnMeta.steps = [...turnMeta.steps, step];
-          if (chatRequestLedgerRef.current.foreground === requestId) setWorkflowSteps(turnMeta.steps);
-        } else {
-          setWorkflowSteps(prev => [...prev, step]);
-        }
-      };
       const customerToolText = sanitizeAgentResponseTextForDisplay(
         data.publicText || describeToolProgress(data.name, phase, isZh),
         isZh ? 'zh' : 'en',
       );
       pushChatProgress(customerToolText, phase === 'error' ? 'error' : 'tool');
-      if (data.result !== undefined) {
-        appendTurnStep({
-          id: `chat-tool-ok-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'tool_result',
-          text: customerToolText,
-          time: Date.now(),
-        });
-      } else if (data.error !== undefined) {
-        appendTurnStep({
-          id: `chat-tool-err-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'error',
-          text: customerToolText,
-          time: Date.now(),
-        });
-      } else {
-        appendTurnStep({
-          id: `chat-tool-start-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'tool_start',
-          text: customerToolText,
-          time: Date.now(),
-        });
-      }
     };
 
     const onProgress = (data: { text?: string; publicText?: string; tone?: ChatProgressTone; requestId?: string; source?: string; conversationId?: string }) => {
@@ -1994,8 +1762,7 @@ export function AgentChatPage({
       );
       const requestId = String(data.requestId || '').trim();
       if (activeMediaGenerationRef.current?.requestId === requestId && data.text?.trim()) {
-        setMediaGenerationStatus('generating');
-        setMediaGenerationDetail(data.text.trim());
+        setMediaGeneration({ status: 'generating', detail: data.text.trim() });
       }
     };
 
@@ -2094,42 +1861,9 @@ export function AgentChatPage({
         let replayReceiptRejected = false;
         if (data.artifactReceipt !== undefined && !mediaGenerationReceiptSettingsMatch(activeMediaGeneration.request, data.artifactReceipt)) {
           replayReceiptRejected = true;
-          setMediaGenerationStatus('error');
-          setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
+          setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
         } else if (!hasArtifact && data.artifactReceipt !== undefined) {
-          const recoveredArtifacts = extractMediaGenerationArtifacts(
-            data.artifactReceipt,
-            activeMediaGeneration.mode,
-          ).filter(artifact => artifact.kind === activeMediaGeneration.mode).map(artifact => ({
-            ...artifact,
-            requestId,
-            operation: resolveMediaGenerationOperation(activeMediaGeneration.request),
-          }));
-          const requiredCount = activeMediaGeneration.mode === 'image'
-            ? Math.max(1, Number(activeMediaGeneration.request.count) || 1)
-            : 1;
-          if (recoveredArtifacts.length > 0) {
-            mediaGenerationArtifactsRef.current = recoveredArtifacts;
-            mediaGenerationArtifactValidationRef.current = {
-              expectedIds: new Set(recoveredArtifacts.map(artifact => artifact.id)),
-              readyIds: new Set(),
-              failedIds: new Set(),
-              requiredCount,
-              contractValid: recoveredArtifacts.length >= requiredCount,
-              finalized: false,
-              terminalSucceeded: false,
-              terminalBlocked: false,
-            };
-            setMediaGenerationArtifacts(recoveredArtifacts);
-            hasArtifact = true;
-            if (recoveredArtifacts.length < requiredCount) {
-              setMediaGenerationStatus('error');
-              setMediaGenerationDetail(mediaGenerationText.artifactCountMismatch);
-            } else {
-              setMediaGenerationStatus('generating');
-              setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
-            }
-          }
+          hasArtifact = receiveMediaArtifacts(data.artifactReceipt, activeMediaGeneration, false);
         }
         const validation = mediaGenerationArtifactValidationRef.current;
         const terminalSucceeded = isFinalizedSuccessfulResponse(data);
@@ -2139,28 +1873,24 @@ export function AgentChatPage({
             validation.terminalSucceeded = false;
             validation.terminalBlocked = Boolean(data.blocked);
           }
-          setMediaGenerationStatus(responseWasCancelled ? 'cancelled' : 'error');
-          setMediaGenerationDetail(responseWasCancelled
+          setMediaGeneration({ status: responseWasCancelled ? 'cancelled' : 'error', detail: responseWasCancelled
             ? mediaGenerationText.statusCancelled
             : describeAgentResponseDelivery({
                 ...data,
                 text: data.text || mediaGenerationText.taskBlocked,
-              }, isZh));
+              }, isZh) });
         } else if (replayReceiptRejected) {
           // Preserve the exact settings mismatch reported above.
         } else if (!hasArtifact || !validation?.contractValid) {
-          setMediaGenerationStatus('error');
-          setMediaGenerationDetail(mediaGenerationText.taskEndedNoArtifact);
+          setMediaGeneration({ status: 'error', detail: mediaGenerationText.taskEndedNoArtifact });
         } else {
           validation.finalized = true;
           validation.terminalSucceeded = true;
           validation.terminalBlocked = false;
           if (validation.readyIds.size >= validation.requiredCount) {
-            setMediaGenerationStatus('completed');
-            setMediaGenerationDetail('');
+            setMediaGeneration({ status: 'completed', detail: '' });
           } else {
-            setMediaGenerationStatus('generating');
-            setMediaGenerationDetail(mediaGenerationText.validatingArtifact);
+            setMediaGeneration({ status: 'generating', detail: mediaGenerationText.validatingArtifact });
           }
         }
         activeMediaGenerationRef.current = null;
@@ -2171,7 +1901,6 @@ export function AgentChatPage({
         currentRequestHadToolRef.current = nextMeta?.hadTool || false;
         currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
         currentResponseFinalizationRef.current = nextMeta?.finalization || null;
-        setWorkflowSteps(nextMeta?.steps || []);
         setWorkflowStatus('thinking');
         chatTurnUiMetaRef.current.delete(requestId);
         // Every terminal owns only its own UI bucket. This applies to an
@@ -2195,13 +1924,6 @@ export function AgentChatPage({
           { finalized: false, blocked: true, reason: data.reason },
         );
         finishChatProgress(rejected.text, rejected.tone);
-        setWorkflowSteps(prev => [...prev, {
-          id: makeChatMessageId('chat-rejected'),
-          type: 'error',
-          text: t.workflowError || 'Processing blocked',
-          detail: describeAgentResponseDelivery(data, isZh),
-          time: Date.now(),
-        }]);
         if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
         return;
       }
@@ -2220,15 +1942,6 @@ export function AgentChatPage({
       );
       finishChatProgress(completion.text, completion.tone);
       if (data.blocked || finalizedSuccess) {
-        setWorkflowSteps(prev => [...prev, {
-          id: makeChatMessageId('chat-resp'),
-          type: data.blocked && !wasCancelled ? 'error' : 'response',
-          text: wasCancelled
-            ? uiMessage('agent-chat-page.execution-cancelled.4ec843f670', isZh ? 'zh' : 'en')
-            : data.blocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
-          detail: describeAgentResponseDelivery(data, isZh),
-          time: Date.now(),
-        }]);
         if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
       }
       chatTurnUiMetaRef.current.delete(requestId);
@@ -2253,16 +1966,6 @@ export function AgentChatPage({
         if (String(data.requestId || '') !== chatRequestLedgerRef.current.foreground) return;
         setWorkflowStatus('thinking');
         pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
-        setWorkflowSteps(prev => {
-          const last = prev[prev.length - 1];
-          if (last?.type === 'thinking' && Date.now() - last.time < 1200) return prev;
-          return [...prev, {
-            id: `chat-thinking-${Date.now()}`,
-            type: 'thinking',
-            text: t.workflowAnalyzing || 'Analyzing your request...',
-            time: Date.now(),
-          }];
-        });
       } else if (activity === 'executing') {
         setWorkflowStatus('executing');
       } else if (activity === 'waiting_confirmation') {
@@ -2270,8 +1973,7 @@ export function AgentChatPage({
       } else if (activity === 'cancelling') {
         setWorkflowStatus('cancelling');
         if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
-          setMediaGenerationStatus('cancelling');
-          setMediaGenerationDetail(mediaGenerationText.statusCancelling);
+          setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
         }
       } else if (data.status === 'idle') {
         if (!terminalTracking?.remaining) {
@@ -2279,15 +1981,13 @@ export function AgentChatPage({
           if (!currentResponseFinalizationRef.current) {
             setWorkflowStatus('idle');
             clearChatProgress();
-            setWorkflowSteps([]);
             seenWorkflowToolEvents.current.clear();
           }
         }
       } else if (isTerminalAgentStatus(data.status)) {
         if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
           const cancelled = data.status === 'cancelled' || data.status === 'canceled';
-          setMediaGenerationStatus(cancelled ? 'cancelled' : 'error');
-          setMediaGenerationDetail(cancelled ? mediaGenerationText.statusCancelled : mediaGenerationText.taskFailed);
+          setMediaGeneration({ status: cancelled ? 'cancelled' : 'error', detail: cancelled ? mediaGenerationText.statusCancelled : mediaGenerationText.taskFailed });
           activeMediaGenerationRef.current = null;
         }
         if (!terminalTracking?.remaining) {
@@ -2320,8 +2020,7 @@ export function AgentChatPage({
         isZh ? 'zh' : 'en',
       );
       if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
-        setMediaGenerationStatus('error');
-        setMediaGenerationDetail(message || mediaGenerationText.taskFailed);
+        setMediaGeneration({ status: 'error', detail: message || mediaGenerationText.taskFailed });
         activeMediaGenerationRef.current = null;
       }
       const tracked = settleTrackedChatRequest(data.requestId);
@@ -2333,7 +2032,6 @@ export function AgentChatPage({
         currentRequestHadToolRef.current = nextMeta?.hadTool || false;
         currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
         currentResponseFinalizationRef.current = nextMeta?.finalization || null;
-        setWorkflowSteps(nextMeta?.steps || []);
         setWorkflowStatus('thinking');
       }
       if (!hasRemainingRequests) {
@@ -2342,13 +2040,6 @@ export function AgentChatPage({
           uiMessage('agent-chat-page.something-went-wrong-i-am.01c198a67b', (isZh) ? 'zh' : 'en'),
           'error'
         );
-        setWorkflowSteps(prev => [...prev, {
-          id: `chat-err-${Date.now()}`,
-          type: 'error',
-          text: t.workflowError || 'Processing failed',
-          detail: message,
-          time: Date.now(),
-        }]);
         scheduleWorkflowReset(data.requestId);
       }
       const streamKey = String(data.requestId || '__legacy__');
@@ -2474,6 +2165,7 @@ export function AgentChatPage({
       socket.off("chat:conversation_updated", onConversationUpdated);
     };
   }, [
+    attachmentConversationIdRef,
     activeDomain,
     activeOrgId,
     acceptChatExecutionEvent,
@@ -2497,10 +2189,7 @@ export function AgentChatPage({
     t.failedToRouteNeuralMesh,
     t.requestFailed,
     t.workflowAnalyzing,
-    t.workflowCalling,
     t.workflowError,
-    t.workflowResponseReady,
-    t.workflowToolFailed,
   ]);
 
   useEffect(() => {
@@ -2608,12 +2297,13 @@ export function AgentChatPage({
             mediaGenerationArtifactsRef.current = [];
             mediaGenerationArtifactValidationRef.current = null;
             setMediaGenerationArtifacts([]);
-            setMediaGenerationStatus('generating');
-            setMediaGenerationDetail(mediaGenerationText.statusGenerating);
+            setMediaGeneration({ status: 'generating', detail: mediaGenerationText.statusGenerating });
             setMediaStudioMode(request.mode);
-            setMediaPrimaryImage(request.primaryImage || '');
-            setMediaReferenceImages(request.referenceImages || []);
-            setMediaVideoReferenceImage(request.referenceImage || '');
+            setMediaSources({
+              primaryImage: request.primaryImage || '', primaryArtifactId: request.primaryArtifactId || '',
+              referenceImages: request.referenceImages || [], referenceArtifactIds: request.referenceArtifactIds || [],
+              referenceImage: request.referenceImage || '', referenceArtifactId: request.referenceArtifactId || '',
+            });
           }
           if (snapshot.terminal) return; // The server replays the terminal event.
           if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
@@ -2628,7 +2318,7 @@ export function AgentChatPage({
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
     return () => { disposed = true; socket.off('connect', resumeActiveExecution); };
-  }, [activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
+  }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
 
   const startNewTextConversation = useCallback(async () => {
     if (conversationTransitionRef.current || isCreatingConversation || restoringConversationId) return;
@@ -2679,7 +2369,6 @@ export function AgentChatPage({
       setSearchError('');
       setIsTyping(false);
       setWorkflowStatus('idle');
-      setWorkflowSteps([]);
       clearChatProgress();
       seenWorkflowToolEvents.current.clear();
       requestAnimationFrame(() => messageInputRef.current?.focus());
@@ -2821,7 +2510,7 @@ export function AgentChatPage({
       if (right.id === activeId) return 1;
       return 0;
     });
-  }, [conversationHistory]);
+  }, [attachmentConversationIdRef, conversationHistory]);
 
   const restoreTextConversation = useCallback(async (conversationId: string) => {
     if (!conversationId || conversationTransitionRef.current || restoringConversationId || isCreatingConversation) return;
@@ -2881,7 +2570,6 @@ export function AgentChatPage({
       setSearchError('');
       setIsTyping(false);
       setWorkflowStatus('idle');
-      setWorkflowSteps([]);
       clearChatProgress();
       seenWorkflowToolEvents.current.clear();
       setConversationHistory(previous => previous.map(item => ({
@@ -2900,7 +2588,7 @@ export function AgentChatPage({
         setRestoringConversationId('');
       }
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, normalizePersistedMessages, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setMessages]);
+  }, [attachmentConversationIdRef, activeDomain, agentId, bindAttachmentContextToConversation, clearChatProgress, clearPersistedExecution, invalidateChatViewWork, isCreatingConversation, normalizePersistedMessages, resetMediaGenerationSurface, restoringConversationId, scopedConversationUrl, setMessages]);
 
   const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
     const id = String(conversationId || '').trim();
@@ -2947,7 +2635,7 @@ export function AgentChatPage({
     } finally {
       setDeletingConversationId('');
     }
-  }, [conversationHistory, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, startNewTextConversation, t]);
+  }, [attachmentConversationIdRef, conversationHistory, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, startNewTextConversation, t]);
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -2974,7 +2662,6 @@ export function AgentChatPage({
   useEffect(() => {
     if (isOpen) return;
     setWorkflowStatus('idle');
-    setWorkflowSteps([]);
     clearChatProgress();
     currentRequestHadToolRef.current = false;
     currentRequestNeedsEvidenceRef.current = false;
@@ -2987,26 +2674,13 @@ export function AgentChatPage({
       .filter(item => item.path || item.transcript || item.content || item.preview)
       .map(serializeChatAttachment);
     if (reusable.length === 0) return;
-    const merged = mergeChatAttachmentReferences(conversationAttachmentsRef.current, reusable).attachments;
-    conversationAttachmentsRef.current = merged;
-    setConversationAttachments(merged);
-    if (attachmentContextStorageKey) {
-      try {
-        localStorage.setItem(attachmentContextStorageKey, serializeChatAttachmentContext(merged));
-      } catch {}
-    }
-  }, [attachmentContextStorageKey]);
+    rememberConversationAttachments(reusable);
+  }, [rememberConversationAttachments]);
 
   const clearConversationAttachmentContext = useCallback(() => {
-    conversationAttachmentsRef.current = [];
-    setConversationAttachments([]);
-    if (attachmentContextStorageKey) {
-      try {
-        localStorage.removeItem(attachmentContextStorageKey);
-      } catch {}
-    }
+    clearStoredAttachments();
     toast.success(uiMessage('agent-chat-page.session-materials-cleared.53bea199b2'));
-  }, [attachmentContextStorageKey]);
+  }, [clearStoredAttachments]);
 
   const sendText = useCallback(async (
     text: string,
@@ -3052,17 +2726,10 @@ export function AgentChatPage({
     const requestId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     options.onRequestCreated?.(requestId);
     const wasIdle = chatRequestLedgerRef.current.size === 0;
-    const initialTurnStep: WorkflowStep = {
-      id: makeChatMessageId('chat-start'),
-      type: 'thinking',
-      text: t.workflowAnalyzing || 'Analyzing your request...',
-      time: Date.now(),
-    };
     chatTurnUiMetaRef.current.set(requestId, {
       hadTool: false,
       needsEvidence: needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0),
       finalization: null,
-      steps: [initialTurnStep],
     });
     if (wasIdle) {
       currentRequestHadToolRef.current = false;
@@ -3078,7 +2745,6 @@ export function AgentChatPage({
         'thinking'
       );
       setWorkflowStatus('thinking');
-      setWorkflowSteps([initialTurnStep]);
     }
 
     setMessages(prev => {
@@ -3167,8 +2833,7 @@ export function AgentChatPage({
           streamingMsgIdsRef.current.delete(requestId);
           streamingRawTextRef.current.delete(requestId);
           if (activeMediaGenerationRef.current?.requestId === requestId) {
-            setMediaGenerationStatus('error');
-            setMediaGenerationDetail(mediaGenerationText.backendNoAck);
+            setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendNoAck });
             activeMediaGenerationRef.current = null;
           }
           resolve();
@@ -3210,8 +2875,7 @@ export function AgentChatPage({
             streamingMsgIdsRef.current.delete(requestId);
             streamingRawTextRef.current.delete(requestId);
             if (activeMediaGenerationRef.current?.requestId === requestId) {
-              setMediaGenerationStatus('error');
-              setMediaGenerationDetail(result?.error || mediaGenerationText.backendLostTask);
+              setMediaGeneration({ status: 'error', detail: result?.error || mediaGenerationText.backendLostTask });
               activeMediaGenerationRef.current = null;
             }
             resolve();
@@ -3261,16 +2925,8 @@ export function AgentChatPage({
         uiMessage('agent-chat-page.the-backend-has-not-acknowledged.4a6f380020', (isZh) ? 'zh' : 'en'),
         'error'
       );
-      setWorkflowSteps(prev => [...prev, {
-        id: `chat-ack-timeout-${Date.now()}`,
-        type: 'error',
-        text: uiMessage('agent-chat-page.backend-did-not-acknowledge-receipt.02f7aa3200', (isZh) ? 'zh' : 'en'),
-        detail: socket.connected ? undefined : (uiMessage('agent-chat-page.socket-is-currently-disconnected.8f04ddd3b7', (isZh) ? 'zh' : 'en')),
-        time: Date.now(),
-      }]);
       if (activeMediaGenerationRef.current?.requestId === requestId) {
-        setMediaGenerationStatus('error');
-        setMediaGenerationDetail(mediaGenerationText.backendNoAck);
+        setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendNoAck });
       }
     }, 5000);
 
@@ -3286,8 +2942,7 @@ export function AgentChatPage({
       if (ack?.ok) {
         pushChatProgress(uiMessage('agent-chat-page.the-backend-has-received-this.859b50e7ed', (isZh) ? 'zh' : 'en'), 'thinking');
         if (activeMediaGenerationRef.current?.requestId === requestId) {
-          setMediaGenerationStatus('submitting');
-          setMediaGenerationDetail('');
+          setMediaGeneration({ status: 'submitting', detail: '' });
         }
       } else {
         setWorkflowStatus('error');
@@ -3296,8 +2951,7 @@ export function AgentChatPage({
           'error'
         );
         if (activeMediaGenerationRef.current?.requestId === requestId) {
-          setMediaGenerationStatus('error');
-          setMediaGenerationDetail(ack?.error || mediaGenerationText.backendRejected);
+          setMediaGeneration({ status: 'error', detail: ack?.error || mediaGenerationText.backendRejected });
           activeMediaGenerationRef.current = null;
         }
         resolve();
@@ -3308,6 +2962,7 @@ export function AgentChatPage({
     // connection problem instead of generating a second, inconsistent answer.
     return requestId;
   }, [
+    attachmentConversationIdRef, conversationAttachmentsRef,
     acceptChatExecutionEvent,
     attachmentUploadText,
     activeDomain,
@@ -3329,7 +2984,6 @@ export function AgentChatPage({
     settleTrackedChatRequest,
     socket,
     t.chatUserFallback,
-    t.workflowAnalyzing,
     user,
   ]);
 
@@ -3347,8 +3001,7 @@ export function AgentChatPage({
     if (!hasSameKindArtifacts) {
       mediaGenerationArtifactsRef.current = [];
       setMediaGenerationArtifacts([]);
-      setMediaGenerationStatus('idle');
-      setMediaGenerationDetail('');
+      setMediaGeneration({ status: 'idle', detail: '' });
     }
     setMediaStudioMode(mode);
   }, [refreshKnowledgeFiles]);
@@ -3362,19 +3015,12 @@ export function AgentChatPage({
   }, [creationRequestId, isOfficeCommandCenter, isOpen, onCreationRequestConsumed, openMediaGenerationStudio]);
 
   const handleMediaSourceChange = useCallback((change: MediaGenerationSourceChange) => {
-    const artifactId = change.artifact?.id || '';
-    if (change.operation === 'image_to_video') {
-      setMediaVideoReferenceImage(change.value);
-      setMediaVideoReferenceArtifactId(artifactId);
-      return;
-    }
-    if (change.slot === 'primary') {
-      setMediaPrimaryImage(change.value);
-      setMediaPrimaryArtifactId(artifactId);
-      return;
-    }
-    setMediaReferenceImages(change.value.trim() ? [change.value] : []);
-    setMediaReferenceArtifactIds(artifactId ? [artifactId] : []);
+    const artifactId = change.value.trim() ? change.artifact?.id || '' : '';
+    setMediaSources(current => {
+      if (change.operation === 'image_to_video') return { ...current, referenceImage: change.value, referenceArtifactId: artifactId };
+      if (change.slot === 'primary') return { ...current, primaryImage: change.value, primaryArtifactId: artifactId };
+      return { ...current, referenceImages: change.value.trim() ? [change.value] : [], referenceArtifactIds: artifactId ? [artifactId] : [] };
+    });
   }, []);
 
   const requestMediaSourceImage = useCallback((
@@ -3388,22 +3034,19 @@ export function AgentChatPage({
 
   const generateMediaFromStudio = useCallback((request: MediaGenerationRequest) => {
     if (isTyping || activeMediaGenerationRef.current) {
-      setMediaGenerationStatus('error');
-      setMediaGenerationDetail(mediaGenerationText.anotherTaskRunning);
+      setMediaGeneration({ status: 'error', detail: mediaGenerationText.anotherTaskRunning });
       return;
     }
     const mediaRequest = normalizeStructuredMediaRequest(request);
     if (!mediaRequest) {
-      setMediaGenerationStatus('error');
-      setMediaGenerationDetail(mediaGenerationText.settingsMismatch);
+      setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
       return;
     }
 
     mediaGenerationArtifactsRef.current = [];
     mediaGenerationArtifactValidationRef.current = null;
     setMediaGenerationArtifacts([]);
-    setMediaGenerationStatus('submitting');
-    setMediaGenerationDetail('');
+    setMediaGeneration({ status: 'submitting', detail: '' });
     setMediaGenerationRetryRequest(request);
     const requestActionLabel = request.operation === 'text_to_image'
       ? mediaGenerationText.generateImage
@@ -3448,8 +3091,7 @@ export function AgentChatPage({
     }).then(requestId => {
       if (requestId) return;
       activeMediaGenerationRef.current = null;
-      setMediaGenerationStatus('error');
-      setMediaGenerationDetail(mediaGenerationText.requestNotCreated);
+      setMediaGeneration({ status: 'error', detail: mediaGenerationText.requestNotCreated });
     });
   }, [isTyping, isZh, mediaGenerationText, sendText]);
 
@@ -3481,8 +3123,7 @@ export function AgentChatPage({
       && !validation.terminalBlocked
       && validation.readyIds.size >= validation.requiredCount
     ) {
-      setMediaGenerationStatus('completed');
-      setMediaGenerationDetail('');
+      setMediaGeneration({ status: 'completed', detail: '' });
     }
   }, []);
 
@@ -3493,8 +3134,7 @@ export function AgentChatPage({
     validation.failedIds.add(artifact.id);
     const remainingPossible = validation.expectedIds.size - validation.failedIds.size;
     if (!validation.contractValid || remainingPossible < validation.requiredCount) {
-      setMediaGenerationStatus('error');
-      setMediaGenerationDetail(mediaGenerationText.artifactLoadFailed);
+      setMediaGeneration({ status: 'error', detail: mediaGenerationText.artifactLoadFailed });
     }
   }, [mediaGenerationText.artifactLoadFailed]);
 
@@ -3511,8 +3151,7 @@ export function AgentChatPage({
     const requestId = activeChatRequestIdRef.current;
     if (!socket || !requestId) {
       if (activeMediaGenerationRef.current) {
-        setMediaGenerationStatus('error');
-        setMediaGenerationDetail(mediaGenerationText.backendLostTask);
+        setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendLostTask });
       }
       return;
     }
@@ -3523,8 +3162,7 @@ export function AgentChatPage({
       if (acknowledged || activeChatRequestIdRef.current !== requestId) return;
       setWorkflowStatus('error');
       if (activeMediaGenerationRef.current?.requestId === requestId) {
-        setMediaGenerationStatus('error');
-        setMediaGenerationDetail(mediaGenerationText.taskFailed);
+        setMediaGeneration({ status: 'error', detail: mediaGenerationText.taskFailed });
       }
       pushChatProgress(
         socket.connected
@@ -3546,8 +3184,7 @@ export function AgentChatPage({
       if (!result?.ok) {
         setWorkflowStatus('error');
         if (activeMediaGenerationRef.current?.requestId === requestId) {
-          setMediaGenerationStatus('error');
-          setMediaGenerationDetail(result?.error || mediaGenerationText.taskFailed);
+          setMediaGeneration({ status: 'error', detail: result?.error || mediaGenerationText.taskFailed });
         }
         pushChatProgress(
           result?.error || uiMessage('agent-chat-page.unable-to-cancel-task.08547685ab', isZh ? 'zh' : 'en'),
@@ -3657,7 +3294,7 @@ export function AgentChatPage({
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
     }
     return result;
-  }, []);
+  }, [conversationAttachmentsRef]);
 
   useEffect(() => {
     if (!isOpen || !attachmentRequest?.requestId) return;
@@ -3780,7 +3417,7 @@ export function AgentChatPage({
       if (work.isCurrent()) { setIsOptimizing(false); setOptimizationProgress(0); }
       work.finish();
     }
-  }, [acceptImportedChatFiles, activeDomain, activeOrgId, attachmentUploadText, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+  }, [conversationAttachmentsRef, acceptImportedChatFiles, activeDomain, activeOrgId, attachmentUploadText, scopedFileUrl, t.chatConnError, t.uploadFailed]);
 
   const uploadChatAttachments = useCallback(async (files: FileList | null) => {
     await runChatAttachmentUpload('files', Array.from(files || []));
@@ -4112,12 +3749,7 @@ export function AgentChatPage({
                 if (result.added.length) void requestCloseCreativeStudio();
               }}
               sourceArtifacts={availableMediaSourceArtifacts}
-              primaryImage={mediaPrimaryImage}
-              referenceImages={mediaReferenceImages}
-              referenceImage={mediaVideoReferenceImage}
-              primaryArtifactId={mediaPrimaryArtifactId}
-              referenceArtifactIds={mediaReferenceArtifactIds}
-              referenceArtifactId={mediaVideoReferenceArtifactId}
+              {...mediaSources}
               retryRequest={mediaGenerationRetryRequest}
               onModeChange={openMediaGenerationStudio}
               onSourceChange={handleMediaSourceChange}
@@ -4151,19 +3783,16 @@ export function AgentChatPage({
               </React.Suspense>}
               onGenerate={generateMediaFromStudio}
               onCancel={() => {
-                setMediaGenerationStatus('cancelling');
-                setMediaGenerationDetail(mediaGenerationText.statusCancelling);
+                setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
                 cancelActiveChat();
               }}
               onRetry={generateMediaFromStudio}
               onOpenArtifact={openMediaGenerationArtifact}
               onContinueEdit={() => {
-                setMediaGenerationStatus('idle');
-                setMediaGenerationDetail('');
+                setMediaGeneration({ status: 'idle', detail: '' });
               }}
               onUseAsVideoReference={() => {
-                setMediaGenerationStatus('idle');
-                setMediaGenerationDetail('');
+                setMediaGeneration({ status: 'idle', detail: '' });
               }}
               onArtifactReady={markMediaGenerationArtifactReady}
               onArtifactError={markMediaGenerationArtifactFailed}
@@ -4393,8 +4022,6 @@ export function AgentChatPage({
             <div className="lumi-command-center-background-task-widget" aria-hidden="true">
               <ActiveTaskWidget
                 status={runtimeStatus}
-                focusThreads={focusThreads}
-                tasks={[]}
                 workflowActive={workflowTaskActive}
                 workflowStatus={workflowStatus}
                 progressText={chatProgressStatusText}

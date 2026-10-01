@@ -1,6 +1,5 @@
-import React from 'react';
 import { motion } from 'motion/react';
-import { Shield, Lock, FileText, Database, Radio, Cpu, Smartphone, Network, Globe, ArrowLeft } from 'lucide-react';
+import { Shield, Lock, Cpu, Network, ArrowLeft } from 'lucide-react';
 
 export function FoundersSanctuary({ t, user, onBack }: { t: any; user: any; onBack: () => void }) {
   const blueprints = [

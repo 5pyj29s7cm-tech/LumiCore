@@ -10,20 +10,14 @@ import {
   buildHandshakeResponse,
 } from './session';
 import {
-  delegateTask,
   updateTaskStatus,
-  getTask,
-  getTasksForAgent,
-  buildTaskListResponse,
   cancelTasksForSession,
-  registerOutboundTask,
 } from './delegate';
-import { shareContext, getActiveSharedContexts, getSharedContext, removeSharedContexts } from './context';
+import { shareContext, removeSharedContexts } from './context';
 import type {
   LAPAgentIdentity,
   LAPRequest,
   LAPMessage,
-  LAPScope,
 } from './types';
 import { consumePairingTicket, inspectPairingTicket } from './pairing';
 

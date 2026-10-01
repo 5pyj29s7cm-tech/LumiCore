@@ -429,7 +429,7 @@ const MIXED_STATUS_QUESTION_RE =
 // an unrelated conversational question.
 // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 const AMBIGUOUS_UNFINISHED_TASK_STATUS_RE =
-  /^(?:怎么回事|什么情况|出什么问题了|哪里(?:出|有)问题了|卡在哪(?:里)?|为什么(?:停了|没继续|没完成|没做完)|what happened|what went wrong|where (?:is|was) it blocked)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
+  /^(?:(?:现在|目前)?(?:任务)?(?:进度(?:怎么样|如何)|(?:做|执行|进行|处理)(?:得)?怎么样|(?:做|执行|进行|处理)到哪(?:一步|里))了?|怎么回事|什么情况|出什么问题了|哪里(?:出|有)问题了|卡在哪(?:里)?|为什么(?:停了|没继续|没完成|没做完)|what happened|what went wrong|where (?:is|was) it blocked)[啊呀吧嘛呢，,。！？?!\s]*$/iu; // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
 
 // A terse negative observation such as "还没播放" is not merely a request to
 // read status. While the matching durable task is unfinished it corrects the
@@ -579,42 +579,11 @@ export function conversationActionRequiresFreshConfirmationReview(
   );
 }
 
-function recoveredStructuredState(text: string): string {
-  const raw = String(text || '');
-  const markerIndex = raw.search(/## Recent action continuation context\b/i);
-  if (markerIndex < 0) return '';
-  const context = raw.slice(markerIndex);
-  const stateIndex = context.search(/Recovered structured action state:/i);
-  if (stateIndex < 0) return '';
-  return context
-    .slice(stateIndex)
-    .split(/\s+(?:Recent user task context|Recent Lumi execution state|Recent tool evidence|Rules):/i, 1)[0];
-}
-
 export function isCurrentAppEditingRequest(text: string): boolean {
   const current = currentTurnText(text);
   return CURRENT_APP_EDIT_RE.test(current)
     || CURRENT_APP_WINDOW_ACTION_RE.test(current)
     || CURRENT_APP_DOCUMENT_CREATE_RE.test(current);
-}
-
-export function getRecoveredApplicationContinuationTarget(text: string): string {
-  const state = recoveredStructuredState(text);
-  if (!state) return '';
-  const target = state.match(
-    /(?:^|\s)- appTarget:\s*(.+?)(?=\s+- (?:sourcePaths|latestBlocker|unfinished):|\s+(?:Recent user task context|Recent Lumi execution state|Recent tool evidence|Rules):|$)/i,
-  )?.[1] || '';
-  return compact(target, 160);
-}
-
-export function isRecoveredCurrentAppEditingContinuation(text: string): boolean {
-  const state = recoveredStructuredState(text);
-  return Boolean(
-    state
-    && /(?:^|\s)- followupIntent:\s*execute(?=\s+- |$)/i.test(state)
-    && getRecoveredApplicationContinuationTarget(text)
-    && isCurrentAppEditingRequest(text),
-  );
 }
 
 export function classifyRecentActionFollowupIntent(text: string): RecentActionFollowupIntent {
@@ -1420,31 +1389,6 @@ export function needsRecentActionContinuationContext(userText: string): boolean 
   // an older task overwrite that self-contained command.
   if (CONCRETE_LOCAL_SOURCE_RE.test(clean) && EXPLICIT_ACTION_TARGET_RE.test(clean)) return false;
   return classifyRecentActionFollowupIntent(clean) !== 'none';
-}
-
-/**
- * Resolve a terse, explicit open instruction from the durable receipt-backed
- * continuation state. This keeps "open it" deterministic without asking a
- * model to guess which earlier website or app the pronoun referred to.
- */
-export function resolveRecentActionOpenTarget(
-  userText: string,
-  persistedState?: ConversationActionContinuationState | null,
-): string | null {
-  const normalizedIntent = normalizeActionIntent(userText);
-  if (
-    normalizedIntent.kind === 'status_query'
-    || normalizedIntent.kind === 'correction_explanation'
-  ) return null;
-  const clean = compact(userText, 120)
-    .replace(/[。！？.!?]+$/u, '')
-    .trim();
-  const state = normalizeConversationActionState(persistedState);
-  if (!clean || !state?.sourcePaths.length) return null;
-  const explicitReferentialOpen = /^(?:请|麻烦)?(?:你)?(?:现在)?(?:直接)?(?:把)?(?:它|这个|那个|这个文件|那个文件|这个文档|那个文档|刚才的文件|刚生成的文件)?(?:给我)?打开(?:一下)?$/u.test(clean) // i18n-allow: Chinese referential-open recognition; not user-visible copy.
-    || /^(?:please\s+)?(?:just\s+)?open\s+(?:it|that|this|the\s+file|the\s+document)$/i.test(clean);
-  if (!explicitReferentialOpen) return null;
-  return [...state.sourcePaths].reverse().find(Boolean) || null;
 }
 
 export function buildRecentActionContinuationBridge(

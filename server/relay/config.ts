@@ -97,15 +97,3 @@ export function relayPath(...names: string[]): string | undefined {
   }
   return undefined;
 }
-
-export function relayHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const key = relayApiKey();
-  if (!key) throw new Error('RELAY_API_KEY is not configured. Set it in Settings > AI Providers > Official.');
-  // Callers may add content headers, but cannot accidentally replace the
-  // credential header with a user-controlled value. Header names are case
-  // insensitive, so filter before adding the authoritative value.
-  const safeExtra = Object.fromEntries(
-    Object.entries(extra).filter(([name]) => !/^(authorization|cookie|proxy-authorization|set-cookie)$/i.test(name)),
-  );
-  return { ...safeExtra, Authorization: `Bearer ${key}` };
-}

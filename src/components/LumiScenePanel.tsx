@@ -1,4 +1,3 @@
-import React from 'react';
 import { Boxes, CheckCircle2, CircleAlert, Layers3 } from 'lucide-react';
 import type { LumiSceneNode, LumiSceneSnapshot, LumiSceneTone } from '../../shared/lumi_scene';
 import { lumiSceneCopy } from '@/i18n/locales/lumiScene';

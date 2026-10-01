@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 /** Durable autonomous task queue for Lumi's unattended background work. */
 import { randomUUID } from 'crypto';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
@@ -191,7 +192,7 @@ function cloneTask(task: AutonomousTask): AutonomousTask {
   return {
     ...task,
     membershipAuthorization: task.membershipAuthorization ? { ...task.membershipAuthorization } : undefined,
-    actions: task.actions ? structuredClone(task.actions) : undefined,
+    actions: task.actions ? cloneDatabaseValue(task.actions) : undefined,
     checkpoint: task.checkpoint ? {
       ...task.checkpoint,
       receiptIds: [...(task.checkpoint.receiptIds || [])],
@@ -413,7 +414,7 @@ export async function settleAutonomousTaskAction(id: string, leaseId: string, re
   if (action.name !== record.name) throw new Error('Autonomous terminal receipt action mismatch.');
   // Keep the bounded canonical receipt already redacted by the tool engine.
   // Oversized receipts remain unknown rather than silently losing replay data.
-  const stored = sanitizeDiagnosticValue(structuredClone(record));
+  const stored = sanitizeDiagnosticValue(cloneDatabaseValue(record));
   if (JSON.stringify(stored).length > 64_000) throw new Error('Autonomous terminal receipt exceeds its durable limit.');
   action.record = stored;
   action.state = 'settled';
@@ -427,7 +428,7 @@ export async function settleAutonomousTaskAction(id: string, leaseId: string, re
 }
 
 export function getAutonomousTaskPriorRecords(task: AutonomousTask): ToolExecutionRecord[] {
-  return (task.actions || []).flatMap(action => action.state === 'settled' && action.record ? [structuredClone(action.record)] : []);
+  return (task.actions || []).flatMap(action => action.state === 'settled' && action.record ? [cloneDatabaseValue(action.record)] : []);
 }
 
 export function hydrateAutonomousTasksFromDb(force = false): number {
@@ -633,33 +634,6 @@ export function markCompleted(
     evidenceRefs: [...verification.terminalReceipt!.evidenceRefs],
     toolNames: [...verification.terminalReceipt!.toolNames],
   };
-  clearLease(task);
-  moveToHistory(task);
-  persist();
-  return cloneTask(task);
-}
-
-export function markFailed(id: string, error: string, leaseId?: string): AutonomousTask | null {
-  ensureHydrated();
-  const task = findTask(id);
-  if (!task) return null;
-  if (!hasLiveLease(task, leaseId)) return null;
-  if (isTaskCancellationRequested(id)) return markCancelled(id, error);
-  if (task.pauseRequestedAt) return markPaused(id);
-  const timestamp = nowIso();
-  task.status = 'failed';
-  task.completedAt = timestamp;
-  task.updatedAt = timestamp;
-  task.error = error;
-  task.terminalReceipt = buildTaskTerminalReceipt({
-    taskId: task.id,
-    runtime: 'autonomous',
-    outcome: 'failed',
-    reasonCode: 'autonomous_execution_failed',
-    reason: error,
-    evidenceRefs: task.checkpoint?.receiptIds,
-    createdAt: timestamp,
-  });
   clearLease(task);
   moveToHistory(task);
   persist();

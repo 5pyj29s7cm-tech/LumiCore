@@ -120,6 +120,7 @@ describe('desktop execution stability policy', () => {
     ].join('\n');
     const dispatch = buildLumiTurnDispatch({
       userId: 'desktop_policy_current_app_user',
+      continuationAppTarget: 'WPS',
       channel: 'chat',
       source: 'chat',
       text,

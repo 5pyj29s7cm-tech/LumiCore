@@ -5,7 +5,7 @@ describe('work takeover continuity', () => {
   it('binds a bare continue turn to the latest active task on a work surface', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const task = createWorkTakeoverTask({
@@ -29,15 +29,15 @@ describe('work takeover continuity', () => {
     expect(context.routeText).toContain('工作接管');
     expect(context.promptOverlay).toContain(task.id);
 
-    const command = getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_continue_user', { surface: 'work' });
-    expect(command?.toolCall.name).toBe('work_takeover_task_advance');
-    expect(command?.toolCall.arguments.id).toBe(task.id);
+    const command = buildWorkTakeoverContinuityContext('continuity_continue_user', '下一步呢', { surface: 'work' });
+    expect(command.intent).toBe('advance');
+    expect(command.latestTask?.id).toBe(task.id);
   });
 
   it('keeps ambiguous chat turns soft on a normal chat surface', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     createWorkTakeoverTask({
@@ -54,13 +54,13 @@ describe('work takeover continuity', () => {
     expect(context.strength).toBe('hint');
     expect(context.shouldResumeTask).toBe(false);
     expect(context.promptOverlay).toContain('may still be ordinary chat');
-    expect(getWorkTakeoverContinuationQuickCommand('下一步呢', 'continuity_chat_user', { surface: 'chat' })).toBeNull();
+    expect(buildWorkTakeoverContinuityContext('continuity_chat_user', '下一步呢', { surface: 'chat' }).shouldResumeTask).toBe(false);
   });
 
   it('does not inherit an older takeover task when the user declares a new isolated task', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const userId = 'continuity_new_task_boundary_user';
@@ -79,13 +79,13 @@ describe('work takeover continuity', () => {
     expect(context.strength).toBe('none');
     expect(context.shouldResumeTask).toBe(false);
     expect(context.routeText).toBe(text);
-    expect(getWorkTakeoverContinuationQuickCommand(text, userId, { surface: 'chat' })).toBeNull();
+    expect(buildWorkTakeoverContinuityContext(userId, text, { surface: 'chat' }).shouldResumeTask).toBe(false);
   });
 
   it('never lets a delivery restatement request resume an older work task', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const userId = 'continuity_adjacent_reply_restatement_user';
@@ -111,14 +111,14 @@ describe('work takeover continuity', () => {
       expect(context.strength, surface).toBe('none');
       expect(context.shouldResumeTask, surface).toBe(false);
       expect(context.routeText, surface).toBe(text);
-      expect(getWorkTakeoverContinuationQuickCommand(text, userId, { surface }), surface).toBeNull();
+      expect(buildWorkTakeoverContinuityContext(userId, text, { surface }).shouldResumeTask, surface).toBe(false);
     }
   });
 
   it('does not turn work-support questions into persisted-task continuation', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     createWorkTakeoverTask({
@@ -144,7 +144,7 @@ describe('work takeover continuity', () => {
       expect(context.strength, text).toBe('none');
       expect(context.shouldResumeTask, text).toBe(false);
       expect(context.routeText, text).toBe(text);
-      expect(getWorkTakeoverContinuationQuickCommand(text, 'continuity_work_support_question_user', { surface: 'chat' }), text).toBeNull();
+      expect(buildWorkTakeoverContinuityContext('continuity_work_support_question_user', text, { surface: 'chat' }).shouldResumeTask, text).toBe(false);
     }
   });
 
@@ -158,7 +158,7 @@ describe('work takeover continuity', () => {
   ])('treats an explicit work imperative as advance, not status: %s', async (text) => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const userId = `continuity_work_imperative_${Buffer.from(text).toString('hex')}`;
@@ -175,9 +175,9 @@ describe('work takeover continuity', () => {
     expect(context.intent).toBe('advance');
     expect(context.strength).toBe('direct');
     expect(context.shouldResumeTask).toBe(true);
-    const command = getWorkTakeoverContinuationQuickCommand(text, userId, { surface: 'chat' });
-    expect(command?.toolCall.name).toBe('work_takeover_task_advance');
-    expect(command?.toolCall.arguments.id).toBe(task.id);
+    const command = buildWorkTakeoverContinuityContext(userId, text, { surface: 'chat' });
+    expect(command.intent).toBe('advance');
+    expect(command.latestTask?.id).toBe(task.id);
   });
 
   it('keeps an explicit completion question on the status path', async () => {
@@ -206,7 +206,7 @@ describe('work takeover continuity', () => {
   it('binds short chat follow-ups to the failed task recovery point', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { buildWorkTakeoverContinuityContext, getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const task = createWorkTakeoverTask({
@@ -235,15 +235,15 @@ describe('work takeover continuity', () => {
     expect(context.promptOverlay).toContain('recovery pressure');
     expect(context.promptOverlay).toContain('failedTool=desktop_ui_click');
 
-    const command = getWorkTakeoverContinuationQuickCommand('怎么样了', 'continuity_failed_resume_user', { surface: 'chat' });
-    expect(command?.toolCall.name).toBe('work_takeover_task_continue');
-    expect(command?.toolCall.arguments.id).toBe(task.id);
+    const command = buildWorkTakeoverContinuityContext('continuity_failed_resume_user', '怎么样了', { surface: 'chat' });
+    expect(command.intent).toBe('status');
+    expect(command.latestTask?.id).toBe(task.id);
   });
 
   it('lets voice chat continue unless the wording is clearly work-directed', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     const task = createWorkTakeoverTask({
@@ -255,16 +255,16 @@ describe('work takeover continuity', () => {
       status: 'in_progress',
     });
 
-    expect(getWorkTakeoverContinuationQuickCommand('继续', 'continuity_voice_user', { surface: 'voice' })).toBeNull();
-    const command = getWorkTakeoverContinuationQuickCommand('继续推进这个任务', 'continuity_voice_user', { surface: 'voice' });
-    expect(command?.toolCall.name).toBe('work_takeover_task_advance');
-    expect(command?.toolCall.arguments.id).toBe(task.id);
+    expect(buildWorkTakeoverContinuityContext('continuity_voice_user', '继续', { surface: 'voice' }).shouldResumeTask).toBe(false);
+    const command = buildWorkTakeoverContinuityContext('continuity_voice_user', '继续推进这个任务', { surface: 'voice' });
+    expect(command.intent).toBe('advance');
+    expect(command.latestTask?.id).toBe(task.id);
   });
 
   it('does not confuse music continuation with work takeover continuation', async () => {
     const { initDatabase } = await import('../db_layer');
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
-    const { getWorkTakeoverContinuationQuickCommand } = await import('../server/work_takeover/continuity');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
 
     createWorkTakeoverTask({
@@ -276,17 +276,13 @@ describe('work takeover continuity', () => {
       status: 'in_progress',
     });
 
-    expect(getWorkTakeoverContinuationQuickCommand('继续播放音乐', 'continuity_music_user')).toBeNull();
+    expect(buildWorkTakeoverContinuityContext('continuity_music_user', '继续播放音乐').shouldResumeTask).toBe(false);
   });
 
-  it('keeps ordinary acknowledgements when there is no active task', async () => {
+  it('does not invent work from an acknowledgement without an active task', async () => {
     const { initDatabase } = await import('../db_layer');
-    const { matchQuickCommand } = await import('../server/cognition/quick_commands');
+    const { buildWorkTakeoverContinuityContext } = await import('../server/work_takeover/continuity');
     await initDatabase();
-
-    const result = await matchQuickCommand('好的', 'continuity_no_task_user');
-    expect(result?.matched).toBe(true);
-    expect(result?.toolCall).toBeUndefined();
-    expect(result?.responseText).toBe('👍');
+    expect(buildWorkTakeoverContinuityContext('continuity_no_task_user', '好的').shouldResumeTask).toBe(false);
   });
 });

@@ -221,14 +221,6 @@ export function mountBranchRoutes(router: Router) {
   });
 }
 
-export function getConnectedBranchCount(): number {
-  return branchHeartbeats.size;
-}
-
-export function getBranchHeartbeats(): ReadonlyMap<string, string> {
-  return branchHeartbeats;
-}
-
 export function removeBranchHeartbeat(identity: string): void {
   branchHeartbeats.delete(identity);
 }

@@ -133,7 +133,3 @@ export const LUMI_OFFICIAL_SUPPORTED_ROLES = LUMI_MODEL_ROLE_IDS.filter(
 export const LUMI_OFFICIAL_UNSUPPORTED_ROLES = LUMI_MODEL_ROLE_IDS.filter(
   role => !LUMI_OFFICIAL_ROLE_CAPABILITIES[role],
 );
-
-export function isLumiOfficialRoleSupported(role: string): boolean {
-  return LUMI_OFFICIAL_ROLE_CAPABILITIES[role as LumiModelRoleId] === true;
-}

@@ -9,7 +9,6 @@ import {
 import {
   VOICE_DESKTOP_LEASE_WAIT_MS,
   VOICE_MODEL_INPUT_BUDGET_TOKENS,
-  canReuseSpeculativeVoiceSpeech,
   resolveVoiceModelInputBudget,
 } from '../server/socket/voice_runtime_policy';
 import {
@@ -109,27 +108,6 @@ describe('live voice runtime stability policy', () => {
     expect(payload).toContain('SAFETY_RULE_SENTINEL');
     expect(estimateModelRequestInputTokens(prepared.messages, prepared.toolDeclarations))
       .toBeLessThanOrEqual(VOICE_MODEL_INPUT_BUDGET_TOKENS);
-  });
-
-  it('does not reuse old speculative audio after a live voice switch', () => {
-    expect(canReuseSpeculativeVoiceSpeech({
-      preparedVoiceId: 'voice-a',
-      currentVoiceId: 'voice-a',
-      preparedSwitchGeneration: 4,
-      currentSwitchGeneration: 4,
-    })).toBe(true);
-    expect(canReuseSpeculativeVoiceSpeech({
-      preparedVoiceId: 'voice-a',
-      currentVoiceId: 'voice-b',
-      preparedSwitchGeneration: 4,
-      currentSwitchGeneration: 5,
-    })).toBe(false);
-    expect(canReuseSpeculativeVoiceSpeech({
-      preparedVoiceId: 'voice-a',
-      currentVoiceId: 'voice-a',
-      preparedSwitchGeneration: 4,
-      currentSwitchGeneration: 5,
-    })).toBe(false);
   });
 
   it('wires capture recovery, live input-device changes, bounded prompts, and the voice lease deadline', () => {

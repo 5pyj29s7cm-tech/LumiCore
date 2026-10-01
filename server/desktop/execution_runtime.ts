@@ -1,3 +1,4 @@
+import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 import type { CapabilityManifestEntry, ToolExecutionRecord } from '../tools/types';
 import {
@@ -39,17 +40,6 @@ const CONTROL_TOOL_RE = /^(?:client_(?:get_state|action)|desktop_(?:open|show_lu
 
 function digest(value: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-}
-
-function parseObject(value: unknown): Record<string, any> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
-  if (typeof value !== 'string' || !value.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
 }
 
 export function parseDesktopWindowFingerprint(value: unknown): WindowFingerprint | null {

@@ -1,4 +1,4 @@
-export { queryMemories, queryMemoriesVector, backfillEmbeddings, addMemory, removeMemory, updateMemoryLifecycle, resolveMemoryConflict, decayMemories, dynamicDecayMemories, computeMemoryValue, promoteMemories, formatMemoriesForContext, classifyMemoryEvidence, isMemoryAvatarScoped, isMemoryAvatarAgentId, addReminder, upsertPendingReminder, getDueReminders, fireReminder, getUnconsolidatedEpisodic, markConsolidated, decayMemoryAssociations, initMemoryAssociations, getAssociatedMemories } from './store';
+export { queryMemories, queryMemoriesVector, backfillEmbeddings, addMemory, removeMemory, updateMemoryLifecycle, resolveMemoryConflict, dynamicDecayMemories, computeMemoryValue, promoteMemories, formatMemoriesForContext, classifyMemoryEvidence, isMemoryAvatarScoped, isMemoryAvatarAgentId, addReminder, upsertPendingReminder, getDueReminders, fireReminder, getUnconsolidatedEpisodic, markConsolidated, decayMemoryAssociations, initMemoryAssociations, getAssociatedMemories } from './store';
 export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
 export type { Reminder } from './store';
 export { extractMemories } from './extractor';
@@ -6,7 +6,7 @@ export type { ExtractedMemory, MemoryTier, MemoryPerspective } from './types';
 export type { ExtractedReminder } from './extractor';
 export { analyzeBehavioralPatterns, runBehavioralAnalysis } from './behavioral';
 export type { BehavioralPattern } from './behavioral';
-export { initMemorySync, registerUserSocket, unregisterUserSocket, broadcastMemoryChange, broadcastDeviceChange, broadcastPreferenceChange } from './sync';
+export { initMemorySync, registerUserSocket, unregisterUserSocket, broadcastMemoryChange, broadcastPreferenceChange } from './sync';
 export { buildNarrativeChain } from './narrative';
 export type { NarrativeChainResult } from './narrative';
 export { evaluateMemoryFirewall, getMemoryFirewallPolicy } from './firewall';

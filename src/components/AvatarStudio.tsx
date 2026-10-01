@@ -1,11 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Brush, Sparkles, Cat, Bird, Disc3, Flame, Loader2, Check, ArrowRight, Wand2, RotateCcw, Download, Upload, Image, Shirt, Palette, Star, Heart, Rabbit, PawPrint } from 'lucide-react';
+import { Brush, Sparkles, Cat, Bird, Disc3, Flame, Check, ArrowRight, Wand2, RotateCcw, Download, Upload, Shirt, Palette, Star, Heart, Rabbit, PawPrint } from 'lucide-react';
 import { toast } from 'sonner';
 import { getDefaultPets, generateCustomPet, recolorPet } from '../pets/defaults';
 import { PetConfig, PetPalette, CustomPetTags, COLOR_PRESETS, BUILTIN_PALETTES } from '../pets/types';
-import { SpriteAnimator, PetAvatar } from './SpriteAnimator';
-import { ALL_ACCESSORIES, AccessoryDef, AccessoryCategory } from '../pets/accessories';
+import { PetAvatar } from './SpriteAnimator';
+import { ALL_ACCESSORIES, AccessoryCategory } from '../pets/accessories';
 import { apiFetch } from '@/services/apiClient';
 import { uiMessage } from '../i18n/uiMessages';
 import { avatarStudioCopy } from '../i18n/locales/avatarStudio';
@@ -71,12 +71,11 @@ export function AvatarStudio({
 }) {
   const uiLang: UiLang = lang || (t?.langCode === 'en' ? 'en' : 'zh');
   const copy = avatarStudioCopy(uiLang);
-  const ui = useCallback((zh: string, en: string) => uiLang === 'zh' ? zh : en, [uiLang]);
   const pets = getDefaultPets();
   const [customPets, setCustomPets] = useState<PetConfig[]>(() => loadCustomPets(storageScope));
   const allPets = [...pets, ...customPets];
   const [activePet, setActivePet] = useState<PetConfig>(() =>
-    pets.find(p => p.id === selectedPetId) || loadCustomPets(storageScope).find(p => p.id === selectedPetId) || pets[0],
+    pets.find(p => p.id === selectedPetId) || customPets.find(p => p.id === selectedPetId) || pets[0],
   );
   const [previewAnim, setPreviewAnim] = useState('idle');
   const [animKey, setAnimKey] = useState(0);
@@ -84,32 +83,25 @@ export function AvatarStudio({
   const [genPrompt, setGenPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [aiMode, setAiMode] = useState(true);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Color editing state
-  const [editPalette, setEditPalette] = useState<PetPalette>(activePet.palette || BUILTIN_PALETTES.cat);
+  const editPalette = activePet.palette || BUILTIN_PALETTES.cat;
   const [activeColorSlot, setActiveColorSlot] = useState<keyof PetPalette>('body');
 
   useEffect(() => {
     storeCustomPets(storageScope, customPets);
   }, [customPets, storageScope]);
 
-  // Sync palette when activePet changes
-  useEffect(() => {
-    if (activePet.palette) setEditPalette(activePet.palette);
-  }, [activePet.id]);
-
   const handleSelectPet = useCallback((pet: PetConfig) => {
     setActivePet(pet);
     onSelectPet(pet);
     toast.success(`${pet.name} ${uiMessage('avatar-studio.set-as-desktop-avatar.b783357c5f')}`);
     setAnimKey(k => k + 1);
-  }, [onSelectPet, ui]);
+  }, [onSelectPet]);
 
   const handleRecolor = useCallback((slot: keyof PetPalette, color: string) => {
     const newPalette = { ...editPalette, [slot]: color };
-    setEditPalette(newPalette);
     const recolored = recolorPet(activePet, newPalette);
     setActivePet(recolored);
     setCustomPets(prev => [recolored, ...prev.filter(p => p.id !== recolored.id && p.id !== activePet.id)]);
@@ -141,7 +133,7 @@ export function AvatarStudio({
     } finally {
       setGenerating(false);
     }
-  }, [genPrompt, handleSelectPet, aiMode, ui]);
+  }, [genPrompt, aiMode, onSelectPet]);
 
   // Export pet as single .pet.json with embedded spritesheet (base64)
   const handleExport = useCallback((pet: PetConfig) => {
@@ -168,7 +160,7 @@ export function AvatarStudio({
     } catch {
       toast.error(uiMessage('avatar-studio.export-failed.758b24672a'));
     }
-  }, [ui]);
+  }, []);
 
   // Import — supports single .pet.json with embedded spritesheet
   const importRef = useRef<HTMLInputElement>(null);
@@ -197,7 +189,7 @@ export function AvatarStudio({
       }
     };
     reader.readAsText(file);
-  }, [handleSelectPet, ui]);
+  }, [handleSelectPet]);
 
   const handleImportClick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -220,7 +212,7 @@ export function AvatarStudio({
     const file = e.dataTransfer.files?.[0];
     if (file && file.name.endsWith('.json')) handleImportFile(file);
     else toast.error(uiMessage('avatar-studio.drop-a-pet-json-file.2fbf3fd8d9'));
-  }, [handleImportFile, ui]);
+  }, [handleImportFile]);
 
   return (
     <div className="flex h-full flex-col bg-zinc-950/85" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -319,8 +311,6 @@ export function AvatarStudio({
                         setAnimKey(k => k + 1);
                       }
                     }}
-                    onMouseEnter={() => setHoveredId(pet.id)}
-                    onMouseLeave={() => setHoveredId(null)}
                     className={`group relative rounded-xl border p-2 text-left transition-colors ${
                       activePet.id === pet.id
                         ? 'bg-cyan-500/10 border-cyan-500/30 ring-1 ring-cyan-500/20'

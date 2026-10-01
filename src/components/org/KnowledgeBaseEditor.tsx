@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -43,7 +43,6 @@ function normalizeTags(tags: string): string[] {
 export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const categoryLabels = knowledgeCategoryLabels(isZh ? 'zh' : 'en');
 
   const [title, setTitle] = useState('');

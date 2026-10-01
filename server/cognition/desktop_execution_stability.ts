@@ -1,6 +1,5 @@
 import type { LumiCapabilityLane, LumiCapabilitySelection } from './capability_selection';
 import type { LumiTurnChannel, LumiTurnFlow } from './turn_flow';
-import { isRecoveredCurrentAppEditingContinuation } from './action_continuation';
 import type { CapabilityExecutionPlan } from './capability_execution_plan';
 import {
   buildDesktopExecutionPlan,
@@ -71,9 +70,7 @@ export function buildDesktopExecutionStabilityPolicy(
     };
   }
 
-  const recoveredCurrentAppEdit = isRecoveredCurrentAppEditingContinuation(
-    input.text || input.flow?.routeText || '',
-  );
+  const recoveredCurrentAppEdit = Boolean(input.flow?.currentAppEditTarget);
   const evidenceTools = unique([
     recoveredCurrentAppEdit ? '' : 'desktop_list_apps',
     'desktop_active_window',

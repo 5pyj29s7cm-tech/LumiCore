@@ -60,7 +60,6 @@ function formatTime(value: string | null, isZh: boolean) {
 export function OrgBranchPanel() {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => isZh ? zh : en;
   const [state, setState] = useState<BranchState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(() => ({

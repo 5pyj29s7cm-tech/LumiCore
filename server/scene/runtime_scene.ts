@@ -105,6 +105,7 @@ function currentSnapshot(
   const orgId = input.domain === 'work' ? String(input.orgId || '') : '';
   const key = scopeKey(input.userId, input.domain, orgId);
   const previous = sceneStore.get(key);
+  if (previous) { sceneStore.delete(key); sceneStore.set(key, previous); }
   const runtime = buildStructuredRuntimeStatus(db, {
     userId: input.userId,
     domain: input.domain,
@@ -120,6 +121,7 @@ function currentSnapshot(
   });
   if (previous?.digest === candidate.digest) return { key, previous, snapshot: previous, changed: false };
   const snapshot = candidate;
+  if (!previous && sceneStore.size >= 256) sceneStore.delete(sceneStore.keys().next().value!);
   sceneStore.set(key, snapshot);
   return { key, previous, snapshot, changed: true };
 }

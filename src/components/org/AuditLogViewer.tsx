@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { FeedbackBanner, type Feedback } from './FeedbackBanner';
+import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  AlertCircle,
-  CheckCircle,
   Clock,
   Download,
   FileText,
@@ -25,12 +24,9 @@ interface AuditEntry {
   timestamp: string;
 }
 
-type Feedback = { type: 'success' | 'error'; text: string };
-
 export function AuditLogViewer() {
   const t = useT();
   const isZh = t.langCode !== 'en';
-  const ui = useCallback((zh: string, en: string) => (isZh ? zh : en), [isZh]);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ userId: '', action: '', resourceType: '' });
@@ -56,7 +52,7 @@ export function AuditLogViewer() {
     } finally {
       setLoading(false);
     }
-  }, [filters, ui]);
+  }, [filters]);
 
   useEffect(() => {
     void loadEntries();
@@ -257,18 +253,5 @@ function FilterInput({
         className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 focus:border-amber-400/35"
       />
     </label>
-  );
-}
-
-function FeedbackBanner({ feedback }: { feedback: Feedback }) {
-  return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
-      feedback.type === 'success'
-        ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
-        : 'border-red-500/20 bg-red-500/10 text-red-200'
-    }`}>
-      {feedback.type === 'success' ? <CheckCircle size={16} className="mt-0.5 shrink-0" /> : <AlertCircle size={16} className="mt-0.5 shrink-0" />}
-      <span>{feedback.text}</span>
-    </div>
   );
 }

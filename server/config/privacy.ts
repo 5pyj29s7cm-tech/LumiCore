@@ -5,7 +5,6 @@
  * operating-system firewall and does not control other applications.
  */
 
-import { loadKeys } from './keys';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
@@ -101,21 +100,5 @@ export function requireNotStrict(operation: string): void {
     throw new Error(
       `[Privacy] Strict mode: "${operation}" is unavailable under the current privacy policy.`
     );
-  }
-}
-
-export function listActiveCloudProviders(): string[] {
-  try {
-    const keys = loadKeys();
-    const providers: string[] = [];
-    if (keys.OPENAI_API_KEY) providers.push('openai');
-    if (keys.ANTHROPIC_API_KEY) providers.push('anthropic');
-    if (keys.DASHSCOPE_API_KEY || keys.QWEN_API_KEY) providers.push('qwen');
-    if (keys.DEEPSEEK_API_KEY) providers.push('deepseek');
-    if (keys.GEMINI_API_KEY) providers.push('gemini');
-    if (keys.ALIYUN_AK_ID) providers.push('aliyun');
-    return providers;
-  } catch {
-    return [];
   }
 }

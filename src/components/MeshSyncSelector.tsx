@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion } from 'motion/react';
 import { Zap } from 'lucide-react';
 import { GlassCard } from './SharedUI';

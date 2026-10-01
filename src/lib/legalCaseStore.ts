@@ -213,12 +213,6 @@ export function getLegalCaseLabel(caseFile: LegalCaseFile | null): string {
   return caseFile.title || caseFile.party || caseFile.caseNumber || chinaLegalCopy().unnamedCase;
 }
 
-export function getActiveLegalCase(): LegalCaseFile | null {
-  const cases = readLegalCaseFiles();
-  const activeId = getActiveLegalCaseId();
-  return cases.find(item => item.id === activeId) || cases[0] || null;
-}
-
 export function getLegalConsultationCase(): LegalCaseFile | null {
   const consultationId = getLegalConsultationCaseId();
   return consultationId ? getLegalCaseById(consultationId) : null;

@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../db/snapshot_changes';
 import type { Request, RequestHandler, Response } from 'express';
 import { flushDBOrThrow } from '../../db_layer';
 import { requireAuth, resolveDomain } from '../middleware/auth';
@@ -22,7 +23,7 @@ export async function sendDurableMutation(
   req: Request, res: Response, result: unknown, afterSaved?: () => void,
   options: { retryable?: boolean } = {},
 ): Promise<Response | void> {
-  const response = structuredClone(result);
+  const response = cloneDatabaseValue(result);
   try { await flushDBOrThrow(); }
   catch {
     return res.status(503).json({

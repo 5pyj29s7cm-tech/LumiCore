@@ -440,7 +440,3 @@ export const ALL_ACCESSORIES: AccessoryDef[] = [
 export function getAccessoryById(id: string): AccessoryDef | undefined {
   return ALL_ACCESSORIES.find(a => a.id === id);
 }
-
-export function getAccessoriesByCategory(cat: AccessoryDef['category']): AccessoryDef[] {
-  return ALL_ACCESSORIES.filter(a => a.category === cat);
-}

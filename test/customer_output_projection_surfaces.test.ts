@@ -77,7 +77,6 @@ describe('customer-facing assistant output projection', () => {
 
   it('applies the shared sanitizer at every secondary assistant surface', () => {
     const surfaces = [
-      'src/components/ChatPanel.tsx',
       'src/hooks/useMemoryAvatarConversation.ts',
       'src/components/org/CentralLumiChat.tsx',
       'src/hooks/useVoiceCall.ts',
@@ -87,13 +86,6 @@ describe('customer-facing assistant output projection', () => {
     for (const relativePath of surfaces) {
       expect(source(relativePath), relativePath).toContain('sanitizeAgentResponseTextForDisplay');
     }
-
-    expect(source('src/components/ChatPanel.tsx')).toMatch(
-      /onMessages[\s\S]*sanitizeAgentResponseTextForDisplay[\s\S]*onResponse[\s\S]*sanitizeAgentResponseTextForDisplay[\s\S]*onProgress[\s\S]*sanitizeAgentResponseTextForDisplay/,
-    );
-    expect(source('src/components/ChatPanel.tsx')).toContain(
-      "const streamingPublicText = sanitizeAgentStreamingTextForDisplay(streamingText, isZh ? 'zh' : 'en')",
-    );
     expect(source('src/components/AgentChatPage.tsx')).toMatch(
       /onChunk[\s\S]*streamingRawTextRef[\s\S]*sanitizeAgentStreamingTextForDisplay\(rawText[\s\S]*onError[\s\S]*sanitizeAgentResponseTextForDisplay/,
     );

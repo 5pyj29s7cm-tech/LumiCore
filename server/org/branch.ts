@@ -87,15 +87,6 @@ interface SyncIndexEntry {
 
 type SyncIndex = Record<string, SyncIndexEntry>;
 
-interface CachedArticle {
-  id: string;
-  title: string;
-  content: string;
-  category: string;
-  tags: string;
-  cachedAt: string;
-}
-
 let branchState: BranchState | null = null;
 interface SyncDrainResult { synced: number; flushed: number; errors: string[] }
 let syncInFlight: Promise<SyncDrainResult> | null = null;
@@ -606,14 +597,6 @@ export function switchDomain(domain: 'personal' | 'work'): void {
   saveBranchState();
 }
 
-export function getCurrentDomain(): 'personal' | 'work' {
-  return bs().currentDomain;
-}
-
-export function isWorkDomain(): boolean {
-  return bs().currentDomain === 'work' && bs().status === 'connected';
-}
-
 async function runSyncWorkData(includeUnsynced: boolean): Promise<SyncDrainResult> {
   const generation = connectionGeneration;
   const state = bs();
@@ -661,15 +644,6 @@ export async function syncWorkData(): Promise<{ synced: number; errors: string[]
   return { synced, errors };
 }
 
-let kbCache: CachedArticle[] | null = null;
-
-function getKbCache(): CachedArticle[] {
-  if (kbCache) return kbCache;
-  const saved = readSetting<unknown>(KB_CACHE_SETTING, []);
-  kbCache = Array.isArray(saved) ? saved.filter(isObject) as CachedArticle[] : [];
-  return kbCache;
-}
-
 export async function pullKbCache(): Promise<number> {
   const state = bs();
   if (!state.companyUrl || !state.connectionToken) return 0;
@@ -680,7 +654,7 @@ export async function pullKbCache(): Promise<number> {
     if (!response.ok) return 0;
     const body: any = await response.json();
     const now = new Date().toISOString();
-    kbCache = (Array.isArray(body?.articles) ? body.articles : []).map((article: any) => ({
+    const kbCache = (Array.isArray(body?.articles) ? body.articles : []).map((article: any) => ({
       id: String(article.id || ''),
       title: String(article.title || ''),
       content: String(article.content || ''),
@@ -697,41 +671,6 @@ export async function pullKbCache(): Promise<number> {
   }
 }
 
-export function searchKbCache(query: string): CachedArticle[] {
-  const normalized = query.toLowerCase();
-  return getKbCache().filter(article =>
-    article.title.toLowerCase().includes(normalized)
-    || article.content.toLowerCase().includes(normalized)
-    || article.tags.toLowerCase().includes(normalized),
-  );
-}
-
-export function getKbCacheStats(): { count: number; lastUpdated: string | null } {
-  const cache = getKbCache();
-  const timestamps = cache.map(article => article.cachedAt).sort();
-  return { count: cache.length, lastUpdated: timestamps.at(-1) || null };
-}
-
-export function queueOfflineAction(type: OfflineAction['type'], payload: any): void {
-  const queue = getOfflineQueue();
-  if (type === 'sync') {
-    const batchId = String(payload?.batchId || '');
-    if (batchId && queue.some(action => action.type === 'sync' && action.payload?.batchId === batchId)) return;
-  }
-  const now = new Date().toISOString();
-  queue.push({
-    id: randomUUID(),
-    type,
-    payload,
-    state: 'pending',
-    attempts: 0,
-    lastError: '',
-    queuedAt: now,
-    updatedAt: now,
-  });
-  saveOfflineQueue(queue);
-}
-
 export async function flushOfflineQueue(): Promise<{ flushed: number; errors: string[] }> {
   const { flushed, errors } = await drainSyncQueue(false);
   return { flushed, errors };
@@ -739,54 +678,4 @@ export async function flushOfflineQueue(): Promise<{ flushed: number; errors: st
 
 export function getOfflineQueueLength(): number {
   return getOfflineQueue().length;
-}
-
-export async function checkConnection(): Promise<BranchStatus> {
-  const state = bs();
-  if (!state.companyUrl || !state.connectionToken) {
-    state.status = 'disconnected';
-    saveBranchState();
-    return state.status;
-  }
-  try {
-    const response = await fetchWithTimeout(`${state.companyUrl}/api/branch/status`, {
-      headers: { Authorization: `Bearer ${state.connectionToken}` },
-    }, 5_000);
-    if (response.ok) {
-      const body: any = await response.json();
-      if (body?.branchId !== state.branchId || body?.orgId !== state.orgId) {
-        state.status = 'error';
-      } else {
-        state.status = 'connected';
-        state.lastHeartbeatAt = new Date().toISOString();
-      }
-    } else if (response.status === 401 || response.status === 403) {
-      state.status = 'error';
-      state.connectionToken = null;
-    } else {
-      state.status = 'reconnecting';
-    }
-  } catch {
-    state.status = 'reconnecting';
-  }
-  saveBranchState();
-  return state.status;
-}
-
-let autoSyncTimer: ReturnType<typeof setInterval> | null = null;
-
-export function startAutoSync(intervalMs = 30_000): void {
-  if (autoSyncTimer) return;
-  autoSyncTimer = setInterval(async () => {
-    if (bs().status === 'connected' && bs().currentDomain === 'work') {
-      await syncWorkData();
-      await checkConnection();
-    }
-  }, intervalMs);
-}
-
-export function stopAutoSync(): void {
-  if (!autoSyncTimer) return;
-  clearInterval(autoSyncTimer);
-  autoSyncTimer = null;
 }

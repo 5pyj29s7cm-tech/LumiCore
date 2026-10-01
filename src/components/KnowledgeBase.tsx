@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Loader2, Search, Upload, ArrowRight, File, FileText, Trash2, Eye, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen, BookOpen, RefreshCw, Link2 } from 'lucide-react';
+import { X, Loader2, Search, Upload, ArrowRight, File, FileText, Trash2, ChevronRight, AlertCircle, CheckCircle2, Clock, FolderOpen, BookOpen, RefreshCw, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
+import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
 import { appConfirm } from '@/lib/appConfirm';
 import { NodeDetailPanel } from './NodeDetailPanel';
 import { MemoryTreeScene, layoutTree3D } from './MemoryTree';
-import type { TreeNode3D, BranchCurve3D, MemoryNode as MemNode, FileEntry } from './MemoryTree';
+import type { MemoryNode as MemNode, FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
-import { CN_BROKEN_TEXT_MARKERS } from '../i18n/regions/cn/recognition';
 import type { ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 
 interface MemoryTree { node: MemNode; children: MemoryTree[]; }
@@ -38,55 +38,18 @@ interface ObsidianVault {
   };
 }
 
-const BROKEN_FILENAME_MARKERS = [
-  '\u00c3',
-  '\u00c2',
-  '\ufffd',
-  ...CN_BROKEN_TEXT_MARKERS,
-];
-
-function looksBrokenFilename(value: string): boolean {
-  return /[\u0080-\u009f]/.test(value)
-    || /[\u00c0-\u00ff][\u0080-\u00bf]/.test(value)
-    || BROKEN_FILENAME_MARKERS.some(marker => value.includes(marker));
-}
-
-function scoreFilenameText(value: string): number {
-  const replacement = (value.match(/\ufffd/g) || []).length;
-  const cjk = (value.match(/[\u4e00-\u9fff]/g) || []).length;
-  const ascii = (value.match(/[A-Za-z0-9._ -]/g) || []).length;
-  const controls = (value.match(/[\u0080-\u009f]/g) || []).length;
-  const brokenMarkers = BROKEN_FILENAME_MARKERS.reduce((sum, marker) => sum + (value.includes(marker) ? 1 : 0), 0);
-  return cjk * 2 + ascii * 0.15 - replacement * 8 - controls * 6 - brokenMarkers * 2;
-}
-
-function repairKnowledgeFilename(value: string | undefined): string {
-  const original = String(value || '').normalize('NFC');
-  if (!original || !looksBrokenFilename(original)) return original;
-  const candidates = new Set<string>([original]);
-  try {
-    const bytes = Uint8Array.from(Array.from(original, ch => ch.charCodeAt(0) & 0xff));
-    candidates.add(new TextDecoder('utf-8', { fatal: false }).decode(bytes).normalize('NFC'));
-  } catch {}
-  return [...candidates].sort((a, b) => scoreFilenameText(b) - scoreFilenameText(a))[0] || original;
-}
-
 export function KnowledgeBase(props: KnowledgeBaseProps) {
   // Lists, editor state and in-flight completions belong to one owner. A new
   // scope gets a new view; late old reads cannot write into that view.
   return <KnowledgeBaseScope key={props.scopeKey || props.domain || 'personal'} {...props} />;
 }
 
-function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: KnowledgeBaseProps) {
+function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal', scopeKey }: KnowledgeBaseProps) {
   const socket = useSocket();
   const isZh = t?.langCode !== 'en';
 
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [memories, setMemories] = useState<MemNode[]>([]);
-  const [treeNodes, setTreeNodes] = useState<TreeNode3D[]>([]);
-  const [branchCurves, setBranchCurves] = useState<BranchCurve3D[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [tree, setTree] = useState<{ memories: MemNode[]; loading: boolean; error: number | 'network' | null }>({ memories: [], loading: true, error: null });
+  const treeRevision = React.useRef(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [cardPos, setCardPos] = useState<{ x: number; y: number } | null>(null);
@@ -98,24 +61,17 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
   const [obsidianVaults, setObsidianVaults] = useState<ObsidianVault[]>([]);
   const [obsidianSyncing, setObsidianSyncing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const archiveReconciled = React.useRef(false);
-  const archivePending = React.useRef<Promise<void> | null>(null);
-  const lastLoadErrorRef = React.useRef<string | null>(null);
-
-  const reportLoadError = useCallback((message: string) => {
-    setLoadError(message);
-    lastLoadErrorRef.current = message;
-  }, []);
-
-  const scopedMemoryUrl = useCallback((path: string) => {
-    const separator = path.includes('?') ? '&' : '?';
-    return `${path}${separator}domain=${encodeURIComponent(domain)}`;
-  }, [domain]);
-
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}domain=${encodeURIComponent(domain)}`;
   }, [domain]);
+  const { files, loading: filesLoading, error: filesError, refresh: refreshFiles } = useGeneratedLibrary(scopeKey || domain, scopedFileUrl);
+  const { memories } = tree;
+  const loading = filesLoading || tree.loading;
+  const loadError = [
+    filesError !== null && `${t.kbFilesLoadFailed || 'Files failed to load'} (${filesError})`,
+    tree.error !== null && `${t.kbMemoriesLoadFailed || 'Memories failed to load'} (${tree.error})`,
+  ].filter(Boolean).join(' / ');
   const notifyKnowledgeUpdated = useCallback((files?: Array<{ id?: string; name?: string; displayName?: string }>) => {
     window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail: { domain, files } }));
     window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
@@ -146,62 +102,25 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
     }
   }, [scopedFileUrl]);
 
-  // Fetch data — parallel, no dependency between files and memory tree
   const fetchAll = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    if (!archiveReconciled.current) {
-      archivePending.current ||= fetch(scopedFileUrl('/api/files/archive-generated'), { method: 'POST', credentials: 'include' })
-        .then(response => { archiveReconciled.current = response.ok; }).catch(() => {});
-      await archivePending.current;
-      archivePending.current = null;
-    }
-    const [filesRes, treeRes] = await Promise.allSettled([
-      fetch(scopedFileUrl('/api/files/list'), { credentials: 'include' }),
-      fetch(scopedMemoryUrl('/api/memory/tree')),
-    ]);
-    const errors: string[] = [];
-
-    if (filesRes.status === 'fulfilled' && filesRes.value.ok) {
+    const request = ++treeRevision.current;
+    setTree(previous => ({ ...previous, loading: true, error: null }));
+    await Promise.all([refreshFiles(), (async () => {
       try {
-        const d = await filesRes.value.json();
-        setFiles((d.files || []).map((file: FileEntry) => {
-          const readableName = repairKnowledgeFilename(file.displayName || file.name || file.id);
-          return {
-            ...file,
-            name: readableName,
-            displayName: readableName,
-            domain: file.domain || domain,
-          };
-        }));
-      } catch {}
-    } else {
-      const status = filesRes.status === 'fulfilled' ? filesRes.value.status : 'network';
-      errors.push(`${t.kbFilesLoadFailed || 'Files failed to load'} (${status})`);
-    }
-
-    if (treeRes.status === 'fulfilled' && treeRes.value.ok) {
-      try {
-        const d = await treeRes.value.json();
-        const flat: MemNode[] = [];
+        const response = await fetch(scopedFileUrl('/api/memory/tree'));
+        if (!response.ok) throw Object.assign(new Error('Memory tree unavailable'), { status: response.status });
+        const data = await response.json(), memories: MemNode[] = [];
         const walk = (nodes: MemoryTree[]) => {
-          for (const n of nodes) { flat.push(n.node); walk(n.children); }
+          for (const { node, children } of nodes) { memories.push(node); walk(children); }
         };
-        walk(d.tree || []);
-        setMemories(flat);
-      } catch {}
-    } else {
-      const status = treeRes.status === 'fulfilled' ? treeRes.value.status : 'network';
-      errors.push(`${t.kbMemoriesLoadFailed || 'Memories failed to load'} (${status})`);
-    }
-
-    if (errors.length > 0) {
-      reportLoadError(errors.join(' / '));
-    } else {
-      lastLoadErrorRef.current = null;
-    }
-    setLoading(false);
-  }, [domain, reportLoadError, scopedFileUrl, scopedMemoryUrl, t.kbFilesLoadFailed, t.kbMemoriesLoadFailed]);
+        walk(data.tree || []);
+        if (request === treeRevision.current) setTree({ memories, loading: false, error: null });
+      } catch (error: any) {
+        if (request === treeRevision.current) setTree(previous => ({ ...previous, loading: false, error: error?.status || 'network' }));
+      }
+    })()]);
+  }, [refreshFiles, scopedFileUrl]);
+  useEffect(() => () => { treeRevision.current++; }, []);
 
   useEffect(() => { if (isOpen) fetchAll(); }, [isOpen, fetchAll]);
   useEffect(() => { if (isOpen) void fetchObsidianStatus(); }, [isOpen, fetchObsidianStatus]);
@@ -214,13 +133,10 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
     return () => { socket.off('memories:changed', fetchAll); socket.off('chat:conversation_updated', fetchAll); };
   }, [socket, isOpen, fetchAll]);
 
-  // Build tree
-  useEffect(() => {
-    if (!isOpen) return;
-    const { nodes, curves } = layoutTree3D(memories, files);
-    setTreeNodes(nodes);
-    setBranchCurves(curves);
-  }, [memories, files, isOpen]);
+  const { nodes: treeNodes, curves: branchCurves } = useMemo(
+    () => isOpen ? layoutTree3D(memories, files) : { nodes: [], curves: [] },
+    [memories, files, isOpen],
+  );
 
   // Find selected node data
   const selectedNode = selectedId ? treeNodes.find(n => n.id === selectedId) : null;
@@ -287,22 +203,22 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
     });
     if (!ok) return;
     try {
-      const endpoint = n.type === 'file' ? scopedFileUrl(`/api/files/delete/${encodeURIComponent(id)}`) : scopedMemoryUrl(`/api/memories/${id}`);
+      const endpoint = n.type === 'file' ? scopedFileUrl(`/api/files/delete/${encodeURIComponent(id)}`) : scopedFileUrl(`/api/memories/${id}`);
       const res = await fetch(endpoint, { method: 'DELETE', credentials: 'include' });
       if (res.ok) { toast.success(t.kbDeleted || 'Deleted'); fetchAll(); setSelectedId(null); }
       else toast.error(t.kbDeleteFailed || 'Delete failed');
     } catch { toast.error(t.kbDeleteFailed || 'Delete failed'); }
   };
 
-  const handleIngest = async (id: string) => {
-    const agentId = targetAgentId;
+  const handleIngest = async (id: string, quiet = false): Promise<boolean> => {
     setIngestingFiles(prev => new Set(prev).add(id));
     try {
       const res = await fetch(scopedFileUrl('/api/files/ingest'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ fileId: id, agentId, domain }),
+        body: JSON.stringify({ fileId: id, agentId: targetAgentId, domain }),
       });
+      if (quiet) return res.ok;
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         const count = data.chunkCount || data.memoryIds?.length || 0;
@@ -315,8 +231,10 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
         const data = await res.json().catch(() => ({}));
         toast.error(data.error || t.kbIngestFailed || 'Ingest failed');
       }
+      return res.ok;
     } catch {
-      toast.error(t.kbIngestFailed || 'Ingest failed');
+      if (!quiet) toast.error(t.kbIngestFailed || 'Ingest failed');
+      return false;
     } finally {
       setIngestingFiles(prev => {
         const next = new Set(prev);
@@ -333,31 +251,13 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
       return;
     }
 
-    const agentId = targetAgentId;
     setBulkIngesting(true);
     let absorbed = 0;
     let failed = 0;
     try {
       for (const file of targets) {
-        setIngestingFiles(prev => new Set(prev).add(file.id));
-        try {
-          const res = await fetch(scopedFileUrl('/api/files/ingest'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ fileId: file.id, agentId, domain }),
-          });
-          if (res.ok) absorbed++;
-          else failed++;
-        } catch {
-          failed++;
-        } finally {
-          setIngestingFiles(prev => {
-            const next = new Set(prev);
-            next.delete(file.id);
-            return next;
-          });
-        }
+        if (await handleIngest(file.id, true)) absorbed++;
+        else failed++;
       }
       await fetchAll();
       notifyKnowledgeUpdated(targets.map(file => ({ id: file.id, name: file.name, displayName: file.displayName })));
@@ -375,7 +275,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
     const memory = memories.find(item => item.id === id);
     if (!memory) return;
     try {
-      const res = await fetch(scopedMemoryUrl(`/api/memory/${id}/protect`), {
+      const res = await fetch(scopedFileUrl(`/api/memory/${id}/protect`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ protected: memory.tier !== 'core_identity' }),
       });
@@ -388,7 +288,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
 
   const handleChangeTier = async (id: string, tier: string, confirmed = false) => {
     try {
-      const res = await fetch(scopedMemoryUrl(`/api/memory/${id}/tier`), {
+      const res = await fetch(scopedFileUrl(`/api/memory/${id}/tier`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tier, confirmed }),
       });
@@ -412,7 +312,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
 
   const handleEdit = async (id: string, content: string) => {
     try {
-      const res = await fetch(scopedMemoryUrl(`/api/memories/${id}`), {
+      const res = await fetch(scopedFileUrl(`/api/memories/${id}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
       });
@@ -672,7 +572,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal' }: Knowled
                         <File size={13} className="text-blue-400/60 shrink-0" />
                       )}
                       <div className="flex-1 min-w-0">
-                        <span className="text-xs text-white/70 truncate block">{f.name}</span>
+                        <span className="text-xs text-white/70 truncate block">{f.displayName || f.name}</span>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           {f.source && (
                             <span className="text-[10px] font-black uppercase tracking-[0.12em] text-white/25">{f.source}</span>

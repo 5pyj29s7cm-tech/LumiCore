@@ -788,6 +788,7 @@ export async function executeNextAutonomousTask(
       orgId: taskScope.orgId,
       source: 'autonomous',
       taskId: task.id,
+      signal: executionAbort.signal,
       onControlPaused: () => {
         requestPauseAutonomousTask(task.id, task.userId);
       },

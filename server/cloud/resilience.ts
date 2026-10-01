@@ -15,7 +15,7 @@
  */
 
 import { isCircuitClosed, recordSuccess, recordFailure } from './circuit_breaker';
-import { withRetry, isCloudRetryable, RetryOptions } from './retry';
+import { withRetry, RetryOptions } from './retry';
 import { classifyCloudError, CloudErrorCategory } from './core';
 
 export interface ResilienceOptions {
@@ -168,9 +168,4 @@ export async function withCloudResilience<T>(
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
   }
-}
-
-/** Check if a provider is available (circuit closed + configured) */
-export function isProviderAvailable(provider: string, model?: string): boolean {
-  return isCircuitClosed(provider, model);
 }

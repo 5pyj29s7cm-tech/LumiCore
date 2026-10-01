@@ -59,11 +59,6 @@ function pickFirst(text: string, patterns: RegExp[], fallback = ''): string {
   return fallback;
 }
 
-function includesAny(text: string, keywords: string[]): boolean {
-  const lower = text.toLowerCase();
-  return keywords.some(keyword => lower.includes(keyword.toLowerCase()));
-}
-
 function extractDeadlines(text: string): string[] {
   return unique([
     ...Array.from(text.matchAll(/(今天|今晚|明天|后天|本周|周内|下周|月底|月初|尽快|马上|立刻|下班前)/g)).map(match => match[0]),

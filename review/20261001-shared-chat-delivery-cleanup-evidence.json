@@ -1,0 +1,345 @@
+{
+  "date": "2026-10-01",
+  "batch": "prune30",
+  "baseline": "turn-start worktree, not HEAD",
+  "files": [
+    {
+      "file": "src/hooks/useConversationAttachments.ts",
+      "beforeLines": 0,
+      "afterLines": 79,
+      "delta": 79,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "b42239ae94986ef9af2c4c1829c2a5a0d803306c77d896b268d3dff7034ab066"
+    },
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "beforeLines": 5034,
+      "afterLines": 4978,
+      "delta": -56,
+      "beforeSha256": "eff290a5e9a0f699b859a7a40465e494dcb9f68a8a6185485f87193430f7d5a5",
+      "afterSha256": "ecbf53bb8974809d726cfce33682925c7da9b04fb36d37f56c8bba0e90c89ea2"
+    },
+    {
+      "file": "src/components/org/CentralLumiChat.tsx",
+      "beforeLines": 948,
+      "afterLines": 886,
+      "delta": -62,
+      "beforeSha256": "d8b9f74ca96795751c32b1505623b9a6e55b2afe1778119be273452657cc53cd",
+      "afterSha256": "dc6ed01d601c1e160eb0ecdb864be8a3697bfc6dbd4cd25b9e47c009af29135c"
+    },
+    {
+      "file": "test/chat_page_fixture.ts",
+      "beforeLines": 101,
+      "afterLines": 102,
+      "delta": 1,
+      "beforeSha256": "4a5e9113fbf416941d85114f501d581379f1e694f95bd65d72c3dba8fc330d0a",
+      "afterSha256": "1fc4b8e35733a94d7e37636e62d92e21d082c59c181592d3b7c9f641ab13cdc1"
+    },
+    {
+      "file": "test/chat_view_async_boundaries.test.ts",
+      "beforeLines": 205,
+      "afterLines": 207,
+      "delta": 2,
+      "beforeSha256": "6fb71a027c47c9de7fbf55849ff3cbafd03f6e9f3074bb4f4a8a8b4161719f99",
+      "afterSha256": "8ed3b573c11c78d43d3615c3102542d12d2d814d46ebe8d0d2e927a4a61101c5"
+    },
+    {
+      "file": "server/cognition/response_delivery.ts",
+      "beforeLines": 172,
+      "afterLines": 203,
+      "delta": 31,
+      "beforeSha256": "025dd7d6de1b31d3c85807fb42d192e433b5013cd102cece0eba986187a667e1",
+      "afterSha256": "a5ce9ca848f3be1cc9da48e1d87df1da7ca82dab7998db05fd14c7c352a4ae95"
+    },
+    {
+      "file": "server/routes/chat_routes.ts",
+      "beforeLines": 882,
+      "afterLines": 835,
+      "delta": -47,
+      "beforeSha256": "e28b97f65c81af8b5920e80f2e06bc4ee067c4f614045a903face8ef82f6558b",
+      "afterSha256": "7813d6253eeca1d4a18eefaef6591d15fd477f39d2792a1a9bc38b8303138e06"
+    },
+    {
+      "file": "server/regions/packs/cn/messaging_routes.ts",
+      "beforeLines": 3743,
+      "afterLines": 3696,
+      "delta": -47,
+      "beforeSha256": "aa5ba3782d3f4d28eddecf26c55f2822b35b0ccf80585f2b14ca6865b42898fc",
+      "afterSha256": "f29adeae5f79334c9edd33154a37bcb126c9a3b239d9b55e0f0fb5e43155513f"
+    },
+    {
+      "file": "server/tools/definitions/ocr_tools.ts",
+      "beforeLines": 1188,
+      "afterLines": 1174,
+      "delta": -14,
+      "beforeSha256": "a459e1daa9fc22a107e37cec7e2a5acf403ff1a17487d75ea5afefc76b3bf25b",
+      "afterSha256": "f6d4b6b3122b3f09b10910f1fad0336ba156dba66b213e70f8298020eb44b44f"
+    },
+    {
+      "file": "server/tools/definitions/desktop_ai_tools.ts",
+      "beforeLines": 1296,
+      "afterLines": 1282,
+      "delta": -14,
+      "beforeSha256": "8af693e956d2c4b9b70b268f551a363dbdcb0ccb4ab83aaf2c0e555683f47d58",
+      "afterSha256": "cca83383d1800a23e8730bc95556852daf00b7fb18ca0aa2058e21c12caa8580"
+    },
+    {
+      "file": "test/output_finalization_paths.test.ts",
+      "beforeLines": 458,
+      "afterLines": 464,
+      "delta": 6,
+      "beforeSha256": "f79e14eb512c5e9cf1568b8eebe1b84143209e9525ba45b608e3baf710e7618e",
+      "afterSha256": "3428d077363622dfceeacae6331d97cd4f2186e3740925b7e95ebe794129a6b5"
+    },
+    {
+      "file": "test/large_ui_state.test.tsx",
+      "beforeLines": 74,
+      "afterLines": 119,
+      "delta": 45,
+      "beforeSha256": "3cce085959b69344784f62d4099521e5ac6ffdae6868494ab42cd2f2b88ef642",
+      "afterSha256": "8a16395842840f292e1c0381207622258615d8b6bf6fb510e780b81ff1936fb8"
+    },
+    {
+      "file": "server/regions/packs/cn/business/workflow_service.ts",
+      "beforeLines": 1186,
+      "afterLines": 1186,
+      "delta": 0,
+      "beforeSha256": "2de82292ab6df0893731d1ce9a91f771c845f765e89660c2f6ce45c92f9f04c4",
+      "afterSha256": "098b31a37ffbfcd30e417060154125fbc6cc2ee1b26bda09af320201318378d9"
+    },
+    {
+      "file": "server/regions/packs/cn/business/finance_delivery.ts",
+      "beforeLines": 1274,
+      "afterLines": 1260,
+      "delta": -14,
+      "beforeSha256": "3e3ad2629577068f489e104f9e95a946a1c866acf766c46141a79c36528b1396",
+      "afterSha256": "2cc0a9200b6e7008b29ea40026deee5ac9dddde780ce60b48787e98fee7a7e94"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1084,
+        "lines": 367569
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159443
+      },
+      "total": {
+        "files": 1824,
+        "lines": 527012
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1085,
+        "lines": 367425
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159497
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526922
+      }
+    }
+  },
+  "tests": {
+    "files": 731,
+    "passed": 6592,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::isolates attachment sessions, carries initial uploads, and releases close listeners on unmount",
+        1
+      ],
+      [
+        "D:/lumiOS/test/large_ui_state.test.tsx::keeps in-memory attachments usable when browser storage fails",
+        1
+      ]
+    ],
+    "removed": [],
+    "lineRelocations": [
+      {
+        "file": "routes/chat_routes.ts",
+        "before": 830,
+        "after": 783,
+        "sha256": "eab967403125019c04334040e198a7d097b774cf786db0a7b7be8857e113e443",
+        "argumentCount": 15
+      },
+      {
+        "file": "regions/packs/cn/messaging_routes.ts",
+        "before": 3250,
+        "after": 3203,
+        "sha256": "a54bf516abc721bd6f51077ffce71b81e6d94e97bd4d21f4ba48a9875943d6b8",
+        "argumentCount": 15
+      }
+    ],
+    "exit": {
+      "maxWorkers": 4,
+      "sourceFingerprints": {
+        "src/hooks/useConversationAttachments.ts": "b42239ae94986ef9af2c4c1829c2a5a0d803306c77d896b268d3dff7034ab066",
+        "src/components/AgentChatPage.tsx": "ecbf53bb8974809d726cfce33682925c7da9b04fb36d37f56c8bba0e90c89ea2",
+        "src/components/org/CentralLumiChat.tsx": "dc6ed01d601c1e160eb0ecdb864be8a3697bfc6dbd4cd25b9e47c009af29135c",
+        "test/chat_page_fixture.ts": "1fc4b8e35733a94d7e37636e62d92e21d082c59c181592d3b7c9f641ab13cdc1",
+        "test/chat_view_async_boundaries.test.ts": "8ed3b573c11c78d43d3615c3102542d12d2d814d46ebe8d0d2e927a4a61101c5",
+        "server/cognition/response_delivery.ts": "a5ce9ca848f3be1cc9da48e1d87df1da7ca82dab7998db05fd14c7c352a4ae95",
+        "server/routes/chat_routes.ts": "7813d6253eeca1d4a18eefaef6591d15fd477f39d2792a1a9bc38b8303138e06",
+        "server/regions/packs/cn/messaging_routes.ts": "f29adeae5f79334c9edd33154a37bcb126c9a3b239d9b55e0f0fb5e43155513f",
+        "server/tools/definitions/ocr_tools.ts": "f6d4b6b3122b3f09b10910f1fad0336ba156dba66b213e70f8298020eb44b44f",
+        "server/tools/definitions/desktop_ai_tools.ts": "cca83383d1800a23e8730bc95556852daf00b7fb18ca0aa2058e21c12caa8580",
+        "test/output_finalization_paths.test.ts": "3428d077363622dfceeacae6331d97cd4f2186e3740925b7e95ebe794129a6b5",
+        "test/large_ui_state.test.tsx": "8a16395842840f292e1c0381207622258615d8b6bf6fb510e780b81ff1936fb8",
+        "server/regions/packs/cn/business/workflow_service.ts": "098b31a37ffbfcd30e417060154125fbc6cc2ee1b26bda09af320201318378d9",
+        "server/regions/packs/cn/business/finance_delivery.ts": "2cc0a9200b6e7008b29ea40026deee5ac9dddde780ce60b48787e98fee7a7e94"
+      },
+      "startedAt": "2026-10-01T14:05:28.263Z",
+      "finishedAt": "2026-10-01T14:11:52.134Z",
+      "status": 0,
+      "signal": null
+    }
+  },
+  "focused": {
+    "files": 9,
+    "passed": 103
+  },
+  "parity": {
+    "success": true,
+    "results": [
+      {
+        "file": "server/routes/chat_routes.ts",
+        "name": "finalizeRestChatResponse",
+        "cases": 36
+      },
+      {
+        "file": "server/regions/packs/cn/messaging_routes.ts",
+        "name": "finalizeMessagingResponseForDelivery",
+        "cases": 36
+      },
+      {
+        "file": "server/tools/definitions/ocr_tools.ts",
+        "name": "visionModelFor",
+        "cases": 7,
+        "scope": "reachable supported providers; provider resolvers are unchanged"
+      },
+      {
+        "file": "server/tools/definitions/desktop_ai_tools.ts",
+        "name": "fallbackVisionModel",
+        "cases": 7,
+        "scope": "reachable supported providers; provider resolvers are unchanged"
+      },
+      {
+        "file": "server/regions/packs/cn/business/finance_delivery.ts",
+        "name": "canonicalJson",
+        "cases": 16
+      },
+      {
+        "file": "src/components/AgentChatPage.tsx",
+        "name": "bindAttachmentContextToConversation",
+        "cases": 6
+      },
+      {
+        "file": "src/components/org/CentralLumiChat.tsx",
+        "name": "bindAttachmentContextToConversation",
+        "cases": 6
+      }
+    ],
+    "cases": 114,
+    "scope": "Pure wrapper assembly and binding comparisons; real shared recovery is covered by the native test suite."
+  },
+  "builds": [
+    {
+      "step": "lint",
+      "start": "2026-10-01T14:04:29.575Z",
+      "end": "2026-10-01T14:05:04.523Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:frontends",
+      "start": "2026-10-01T14:05:04.524Z",
+      "end": "2026-10-01T14:05:13.489Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "start": "2026-10-01T14:05:13.490Z",
+      "end": "2026-10-01T14:05:22.650Z",
+      "exitCode": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "start": "2026-10-01T14:05:22.650Z",
+      "end": "2026-10-01T14:05:23.113Z",
+      "exitCode": 0
+    },
+    {
+      "step": "build:server",
+      "start": "2026-10-01T14:05:23.113Z",
+      "end": "2026-10-01T14:05:28.216Z",
+      "exitCode": 0
+    }
+  ],
+  "verification": [
+    {
+      "step": "builds",
+      "start": "2026-10-01T14:04:29.530Z",
+      "end": "2026-10-01T14:05:28.225Z",
+      "status": 0
+    },
+    {
+      "step": "full-native",
+      "start": "2026-10-01T14:05:28.227Z",
+      "end": "2026-10-01T14:11:52.142Z",
+      "status": 0
+    }
+  ],
+  "scope": {
+    "attachments": [
+      "Personal and organization chat now share conversation attachment state, binding, persistence, clearing and close-event lifecycle.",
+      "Preserved separate scope keys, metadata-only storage, personal reuse filtering, synchronous refs and personal-page async invalidation before changing conversation.",
+      "Existing page scope-reset effects remain authoritative; explicit dependencies reference stable hook-owned refs."
+    ],
+    "delivery": [
+      "REST and remote messaging use the existing response_delivery module for finalization and bounded recovery assembly.",
+      "Remote messaging retains current task/request receipt filtering before shared delivery; initial/custom finalization, cancellation and pending confirmation are preserved.",
+      "No additional model call, decision engine or execution channel was added."
+    ],
+    "vision": [
+      "OCR and desktop AI remove duplicated default-model switches and read DEFAULT_VISION_MODELS for the provider already validated by the unchanged resolver."
+    ],
+    "finance": [
+      "Finance delivery reuses canonicalJson through its pre-existing workflow service import; nested key order, undefined values and errors preserved."
+    ],
+    "tests": [
+      "Existing assertions relocated to shared production code instead of checking deleted copies.",
+      "Two added hook tests cover session/scope isolation, carry-over uploads, close listener cleanup and unavailable storage."
+    ]
+  },
+  "intermediateCorrections": [
+    "Initial architecture assertion still expected outbound boundary in the route; it now verifies the route alias and shared boundary.",
+    "Strict hooks lint required explicit dependencies for refs returned by a custom hook; added stable refs without suppressing lint."
+  ],
+  "deferred": [
+    "SkillCenter async list refresh ownership and concurrent responses remain to be simplified.",
+    "Standalone bundled skill extractors require packaging support before sharing implementations.",
+    "Different recursive receipt decoding depths and privacy sanitizers were not blindly merged."
+  ],
+  "boundaries": {
+    "commit": false,
+    "push": false,
+    "backendRestarted": false,
+    "clientRestarted": false,
+    "nativeDesktopTested": false,
+    "officialModelApiTested": false,
+    "realUserDataModified": false,
+    "performanceSpeedupMeasured": false,
+    "newExecutionPaths": 0,
+    "newBusinessFiles": [
+      "src/hooks/useConversationAttachments.ts"
+    ],
+    "wholeProjectSimplificationComplete": false
+  }
+}

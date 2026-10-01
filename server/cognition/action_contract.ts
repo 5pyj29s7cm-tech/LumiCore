@@ -6,13 +6,13 @@ import { verifiedExternalCliStatus } from './external_cli_status';
 import type { CapabilityLane, CapabilityOperation, ToolExecutionRecord } from '../tools/types';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
-import { artifactPathFromRecord, artifactRecordMatchesTurn, isArtifactProducerRecord, resolveArtifactDelivery, sameArtifactPath } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, resolveArtifactDelivery, sameArtifactPath } from '../tools/artifact_evidence';
 import { LEGAL_ENTRY_PREFERRED_TOOLS, isLegalEntryTurn, isRemoteLegalMessageTurn } from './legal_entry';
 import { hasExplicitNoToolInstruction, hasExplicitNoMutationInstruction, hasRequestedArtifactMutation, isInformationOnlyQuestion } from './tool_intent';
 import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { preservedSourceOutputScope, matchesRequestedArtifactOutput } from './artifact_write_scope';
 import { sourceDocumentInstruction } from '../conversation/task_target_anchor';
-import { extractExplicitArtifactTextRequirements, projectArtifactProgress } from './artifact_progress';
+import { projectArtifactProgress } from './artifact_progress';
 export { extractExplicitArtifactTextRequirements } from './artifact_progress';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
@@ -206,15 +206,13 @@ export function requestedDesktopWindowAction(input: string): DesktopWindowAction
   return null;
 }
 
-export function requiresCurrentAppUiMutation(input: string): boolean {
-  const raw = String(input || '');
+export function requiresCurrentAppUiMutation(input: string, appTarget = ''): boolean {
   const primary = compact(extractPrimaryTaskText(input));
   // Creating an artifact and opening it afterwards does not mean editing
   // whatever document happens to be in the foreground right now.
   const createsArtifact = /(?:\u751f\u6210|\u5236\u4f5c|\u8d77\u8349|\u65b0\u5efa|\u521b\u5efa)|\b(?:generate|create|draft)\b/iu.test(primary)
     && /\.(?:docx|xlsx|pptx)\b/iu.test(primary);
   if (createsArtifact && !/(?:\u5f53\u524d|\u6b63\u5728|\u5df2\u6253\u5f00).{0,10}(?:\u7a97\u53e3|\u6587\u6863)|\b(?:current|active|existing)\s+(?:window|document)\b/iu.test(primary)) return false;
-  const hasRecoveredTarget = /(?:^|\r?\n)\s*-\s*appTarget:\s*(?!none|null|unknown|n\/a)[^\r\n]+/i.test(raw);
   const openIntent = primary.match(APP_OPEN_INTENT_RE);
   const textAfterOpen = openIntent
     ? primary.slice((openIntent.index ?? 0) + openIntent[0].length, (openIntent.index ?? 0) + openIntent[0].length + 64)
@@ -225,7 +223,7 @@ export function requiresCurrentAppUiMutation(input: string): boolean {
   );
   return Boolean(
     primary
-    && (CURRENT_APP_REFERENCE_RE.test(primary) || hasRecoveredTarget || hasNamedAuthoringSequence)
+    && (CURRENT_APP_REFERENCE_RE.test(primary) || Boolean(appTarget) || hasNamedAuthoringSequence)
     && CURRENT_APP_MUTATION_INTENT_RE.test(primary)
   );
 }
@@ -259,8 +257,6 @@ export function requiresCurrentAuthoringDocumentInspection(input: string): boole
 
 export function extractCurrentAppTarget(input: string): string {
   const raw = String(input || '');
-  const recovered = raw.match(/(?:^|\r?\n)\s*-\s*appTarget:\s*([^\r\n]+)/i)?.[1]?.trim() || '';
-  if (recovered && !/^(?:none|null|unknown|n\/a)$/i.test(recovered)) return recovered;
 
   const primary = compact(extractPrimaryTaskText(raw));
   const named = primary.match(/\b(WPS(?:\s+Office)?|Microsoft\s+Word|Word|Excel|PowerPoint|AutoCAD|WeChat|Chrome)\b/i)?.[1]
@@ -878,7 +874,7 @@ export function isDocumentOpenAndReviewRequest(text: string): boolean {
     .replace(/(?:不能|不要|别|禁止|不可).{0,64}(?:替代|冒充|代替)/gu, ' ') // i18n-allow: Exact-target exclusions.
     .replace(/\b(?:do\s+not|don't|never)\b.{0,80}\b(?:substitute|replace|use\s+instead)\b/giu, ' ');
   const wantsOpen = /(?:打开|启动)|\b(?:open|launch)\b/iu.test(candidate); // i18n-allow: Open intent.
-  const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b/iu.test(candidate) // i18n-allow: Document targets.
+  const hasDocument = /(?:PDF|DOCX|PPTX?|XLSX?|文件|文档)|\b(?:pdf|docx?|pptx?|xlsx?|file|document)\b|\.(?:csv|txt|md|json|rtf)\b/iu.test(candidate) // i18n-allow: Document targets.
     || /(?:打开|启动|阅读|读取).{0,24}(?:报告|介绍)|(?:报告|介绍)(?:文件|文档)/u.test(candidate) // i18n-allow: Named report targets.
     || /\b(?:open|launch|read|review).{0,32}\breport\b/iu.test(candidate);
   const wantsReview = /(?:分析|总结|介绍|讲解|读取|阅读|逐页|一页一页|看一下|看看|核对|核验|检查|查看)|\b(?:analy[sz]e|summari[sz]e|review|read|present|walk\s+through|inspect|check|verify)\b/iu.test(candidate); // i18n-allow: Reading or inspecting contents is work after launch.
@@ -894,12 +890,14 @@ function isDesktopLaunchVerificationOnly(
     || normalizedIntent.operation !== 'navigate'
     || normalizedIntent.sideEffectClass !== 'none'
   ) return false;
-  if (isDocumentOpenAndReviewRequest(text)) return false;
+  // A file mentioned only in a prohibition is not a file-reading task.
+  // Stop at commas so a following affirmative operation stays visible.
+  const withoutExclusions = text
+    .replace(/(?:\u7981\u6b62|\u4e0d\u8981|\u4e0d\u51c6|\u4e0d\u5f97|\u4e0d\u7528|\u65e0\u9700|\u907f\u514d|\u52ff|\u522b)[^\u3002\uFF0C\uFF1B,;.!?\n\r]*/giu, ' ')
+    .replace(/\b(?:do\s+not|don't|never|must\s+not|without)\b[^,.;!?\n\r]*/giu, ' ');
+  if (isDocumentOpenAndReviewRequest(withoutExclusions)) return false;
   const target = compact(normalizedIntent.target);
   if (!target || /(?:https?:|www\.|\u7f51\u7ad9|\u7f51\u9875|\u6d4f\u89c8\u5668)/iu.test(target)) return false;
-  const withoutExclusions = text
-    .replace(/(?:\u4e0d\u80fd|\u4e0d\u8981|\u522b|\u7981\u6b62|\u4e0d\u53ef).{0,48}(?:\u66ff\u4ee3|\u5192\u5145|\u4ee3\u66ff)/gu, ' ')
-    .replace(/\b(?:do\s+not|don't|never)\b.{0,64}\b(?:substitute|replace|use)\b/giu, ' ');
   if (/(?:\u767b\u5f55|\u641c\u7d22|\u67e5\u627e|\u627e\u4e00\u4e0b|\u8be2\u95ee|\u95ee\u4e00\u4e0b|\u56de\u590d|\u8f93\u5165|\u7f16\u8f91|\u53d1\u9001|\u64ad\u653e|\u521b\u5efa|\u751f\u6210|\u7ed8\u5236|\u753b\u56fe|\u70b9\u51fb|\u62d6\u62fd|\u9f20\u6807|\u952e\u76d8|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u53d1\u5e03)|\b(?:login|search|find|ask|message|reply|type|edit|send|play|create|generate|draw|operate|mouse|keyboard|cursor|click|drag|write|save|export|publish)\b/iu.test(withoutExclusions)) {
     return false;
   }
@@ -3108,25 +3106,6 @@ function requestsExactReadOnlyArtifactInspection(taskText: string): boolean {
   return !wantsMutation;
 }
 
-function taskTextAnchorsExactDocumentTarget(taskText: string, target: string): boolean {
-  const exactTarget = compact(target).replace(/^['"`\u201c\u201d\u2018\u2019]+|['"`\u201c\u201d\u2018\u2019]+$/gu, '');
-  // A basename, glob, search directory, or model-selected path is not an
-  // accepted source anchor. The user must name one complete absolute target.
-  const windowsTarget = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/u.test(exactTarget);
-  const posixTarget = /^\/(?!\/)/u.test(exactTarget);
-  if (!windowsTarget && !posixTarget) return false;
-  const normalize = (value: string) => value
-    .normalize('NFKC')
-    .replace(/\\/gu, '/')
-    .replace(/\/{2,}/gu, '/')
-    .trim();
-  const normalizedTarget = normalize(exactTarget);
-  const normalizedTask = normalize(extractPrimaryTaskText(taskText));
-  return windowsTarget
-    ? normalizedTask.toLowerCase().includes(normalizedTarget.toLowerCase())
-    : normalizedTask.includes(normalizedTarget);
-}
-
 /**
  * Bind a semantic document-read receipt to the exact file identity supplied
  * by the accepted task. A reader choosing some other file is useful evidence
@@ -3490,7 +3469,6 @@ export function hasCoreActionEvidence(
       })()
     : false;
   if (successful.length === 0 && !recoverableObservedOpen) return false;
-  const toolNames = successful.map(record => record.name);
   if (contract.kind === 'avatar_authoring') return successful.some(record => {
     if (!['memory_avatar_read','memory_avatar_configure_animation','memory_avatar_create','memory_avatar_import_image'].includes(record.name)) return false;
     const p = parseRecordJson(record);

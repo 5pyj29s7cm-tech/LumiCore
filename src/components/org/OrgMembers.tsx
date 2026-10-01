@@ -1,8 +1,7 @@
+import { FeedbackBanner, type Feedback } from './FeedbackBanner';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  AlertCircle,
-  CheckCircle,
   Crown,
   Loader2,
   Shield,
@@ -25,12 +24,8 @@ interface Member {
   joinedAt: string | null;
 }
 
-type Feedback = { type: 'success' | 'error'; text: string };
-
 export function OrgMembers() {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const ui = useCallback((zh: string, en: string) => (isZh ? zh : en), [isZh]);
   const { orgConnection } = useApp();
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,7 +59,7 @@ export function OrgMembers() {
     } finally {
       setLoading(false);
     }
-  }, [orgConnection?.orgId, ui]);
+  }, [orgConnection?.orgId]);
 
   useEffect(() => {
     void loadOrgAndMembers();
@@ -261,19 +256,6 @@ export function OrgMembers() {
           )}
         </section>
       </div>
-    </div>
-  );
-}
-
-function FeedbackBanner({ feedback }: { feedback: Feedback }) {
-  return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
-      feedback.type === 'success'
-        ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
-        : 'border-red-500/20 bg-red-500/10 text-red-200'
-    }`}>
-      {feedback.type === 'success' ? <CheckCircle size={16} className="mt-0.5 shrink-0" /> : <AlertCircle size={16} className="mt-0.5 shrink-0" />}
-      <span>{feedback.text}</span>
     </div>
   );
 }

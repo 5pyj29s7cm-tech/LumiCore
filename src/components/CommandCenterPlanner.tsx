@@ -40,18 +40,23 @@ type CommandCenterPlan = {
   status: 'active' | 'paused' | 'completed';
   nextRunAt: string;
   lastRuntimeTaskId: string;
-  lastRunAt?: string;
-  updatedAt: string;
   authorizationBlockedReason?: 'membership_missing' | 'membership_changed' | '';
 };
 
 type RuntimeTask = {
   id: string;
   status: string;
-  phase?: string;
   blocker?: string;
   completionFeedback?: TaskCompletionFeedback;
 };
+
+function normalizeRuntimeTask(task: RuntimeTask, isZh: boolean): RuntimeTask {
+  return {
+    ...task,
+    blocker: task.blocker ? customerVisibleTaskBlocker(task.blocker, isZh ? 'zh' : 'en') : undefined,
+    completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
+  };
+}
 
 const KIND_ICONS = {
   daily_task: CalendarClock,
@@ -68,9 +73,9 @@ export function CommandCenterPlanner({
   conversationId: string;
   onDiscuss: (prompt: string) => void;
 }) {
-  const { workDomain, orgConnection } = useApp();
+  const { user, workDomain, orgConnection } = useApp();
   const isWork = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
-  const scopeKey = `${isWork ? 'work' : 'personal'}:${isWork ? orgConnection?.orgId || '' : ''}`;
+  const scopeKey = JSON.stringify([user?.uid || '', isWork ? orgConnection?.orgId : '']);
   const [plans, setPlans] = useState<CommandCenterPlan[]>([]);
   const [runtimeTasks, setRuntimeTasks] = useState<RuntimeTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,44 +94,33 @@ export function CommandCenterPlanner({
   const runningPlanIdsRef = useRef(new Set<string>());
   const scopeGenerationRef = useRef(0);
   const activeScopeKeyRef = useRef(scopeKey);
+  activeScopeKeyRef.current = scopeKey;
+  const refreshRevisionRef = useRef(0);
 
   const copy = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
   const feedbackCopy = taskCompletionFeedbackCopy(isZh ? 'zh' : 'en');
   const refresh = useCallback(async (quiet = false) => {
     const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+    const revision = ++refreshRevisionRef.current;
     if (!quiet) setLoading(true);
-    const [planResult, taskResult] = await Promise.allSettled([
-      apiFetch('/api/command-center/plans').then(async response => {
+    const [planResult, taskResult] = await Promise.allSettled(
+      ['/api/command-center/plans', '/api/autonomy/work'].map(url => apiFetch(url).then(async response => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         return payload;
-      }),
-      apiFetch('/api/autonomy/work').then(async response => {
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-        return payload;
-      }),
-    ]);
-    if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
+      })),
+    );
+    if (revision !== refreshRevisionRef.current || !isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
     if (planResult.status === 'fulfilled') {
       setPlans(Array.isArray(planResult.value?.plans) ? planResult.value.plans : []);
     }
     if (taskResult.status === 'fulfilled') {
       setRuntimeTasks(Array.isArray(taskResult.value?.items)
-        ? taskResult.value.items.map((task: RuntimeTask) => ({
-            ...task,
-            blocker: task.blocker
-              ? customerVisibleTaskBlocker(task.blocker, isZh ? 'zh' : 'en')
-              : undefined,
-            completionFeedback: normalizeTaskCompletionFeedback(task.completionFeedback),
-          }))
+        ? taskResult.value.items.map((task: RuntimeTask) => normalizeRuntimeTask(task, isZh))
         : []);
     }
-    const failures = [planResult, taskResult]
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
-    setError(failures.length > 0 ? feedbackCopy.controlError : '');
+    setError([planResult, taskResult].some(result => result.status === 'rejected') ? feedbackCopy.controlError : '');
     setLoading(false);
   }, [feedbackCopy.controlError, isZh, scopeKey]);
 
@@ -144,6 +138,7 @@ export function CommandCenterPlanner({
     setTitle('');
     setInstruction('');
     setLoading(true);
+    return () => { activeScopeKeyRef.current = ''; scopeGenerationRef.current++; };
   }, [scopeKey]);
 
   useEffect(() => {
@@ -161,6 +156,7 @@ export function CommandCenterPlanner({
     events.forEach(event => socket.on(event, update));
     const timer = window.setInterval(update, 15_000);
     return () => {
+      refreshRevisionRef.current++;
       window.clearInterval(timer);
       events.forEach(event => socket.off(event, update));
     };
@@ -168,7 +164,6 @@ export function CommandCenterPlanner({
 
   useEffect(() => {
     if (kind === 'daily_task') setCadence('daily');
-    else if (kind === 'long_term_goal') setCadence('weekly');
     else setCadence('weekly');
   }, [kind]);
 
@@ -201,22 +196,22 @@ export function CommandCenterPlanner({
     }
   };
 
-  const updatePlan = async (plan: CommandCenterPlan, patch: Record<string, unknown>) => {
+  const updatePlan = async (plan: CommandCenterPlan, patch?: Record<string, unknown>) => {
     const requestToken = { scopeKey, generation: scopeGenerationRef.current };
     setError('');
     setNotice('');
     try {
       const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, {
-        method: 'PUT',
+        method: patch ? 'PUT' : 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
+        body: patch ? JSON.stringify(patch) : undefined,
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       await refresh(true);
     } catch (cause) {
-      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) throw cause;
+      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) setError(feedbackCopy.controlError);
     }
   };
 
@@ -235,13 +230,7 @@ export function CommandCenterPlanner({
       if (payload.reused === true) setNotice(copy.existingRun);
       if (payload.task?.id) {
         setRuntimeTasks(previous => [
-          {
-            ...payload.task,
-            blocker: payload.task.blocker
-              ? customerVisibleTaskBlocker(payload.task.blocker, isZh ? 'zh' : 'en')
-              : undefined,
-            completionFeedback: normalizeTaskCompletionFeedback(payload.task.completionFeedback),
-          },
+          normalizeRuntimeTask(payload.task, isZh),
           ...previous.filter(task => task.id !== payload.task.id),
         ]);
       }
@@ -250,28 +239,9 @@ export function CommandCenterPlanner({
       if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
       setError(feedbackCopy.controlError);
     } finally {
-      runningPlanIdsRef.current.delete(plan.id);
       if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
+        runningPlanIdsRef.current.delete(plan.id);
         setRunningPlanIds([...runningPlanIdsRef.current]);
-      }
-    }
-  };
-
-  const removePlan = async (plan: CommandCenterPlan) => {
-    const requestToken = { scopeKey, generation: scopeGenerationRef.current };
-    setNotice('');
-    try {
-      const response = await apiFetch(`/api/command-center/plans/${encodeURIComponent(plan.id)}`, { method: 'DELETE' });
-      if (!isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) return;
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        setError(feedbackCopy.controlError);
-        return;
-      }
-      await refresh(true);
-    } catch (cause) {
-      if (isCurrentScopeRequest(requestToken, activeScopeKeyRef.current, scopeGenerationRef.current)) {
-        setError(feedbackCopy.controlError);
       }
     }
   };
@@ -379,7 +349,7 @@ export function CommandCenterPlanner({
               </div>
               {plan.authorizationBlockedReason && plan.status !== 'completed' ? <div data-command-center-authorization-blocker className="mt-2 text-xs leading-5 text-amber-100/80">
                 <p>{copy.authorizationRequired}</p>
-                <button type="button" onClick={() => void updatePlan(plan, { reauthorize: true, status: 'active' }).catch(() => setError(feedbackCopy.controlError))} className="mt-1 rounded-lg border border-amber-200/25 px-2 py-1 font-semibold">{copy.reauthorize}</button>
+                <button type="button" onClick={() => void updatePlan(plan, { reauthorize: true, status: 'active' })} className="mt-1 rounded-lg border border-amber-200/25 px-2 py-1 font-semibold">{copy.reauthorize}</button>
               </div> : null}
             </div>
           </div>
@@ -405,9 +375,9 @@ export function CommandCenterPlanner({
           <div className="mt-3 flex items-center justify-end gap-1.5 border-t border-white/[0.05] pt-2.5">
             <button type="button" onClick={() => onDiscuss(copy.discussPrompt(plan.title, plan.instruction))} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-white/38 hover:bg-white/[0.05] hover:text-white/65"><MessageSquareText size={11} />{copy.discuss}</button>
             <button type="button" disabled={runDisabled} aria-busy={runInFlight} onClick={() => void runPlan(plan)} className="flex h-7 items-center gap-1 rounded-lg px-2 text-[9px] text-cyan-100/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50 disabled:cursor-not-allowed disabled:opacity-35">{runInFlight ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}{runInFlight ? copy.running : copy.run}</button>
-            <button type="button" onClick={() => void updatePlan(plan, { status: plan.status === 'paused' ? 'active' : 'paused' }).catch(() => setError(feedbackCopy.controlError))} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.05] hover:text-white/60" title={plan.status === 'paused' ? copy.resume : copy.pause}>{plan.status === 'paused' ? <Play size={11} /> : <Pause size={11} />}</button>
-            <button type="button" onClick={() => void updatePlan(plan, { status: 'completed' }).catch(() => setError(feedbackCopy.controlError))} className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-100/35 hover:bg-emerald-300/[0.08] hover:text-emerald-100" title={copy.complete}><Check size={11} /></button>
-            <button type="button" onClick={() => void removePlan(plan)} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/24 hover:bg-rose-300/[0.08] hover:text-rose-100/70" title={copy.remove}><Trash2 size={11} /></button>
+            <button type="button" onClick={() => void updatePlan(plan, { status: plan.status === 'paused' ? 'active' : 'paused' })} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/30 hover:bg-white/[0.05] hover:text-white/60" title={plan.status === 'paused' ? copy.resume : copy.pause}>{plan.status === 'paused' ? <Play size={11} /> : <Pause size={11} />}</button>
+            <button type="button" onClick={() => void updatePlan(plan, { status: 'completed' })} className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-100/35 hover:bg-emerald-300/[0.08] hover:text-emerald-100" title={copy.complete}><Check size={11} /></button>
+            <button type="button" onClick={() => void updatePlan(plan)} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/24 hover:bg-rose-300/[0.08] hover:text-rose-100/70" title={copy.remove}><Trash2 size={11} /></button>
           </div>
         </article>;
       })}

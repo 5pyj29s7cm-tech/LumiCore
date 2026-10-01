@@ -1,7 +1,7 @@
 import { readDB, writeDB } from '../../db_layer';
 import { addMemory } from '../memory/store';
 import { PersonalityVector } from './types';
-import { getSeasonInfo, getNearbyHoliday, isWeekend, getTimeOfDay } from '../time/utils';
+import { getSeasonInfo, getNearbyHoliday, isWeekend } from '../time/utils';
 import { himTick, loadHIMState, saveHIMState, getBestPeak, formatPeakForPrompt, type HIMState } from './him';
 
 const emotionWriteQueues = new Map<string, Promise<void>>();

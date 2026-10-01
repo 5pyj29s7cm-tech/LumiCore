@@ -1,3 +1,4 @@
+import { isConfirmationCancellation, isExplicitConfirmationReply } from '../tools/pending_confirmation';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 
 export interface PendingInterruptedVoiceTurn {
@@ -63,12 +64,12 @@ export function isVoiceWorkModificationContinuation(text: string): boolean {
 export function isVoiceTaskContinuation(text: string): boolean {
   const normalized = String(text || '').trim();
   if (!normalized || normalized.length > 96) return false;
-  if (isVoiceWorkModificationContinuation(normalized)) return true;
+  if (isExplicitConfirmationReply(normalized) || isVoiceWorkModificationContinuation(normalized)) return true;
   const compact = normalized
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001\u2026\uFF5E~\u201C\u201D\u2018\u2019]+/gu, '')
     .toLowerCase();
   if (!compact) return false;
-  return /^(?:需要|要|同意|允许|确认|可以|行|好|好的|继续|接着|执行|执行任务|继续执行|就这样|就这个|对|是的|yes|ok|okay|confirm|proceed|continue|doit)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
+  return /^(?:需要|要|继续|接着|执行|执行任务|就这个|对|是的|continue|doit)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:就|已经|现在|目标|联系人|文件|窗口|页面|输入框|按钮).{1,72}(?:在|就在|是|打开|选中|前台|里|上|下)$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:打开|完成|做好|处理好|找到|选中|进入|登录)(?:以后|之后|后)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact) // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
     || /^(?:然后|接着|随后|下一步)(?:直接|再|就|继续)?(?:播放|打开|保存|发送|导出|关闭|点击|输入|继续|执行).{0,48}$/u.test(compact); // i18n-allow: Chinese voice-continuation recognition; not user-visible copy.
@@ -82,10 +83,9 @@ export function classifyVoiceWorkInterruption(
   const compact = normalized
     .replace(/[\s\u3002\uFF01\uFF1F.!?\uFF0C,\u3001]+/gu, '')
     .toLowerCase();
-  if (
-    /(?:\u505c\u6b62\u4efb\u52a1|\u7ec8\u6b62\u4efb\u52a1|\u53d6\u6d88\u4efb\u52a1|\u4e0d\u7528\u505a\u4e86|\u522b\u505a\u4e86|\u4efb\u52a1\u53d6\u6d88)/u.test(compact)
-    || /\b(?:stop|cancel|abort|terminate)\s+(?:the\s+)?(?:work|task|job)\b/i.test(normalized)
-  ) return 'cancel_work';
+  // Bare spoken 'stop' remains an audio interruption; explicit task control
+  // uses the same cancellation vocabulary as text and pending confirmations.
+  if (compact !== 'stop' && isConfirmationCancellation(normalized)) return 'cancel_work';
   if (
     isVoiceCurrentActivityQuestion(normalized)
     || /^(?:怎么回事|什么情况)[？?。！!\s]*$/u.test(normalized) // i18n-allow: Chinese active-work interruption recognition.

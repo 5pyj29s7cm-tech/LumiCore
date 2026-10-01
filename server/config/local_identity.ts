@@ -68,10 +68,6 @@ export function getJwtSecret(): string {
   return configured || getLocalIdentity().jwtSecret;
 }
 
-export function getLocalIdentityPath(): string {
-  return IDENTITY_FILE;
-}
-
 export function isLoopbackAddress(address?: string | null): boolean {
   const normalized = String(address || '').trim().toLowerCase().split('%')[0];
   if (!normalized) return false;

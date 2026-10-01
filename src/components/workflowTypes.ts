@@ -5,30 +5,9 @@ import {
   sanitizeAgentResponseTextForDisplay,
 } from '@/lib/agentResponseDelivery';
 
-export interface WorkflowStep {
-  id: string;
-  type: 'thinking' | 'background' | 'confirmation' | 'tool_start' | 'tool_result' | 'response' | 'error';
-  text: string;
-  time: number;
-  detail?: string;
-}
-
-export type TaskCompletionFeedbackStatus =
-  | 'completed'
-  | 'blocked'
-  | 'failed'
-  | 'cancelled'
-  | 'working'
-  | 'unknown';
-
-export interface TaskCompletionFeedback {
-  status: TaskCompletionFeedbackStatus;
-  completed: string[];
-  evidence: string[];
-  incomplete: string[];
-  blockers: string[];
-  nextSteps: string[];
-}
+import type { TaskCompletionFeedback } from '../../server/cognition/acceptance_evidence';
+export type { TaskCompletionFeedback } from '../../server/cognition/acceptance_evidence';
+export type TaskCompletionFeedbackStatus = TaskCompletionFeedback['status'];
 
 const TASK_COMPLETION_FEEDBACK_STATUSES = new Set<TaskCompletionFeedbackStatus>([
   'completed',
@@ -42,7 +21,7 @@ const TASK_COMPLETION_FEEDBACK_STATUSES = new Set<TaskCompletionFeedbackStatus>(
 function feedbackItems(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value
-    .map(item => String(item || '').replace(/\s+/g, ' ').trim().slice(0, 700))
+    .map(compactCustomerText)
     .filter(Boolean)))
     .slice(0, 20);
 }
@@ -69,19 +48,7 @@ export function customerVisibleTaskStatus(value: unknown, locale: Locale): strin
 }
 
 export function customerVisibleTaskBlocker(value: unknown, locale: Locale): string {
-  const raw = compactCustomerText(value);
-  if (!raw) return '';
-  const sanitized = sanitizeAgentResponseTextForDisplay(raw, locale);
-  if (
-    sanitized
-    && !hasInternalAgentExecutionDetail(sanitized)
-    && !MACHINE_EXECUTION_DETAIL_RE.test(sanitized)
-  ) return sanitized;
-  // A backend blocker can contain provider errors, paths, tool names, or
-  // verifier prose even when it does not match a known diagnostic code. The
-  // assistant reply owns the detailed explanation; this panel only signals
-  // the actionable customer state.
-  return taskCompletionFeedbackCopy(locale).attentionHint;
+  return customerVisibleTaskDetail(value, locale, taskCompletionFeedbackCopy(locale).attentionHint);
 }
 
 export function customerVisibleTaskNextAction(value: unknown, locale: Locale): string {
@@ -149,15 +116,4 @@ export function normalizeTaskCompletionFeedback(value: unknown): TaskCompletionF
     blockers: feedbackItems(record.blockers),
     nextSteps: feedbackItems(record.nextSteps),
   };
-}
-
-export interface WorkflowTask {
-  id: string;
-  title?: string;
-  status: 'queued' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'completed' | 'failed' | 'blocked' | 'cancelled';
-  toolCallsCount?: number;
-  error?: string;
-  resultPreview?: string;
-  updatedAt?: string;
-  completionFeedback?: TaskCompletionFeedback;
 }

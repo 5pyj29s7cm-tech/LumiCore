@@ -8,16 +8,8 @@ import { useT } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 import { personalityEvolutionCopy } from '../i18n/locales/personalityEvolution';
 
-interface OwnerProfile {
-  synthesizedAt: string;
-  memoryCount: number;
-  dominantTone: string;
-  frequentExpressions: string[];
-  interestClusters: string[];
-  formalityLevel: number;
-  emotionalExpressiveness: number;
-  communicationPatterns: string[];
-}
+import type { OwnerProfile } from '../../server/personality/evolution';
+import type { PersonalityConfig, PersonalityEvolutionAudit, PersonalityGrowthState, PersonalityVector } from '../../server/personality/types';
 
 interface EvolutionMutation {
   field: string;
@@ -38,46 +30,14 @@ interface EvolutionStep {
   revertedAt?: string;
 }
 
-interface EvolutionAuditEntry {
-  id: string;
-  status: 'active' | 'reverted';
-  createdAt: string;
-  revertedAt?: string;
-  trigger: string;
-  depth: string;
-  affectedLayer: 'core' | 'growth' | 'mixed';
-  reversible: boolean;
-  summary: string;
-  mutationFields: string[];
-  reasons: string[];
-  sourceMemoryCount?: number;
-}
-
-interface GrowthState {
-  version: number;
-  lastUpdatedAt: string;
-  ownerInterests: string[];
-  ownerExpressions: string[];
-  communicationPatterns: string[];
-}
-
 interface EvolutionData {
   personalityId: string;
-  currentVector: {
-    cognitiveStyle: Record<string, number>;
-    socialStyle: Record<string, number>;
-  } | null;
+  currentVector: PersonalityVector | null;
   version: string;
-  evolutionConfig: {
-    plasticity: number;
-    minMemoriesForEvolution: number;
-    minConnectionForEvolution: number;
-    cooldownMs: number;
-    maxMutationsPerStep: number;
-  };
+  evolutionConfig: NonNullable<PersonalityConfig['evolutionConfig']>;
   history: EvolutionStep[];
-  audit?: EvolutionAuditEntry[];
-  growthState?: GrowthState | null;
+  audit?: PersonalityEvolutionAudit[];
+  growthState?: PersonalityGrowthState | null;
   evolutionFrozenAt?: string | null;
 }
 
@@ -122,7 +82,6 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
   const t = useT();
   const { addNotification } = useApp();
   const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
   const DIM_LABELS = personalityEvolutionCopy(isZh ? 'zh' : 'en').dimensions as Record<string, string>;
 
   const [data, setData] = useState<EvolutionData | null>(null);
@@ -232,12 +191,6 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
   const selected = selectedStep !== null && selectedStep !== undefined ? evolutionSteps[selectedStep] : null;
   const selectedAudit = selected?.auditId ? data?.audit?.find(a => a.id === selected.auditId) : null;
 
-  const vectorToMap = (vec: Record<string, number>) => {
-    const m: Record<string, number> = {};
-    for (const [k, v] of Object.entries(vec)) m[k] = v;
-    return m;
-  };
-
   const cx = 150, cy = 150, r = 130;
 
   return (
@@ -330,7 +283,6 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
                 if (!data?.currentVector) return null;
                 // Reconstruct vector for this step by applying mutations backwards
                 // For simplicity, use current vector if not selected, or show all steps
-                const opacity = idx === selectedStep ? 1 : 0.2;
                 // We show the current vector for the latest step, or a faded version for older ones
                 const values = data.currentVector;
                 const merged: Record<string, number> = {
@@ -342,7 +294,6 @@ export function PersonalityEvolution({ personalityId = 'lumi' }: Props) {
                   for (const mut of evolutionSteps[s].mutations) {
                     const parts = mut.field.split('.');
                     if (parts[0] === 'personalityVector' && parts.length === 3) {
-                      const style = parts[1] as 'cognitiveStyle' | 'socialStyle';
                       const dim = parts[2];
                       if (merged[dim] !== undefined && typeof mut.from === 'number') {
                         merged[dim] = mut.from;

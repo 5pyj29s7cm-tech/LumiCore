@@ -203,17 +203,6 @@ export function updateOrgProfile(
   return org;
 }
 
-export function updateOrgSettings(orgId: string, settings: Record<string, any>): Organization | null {
-  const db = entDB();
-  const org = db.organizations?.find((o: Organization) => o.id === orgId);
-  if (!org) return null;
-  const current = JSON.parse(org.settings || '{}');
-  org.settings = JSON.stringify({ ...current, ...settings });
-  org.updatedAt = now();
-  entWrite();
-  return org;
-}
-
 export function deleteOrg(orgId: string): boolean {
   const db = entDB();
   const idx = db.organizations?.findIndex((o: Organization) => o.id === orgId);
@@ -535,20 +524,4 @@ export function listAuditLog(orgId: string, limit: number | null = 50, offset: n
   const entries = (entDB().auditLog || []).filter((e: AuditEntry) => e.orgId === orgId);
   const sorted = entries.sort((a: AuditEntry, b: AuditEntry) => b.timestamp.localeCompare(a.timestamp));
   return limit === null ? sorted.slice(offset) : sorted.slice(offset, offset + limit);
-}
-
-// ── Domain helpers ───────────────────────────────────────────────────────
-
-/** Set domain on existing memories/interactions in bulk. */
-export function setDomain(collection: 'memories' | 'interactions', ids: string[], domain: 'personal' | 'work', orgId: string | null): void {
-  const db = entDB();
-  const items = db[collection] as any[] | undefined;
-  if (!items) return;
-  for (const item of items) {
-    if (ids.includes(item.id)) {
-      item.domain = domain;
-      item.orgId = orgId || '';
-    }
-  }
-  entWrite();
 }

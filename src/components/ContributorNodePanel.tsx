@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Cpu, Gavel, Database, Megaphone, Activity, ChevronRight } from 'lucide-react';
 import { GlassCard } from './SharedUI';

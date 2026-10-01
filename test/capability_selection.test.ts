@@ -133,6 +133,7 @@ async function selectCapability(input: {
   operationMode?: string;
   targetIsLumi?: boolean;
   continuationContext?: string;
+  continuationAppTarget?: string;
 }) {
   const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
   const { buildLumiExecutionDecision } = await import('../server/cognition/execution_decision');
@@ -394,6 +395,7 @@ describe('Lumi capability selection', () => {
       userId: 'capability_selection_wps_exact_replay_user',
       text,
       continuationContext,
+      continuationAppTarget: 'WPS',
       operationMode: 'assistant',
     });
 

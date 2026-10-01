@@ -1,16 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  X, 
-  Upload, 
-  Settings2, 
-  Mic, 
-  CheckCircle2, 
-  Loader2, 
+import {
+  X,
+  Upload,
+  Mic,
+  CheckCircle2,
+  Loader2,
   FileAudio,
-  Plus,
   Trash2,
-  Sparkles
+  Sparkles,
 } from 'lucide-react';
 import { uploadSamples, cloneVoice, listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
 import { toast } from 'sonner';

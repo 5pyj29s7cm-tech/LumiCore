@@ -1,29 +1,11 @@
-import fs from 'node:fs';
-import vm from 'node:vm';
-import path from 'node:path';
-import ts from 'typescript';
+import { extractSourceExpression } from './source_expression';
 import { expect, it, vi } from 'vitest';
 import { ChatRequestLedger, upsertPersistedPendingChatExecution, removePersistedPendingChatExecution } from '../src/lib/chatEventReceipts';
 import { chatExecutionStorageKey, ownedPendingChatExecutions, type ChatRecoveryOwner } from '../src/lib/chatExecutionRecovery';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
 
 // Execute the real component callbacks, with synthetic storage and socket replies.
-const source = fs.readFileSync(path.resolve('src/components/AgentChatPage.tsx'), 'utf8');
-const ast = ts.createSourceFile('AgentChatPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function callback(name: string, dependencies: Record<string, unknown>) {
-  let expression: ts.Expression | undefined;
-  function visit(node: ts.Node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name && node.initializer) {
-      expression = ts.isCallExpression(node.initializer) && node.initializer.expression.getText(ast) === 'useCallback'
-        ? node.initializer.arguments[0] : node.initializer;
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(ast);
-  if (!expression) throw new Error(`Missing callback: ${name}`);
-  const js = ts.transpileModule(`(${expression.getText(ast)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  return vm.runInNewContext(js, dependencies);
-}
+const callback = extractSourceExpression.bind(null, 'src/components/AgentChatPage.tsx');
 const noop = () => {};
 const owner = (userId: string): ChatRecoveryOwner => ({ userId, agentId: 'lumi', domain: 'personal', source: 'command-center-chat' });
 const requestId = 'owner-a-media-request';
@@ -60,8 +42,8 @@ function harness(currentOwner = owner('owner-a')) {
     ACTIVE_CHAT_EXECUTION_TTL_MS: 86400000, clearPersistedExecution: noop,
     isOfficeCommandCenter: true, activeMediaGenerationRef: activeMedia,
     mediaStudioOpenRef: { current: false }, mediaGenerationArtifactsRef: { current: [] }, mediaGenerationArtifactValidationRef: { current: null },
-    setMediaGenerationArtifacts: noop, setMediaGenerationStatus: noop, setMediaGenerationDetail: noop,
-    setMediaStudioMode: noop, setMediaPrimaryImage: setReference, setMediaReferenceImages: noop, setMediaVideoReferenceImage: noop,
+    setMediaGenerationArtifacts: noop, setMediaGeneration: noop,
+    setMediaStudioMode: noop, setMediaSources: vi.fn(value => { setReference(value.primaryImage); }),
     mediaGenerationText: { statusGenerating: 'generating' }, chatRequestLedgerRef: { current: ledger },
     activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false }, chatTurnTimerGuardRef: { current: { begin: noop } },
     setIsTyping: vi.fn(), lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: vi.fn(),
@@ -172,4 +154,19 @@ it('can recover after adopting the active conversation without dropping referenc
   expect(h.setReference).not.toHaveBeenCalled();
   h.replies[0](h.accepted);
   expect(h.setReference).toHaveBeenCalledWith(reference);
+});
+
+it.each(['image_edit', 'image_to_video'])('recovers all source identities atomically and clears the previous selection: %s', async operation => {
+  const h = harness();
+  const stored = JSON.parse(h.localStorage.getItem(h.key)!);
+  const empty = { primaryImage: '', primaryArtifactId: '', referenceImages: [], referenceArtifactIds: [], referenceImage: '', referenceArtifactId: '' };
+  const sources = operation === 'image_edit'
+    ? { primaryImage: reference, primaryArtifactId: 'main-id', referenceImages: ['D:/ref.png'], referenceArtifactIds: ['ref-id'] }
+    : { referenceImage: reference, referenceArtifactId: 'first-frame-id' };
+  stored.pending[0].mediaGeneration = { mode: operation === 'image_edit' ? 'image' : 'video', operation, size: '1024x1024', prompt: 'Keep this source', ...sources };
+  h.localStorage.setItem(h.key, JSON.stringify(stored));
+  await h.resume();
+  expect(h.dependencies.setMediaSources).not.toHaveBeenCalled();
+  h.replies[0](h.accepted);
+  expect(h.dependencies.setMediaSources).toHaveBeenCalledExactlyOnceWith({ ...empty, ...sources });
 });

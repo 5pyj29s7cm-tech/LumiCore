@@ -8,15 +8,17 @@ import {
   requiresDesktopAiRequest,
 } from '../server/cognition/action_contract';
 import {
-  resolveRecentActionOpenTarget,
   type ConversationActionContinuationState,
 } from '../server/cognition/action_continuation';
 import {
   buildDesktopObservationPlan,
   formatDesktopObservationResult,
 } from '../server/cognition/desktop_observation';
-import { processInput } from '../server/cognition';
-import { matchQuickCommand } from '../server/cognition/quick_commands';
+import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
+import { resolveAcceptedTaskTarget } from '../server/conversation/task_target_anchor';
+import { registerAllTools } from '../server/tools/definitions';
+import { buildDeterministicLocalDesktopNavigationCommand } from '../server/cognition/quick_commands';
+import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import {
   addMemory,
@@ -67,47 +69,28 @@ describe('systematic naturalness regressions', () => {
       { pid: 1, name: 'wps.exe' },
       { pid: 2, name: 'Weixin.exe' },
     ]));
-    const classifier = vi.fn();
     try {
-      const result = await processInput(
-        '现在后台有几个软件在运行？',
-        {
-          userId: 'naturalness-observation',
-          personalityId: 'lumi',
-          personalityName: 'Lumi',
-          llmProvider: 'deepseek',
-          llmModel: 'deepseek-v4-flash',
-          isLLMAvailable: true,
-        },
-        classifier,
-        { userId: 'naturalness-observation' },
-      );
-      expect(result.directToolExecuted).toBe(false);
-      expect(result.toolRecords).toBeUndefined();
-      expect(result.responseText).toBe('');
+      const result = buildLumiExecutionPipeline({
+        dispatch: { text: '现在后台有几个软件在运行？', userId: 'naturalness-observation', channel: 'voice',
+          source: 'voice', operationMode: 'assistant', targetIsLumi: true },
+        registry: toolRegistry,
+      });
+      expect(result.intentTrace.normalizedActionIntent).toEqual(result.normalizedIntent);
       expect(execute).not.toHaveBeenCalled();
-      expect(classifier).not.toHaveBeenCalled();
     } finally {
       execute.mockRestore();
     }
   });
 
-  it('opens the latest receipt-backed artifact for a terse referential follow-up', () => {
-    const state: ConversationActionContinuationState = {
-      version: 1,
-      goal: '创建一份 Word 文档',
-      latestInstruction: '创建一份 Word 文档',
-      appTarget: '',
-      sourcePaths: ['D:\\lumi_output\\客户报告.docx'],
-      latestBlocker: '',
-      unfinished: false,
-      evidenceTools: ['create_docx'],
-      assistantState: '文档已创建',
-      toolSummaries: ['create_docx succeeded'],
-      updatedAt: new Date().toISOString(),
-    };
-    expect(resolveRecentActionOpenTarget('你直接打开', state)).toBe('D:\\lumi_output\\客户报告.docx');
-    expect(resolveRecentActionOpenTarget('打开浏览器', state)).toBeNull();
+  it('binds an open follow-up to its persisted producer receipt without guessing for a new target', () => {
+    const path = 'D:/lumi_output/customer-report.docx';
+    const persistedHistory = [{ id: 'created-document', role: 'assistant', requestId: 'produce-doc', message: 'Created', toolCalls: [{
+      name: 'create_docx', requestId: 'produce-doc', result: JSON.stringify({ ok: true, path }), terminalVerification: { status: 'verified' },
+    }] }];
+    const accepted = resolveAcceptedTaskTarget({ text: '打开刚才生成的文件', persistedHistory });
+    expect(accepted).toMatchObject({ source: 'prior_tool_receipt', sourceId: 'created-document' });
+    expect(accepted?.target.path.replaceAll('\\', '/')).toBe(path);
+    expect(resolveAcceptedTaskTarget({ text: '打开浏览器', persistedHistory })).toBeUndefined();
   });
 
   it('does not reopen a receipt target for a retrospective status question', () => {
@@ -124,27 +107,32 @@ describe('systematic naturalness regressions', () => {
       toolSummaries: ['desktop_open succeeded'],
       updatedAt: new Date().toISOString(),
     };
-    expect(resolveRecentActionOpenTarget('\u521a\u624d\u6253\u5f00\u4e86\u4ec0\u4e48\uff1f\u4e0d\u8981\u6267\u884c\u65b0\u64cd\u4f5c\u3002', state)).toBeNull();
+    const pipeline = buildLumiExecutionPipeline({
+      dispatch: { text: '刚才打开了什么？不要执行新操作。', userId: 'naturalness-status', channel: 'voice', source: 'voice', operationMode: 'assistant', targetIsLumi: true },
+      registry: toolRegistry, actionTaskState: state,
+    });
+    expect(pipeline.executionRequested).toBe(false);
+    expect(pipeline.normalizedIntent.kind).toBe('status_query');
   });
 
-  it('routes a known-site login straight to the visible saved-session runner', async () => {
-    const result = await matchQuickCommand('登录中国裁判文书网', 'naturalness-login', { surface: 'voice' });
-    expect(result?.matched).toBe(true);
-    expect(result?.toolCall).toEqual(expect.objectContaining({
-      name: 'web_login_run',
-      arguments: expect.objectContaining({
-        profileId: 'china-judgments-online',
-        headless: false,
-      }),
-    }));
+  it('keeps saved-session login available in shared planning', () => {
+    const registry = new ToolRegistry();
+    registerAllTools(registry);
+    const result = buildLumiExecutionPipeline({
+      dispatch: { text: '登录中国裁判文书网', userId: 'naturalness-login', channel: 'voice', source: 'voice', operationMode: 'assistant', targetIsLumi: true },
+      registry,
+    });
+    expect(result.executionRequested).toBe(true);
+    expect(result.modelToolProjection.toolNames).toContain('web_login_run');
   });
 
-  it('does not collapse a compound workflow name into an application launch', async () => {
-    expect(await matchQuickCommand('打开微信消息值守', 'naturalness-compound-open')).toBeNull();
-    expect(await matchQuickCommand('打开返现主页', 'naturalness-contextual-site-open')).toBeNull();
-    expect((await matchQuickCommand('打开网易云音乐', 'naturalness-atomic-open'))?.toolCall).toEqual({
-      name: 'desktop_open',
-      arguments: { target: '网易云音乐' },
+  it('does not collapse a compound workflow name into an application launch', () => {
+    for (const text of ['打开微信消息值守', '打开返现主页']) {
+      expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toBeNull();
+    }
+    const text = '打开网易云音乐';
+    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)?.toolCall).toEqual({
+      name: 'desktop_open', arguments: { target: '网易云音乐' },
     });
   });
 

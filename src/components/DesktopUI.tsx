@@ -29,7 +29,6 @@ import {
   Sparkles,
   Box,
   Wrench,
-  MessageSquare,
   Brush,
   Play,
   Pause,
@@ -64,20 +63,14 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAmbientPoller } from '@/hooks/useAmbientPoller';
 import { useVoiceCall, type VoiceTranscriptMeta } from '@/hooks/useVoiceCall';
 import { useApp, type OperationMode } from '@/contexts/AppContext';
-import { describeAgentResponseDelivery } from '@/lib/agentResponseDelivery';
 const LumiCoreAvatar = lazy(() => import('./LumiCoreAvatar').then(m => ({ default: m.LumiCoreAvatar })));
 const MemoryAvatarLab = lazy(() => import('./MemoryAvatarLab').then(m => ({ default: m.MemoryAvatarLab })));
 const Sanctuary = lazy(() => import('./Sanctuary').then(m => ({ default: m.Sanctuary })));
 const InkWorldLazy = lazy(() => import('./InkWorld').then(m => ({ default: m.InkWorld })));
 import {
-  normalizeTaskCompletionFeedback,
-  type WorkflowTask,
-  type WorkflowStep,
 } from './workflowTypes';
 import type { CommandCenterView } from './commandCenterTypes';
 import { useWakeWord } from '../hooks/useWakeWord';
-import { ErrorBoundary } from './ErrorBoundary';
-import { appConfirm } from '@/lib/appConfirm';
 import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
@@ -532,13 +525,6 @@ function OSWindow({
   );
 }
 
-interface DesktopIconProps {
-  label: string;
-  icon: React.ReactNode;
-  colorClass: string;
-  onClick: () => void;
-}
-
 interface DesktopIconDefinition {
   id: string;
   label?: string;
@@ -559,25 +545,6 @@ function externalCapabilityDesktopIcon(icon: string | undefined): React.ReactNod
   if (/spark|ai|magic|generate/.test(normalized)) return <Sparkles size={24} />;
   if (/tool|wrench|mcp|plugin/.test(normalized)) return <Wrench size={24} />;
   return <Box size={24} />;
-}
-
-function DesktopIcon({ label, icon, colorClass, onClick }: DesktopIconProps) {
-  return (
-    <div
-      onDoubleClick={onClick}
-      className="desktop-icon group cursor-pointer"
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); }}}
-    >
-      <div className={`desktop-icon-img bg-gradient-to-br ${colorClass} shadow-[0_10px_20px_-5px_rgba(0,0,0,0.5)]`}>
-        <div className="text-white group-hover:rotate-12 transition-transform">
-          {icon}
-        </div>
-      </div>
-      <span className="desktop-icon-label">{label}</span>
-    </div>
-  );
 }
 
 function SensorPrimer({ isOpen, onContinue, t }: { isOpen: boolean; onContinue: () => void; t: any }) {
@@ -1447,7 +1414,6 @@ export function DesktopUI({
   const [openWindows, setOpenWindows] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
   const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
   const [focusedWindow, setFocusedWindow] = useState<string | null>(initialWindowId);
-  const [windowOrder, setWindowOrder] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
   const [knowledgeOpen, setKnowledgeOpen] = useState(activeTab === 'knowledge');
   const [knowledgeLoaded, setKnowledgeLoaded] = useState(activeTab === 'knowledge');
   const [organizationWorkspaceView, setOrganizationWorkspaceView] = useState<OrganizationWorkspaceView>('dashboard');
@@ -1476,8 +1442,7 @@ export function DesktopUI({
   const [chatOpen, setChatOpen] = useState(initialCommandCenterOpen);
   const [chatLoaded, setChatLoaded] = useState(initialCommandCenterOpen);
   const [commandCenterView, setCommandCenterView] = useState<CommandCenterView>('office');
-  const [chatPrefill, setChatPrefill] = useState('');
-  const [chatPrefillSource, setChatPrefillSource] = useState('proactive');
+  const [chatPrefill, setChatPrefill] = useState<{ text: string; source: string } | null>(null);
   const [creationRequestId, setCreationRequestId] = useState<string | null>(null);
   const [chatAttachmentRequest, setChatAttachmentRequest] = useState<ChatAttachmentRequest | null>(null);
   const [sanctuaryOpen, setSanctuaryOpen] = useState(false);
@@ -1499,7 +1464,6 @@ export function DesktopUI({
     setMemoryLabOpen(false);
   }, [user?.uid]);
   const [petReaction, setPetReaction] = useState<{ animation: string; until: number } | null>(null);
-  const [activePersonality, setActivePersonality] = useState('lumi');
   const petReactionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [memoryLabOpen, setMemoryLabOpen] = useState(false);
@@ -1731,7 +1695,6 @@ export function DesktopUI({
     setCommandCenterView(view);
     setOpenWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
     setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
-    setWindowOrder(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
     setFocusedWindow(previous => ['chat', 'command-center'].includes(previous || '') ? null : previous);
     setChatLoaded(true);
     setChatOpen(true);
@@ -1777,8 +1740,7 @@ export function DesktopUI({
     surfaceReturnTargetRef.current = returnTarget || inferSurfaceReturnTarget();
     // Only one full-screen surface owns focus at a time.
     setChatOpen(false);
-    setChatPrefill('');
-    setChatPrefillSource('proactive');
+    setChatPrefill(null);
     setMemoryLabOpen(false);
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
@@ -1858,8 +1820,7 @@ export function DesktopUI({
     // never stack.  The recorded origin is restored by closeMemoryAvatar.
     setChatOpen(false);
     setKnowledgeOpen(false);
-    setChatPrefill('');
-    setChatPrefillSource('proactive');
+    setChatPrefill(null);
     setActiveTab('home');
     if (selected) {
       setSanctuaryAgent(selected);
@@ -1880,8 +1841,7 @@ export function DesktopUI({
     }
     setChatOpen(false);
     setKnowledgeOpen(false);
-    setChatPrefill('');
-    setChatPrefillSource('proactive');
+    setChatPrefill(null);
     setActiveTab('home');
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
@@ -1925,8 +1885,7 @@ export function DesktopUI({
 
   const openProactiveChat = useCallback((detail: ProactiveChatDetail) => {
     setIsNotificationPanelOpen(false);
-    setChatPrefillSource('proactive_context');
-    setChatPrefill(formatProactiveChatPrefill(detail, lang));
+    setChatPrefill({ text: formatProactiveChatPrefill(detail, lang), source: 'proactive_context' });
     openCommandCenter('office');
   }, [lang, openCommandCenter]);
 
@@ -2097,7 +2056,6 @@ export function DesktopUI({
   }>>([]);
   const showMcpPanel = false;
   const [agentStatus, setAgentStatus] = useState<'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'done' | 'error'>('idle');
-  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [pendingOperationMode, setPendingOperationMode] = useState<OperationMode | null>(null);
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const readMeetingItem = useCallback((scopedKey: string, legacyKey: string): string | null => (
@@ -2438,8 +2396,8 @@ export function DesktopUI({
   }, [callState, endCall, meetingPreferenceScopeKey, operationMode, setOperationMode]);
 
   const startStandardVoiceCall = useCallback(() => {
-    void startCall(selectedVoiceId, activePersonality, activePersonality, getVoiceScopeOptions());
-  }, [activePersonality, getVoiceScopeOptions, selectedVoiceId, startCall]);
+    void startCall(selectedVoiceId, 'lumi', 'lumi', getVoiceScopeOptions());
+  }, [getVoiceScopeOptions, selectedVoiceId, startCall]);
 
   const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean; refinementId?: string } = {}) => {
     setMeetingPaused(false);
@@ -2479,9 +2437,9 @@ export function DesktopUI({
       if (now - meetingStartAttemptRef.current < 3000) return;
       meetingStartAttemptRef.current = now;
       meetingVoiceActiveRef.current = true;
-      void startCall(selectedVoiceId, activePersonality, activePersonality, { ...getVoiceScopeOptions(), transcriptionOnly: true, meetingId: meetingIdentityRef.current.meetingId });
+      void startCall(selectedVoiceId, 'lumi', 'lumi', { ...getVoiceScopeOptions(), transcriptionOnly: true, meetingId: meetingIdentityRef.current.meetingId });
     }
-  }, [activePersonality, callState, endCall, getVoiceScopeOptions, meetingPaused, meetingStorageKeys.startedAt, operationMode, selectedVoiceId, startCall]);
+  }, [callState, endCall, getVoiceScopeOptions, meetingPaused, meetingStorageKeys.startedAt, operationMode, selectedVoiceId, startCall]);
   // Spacebar push-to-talk: track whether this call was started by spacebar
   const isSpacebarRecording = useRef(false);
   const callStateRef = useRef(callState);
@@ -3174,8 +3132,8 @@ export function DesktopUI({
       if (detail?.tab === 'home') {
         surfaceReturnTargetRef.current = 'home';
         setOpenWindows([]);
+        setMinimizedWindows([]);
         setFocusedWindow(null);
-        setWindowOrder([]);
         setKnowledgeOpen(false);
         setChatOpen(false);
         setMemoryLabOpen(false);
@@ -3487,8 +3445,6 @@ export function DesktopUI({
     let activeForegroundRequestId: string | null = null;
     let activeForegroundSource: string | null = null;
     let terminalResetTimer: ReturnType<typeof setTimeout> | null = null;
-    const workflowStepId = (prefix: string, seed?: string) =>
-      `${prefix}-${seed || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const isDetachedBackgroundEvent = (data: { source?: string }) =>
       /^(?:background|proactive|scheduler)/i.test(String(data.source || ''));
     const acceptsForegroundEvent = (data: { requestId?: string; source?: string }, claim = false) => {
@@ -3510,13 +3466,23 @@ export function DesktopUI({
       return activeForegroundRequestId === requestId;
     };
 
+    const scheduleTerminalReset = (terminalRequestId: string | null) => {
+      if (terminalResetTimer) clearTimeout(terminalResetTimer);
+      terminalResetTimer = setTimeout(() => {
+        if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
+        setAgentStatus('idle');
+        activeForegroundRequestId = null;
+        activeForegroundSource = null;
+        terminalResetTimer = null;
+      }, 5000);
+    };
+
     const onStatus = (data: { status: string; agentName?: string; phase?: string; detail?: string; source?: string; requestId?: string }) => {
       if (data.status === 'thinking') {
         if (isDetachedBackgroundEvent(data)) return;
         if (data.requestId && activeForegroundRequestId !== data.requestId) {
           activeForegroundRequestId = data.requestId;
           activeForegroundSource = data.source || null;
-          setWorkflowSteps([]);
           seenWorkflowToolEvents.current.clear();
         } else if (!acceptsForegroundEvent(data, true)) return;
         terminalResponseSeen = false;
@@ -3526,15 +3492,6 @@ export function DesktopUI({
         }
         const isBackground = data.phase === 'background';
         setAgentStatus(isBackground ? 'background' : 'thinking');
-        setWorkflowSteps(prev => [...prev, {
-          id: workflowStepId('thinking'),
-          type: isBackground ? 'background' : 'thinking',
-          text: isBackground
-            ? (t.workflowBackgroundStep || 'Lumi is handling this in the background')
-            : (t.workflowAnalyzing || 'Analyzing your request...'),
-          detail: data.detail || (data.agentName && data.agentName !== 'Lumi' ? data.agentName : undefined),
-          time: Date.now(),
-        }]);
       } else if (data.status === 'idle') {
         if (!acceptsForegroundEvent(data)) return;
         // "idle" is a transport/pipeline state, not evidence that user work completed.
@@ -3545,37 +3502,21 @@ export function DesktopUI({
         terminalResponseSeen = true;
         const terminalRequestId = data.requestId || activeForegroundRequestId;
         setAgentStatus('error');
-        if (terminalResetTimer) clearTimeout(terminalResetTimer);
-        terminalResetTimer = setTimeout(() => {
-          if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
-          setAgentStatus('idle');
-          setWorkflowSteps([]);
-          activeForegroundRequestId = null;
-          activeForegroundSource = null;
-          terminalResetTimer = null;
-        }, 5000);
+        scheduleTerminalReset(terminalRequestId);
       }
     };
 
     const onToolCall = (data: { correlationId?: string; name: string; arguments?: any; args?: any; result?: string; error?: string; source?: string; requestId?: string }) => {
       if (!acceptsForegroundEvent(data, true)) return;
-      const toolArgs = data.arguments ?? data.args;
       const phase = data.error !== undefined ? 'error' : data.result !== undefined ? 'result' : 'start';
       if (data.correlationId) {
         const eventKey = `${data.correlationId}:${phase}`;
         if (seenWorkflowToolEvents.current.has(eventKey)) return;
         seenWorkflowToolEvents.current.add(eventKey);
       }
+      setAgentStatus('executing');
       if (data.error !== undefined) {
-        setAgentStatus('executing');
         triggerPetReaction('failed', 2000);
-        setWorkflowSteps(prev => [...prev, {
-          id: `tool-err-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'error',
-          text: `${data.name} ${t.workflowToolFailed || 'failed'}`,
-          detail: data.error?.slice(0, 100),
-          time: Date.now(),
-        }]);
       } else if (data.result !== undefined) {
         let structured: Record<string, unknown> | null = null;
         let parsed: unknown = String(data.result || '').trim();
@@ -3598,29 +3539,7 @@ export function DesktopUI({
           || structured?.verified === false
           || ['blocked', 'cancelled', 'canceled', 'error', 'failed', 'timeout', 'timed_out'].includes(status)
         );
-        setAgentStatus('executing');
         triggerPetReaction(resultFailed ? 'failed' : 'jump', resultFailed ? 2000 : 1200);
-        setWorkflowSteps(prev => [...prev, {
-          id: `tool-result-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: resultFailed ? 'error' : 'tool_result',
-          text: resultFailed
-            ? `${data.name} returned a blocked or failed result`
-            : `${data.name} returned a result`,
-          detail: data.result?.slice(0, 100),
-          time: Date.now(),
-        }]);
-      } else {
-        setAgentStatus('executing');
-        const argsSummary = toolArgs
-          ? Object.entries(toolArgs).map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 30) : String(v).slice(0, 30)}`).join(', ')
-          : '';
-        setWorkflowSteps(prev => [...prev, {
-          id: `tool-start-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          type: 'tool_start',
-          text: `${t.workflowCalling || 'Calling'} ${data.name}`,
-          detail: argsSummary || undefined,
-          time: Date.now(),
-        }]);
       }
     };
 
@@ -3644,48 +3563,18 @@ export function DesktopUI({
       terminalResponseSeen = true;
       const terminalRequestId = data.requestId || activeForegroundRequestId;
       setAgentStatus(responseBlocked ? 'error' : 'done');
-      setWorkflowSteps(prev => [...prev, {
-        id: workflowStepId('resp', data.requestId),
-        type: responseBlocked ? 'error' : 'response',
-        text: responseBlocked ? (t.workflowError || 'Processing blocked') : (t.workflowResponseReady || 'Response ready'),
-        detail: describeAgentResponseDelivery(data, lang === 'zh'),
-        time: Date.now(),
-      }]);
-      if (terminalResetTimer) clearTimeout(terminalResetTimer);
-      terminalResetTimer = setTimeout(() => {
-        if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
-        setAgentStatus('idle');
-        setWorkflowSteps([]);
-        activeForegroundRequestId = null;
-        activeForegroundSource = null;
-        terminalResetTimer = null;
-      }, 5000);
+      scheduleTerminalReset(terminalRequestId);
     };
 
     const onError = (data: { message: string; source?: string; requestId?: string }) => {
       if (!acceptsForegroundEvent(data, true)) return;
       const terminalRequestId = data.requestId || activeForegroundRequestId;
       setAgentStatus('error');
-      setWorkflowSteps(prev => [...prev, {
-        id: workflowStepId('err', data.requestId),
-        type: 'error',
-        text: t.workflowError || 'Processing failed',
-        detail: data.message,
-        time: Date.now(),
-      }]);
-      if (terminalResetTimer) clearTimeout(terminalResetTimer);
-      terminalResetTimer = setTimeout(() => {
-        if (terminalRequestId && activeForegroundRequestId !== terminalRequestId) return;
-        setAgentStatus('idle');
-        setWorkflowSteps([]);
-        activeForegroundRequestId = null;
-        activeForegroundSource = null;
-        terminalResetTimer = null;
-      }, 5000);
+      scheduleTerminalReset(terminalRequestId);
     };
 
     const onProactive = (data: { type?: string; taskId: string; message: string; timestamp: string }) => {
-      const taskId = data.type || data.taskId || data.taskId;
+      const taskId = data.type || data.taskId;
       if (taskId === 'greeting' && localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
       // Trigger pet reaction
       switch (taskId) {
@@ -3777,15 +3666,11 @@ export function DesktopUI({
       });
     };
 
-    const onTokenUsageUpdate = (_data: { totalTokens: number; provider: string }) => {
-      // Token usage updated — TokenDashboard handles REST polling, this is real-time supplement
-    };
     socket.on('preferences:changed', onPreferencesChanged);
     socket.on('agent:notification', onAgentNotification);
     socket.on('wake:detected', onWakeDetected);
     socket.on('wake:error', onWakeError);
     socket.on('wake:started', onWakeStarted);
-    socket.on('token:usage_update', onTokenUsageUpdate);
 
     return () => {
       socket.off('agent:status', onStatus);
@@ -3800,7 +3685,6 @@ export function DesktopUI({
       socket.off('wake:detected', onWakeDetected);
       socket.off('wake:error', onWakeError);
       socket.off('wake:started', onWakeStarted);
-      socket.off('token:usage_update', onTokenUsageUpdate);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
     };
   }, [
@@ -3809,12 +3693,6 @@ export function DesktopUI({
     orgConnection?.orgId,
     petStorageKeys,
     socket,
-    t.workflowAnalyzing,
-    t.workflowBackgroundStep,
-    t.workflowCalling,
-    t.workflowError,
-    t.workflowResponseReady,
-    t.workflowToolFailed,
     workDomain,
   ]);
 
@@ -3993,6 +3871,7 @@ export function DesktopUI({
       setSanctuaryOpen(false);
       setSanctuaryAgent(null);
       setOpenWindows([]);
+      setMinimizedWindows([]);
       setFocusedWindow(null);
       setActiveTab('home');
       return;
@@ -4014,7 +3893,6 @@ export function DesktopUI({
       setIsNotificationPanelOpen(prev => !prev);
       setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
       setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
-      setWindowOrder(prev => prev.filter(w => w !== 'notifications'));
       if (focusedWindow === 'notifications') setFocusedWindow(null);
       return;
     }
@@ -4033,35 +3911,26 @@ export function DesktopUI({
       void openMemoryAvatar();
       return;
     }
-    if (openWindows.includes(tab)) {
-      if (minimizedWindows.includes(tab)) {
-        setMinimizedWindows(prev => prev.filter(w => w !== tab));
-      }
-      setFocusedWindow(tab);
-      setWindowOrder(prev => [...prev.filter(w => w !== tab), tab]);
-    } else {
-      setOpenWindows(prev => prev.includes(tab) ? prev : [...prev, tab]);
-      setFocusedWindow(tab);
-      setWindowOrder(prev => [...prev, tab]);
-    }
+    setOpenWindows(prev => [...prev.filter(w => w !== tab), tab]);
+    setMinimizedWindows(prev => prev.filter(w => w !== tab));
+    setFocusedWindow(tab);
     setActiveTab(tab);
-  }, [closeKnowledgeBase, focusedWindow, knowledgeOpen, minimizedWindows, openCommandCenter, openKnowledgeBase, openMemoryAvatar, openWindows, setActiveTab]);
+  }, [closeKnowledgeBase, focusedWindow, knowledgeOpen, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab]);
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
-    const remainingOrder = windowOrder.filter(w => w !== tab);
+    const remainingOrder = openWindows.filter(w => w !== tab && !minimizedWindows.includes(w));
     const nextFocusedWindow = remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null;
     setOpenWindows(prev => prev.filter(w => w !== tab));
     setMinimizedWindows(prev => prev.filter(w => w !== tab));
-    setWindowOrder(remainingOrder);
     if (focusedWindow === tab) {
       setFocusedWindow(nextFocusedWindow);
       if (!nextFocusedWindow) setActiveTab('home');
     }
-  }, [focusedWindow, setActiveTab, windowOrder]);
+  }, [focusedWindow, minimizedWindows, openWindows, setActiveTab]);
 
   const minimizeOsWindow = (tab: string) => {
-    const remainingOrder = windowOrder.filter(w => w !== tab && !minimizedWindows.includes(w));
+    const remainingOrder = openWindows.filter(w => w !== tab && !minimizedWindows.includes(w));
     setMinimizedWindows(prev => prev.includes(tab) ? prev : [...prev, tab]);
     if (focusedWindow === tab) {
       setFocusedWindow(remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null);
@@ -4169,7 +4038,6 @@ export function DesktopUI({
     setOpenWindows([]);
     setMinimizedWindows([]);
     setFocusedWindow(null);
-    setWindowOrder([]);
     setActiveTab('home');
     setIsDesktopWidgetMode(true);
     if (isTauri) {
@@ -4241,7 +4109,6 @@ export function DesktopUI({
       const action = String(detail.action || '');
       const target = String(detail.target || '');
       const mode = String(detail.mode || '');
-      const task = String(detail.task || '');
       const section = String(detail.section || '');
       const confirmed = Boolean(detail.confirmed);
       const respond = typeof detail.respond === 'function' ? detail.respond : () => {};
@@ -4284,7 +4151,6 @@ export function DesktopUI({
           setOpenWindows([]);
           setMinimizedWindows([]);
           setFocusedWindow(null);
-          setWindowOrder([]);
           setKnowledgeOpen(false);
           setChatOpen(false);
           setMemoryLabOpen(false);
@@ -4330,15 +4196,13 @@ export function DesktopUI({
           setIsNotificationPanelOpen(true);
           setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
           setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
-          setWindowOrder(prev => prev.filter(w => w !== 'notifications'));
           if (focusedWindow === 'notifications') setFocusedWindow(null);
           return;
         }
         surfaceReturnTargetRef.current = 'home';
-        setOpenWindows(prev => prev.includes(windowId) ? prev : [...prev, windowId]);
         setMinimizedWindows(prev => prev.filter(w => w !== windowId));
         setFocusedWindow(windowId);
-        setWindowOrder(prev => [...prev.filter(w => w !== windowId), windowId]);
+        setOpenWindows(prev => [...prev.filter(w => w !== windowId), windowId]);
         setActiveTab(windowId);
       };
 
@@ -4381,8 +4245,7 @@ export function DesktopUI({
           setMemoryLabOpen(false);
           setSanctuaryOpen(false);
           setSanctuaryAgent(null);
-          setChatPrefill('');
-          setChatPrefillSource('proactive');
+          setChatPrefill(null);
           setActiveTab('home');
           return;
         }
@@ -4798,13 +4661,6 @@ export function DesktopUI({
         permissions: clientPermissions,
         tools: {
           agentStatus,
-          workflowStepCount: workflowSteps.length,
-          runningWorkflowSteps: workflowSteps.filter(step =>
-            step.type === 'thinking' ||
-            step.type === 'background' ||
-            step.type === 'confirmation' ||
-            step.type === 'tool_start'
-          ).length,
           mcpActivityCount: mcpActivities.length,
         },
         runtime: clientRuntime,
@@ -4860,7 +4716,6 @@ export function DesktopUI({
     settingsSection,
     viewMode,
     workDomain,
-    workflowSteps,
   ]);
 
   const appIcons = [
@@ -5178,8 +5033,7 @@ export function DesktopUI({
                 setMemoryLabOpen(false);
                 setSanctuaryOpen(false);
                 setSanctuaryAgent(null);
-                setChatPrefill('');
-                setChatPrefillSource('proactive');
+                setChatPrefill(null);
                 setActiveTab('home');
               }}
               commandCenterOpen={chatOpen || knowledgeOpen || memoryLabOpen || sanctuaryOpen}
@@ -6010,9 +5864,8 @@ export function DesktopUI({
           </Suspense>
         )}
         <AnimatePresence>
-          {openWindows.map(windowId => {
+          {openWindows.map((windowId, orderIdx) => {
             const size = getWindowSize(windowId);
-            const orderIdx = windowOrder.indexOf(windowId);
             const meta = getWindowMeta(windowId);
             return (
               <OSWindow
@@ -6022,10 +5875,10 @@ export function DesktopUI({
                 icon={meta.icon}
                 isActive={focusedWindow === windowId}
                 isMinimized={minimizedWindows.includes(windowId)}
-                zIndex={10 + (orderIdx >= 0 ? orderIdx : 0)}
+                zIndex={10 + orderIdx}
                 onFocus={(id) => {
                   setFocusedWindow(id);
-                  setWindowOrder(prev => [...prev.filter(w => w !== id), id]);
+                  setOpenWindows(prev => prev.includes(id) ? [...prev.filter(w => w !== id), id] : prev);
                 }}
                 onMinimize={minimizeOsWindow}
                 onMinimizeComplete={(id) => {
@@ -6178,8 +6031,7 @@ export function DesktopUI({
               surfaceReturnTargetRef.current = 'home';
               setChatOpen(false);
               setActiveTab('home');
-              setChatPrefill('');
-              setChatPrefillSource('proactive');
+              setChatPrefill(null);
             }}
             layout="command-center"
             commandCenterView={commandCenterView}
@@ -6201,11 +6053,11 @@ export function DesktopUI({
               onStart: startStandardVoiceCall,
               onEnd: endVoiceCallFromUI,
             }}
-            prefillMessage={chatPrefill}
+            prefillMessage={chatPrefill?.text || ''}
             creationRequestId={creationRequestId || undefined}
             onCreationRequestConsumed={(requestId) => setCreationRequestId(current => current === requestId ? null : current)}
-            prefillSource={chatPrefillSource}
-            onPrefillConsumed={() => { setChatPrefill(''); setChatPrefillSource('proactive'); }}
+            prefillSource={chatPrefill?.source || 'proactive'}
+            onPrefillConsumed={() => { setChatPrefill(null); }}
             attachmentRequest={chatAttachmentRequest || undefined}
             onAttachmentRequestConsumed={(requestId) => {
               setChatAttachmentRequest(current => current?.requestId === requestId ? null : current);

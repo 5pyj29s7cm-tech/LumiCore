@@ -7,8 +7,6 @@ import { logger } from '../../logger';
 import { CN_TIMER_SKILL_METADATA } from '../regions/packs/cn/skill_messages';
 
 const SUPPORTED_LANGS = ['zh', 'en'];
-const FIELDS_TO_TRANSLATE = ['displayName', 'description', 'setupNote'] as const;
-
 const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {
   'skill-cad-drafting': {
     displayName: 'CAD 制图包',

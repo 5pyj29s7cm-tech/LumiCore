@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
+import { loadSourceModule } from './source_expression';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import * as React from 'react';
-import fs from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fetchApi = vi.fn();
@@ -19,14 +17,7 @@ const imports: Record<string, any> = {
   '@/lib/audioContextLifecycle': { closeAudioContext: closeContext },
   '@/services/voiceService': { VOICE_PROVIDER_CHANGED_EVENT: 'lumi:voice-provider-changed' },
 };
-const source = fs.readFileSync(path.join(process.cwd(), 'src/hooks/useWakeWord.ts'), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-const module = { exports: {} as typeof import('../src/hooks/useWakeWord') };
-new Function('require', 'module', 'exports', compiled)((name: string) => {
-  if (!(name in imports)) throw new Error(`Unexpected hook dependency: ${name}`);
-  return imports[name];
-}, module, module.exports);
-const { useWakeWord } = module.exports;
+const { useWakeWord } = loadSourceModule<typeof import('../src/hooks/useWakeWord')>('src/hooks/useWakeWord.ts', imports);
 
 function socket(id: string) {
   const callbacks = new Map<string, Set<(...args: any[]) => void>>();
