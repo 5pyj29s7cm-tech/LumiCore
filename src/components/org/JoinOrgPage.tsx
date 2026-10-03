@@ -4,59 +4,43 @@ import { Building2, ArrowRight, CheckCircle, Loader2, AlertCircle } from 'lucide
 import { Button } from '../ui/button';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
-import { apiFetch } from '../../services/apiClient';
+import { apiJson } from '../../services/apiClient';
+import { useAsyncOperation } from '../../hooks/useAsyncOperation';
 import { uiMessage } from '../../i18n/uiMessages';
 
 export function JoinOrgPage() {
-  const t = useT();
-  const { refreshUser, switchDomain } = useApp();
+  const { user } = useApp();
+  return user ? <JoinForm key={JSON.stringify([user.uid, user.role])} /> : null;
+}
+function JoinForm() {
+  const t = useT(), { switchDomain } = useApp();
   const [code, setCode] = useState('');
-  const [step, setStep] = useState<'input' | 'preview' | 'joining' | 'done' | 'error'>('input');
-  const [orgInfo, setOrgInfo] = useState<any>(null);
-  const [error, setError] = useState('');
-
-  const handleValidate = async () => {
-    if (code.length < 6) return;
-    try {
-      const res = await apiFetch(`/api/org/invitations/${code.toUpperCase()}`);
-      const data = await res.json();
-      if (data.valid) {
-        setOrgInfo(data);
-        setStep('preview');
-      } else {
-        setError(data.error || uiMessage('join-org-page.invalid-invitation-code.bf31d88f81'));
-        setStep('error');
-      }
-    } catch {
-      setError(uiMessage('join-org-page.unable-to-reach-the-organization.eae15e7512'));
-      setStep('error');
+  const [step, setStep] = useState<'input' | 'preview' | 'done'>('input');
+  const [orgInfo, setOrgInfo] = useState<{ code: string; org: { id: string; name: string }; role: string } | null>(null);
+  const [joinedOrgId, setJoinedOrgId] = useState('');
+  const { busy, error, run, cancel } = useAsyncOperation();
+  const handleValidate = () => code.length >= 6 && run('validate', async signal => {
+    const validatedCode = code.trim().toUpperCase();
+    const data = await apiJson('/api/org/invitations/' + encodeURIComponent(validatedCode), { signal });
+    if (data?.valid !== true || typeof data.org?.id !== 'string' || !data.org.id || typeof data.org.name !== 'string'
+      || !['owner', 'admin', 'member', 'viewer'].includes(data.role)) throw new Error(uiMessage('join-org-page.invalid-invitation-code.bf31d88f81'));
+    return () => { setOrgInfo({ org: { id: data.org.id, name: data.org.name }, role: data.role, code: validatedCode }); setJoinedOrgId(''); setStep('preview'); };
+  });
+  const handleJoin = () => orgInfo && run('join', async signal => {
+    if (joinedOrgId !== orgInfo.org.id) {
+      const data = await apiJson('/api/org/invitations/' + encodeURIComponent(orgInfo.code) + '/accept', { method: 'POST', signal });
+      signal.throwIfAborted();
+      if (data?.success !== true || data.orgId !== orgInfo.org.id) throw new Error(uiMessage('join-org-page.failed-to-join.ae4588143e'));
+      setJoinedOrgId(data.orgId);
     }
-  };
+    const result = await switchDomain('work', { orgId: orgInfo.org.id, orgName: orgInfo.org.name, signal });
+    if (!result.success || result.connection?.orgId !== orgInfo.org.id) throw new Error(result.message || uiMessage('join-org-page.failed-to-join.ae4588143e'));
+    return () => {
+      setStep('done');
+      window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org' } }));
+    };
+  });
 
-  const handleJoin = async () => {
-    setStep('joining');
-    try {
-      const res = await apiFetch(`/api/org/invitations/${code.toUpperCase()}/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) {
-        setStep('done');
-        await refreshUser();
-        await switchDomain('work');
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org' } }));
-        }, 600);
-      } else {
-        setError(data.error || uiMessage('join-org-page.failed-to-join.ae4588143e'));
-        setStep('error');
-      }
-    } catch {
-      setError(uiMessage('join-org-page.connection-failed-please-try-again.5922631739'));
-      setStep('error');
-    }
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-celestial-deep to-black p-6">
@@ -71,24 +55,22 @@ export function JoinOrgPage() {
           <p className="text-white/50 text-sm">{t.orgJoinDesc}</p>
         </div>
 
+        {error && <p role="alert" className="mb-4 text-red-400 text-sm text-center"><AlertCircle size={14} className="inline mr-1" />{error}</p>}
+
         {step === 'input' && (
           <div className="space-y-4">
             <input
               type="text"
               value={code}
-              onChange={e => { setCode(e.target.value.toUpperCase().slice(0, 8)); setError(''); }}
+              onChange={e => { cancel(); setCode(e.target.value.toUpperCase().slice(0, 8)); }}
+              disabled={Boolean(busy)}
               placeholder="ABCD1234"
               maxLength={8}
               className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-center text-2xl tracking-[0.3em] font-mono placeholder:text-white/45 focus:outline-none focus:border-blue-500/50"
             />
-            {error && (
-              <p className="text-red-400 text-sm text-center flex items-center justify-center gap-1">
-                <AlertCircle size={14} /> {error}
-              </p>
-            )}
             <Button
               onClick={handleValidate}
-              disabled={code.length < 6}
+              disabled={code.length < 6 || Boolean(busy)}
               className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl py-3"
             >
               {uiMessage('join-org-page.validate-code.bb3fb2ed0c')} <ArrowRight size={16} className="ml-2" />
@@ -109,20 +91,13 @@ export function JoinOrgPage() {
               <h2 className="text-xl font-semibold text-white">{orgInfo.org.name}</h2>
               <p className="text-white/40 text-sm">{uiMessage('join-org-page.role.b9e0249a04')}: {orgInfo.role}</p>
             </div>
-            <Button onClick={handleJoin} className="w-full bg-green-600 hover:bg-green-500 text-white rounded-xl py-3">
-              {uiMessage('join-org-page.join.95aa690879')} <CheckCircle size={16} className="ml-2" />
+            <Button onClick={handleJoin} disabled={Boolean(busy)} className="w-full bg-green-600 hover:bg-green-500 text-white rounded-xl py-3">
+              {uiMessage(joinedOrgId ? 'join-org-page.already-joined-return-to-the.14547e2e0f' : 'join-org-page.join.95aa690879')} {busy ? <Loader2 size={16} className="ml-2 animate-spin" /> : <CheckCircle size={16} className="ml-2" />}
             </Button>
-            <button onClick={() => setStep('input')} className="w-full text-center text-white/55 text-sm hover:text-white/50">
+            <button disabled={Boolean(busy)} onClick={() => { cancel(); setStep('input'); setOrgInfo(null); }} className="w-full text-center text-white/55 text-sm hover:text-white/50">
               {uiMessage('join-org-page.cancel.998b9c48fb')}
             </button>
           </motion.div>
-        )}
-
-        {step === 'joining' && (
-          <div className="text-center py-8">
-            <Loader2 size={40} className="mx-auto animate-spin text-blue-400 mb-4" />
-            <p className="text-white/50">{uiMessage('join-org-page.joining-organization.11ce9009cd')}</p>
-          </div>
         )}
 
         {step === 'done' && (
@@ -133,15 +108,6 @@ export function JoinOrgPage() {
           </motion.div>
         )}
 
-        {step === 'error' && (
-          <div className="text-center space-y-4">
-            <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
-            <p className="text-red-400">{error}</p>
-            <Button onClick={() => { setStep('input'); setError(''); }} className="bg-white/10 hover:bg-white/20 text-white rounded-xl">
-              {uiMessage('join-org-page.try-again.8dcede9d49')}
-            </Button>
-          </div>
-        )}
       </motion.div>
     </div>
   );

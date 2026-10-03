@@ -1,0 +1,156 @@
+{
+  "batch": "prune57",
+  "files": [
+    {
+      "file": "src/lib/legalCaseStore.ts",
+      "before": 305,
+      "after": 342,
+      "delta": 37,
+      "beforeSha256": "78b2c0659eb18c625ae960d4d21ff199be6466056a061c6aadbecd45396faf23",
+      "afterSha256": "2b3c7a8f5bb5f2c36365bc6368cc9cba64cbbdb4f9edf8cfb98cf0b34f171d9f"
+    },
+    {
+      "file": "src/contexts/AppContext.tsx",
+      "before": 738,
+      "after": 740,
+      "delta": 2,
+      "beforeSha256": "d7bc4c9a480e79e3c5a6e2b936afbf6c71b251e5a25a48213a1d192f3a4861e0",
+      "afterSha256": "46e0ded92ca75ed8b293a99bda429d1ac6654380497326561bf9033a31083718"
+    },
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2011,
+      "after": 2026,
+      "delta": 15,
+      "beforeSha256": "2694a6b58bd73c7fc0b2864f909ab729c5c4a546d17a905de9650456a0aff313",
+      "afterSha256": "855284da958c3f0028bccff90f991ab9ac7432f910d7454275362b04fabb1f2f"
+    },
+    {
+      "file": "test/legal_case_client_scope.test.ts",
+      "before": 111,
+      "after": 136,
+      "delta": 25,
+      "beforeSha256": "c07e000a9c70afb9790c1a4768699bdfeac36d101c27d701694fab29a1adc2ed",
+      "afterSha256": "965668ba3f7d62196cc917d9b8fe1704807725c163a6734d65121e47562e2f57"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 333,
+      "after": 343,
+      "delta": 10,
+      "beforeSha256": "3a26590b97fbc8899d745dfb1a85c0d17316edea9d896b800e078edaa5614aff",
+      "afterSha256": "18b6eaa801670db275c09a0c63940fae1a6d026010292cfe224e8f48066a2a55"
+    },
+    {
+      "file": "src/contexts/frontendPreferenceContracts.test.tsx",
+      "before": 131,
+      "after": 138,
+      "delta": 7,
+      "beforeSha256": "dcfc8108417592497f483b250cba262a1b80f1190fa3c64e91c0f1a0efe4b1da",
+      "afterSha256": "dc62e0166bdc3f173f138607b29f233dd494e9a3ccb56ff91c2dcb91e6bc9e11"
+    },
+    {
+      "file": "src/components/DesktopUI.tsx",
+      "before": 6208,
+      "after": 6211,
+      "delta": 3,
+      "beforeSha256": "fa4f9d89e13c839254da186861a01072a717a3e1e1aa134d934b8c842c5707f4",
+      "afterSha256": "a087a47ea4230d71bad6fb4807d4f2e5dad2ac4dae451cd2e03de76fcce906eb"
+    },
+    {
+      "file": "src/i18n/locales/ui.generated.json",
+      "before": 8875,
+      "after": 8887,
+      "delta": 12,
+      "beforeSha256": "d8aab339892e7deaa6ff5956a5941ca236b74988645f0d277a44ddd82630f611",
+      "afterSha256": "bf382c712f622ffa226578b56f187724d9a3bc58f6b3443be8ee357ea9cd526b"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365766
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526568
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365823
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160844
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526667
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": 57
+      },
+      "tests": {
+        "files": 0,
+        "lines": 42
+      },
+      "total": {
+        "files": 0,
+        "lines": 99
+      }
+    }
+  },
+  "focused": {
+    "files": 13,
+    "passed": 204
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T15:38:21.581Z",
+      "finishedAt": "2026-10-02T15:38:28.415Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T15:38:28.417Z",
+      "finishedAt": "2026-10-02T15:38:55.620Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T15:38:55.621Z",
+      "finishedAt": "2026-10-02T15:39:03.018Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T15:39:03.018Z",
+      "finishedAt": "2026-10-02T15:39:10.535Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T15:39:10.535Z",
+      "finishedAt": "2026-10-02T15:39:10.831Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "limitations": [
+    "Browser account scoping, not encryption or filesystem access control. Original legacy data retained; ownership is explicitly confirmed by the local user.",
+    "Legacy claims across simultaneously active browser windows are not a transactional lock. No real user data or runtime was changed.",
+    "One intermediate asynchronous workbench assertion missed its request during a parallel run; its isolated repeat and final focused run passed unchanged. No proven cause or timeout changes.",
+    "No full-suite or native-client acceptance, commit, push or restart."
+  ]
+}

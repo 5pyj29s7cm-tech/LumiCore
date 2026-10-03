@@ -35,10 +35,20 @@ import {
   type EcommercePlatformId,
 } from '../../shared/ecommerce_platform_presets';
 import { ecommerceWorkbenchCopy } from '../i18n/locales/ecommerceWorkbench';
+import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { startIndustryWorkflow, verifyIndustryWorkflow } from '../lib/industryWorkflowClient';
 
 const REPORT_KINDS: EcommerceReportKind[] = ['orders', 'campaigns', 'inventory', 'afterSales', 'reviews'];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+export interface EcommerceWorkbenchDraft {
+  sources: Partial<Record<EcommerceReportKind, { table: EcommerceTable; name: string; mapping: EcommerceColumnMapping }>>;
+  selectedPlatform: EcommercePlatformId;
+  grossMarginPercent: number;
+  targetStockDays: number;
+  pasteValue: string;
+  archiveTaskId: string;
+}
 
 type HubCopy = (typeof ecommerceWorkbenchCopy)[keyof typeof ecommerceWorkbenchCopy];
 
@@ -209,11 +219,15 @@ function SourceBadge({
 
 export function EcommerceHub({
   lang,
+  draft: initialDraft,
+  onDraftChange,
   initialReportKind = 'orders',
   workflowEntryId = 'store-data',
   onSnapshotChange,
 }: {
   lang: 'en' | 'zh';
+  draft?: EcommerceWorkbenchDraft;
+  onDraftChange?: (draft: EcommerceWorkbenchDraft) => void;
   initialReportKind?: EcommerceReportKind;
   workflowEntryId?: 'today-operations' | 'store-data';
   onSnapshotChange?: (snapshot: EcommerceWorkbenchSnapshot | null) => void;
@@ -221,16 +235,22 @@ export function EcommerceHub({
   const copy = ecommerceWorkbenchCopy[lang];
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedKind, setSelectedKind] = useState<EcommerceReportKind>(initialReportKind);
-  const [selectedPlatform, setSelectedPlatform] = useState<EcommercePlatformId>('generic');
-  const [reports, setReports] = useState<Partial<Record<EcommerceReportKind, EcommerceTable>>>({});
-  const [sourceNames, setSourceNames] = useState<Partial<Record<EcommerceReportKind, string>>>({});
-  const [columnMappings, setColumnMappings] = useState<Partial<Record<EcommerceReportKind, EcommerceColumnMapping>>>({});
-  const [grossMarginPercent, setGrossMarginPercent] = useState(35);
-  const [targetStockDays, setTargetStockDays] = useState(30);
-  const [pasteValue, setPasteValue] = useState('');
-  const [processing, setProcessing] = useState(false);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveTaskId, setArchiveTaskId] = useState('');
+  const [draft, setDraft] = useState<EcommerceWorkbenchDraft>(() => initialDraft || {
+    sources: {}, selectedPlatform: 'generic', grossMarginPercent: 35, targetStockDays: 30, pasteValue: '', archiveTaskId: '',
+  });
+  const { sources, selectedPlatform, grossMarginPercent, targetStockDays, pasteValue, archiveTaskId } = draft;
+  const { busy, error, run, cancel } = useAsyncOperation();
+  const processing = busy === 'import', archiving = busy === 'archive';
+  const { reports, sourceNames, columnMappings } = useMemo(() => ({
+    reports: Object.fromEntries(Object.entries(sources).map(([kind, source]) => [kind, source.table])),
+    sourceNames: Object.fromEntries(Object.entries(sources).map(([kind, source]) => [kind, source.name])),
+    columnMappings: Object.fromEntries(Object.entries(sources).map(([kind, source]) => [kind, source.mapping])),
+  }), [sources]);
+  useEffect(() => { onDraftChange?.(draft); }, [draft, onDraftChange]);
+  useEffect(() => { cancel(); }, [selectedKind, cancel]);
+  const edit = (patch: Partial<EcommerceWorkbenchDraft>) => {
+    cancel(); setDraft(current => ({ ...current, ...patch, archiveTaskId: '' }));
+  };
   const snapshot = useMemo(() => analyzeEcommerceWorkbench(reports, {
     grossMarginRate: grossMarginPercent / 100,
     targetStockDays,
@@ -246,30 +266,24 @@ export function EcommerceHub({
     onSnapshotChange?.(hasData ? snapshot : null);
   }, [hasData, onSnapshotChange, snapshot]);
 
-  const setReport = (kind: EcommerceReportKind, table: EcommerceTable, sourceName: string) => {
-    setReports(current => ({ ...current, [kind]: table }));
-    setSourceNames(current => ({ ...current, [kind]: sourceName }));
-    setColumnMappings(current => ({ ...current, [kind]: suggestEcommerceColumnMapping(kind, table) }));
+  const setReport = (kind: EcommerceReportKind, table: EcommerceTable, name: string) => {
+    edit({ sources: { ...sources, [kind]: { table, name, mapping: suggestEcommerceColumnMapping(kind, table) } } });
     toast.success(`${copy.importSuccess}: ${copy.reportTypes[kind]}`);
   };
 
-  const handleFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  const handleFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = '';
     if (!file) return;
-    if (file.size > MAX_FILE_BYTES) {
-      toast.error(copy.tooLarge);
-      return;
-    }
-    setProcessing(true);
-    try {
-      setReport(selectedKind, await readReportFile(file, selectedKind), file.name);
-    } catch (error) {
-      const code = error instanceof Error ? error.message : '';
-      toast.error(code === 'UNSUPPORTED' ? copy.unsupported : code === 'NO_WORKSHEET' ? copy.noWorksheet : copy.invalidFile);
-    } finally {
-      setProcessing(false);
-    }
+    if (file.size > MAX_FILE_BYTES) { toast.error(copy.tooLarge); return; }
+    void run('import', async () => {
+      try {
+        const table = await readReportFile(file, selectedKind);
+        return () => setReport(selectedKind, table, file.name);
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        throw new Error(code === 'UNSUPPORTED' ? copy.unsupported : code === 'NO_WORKSHEET' ? copy.noWorksheet : copy.invalidFile);
+      }
+    }, 60_000);
   };
 
   const analyzePaste = () => {
@@ -282,42 +296,19 @@ export function EcommerceHub({
         ? normalizedReviewsToTable(normalizeReviewSourceRecords({ sourceText: pasteValue }).records)
         : parseDelimitedReport(pasteValue);
       setReport(selectedKind, table, copy.pastedData);
-      setPasteValue('');
+      setDraft(current => ({ ...current, pasteValue: '' }));
     } catch {
       toast.error(copy.invalidFile);
     }
   };
 
   const removeReport = (kind: EcommerceReportKind) => {
-    setReports(current => {
-      const next = { ...current };
-      delete next[kind];
-      return next;
-    });
-    setSourceNames(current => {
-      const next = { ...current };
-      delete next[kind];
-      return next;
-    });
-    setColumnMappings(current => {
-      const next = { ...current };
-      delete next[kind];
-      return next;
-    });
+    const next = { ...sources }; delete next[kind]; edit({ sources: next });
   };
-
-  const clearReports = () => {
-    setReports({});
-    setSourceNames({});
-    setColumnMappings({});
-    setPasteValue('');
-  };
-
+  const clearReports = () => edit({ sources: {}, pasteValue: '' });
   const changeMapping = (kind: EcommerceReportKind, field: string, column: string) => {
-    setColumnMappings(current => ({
-      ...current,
-      [kind]: { ...(current[kind] || {}), [field]: column },
-    }));
+    const source = sources[kind];
+    if (source) edit({ sources: { ...sources, [kind]: { ...source, mapping: { ...source.mapping, [field]: column } } } });
   };
 
   const downloadTemplate = () => {
@@ -348,10 +339,9 @@ export function EcommerceHub({
     return `\uFEFF${lines.map(line => line.map(csvCell).join(',')).join('\r\n')}`;
   };
 
-  const archiveDiagnosis = async () => {
-    if (!hasData || archiving) return;
-    setArchiving(true);
-    try {
+  const archiveDiagnosis = () => {
+    if (!hasData) return;
+    return run('archive', async signal => {
       const archiveSourceNames = Object.fromEntries(
         Object.entries(sourceNames)
           .map(([kind, name]) => [kind, sourceBaseName(name)] as const)
@@ -373,7 +363,8 @@ export function EcommerceHub({
           targetStockDays,
         }),
         source: 'ecommerce_data_workbench',
-      });
+      }, signal);
+      signal.throwIfAborted();
       const archived = await verifyIndustryWorkflow({
         taskId: workflow.task.id,
         workbenchInput: {
@@ -400,17 +391,15 @@ export function EcommerceHub({
           },
         },
         source: 'ecommerce_data_workbench',
-      });
-      setArchiveTaskId(workflow.task.id);
+      }, signal);
+      return () => {
+      setDraft(current => ({ ...current, archiveTaskId: workflow.task.id }));
       // i18n-allow: Short bilingual operational feedback local to the ecommerce variant.
       if (archived.verification?.passed) toast.success(lang === 'zh' ? '经营诊断已核验并归档' : 'Diagnosis verified and archived');
       // i18n-allow: Short bilingual operational feedback local to the ecommerce variant.
       else toast.warning(lang === 'zh' ? '经营诊断已归档，仍需复核' : 'Diagnosis archived for review');
-    } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setArchiving(false);
-    }
+      };
+    }, 60_000);
   };
 
   const exportDiagnosis = () => {
@@ -460,6 +449,7 @@ export function EcommerceHub({
           )}
           {archiveTaskId && <div className="-mt-3 text-right text-[11px] font-mono text-emerald-200/35">archive {archiveTaskId}</div>}
         </header>
+        {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
 
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">
           <MetricCard label={copy.metrics.gmv} value={hasData ? formatMoney(snapshot.metrics.gmv, lang) : '—'} />
@@ -480,7 +470,7 @@ export function EcommerceHub({
               <span className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-white/35">{copy.platform}</span>
               <select
                 value={selectedPlatform}
-                onChange={event => setSelectedPlatform(event.target.value as EcommercePlatformId)}
+                onChange={event => edit({ selectedPlatform: event.target.value as EcommercePlatformId })}
                 className="h-10 w-full rounded-xl border border-white/10 bg-[#0b1116] px-3 text-xs font-bold text-white/65 outline-none focus:border-cyan-300/25"
               >
                 {ECOMMERCE_PLATFORM_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
@@ -526,7 +516,7 @@ export function EcommerceHub({
               <div className="mb-2 text-xs font-bold text-white/35">{copy.pasteLabel}</div>
               <textarea
                 value={pasteValue}
-                onChange={event => setPasteValue(event.target.value)}
+                onChange={event => edit({ pasteValue: event.target.value })}
                 placeholder={selectedKind === 'reviews' ? copy.reviewPastePlaceholder : copy.pastePlaceholder}
                 className="h-24 w-full resize-none rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs leading-relaxed text-white/70 outline-none placeholder:text-white/20 focus:border-cyan-300/25"
               />
@@ -548,7 +538,7 @@ export function EcommerceHub({
                       max="100"
                       step="1"
                       value={grossMarginPercent}
-                      onChange={event => setGrossMarginPercent(Math.min(100, Math.max(0, Number(event.target.value) || 0)))}
+                      onChange={event => edit({ grossMarginPercent: Math.min(100, Math.max(0, Number(event.target.value) || 0)) })}
                       className="h-8 min-w-0 flex-1 bg-transparent text-xs text-white/65 outline-none"
                     />
                     <span className="text-xs text-white/30">%</span>
@@ -562,7 +552,7 @@ export function EcommerceHub({
                     max="365"
                     step="1"
                     value={targetStockDays}
-                    onChange={event => setTargetStockDays(Math.min(365, Math.max(1, Number(event.target.value) || 1)))}
+                    onChange={event => edit({ targetStockDays: Math.min(365, Math.max(1, Number(event.target.value) || 1)) })}
                     className="h-8 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-xs text-white/65 outline-none focus:border-cyan-300/25"
                   />
                 </label>

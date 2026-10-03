@@ -1,0 +1,199 @@
+{
+  "batch": "prune61",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "server/mcp/public_security.ts",
+      "before": 106,
+      "after": 112,
+      "delta": 6,
+      "beforeSha256": "bf04785a9e3000ad89af29af690b88f2633131221ceaee56d0c6a8ab47ce2c32",
+      "afterSha256": "9f21c16fe0c8aa37aad9471f9b372bf121c2248e565fa63b8fafbf41b7766f8f"
+    },
+    {
+      "file": "server/routes/mcp_routes.ts",
+      "before": 279,
+      "after": 278,
+      "delta": -1,
+      "beforeSha256": "27a395f18c6ac1e4da2682812403f3a3978f45b4a79e62303c1dff19c61832dd",
+      "afterSha256": "af59a0ee99fae64bdb3824cfab764eca4d073d212ad25cb2784a61f95cbf5bdb"
+    },
+    {
+      "file": "src/components/MCPSettings.tsx",
+      "before": 432,
+      "after": 433,
+      "delta": 1,
+      "beforeSha256": "e580474f8b56a700906c4ee41a54db7891cd45904145c67913360304c0f6e368",
+      "afterSha256": "719a058f7b587302e054ff6cf767acc1e4064021737469b5dc4ea3ae1a08b8f7"
+    },
+    {
+      "file": "src/components/RemoteMCPSettings.tsx",
+      "before": 193,
+      "after": 199,
+      "delta": 6,
+      "beforeSha256": "6b7cb20585a3e8b723fea4658cd4f7d4e29b43a64362fc67c848a2e49723b814",
+      "afterSha256": "5163cfe5acb480cfb2f2d127d92c5c15294927fb4531492792beb09a76cfb88a"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 153,
+      "after": 226,
+      "delta": 73,
+      "beforeSha256": "09c53f2a42a0e3abb9af053c3e5642925002d110dec11635b1b2b808e4928b75",
+      "afterSha256": "27027e842008be8bda260000604f2605147b6d66243325df6b3f09d1eb3ce101"
+    },
+    {
+      "file": "test/mcp_route_security.test.ts",
+      "before": 492,
+      "after": 516,
+      "delta": 24,
+      "beforeSha256": "8cd7d559958fcdba380c6582570207c4091e548752a81a06ef580737fce8ec8a",
+      "afterSha256": "389b3ceb25cda67171b5fc5e2b639775711e37182549fc6d364fc98e2c78bc3b"
+    },
+    {
+      "file": "test/mcp_public_security.test.ts",
+      "before": 70,
+      "after": 79,
+      "delta": 9,
+      "beforeSha256": "7e8a2a82d3aeeb62f3004c1ec257ec0aa7fb01e2c79a9669d41f161b3cfec9b3",
+      "afterSha256": "851cdd979389be6f77f0d5a5e53c4304b7de5f2378d18fdb0581656b5db53c20"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365635
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161006
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526641
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365647
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161112
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526759
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": 12
+      },
+      "tests": {
+        "files": 0,
+        "lines": 106
+      },
+      "total": {
+        "files": 0,
+        "lines": 118
+      }
+    }
+  },
+  "focused": {
+    "files": 16,
+    "passed": 164,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T05:57:15.926Z",
+      "finishedAt": "2026-10-03T05:57:26.842Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T05:57:26.843Z",
+      "finishedAt": "2026-10-03T05:57:58.897Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T05:57:58.898Z",
+      "finishedAt": "2026-10-03T05:58:07.448Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T05:58:07.448Z",
+      "finishedAt": "2026-10-03T05:58:16.091Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T05:58:16.092Z",
+      "finishedAt": "2026-10-03T05:58:16.443Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "reproduced": [
+    {
+      "file": "D:/lumiOS/test/mcp_route_security.test.ts",
+      "title": "preserves stored credentials across projected reads and rejects partially edited placeholders"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "blocks remote-device editing after a failed read (403) and retries"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "blocks remote-device editing after a failed read (invalid) and retries"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "uses the confirmed remote configuration after saving instead of keeping raw credentials in the view"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "discards the previous account read and clears its draft on account switch"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "discards the previous account read and clears its draft on account switch"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "does not toast or refresh a completed write after the account leaves"
+    },
+    {
+      "file": "D:/lumiOS/src/components/frontendBusinessContracts.test.tsx",
+      "title": "does not toast or refresh a completed write after the account leaves"
+    }
+  ],
+  "changes": [
+    "Remote-device normalization preserves the stored endpoint only when the same device name is posted with its exact current public projection. Partial edits or renamed entries containing display placeholders are rejected before persistence. Explicit complete replacement URLs and deletions remain supported.",
+    "Remote-device GET and PUT results share one frontend path. A failed or malformed read cannot expose an editable empty configuration. A successful save shows the confirmed sanitized map rather than the untrimmed credential-bearing draft.",
+    "MCP and remote-device editors remount on account or role changes and disappear on logout. Their request lifetimes abort on cleanup, and continuations ignore aborted results before modifying state, toasting or starting refreshes.",
+    "MCP list and health requests are versioned independently; a pushed health update invalidates older reads. Mount, requests and the health subscription share one cleanup effect.",
+    "MCP status icons and status text use one status determination and appearance table instead of duplicate nested branches. Remote-device empty-list conditions and separate read/write response mapping are removed.",
+    "Remote-device output maps use null prototypes so own names such as __proto__ remain data instead of invoking inherited setters."
+  ],
+  "validationNotes": [
+    "Eight new regression cases failed on the turn-start implementation: credential replacement, failed/malformed reads, raw credentials kept in the view, and stale account reads/writes. All pass on the final implementation.",
+    "One older sensor fixture used the same array response for both device-list and remote-configuration endpoints. It was corrected to return each actual API shape after remote-configuration validation was tightened.",
+    "Twelve cases were added in the existing test files, including request ordering, pushed health precedence, StrictMode effect replay, own-property handling and an authenticated GET-to-PUT route round trip."
+  ],
+  "limitations": [
+    "This batch is primarily boundary repair. After duplicate removal, business code grows by 12 lines and tests by 106 lines; it is not counted as a net source reduction.",
+    "Authenticated route tests used a loopback test server and synthetic configuration behind mocked manager persistence. Frontend tests used synthetic accounts, fetch and sockets. No real connector or user credentials were read, modified or repaired.",
+    "An unchanged projected URL means preserve the current stored value. Changing or renaming a masked endpoint requires a complete replacement URL; this does not add a credential-editing or rename protocol.",
+    "Aborting a request prevents later client handling; it cannot retract a write already accepted by the backend. No multi-client transaction or historical credential recovery is claimed.",
+    "No full-suite run, native-client acceptance, backend rebuild, commit, push or client restart. The whole project is not declared simplified."
+  ]
+}

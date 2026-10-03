@@ -1,0 +1,180 @@
+{
+  "batch": "prune66",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/hooks/useApiCollection.ts",
+      "before": 0,
+      "after": 54,
+      "delta": 54,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "0ae8732b4b284a19ab3b17432b4c33f6247210fca958a6dd51c3b9ff156c63dd"
+    },
+    {
+      "file": "src/components/ContactsPanel.tsx",
+      "before": 166,
+      "after": 96,
+      "delta": -70,
+      "beforeSha256": "25b10f850af1f3a3b819c3b743678b902f748199d1ccb65202532591adc317b8",
+      "afterSha256": "5a9a26aeb7f2a72dc58b9e86ca1a3301efd0779f245dfeafa73cf4a2dbe5ec3e"
+    },
+    {
+      "file": "src/components/ReminderPanel.tsx",
+      "before": 240,
+      "after": 174,
+      "delta": -66,
+      "beforeSha256": "b3cd043003b6cfa4cb1f61907b0be5688500e6493a4e1e104fe90b54eda07dc1",
+      "afterSha256": "0ec320040c7badec4df06d343b82ecc5abf72c989516ef2cb097fa6ffbb4c71c"
+    },
+    {
+      "file": "server/contacts/types.ts",
+      "before": 29,
+      "after": 32,
+      "delta": 3,
+      "beforeSha256": "c14fcb6180e1afb88d70419f34b9fc7cf9562e76e0e80abb2333da7c41bc2017",
+      "afterSha256": "6efb1f7f45bcc3a870d3b6df8604dda71698ea502326e9ae4bdde304b7e0127b"
+    },
+    {
+      "file": "server/contacts/store.ts",
+      "before": 92,
+      "after": 91,
+      "delta": -1,
+      "beforeSha256": "70a95bd5c098adee0ecaf7e62e37bd761a93890720b9d5f8b60d442cad726a46",
+      "afterSha256": "77d8b2b4d911fb645676c0d1226cbc6d4e3febb3048cd523eade05392abaf8e9"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 519,
+      "after": 582,
+      "delta": 63,
+      "beforeSha256": "f535f25907baf69c01563b80b3936427977417e2deafbe05f41da44af238cd8f",
+      "afterSha256": "c413a7d7dd930a88762c94b54f862da858be8f1ae965a1669d3df642770a7c74"
+    },
+    {
+      "file": "test/confirmed_save_routes.test.ts",
+      "before": 70,
+      "after": 84,
+      "delta": 14,
+      "beforeSha256": "414dd44c159abb3a9e0448713e40565b45e967e839367291108f9a3850d91b93",
+      "afterSha256": "1dde35967dbf15f8bfbbb1303fbb33cede93d33ffb5629a1dcba17c91da1c171"
+    },
+    {
+      "file": "src/i18n/locales/ui.generated.json",
+      "before": 8887,
+      "after": 8875,
+      "delta": -12,
+      "beforeSha256": "bf382c712f622ffa226578b56f187724d9a3bc58f6b3443be8ee357ea9cd526b",
+      "afterSha256": "56c0f89df0e032c7d8c1704dba6da7f2eed2233c4118ba33264e65abc174be60"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365211
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161478
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526689
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1088,
+        "lines": 365131
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161555
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526686
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 1,
+        "lines": -80
+      },
+      "tests": {
+        "files": 0,
+        "lines": 77
+      },
+      "total": {
+        "files": 1,
+        "lines": -3
+      }
+    }
+  },
+  "focused": {
+    "files": 14,
+    "passed": 146,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T08:13:12.019Z",
+      "finishedAt": "2026-10-03T08:13:18.554Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T08:13:18.555Z",
+      "finishedAt": "2026-10-03T08:13:47.280Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T08:13:47.281Z",
+      "finishedAt": "2026-10-03T08:13:55.025Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T08:13:55.026Z",
+      "finishedAt": "2026-10-03T08:14:02.714Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T08:14:02.715Z",
+      "finishedAt": "2026-10-03T08:14:03.032Z",
+      "status": 0
+    },
+    {
+      "step": "build:server",
+      "startedAt": "2026-10-03T08:14:03.032Z",
+      "finishedAt": "2026-10-03T08:14:04.017Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "Contacts and reminders share one confirmed collection reader/writer with authenticated transport, single in-flight operation per mounted view, a 15-second request signal, response validation, and unmount cancellation. Duplicate raw-fetch and per-operation error/state flows are removed.",
+    "Reminder create and complete use the server-returned record directly instead of an additional list GET. Failed or unconfirmed writes keep the existing list and drafts; deletion requires an explicit success response.",
+    "Contacts share one create/edit form and the backend Contact type. Phone, email and company fields now persist through create/update. Edit drafts omit notes/tags/relationship so an unrelated form edit cannot replace them.",
+    "Interaction notes belong to their contact card. The last-contact date uses lastContacted, matching the backend, instead of the unused lastInteraction field.",
+    "Contacts filter the already-loaded complete list locally, retaining name/notes/traits/tag matching and adding phone/email/company matching. Search no longer creates per-keystroke GET requests capable of overwriting a confirmed mutation.",
+    "Reminder pending/completed lists use one section renderer. Both views reset by account/role; reminders also reset by workDomain and organization identity, matching the existing authenticated backend scope.",
+    "Backend recordInteraction delegates to updateContact, sharing its owner lookup, field allowlist and persistence path without an extra database scan. Four obsolete reminder error translation entries are removed."
+  ],
+  "validationNotes": [
+    "Six new cases: two collection read-retry/account-isolation scenarios; contact shared-form/save-failure/independent-note/search/create behavior; authenticated reminder create/complete/delete and duplicate-submit suppression; same-user reminder work-scope transition; isolated HTTP contact field persistence and ownership/notes preservation.",
+    "Frontend tests mount the actual panels and collection hook over the real API client with synthetic fetch. The HTTP contact test uses isolated temporary database storage and the production routes/store, including durable saves.",
+    "Initial validation found a test selecting the old Lucide Edit3 CSS alias and an incorrect UserProfile.orgId reference in the new reminder key. The button now has a translated accessible title; the key uses AppContext workDomain/orgConnection. Final focused checks and builds ran after these corrections.",
+    "Fourteen focused test files passed, along with lint/type checks, all-frontend and desktop builds, compact-layout validation and direct server bundling. Final source fingerprints preserve the latest prune40-65 baselines."
+  ],
+  "limitations": [
+    "Per-view serialization does not provide cross-window synchronization. A canceled or timed-out request cannot undo a write already accepted by the server; writes are not automatically retried.",
+    "Reminders keep the backend scope derived from the authenticated token. This change isolates view state but does not introduce a new permission or storage model.",
+    "Contact notes are component drafts; changing filters to hide a contact or closing the view discards that unsaved note. Search operates on the existing non-paginated full-list contract; no large-address-book benchmark was run.",
+    "No full-suite run, real provider or user-data change, native client acceptance, commit, push or client restart. Backend build used scripts/build-server.mjs directly and did not regenerate capability documentation."
+  ]
+}

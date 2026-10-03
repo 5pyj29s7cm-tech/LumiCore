@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { GitBranch, Settings } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
-import { useT } from '../../lib/useT';
 import { OrgBranchPanel } from '../OrgBranchPanel';
 import { OrgSettings } from './OrgSettings';
 import { uiMessage } from '../../i18n/uiMessages';
@@ -10,7 +9,6 @@ type OrganizationSettingsTab = 'general' | 'branch';
 
 export function OrganizationSettingsWorkspace({ initialTab = 'general' }: { initialTab?: OrganizationSettingsTab }) {
   const { orgConnection } = useApp();
-  const t = useT();
   const canManage = ['owner', 'admin'].includes(String(orgConnection?.orgRole || '').toLowerCase());
   const [tab, setTab] = useState<OrganizationSettingsTab>(() => initialTab === 'general' && !canManage ? 'branch' : initialTab);
 

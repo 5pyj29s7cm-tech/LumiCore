@@ -1497,9 +1497,7 @@ export function verifyClientActionResult(
     ? (relayOk === true ? 'not_applicable' : 'pending')
     : missing.length === 0
       ? 'verified'
-      : after
-        ? 'pending'
-        : 'pending';
+      : 'pending';
 
   return {
     status,

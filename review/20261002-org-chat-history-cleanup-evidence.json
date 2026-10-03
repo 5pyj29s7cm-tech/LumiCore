@@ -1,0 +1,183 @@
+{
+  "date": "2026-10-02",
+  "batch": "prune40",
+  "baseline": "turn-start worktree including uncommitted prune35-prune39",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/CentralLumiChat.tsx",
+      "beforeLines": 822,
+      "afterLines": 813,
+      "delta": -9,
+      "beforeSha256": "d61bd108aa605960720798379a74273b641a57c9ee697419e9b2c196b8caa3ce",
+      "afterSha256": "f8ae8d6773a1a55dc58e293bed453149622e0373e4154b9a8f011295a2094588"
+    },
+    {
+      "file": "test/central_chat_upload_scope.test.tsx",
+      "beforeLines": 120,
+      "afterLines": 193,
+      "delta": 73,
+      "beforeSha256": "f81d1806b41d9ffdf513b8b447c25c7d0fc6980ff61f89c07d77909c8ec08534",
+      "afterSha256": "bb5dc11aa54d9c0bc80749eaf7e9fb63e7b6a67aa039a625a01e27ce53fd19ed"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1086,
+        "lines": 366907
+      },
+      "tests": {
+        "files": 743,
+        "lines": 159950
+      },
+      "total": {
+        "files": 1829,
+        "lines": 526857
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1086,
+        "lines": 366898
+      },
+      "tests": {
+        "files": 743,
+        "lines": 160023
+      },
+      "total": {
+        "files": 1829,
+        "lines": 526921
+      }
+    }
+  },
+  "changes": [
+    "Initial and socket history reads share one loader, response validation and normalization path.",
+    "Abort superseded history reads and reject late results after message changes, active requests, conversation changes or disposal; same-conversation refreshes do not cancel uploads.",
+    "Do not clear active request ownership or timers when resubscribing after a language change; retained old socket callbacks are inert.",
+    "Stream previews and finalized replies share one bubble update path; existing response sanitization and finalized-response gate are retained."
+  ],
+  "tests": {
+    "files": 9,
+    "passed": 104,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      "accepts only the latest history response after a delayed initial read",
+      "accepts only the latest history response after a delayed socket read",
+      "preserves new messages and the same response bubble while history arrives during streaming",
+      "preserves new messages and the same response bubble while history arrives during finished",
+      "keeps an active reply attached when the display language changes",
+      "invalidates pending history on rollover, closure and unmount, including retained socket callbacks",
+      "ignores rejected, malformed and unrelated history without cancelling a current upload"
+    ],
+    "removed": 0,
+    "comparisonBaseline": "prune39 matching files"
+  },
+  "beforeFix": {
+    "passed": 10,
+    "failed": 6,
+    "unchangedTurnStartComponent": true,
+    "method": "Run identical final tests against an isolated copy of the turn-start component with relocated imports; live workspace never rolled back.",
+    "failures": [
+      {
+        "name": "accepts only the latest history response after a delayed initial read",
+        "firstFailure": "AssertionError: expected <div …(1)></div> to be null"
+      },
+      {
+        "name": "accepts only the latest history response after a delayed socket read",
+        "firstFailure": "AssertionError: expected <div …(1)></div> to be null"
+      },
+      {
+        "name": "preserves new messages and the same response bubble while history arrives during streaming",
+        "firstFailure": "TestingLibraryElementError: Unable to find an element with the text: Here is the first part of the answer. Here is the second part.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "preserves new messages and the same response bubble while history arrives during finished",
+        "firstFailure": "TestingLibraryElementError: Unable to find an element with the text: Here is the first part of the answer. Here is the second part.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "keeps an active reply attached when the display language changes",
+        "firstFailure": "TestingLibraryElementError: Unable to find an element with the text: The first part precedes a language change. The second part follows.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "invalidates pending history on rollover, closure and unmount, including retained socket callbacks",
+        "firstFailure": "AssertionError: expected <div …(1)></div> to be null"
+      }
+    ]
+  },
+  "verification": {
+    "fingerprints": {
+      "src/components/org/CentralLumiChat.tsx": "f8ae8d6773a1a55dc58e293bed453149622e0373e4154b9a8f011295a2094588",
+      "test/central_chat_upload_scope.test.tsx": "bb5dc11aa54d9c0bc80749eaf7e9fb63e7b6a67aa039a625a01e27ce53fd19ed"
+    },
+    "tests": [
+      "test/central_chat_upload_scope.test.tsx",
+      "test/chat_attachment_references.test.ts",
+      "test/chat_attachment_upload_delivery.test.ts",
+      "test/chat_conversation_transition.test.ts",
+      "test/chat_view_async_boundaries.test.ts",
+      "test/customer_output_projection_surfaces.test.ts",
+      "test/frontend_response_finalization.test.ts",
+      "test/large_ui_state.test.tsx",
+      "src/hooks/useGeneratedLibrary.test.tsx"
+    ],
+    "receipts": [
+      {
+        "step": "focused",
+        "startedAt": "2026-10-02T08:35:19.916Z",
+        "finishedAt": "2026-10-02T08:35:26.435Z",
+        "status": 0
+      },
+      {
+        "step": "lint",
+        "startedAt": "2026-10-02T08:35:26.436Z",
+        "finishedAt": "2026-10-02T08:36:04.971Z",
+        "status": 0
+      },
+      {
+        "step": "build:frontends",
+        "startedAt": "2026-10-02T08:36:04.972Z",
+        "finishedAt": "2026-10-02T08:36:15.861Z",
+        "status": 0
+      },
+      {
+        "step": "build:desktop-ui",
+        "startedAt": "2026-10-02T08:36:15.862Z",
+        "finishedAt": "2026-10-02T08:36:25.897Z",
+        "status": 0
+      },
+      {
+        "step": "check:compact-layout-build",
+        "startedAt": "2026-10-02T08:36:25.898Z",
+        "finishedAt": "2026-10-02T08:36:26.344Z",
+        "status": 0
+      }
+    ]
+  },
+  "limitations": [
+    "React component tests use synthetic HTTP, socket and native-drop dependencies; they are not live client or official model acceptance.",
+    "Initial test fragments were shorter than the existing 24-character stream-display buffer. Fixtures were changed to complete sentences without mocking or changing the production sanitizer; before-fix results above use the corrected final fixtures.",
+    "Business code decreased by 9 lines; permanent regression coverage adds 73 lines, so total code increased by 64 lines.",
+    "No measured improvement in real user response latency is claimed."
+  ],
+  "scope": {
+    "committed": false,
+    "pushed": false,
+    "restarted": false,
+    "realUserDataModified": false,
+    "newBusinessModules": 0,
+    "fullSuiteRerun": false,
+    "backendRebuild": false,
+    "overallOptimizationComplete": false
+  },
+  "rawArtifacts": [
+    ".codex-run/prune40-before.json",
+    ".codex-run/prune40-before-tests.json",
+    ".codex-run/prune40-after-tests.json",
+    ".codex-run/prune40-corrected-tests.json",
+    ".codex-run/prune40-baseline.json",
+    ".codex-run/prune40-focused-final.json",
+    ".codex-run/prune40-verification.json"
+  ]
+}

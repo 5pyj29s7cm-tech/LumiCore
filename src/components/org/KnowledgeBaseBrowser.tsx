@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 import { knowledgeCategoryLabels } from '../../i18n/locales/knowledgeCategories';
+import type { KnowledgeStats as ServerKnowledgeStats } from '../../../server/org/kb';
 
 type ArticleStatus = 'draft' | 'published' | 'archived' | string;
 
@@ -65,25 +66,10 @@ interface UploadedKnowledgeFile {
   extractionStatus?: 'indexed' | 'partial' | 'unsupported' | 'failed';
 }
 
-interface KnowledgeStats {
-  totalArticles: number;
-  publishedArticles: number;
-  draftArticles: number;
-  archivedArticles: number;
-  totalChunks: number;
-  indexedArticles: number;
-  missingIndexArticles: number;
-  staleArticles: number;
-  categoryBreakdown: Array<{ category: string; count: number }>;
-  statusBreakdown: Array<{ status: string; count: number }>;
-  articleHealth: Array<{
-    articleId: string;
-    chunks: number;
-    indexed: boolean;
-    stale: boolean;
-    updatedAt: string;
-    lastIndexedAt: string | null;
-  }>;
+interface KnowledgeStats extends Pick<ServerKnowledgeStats,
+  'totalArticles' | 'publishedArticles' | 'draftArticles' | 'archivedArticles' | 'totalChunks'
+  | 'indexedArticles' | 'missingIndexArticles' | 'staleArticles' | 'categoryBreakdown' | 'statusBreakdown'> {
+  articleHealth: Array<Pick<ServerKnowledgeStats['articleHealth'][number], 'articleId' | 'chunks' | 'indexed' | 'stale' | 'updatedAt' | 'lastIndexedAt'>>;
 }
 
 type SortMode = 'updated' | 'title' | 'health';

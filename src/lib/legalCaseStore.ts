@@ -43,6 +43,15 @@ export const LEGAL_CASES_STORAGE = 'lumi_legal_cases_v1';
 export const ACTIVE_LEGAL_CASE_STORAGE = 'lumi_legal_active_case_v1';
 export const LEGAL_CONSULTATION_CASE_STORAGE = 'lumi_legal_consultation_case_v1';
 export const LEGAL_CASES_CHANGED_EVENT = 'lumi:legal-cases-changed';
+let legalAccountId = '';
+export const isLegalCaseAccount = (uid?: string) => Boolean(uid) && uid === legalAccountId;
+
+export function setLegalCaseAccount(uid?: string) {
+  const next = String(uid || '').trim();
+  if (legalAccountId === next) return;
+  legalAccountId = next;
+  emitLegalCasesChanged();
+}
 
 function canUseStorage() {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -55,13 +64,15 @@ function currentLegalStorageScope(): { domain: 'personal' | 'work'; orgId: strin
     const orgId = String(JSON.parse(localStorage.getItem('lumi_org_connection') || 'null')?.orgId || '').trim();
     return orgId ? { domain: 'work', orgId } : { domain: 'work', orgId: 'pending' };
   } catch {
-    return { domain: 'personal', orgId: '' };
+    return { domain: 'work', orgId: 'pending' };
   }
 }
 
 function scopedLegalStateKey(base: string): string {
+  if (!legalAccountId) return '';
   const scope = currentLegalStorageScope();
-  return scope.domain === 'work' ? `${base}:org:${encodeURIComponent(scope.orgId)}` : base;
+  const key = `${base}:user:${encodeURIComponent(legalAccountId)}`;
+  return scope.domain === 'work' ? `${key}:org:${encodeURIComponent(scope.orgId)}` : key;
 }
 
 function newId(prefix: string) {
@@ -120,10 +131,10 @@ function normalizeCaseFile(value: any): LegalCaseFile | null {
 }
 
 export function readLegalCaseFiles(): LegalCaseFile[] {
-  if (!canUseStorage()) return [];
+  if (!canUseStorage() || !legalAccountId) return [];
   if (currentLegalStorageScope().domain === 'work') return [];
   try {
-    const parsed = JSON.parse(localStorage.getItem(LEGAL_CASES_STORAGE) || '[]');
+    const parsed = JSON.parse(localStorage.getItem(scopedLegalStateKey(LEGAL_CASES_STORAGE)) || '[]');
     if (!Array.isArray(parsed)) return [];
     return parsed.map(normalizeCaseFile).filter(Boolean) as LegalCaseFile[];
   } catch {
@@ -131,45 +142,71 @@ export function readLegalCaseFiles(): LegalCaseFile[] {
   }
 }
 
+function readLegalCaseChoice(base: string): string {
+  if (!canUseStorage() || !legalAccountId) return '';
+  return localStorage.getItem(scopedLegalStateKey(base)) || '';
+}
+
+function writeLegalCaseChoice(base: string, caseId: string) {
+  if (!canUseStorage() || !legalAccountId) return;
+  const key = scopedLegalStateKey(base);
+  if (caseId) localStorage.setItem(key, caseId);
+  else localStorage.removeItem(key);
+}
+
 export function getActiveLegalCaseId(): string {
-  if (!canUseStorage()) return '';
-  return localStorage.getItem(scopedLegalStateKey(ACTIVE_LEGAL_CASE_STORAGE)) || '';
+  return readLegalCaseChoice(ACTIVE_LEGAL_CASE_STORAGE);
 }
 
 export function getLegalConsultationCaseId(): string {
-  if (!canUseStorage()) return '';
-  return localStorage.getItem(scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE)) || '';
+  return readLegalCaseChoice(LEGAL_CONSULTATION_CASE_STORAGE);
 }
 
 export function setActiveLegalCaseId(caseId: string) {
-  if (!canUseStorage()) return;
-  const key = scopedLegalStateKey(ACTIVE_LEGAL_CASE_STORAGE);
-  if (caseId) localStorage.setItem(key, caseId);
-  else localStorage.removeItem(key);
+  if (!canUseStorage() || !legalAccountId) return;
+  writeLegalCaseChoice(ACTIVE_LEGAL_CASE_STORAGE, caseId);
   emitLegalCasesChanged();
 }
 
 export function setLegalConsultationCaseId(caseId: string) {
-  if (!canUseStorage()) return;
-  const key = scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE);
-  if (caseId) localStorage.setItem(key, caseId);
-  else localStorage.removeItem(key);
+  writeLegalCaseChoice(LEGAL_CONSULTATION_CASE_STORAGE, caseId);
 }
 
 export function clearLegalConsultationCaseId() {
-  if (!canUseStorage()) return;
-  localStorage.removeItem(scopedLegalStateKey(LEGAL_CONSULTATION_CASE_STORAGE));
+  setLegalConsultationCaseId('');
 }
 
 export function writeLegalCaseFiles(cases: LegalCaseFile[], activeCaseId?: string) {
-  if (!canUseStorage()) return;
+  if (!canUseStorage() || !legalAccountId) throw new Error('Sign in before saving personal cases');
   if (currentLegalStorageScope().domain === 'work') return;
-  localStorage.setItem(LEGAL_CASES_STORAGE, JSON.stringify(cases));
-  if (typeof activeCaseId === 'string') {
-    if (activeCaseId) localStorage.setItem(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
-    else localStorage.removeItem(ACTIVE_LEGAL_CASE_STORAGE);
-  }
+  localStorage.setItem(scopedLegalStateKey(LEGAL_CASES_STORAGE), JSON.stringify(cases));
+  if (typeof activeCaseId === 'string') writeLegalCaseChoice(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
   emitLegalCasesChanged();
+}
+
+export function hasLegacyLegalCases(): boolean {
+  if (!canUseStorage() || !legalAccountId || currentLegalStorageScope().domain !== 'personal') return false;
+  const owner = localStorage.getItem(`${LEGAL_CASES_STORAGE}:owner`);
+  return (!owner || owner === legalAccountId) && Boolean(localStorage.getItem(LEGAL_CASES_STORAGE))
+    && localStorage.getItem(`${scopedLegalStateKey(LEGAL_CASES_STORAGE)}:legacy-imported`) !== '1';
+}
+
+/** Called only after the user confirms ownership; never infer it from first login. */
+export function importLegacyLegalCases(): boolean {
+  if (!hasLegacyLegalCases()) return false;
+  const parsed = JSON.parse(localStorage.getItem(LEGAL_CASES_STORAGE) || '[]');
+  if (!Array.isArray(parsed)) throw new Error('Legacy case archive is invalid');
+  const legacy = parsed.map(normalizeCaseFile).filter((file): file is LegalCaseFile => Boolean(file))
+    .map(file => ({ ...file, id: `legacy:${file.id}` }));
+  const current = readLegalCaseFiles(), ids = new Set(current.map(file => file.id));
+  // Claim first: a failed copy remains recoverable by this account, not a later login.
+  localStorage.setItem(`${LEGAL_CASES_STORAGE}:owner`, legalAccountId);
+  const active = getActiveLegalCaseId() || `legacy:${localStorage.getItem(ACTIVE_LEGAL_CASE_STORAGE) || ''}`;
+  const merged = [...current, ...legacy.filter(file => !ids.has(file.id))];
+  writeLegalCaseFiles(merged, merged.some(file => file.id === active) ? active : merged[0]?.id || '');
+  localStorage.setItem(`${scopedLegalStateKey(LEGAL_CASES_STORAGE)}:legacy-imported`, '1');
+  emitLegalCasesChanged();
+  return true;
 }
 
 export function getLegalCaseById(caseId: string): LegalCaseFile | null {
@@ -177,16 +214,14 @@ export function getLegalCaseById(caseId: string): LegalCaseFile | null {
   return readLegalCaseFiles().find(item => item.id === caseId) || null;
 }
 
-export function updateLegalCase(caseId: string, patch: Partial<LegalCaseFile>): LegalCaseFile | null {
+export function updateLegalCase(caseId: string, patch: Partial<LegalCaseFile> | ((current: LegalCaseFile) => Partial<LegalCaseFile>)): LegalCaseFile | null {
   const cases = readLegalCaseFiles();
-  let updated: LegalCaseFile | null = null;
-  const next = cases.map(item => {
-    if (item.id !== caseId) return item;
-    updated = { ...item, ...patch, updatedAt: new Date().toISOString() };
-    return updated;
-  });
-  if (!updated) return null;
-  writeLegalCaseFiles(next, caseId);
+  const index = cases.findIndex(item => item.id === caseId);
+  if (index < 0) return null;
+  const current = cases[index];
+  const updated = { ...current, ...(typeof patch === 'function' ? patch(current) : patch), updatedAt: new Date().toISOString() };
+  cases[index] = updated;
+  writeLegalCaseFiles(cases, caseId);
   return updated;
 }
 
@@ -194,8 +229,6 @@ export function addLegalCaseMaterial(
   caseId: string,
   material: Omit<LegalCaseMaterial, 'id' | 'createdAt'> & Partial<Pick<LegalCaseMaterial, 'id' | 'createdAt'>>,
 ): LegalCaseMaterial | null {
-  const current = getLegalCaseById(caseId);
-  if (!current) return null;
   const nextMaterial: LegalCaseMaterial = {
     id: material.id || newId('mat'),
     type: material.type,
@@ -204,8 +237,7 @@ export function addLegalCaseMaterial(
     content: material.content,
     source: material.source || 'manual',
   };
-  updateLegalCase(caseId, { materials: [nextMaterial, ...(current.materials || [])] });
-  return nextMaterial;
+  return updateLegalCase(caseId, current => ({ materials: [nextMaterial, ...current.materials] })) ? nextMaterial : null;
 }
 
 export function getLegalCaseLabel(caseFile: LegalCaseFile | null): string {
@@ -229,68 +261,59 @@ export function archiveLegalMeetingToConsultationCase({
   startedAt: number | null;
   endedAt: number;
 }): { caseFile: LegalCaseFile; material: LegalCaseMaterial } | null {
-  const caseId = getLegalConsultationCaseId();
-  const caseFile = caseId ? getLegalCaseById(caseId) : null;
-  if (!caseFile) return null;
+  const finalCase = updateLegalCase(getLegalConsultationCaseId(), caseFile => {
+    const started = startedAt ? new Date(startedAt) : new Date(endedAt);
+    const ended = new Date(endedAt);
+    const locale = getLocale();
+    const localeTag = locale === 'zh' ? 'zh-CN' : 'en-US';
+    const copy = chinaLegalCopy(locale);
+    const transcript = notes
+      .map(note => {
+        const time = note.time ? new Date(note.time).toLocaleTimeString(localeTag) : '';
+        const text = String(note.text || '').trim();
+        return text ? `- [${time}] ${text}` : '';
+      })
+      .filter(Boolean)
+      .join('\n');
 
-  const started = startedAt ? new Date(startedAt) : new Date(endedAt);
-  const ended = new Date(endedAt);
-  const locale = getLocale();
-  const localeTag = locale === 'zh' ? 'zh-CN' : 'en-US';
-  const copy = chinaLegalCopy(locale);
-  const transcript = notes
-    .map(note => {
-      const time = note.time ? new Date(note.time).toLocaleTimeString(localeTag) : '';
-      const text = String(note.text || '').trim();
-      return text ? `- [${time}] ${text}` : '';
-    })
-    .filter(Boolean)
-    .join('\n');
+    const title = `${copy.meeting.title} ${started.toLocaleString(localeTag)}`;
+    const content = [
+      `# ${title}`,
+      '',
+      `${copy.meeting.case}: ${getLegalCaseLabel(caseFile)}`,
+      `${copy.meeting.started}: ${started.toLocaleString(localeTag)}`,
+      `${copy.meeting.ended}: ${ended.toLocaleString(localeTag)}`,
+      '',
+      `## ${copy.meeting.summary}`,
+      '',
+      report || copy.meeting.noSummary,
+      '',
+      `## ${copy.meeting.transcript}`,
+      '',
+      transcript || copy.meeting.noTranscript,
+      '',
+      `## ${copy.meeting.boundary}`,
+      '',
+      copy.meeting.boundaryText,
+    ].join('\n');
 
-  const title = `${copy.meeting.title} ${started.toLocaleString(localeTag)}`;
-  const content = [
-    `# ${title}`,
-    '',
-    `${copy.meeting.case}: ${getLegalCaseLabel(caseFile)}`,
-    `${copy.meeting.started}: ${started.toLocaleString(localeTag)}`,
-    `${copy.meeting.ended}: ${ended.toLocaleString(localeTag)}`,
-    '',
-    `## ${copy.meeting.summary}`,
-    '',
-    report || copy.meeting.noSummary,
-    '',
-    `## ${copy.meeting.transcript}`,
-    '',
-    transcript || copy.meeting.noTranscript,
-    '',
-    `## ${copy.meeting.boundary}`,
-    '',
-    copy.meeting.boundaryText,
-  ].join('\n');
+    const material: LegalCaseMaterial = {
+      id: newId('mat'),
+      createdAt: new Date().toISOString(),
+      type: 'consultation',
+      title,
+      content,
+      source: 'meeting',
+    };
 
-  const material = addLegalCaseMaterial(caseFile.id, {
-    type: 'consultation',
-    title,
-    content,
-    source: 'meeting',
+    return {
+      materials: [material, ...caseFile.materials],
+      notes: [caseFile.notes, `【会谈归档 ${ended.toLocaleString()}】`, report || transcript].filter(Boolean).join('\n').trim(),
+    };
   });
-  if (!material) return null;
-
-  const updatedCase = getLegalCaseById(caseFile.id) || caseFile;
-  const nextNotes = [
-    updatedCase.notes,
-    '',
-    `【会谈归档 ${ended.toLocaleString()}】`,
-    report || transcript,
-  ].filter(Boolean).join('\n').trim();
-  updateLegalCase(caseFile.id, {
-    notes: nextNotes,
-    stage: updatedCase.stage === 'consultation' ? 'consultation' : updatedCase.stage,
-  });
+  if (!finalCase) return null;
   clearLegalConsultationCaseId();
-
-  const finalCase = getLegalCaseById(caseFile.id) || updatedCase;
-  return { caseFile: finalCase, material };
+  return { caseFile: finalCase, material: finalCase.materials[0] };
 }
 
 export function emitLegalCasesChanged() {

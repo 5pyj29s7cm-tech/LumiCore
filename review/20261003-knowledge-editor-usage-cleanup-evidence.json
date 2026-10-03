@@ -1,0 +1,136 @@
+{
+  "batch": "prune70",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/org/KnowledgeBaseEditor.tsx",
+      "before": 336,
+      "after": 275,
+      "delta": -61,
+      "beforeSha256": "adedef0ac540b14e8ab2d04c9c2b1977dc75208649e9c5d6416b47cee1fed9d0",
+      "afterSha256": "cbaaf5aae64653c9836532f3c0609a4d604457d0ac655642dbe8f7399b1f96d4"
+    },
+    {
+      "file": "src/components/TokenDashboard.tsx",
+      "before": 261,
+      "after": 253,
+      "delta": -8,
+      "beforeSha256": "118f1c59a4c063cdcca268bab8b8cf6029839e684be7ae29c3025c744d28ce48",
+      "afterSha256": "b61c1377b928978a7e8707f19900b09c95cadf29752e070a3fe3de1992dfdfa5"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 719,
+      "after": 774,
+      "delta": 55,
+      "beforeSha256": "d941938b6938f0ee98f11719b1de5a9f91ed95fcc73dbb3f6681fa412b8768b3",
+      "afterSha256": "90480aec6772fbe1b78fa130e921c5c5470a3a48fb4cf91bb98a19a89dc09d14"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1089,
+        "lines": 364887
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161751
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526638
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1089,
+        "lines": 364818
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161806
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526624
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -69
+      },
+      "tests": {
+        "files": 0,
+        "lines": 55
+      },
+      "total": {
+        "files": 0,
+        "lines": -14
+      }
+    }
+  },
+  "focused": {
+    "files": 13,
+    "passed": 152,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T09:55:17.079Z",
+      "finishedAt": "2026-10-03T09:55:24.258Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T09:55:24.259Z",
+      "finishedAt": "2026-10-03T09:55:59.931Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T09:55:59.932Z",
+      "finishedAt": "2026-10-03T09:56:09.331Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T09:56:09.331Z",
+      "finishedAt": "2026-10-03T09:56:18.701Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T09:56:18.701Z",
+      "finishedAt": "2026-10-03T09:56:19.080Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "KnowledgeBaseEditor merges five independent form states into one draft and shares the GET/POST/PUT request state and receipt validation. It reuses apiJson for existing authentication, desktop proof, dynamic backend origin and bounded cancellation.",
+    "The editor is owned by account, role, work domain, organization and article ID. Strict remounts and scope changes cancel obsolete requests. A failed initial read offers explicit retry instead of an editable empty record. Failed saves retain input; duplicate writes are blocked and form fields are disabled until confirmation.",
+    "Only a valid article receipt may update the draft, publish the existing knowledge-updated event and call onSaved. Creation clears the draft while retaining its category. The unmanaged 350 ms navigation timer, duplicate success/error markup and duplicate tag-array formatting were deleted.",
+    "TokenDashboard combines initial loading, polling and manual refresh under one request lifecycle and one state object. Polling schedules the next read 10 seconds after the previous one settles, with a 15 second request timeout. Account or time-range changes cancel old reads and clear their displayed data.",
+    "Usage requests reuse apiJson and validate rendering-critical result fields. Failed refreshes clear stale data and display an error; automatic and manual retry remain available. Provider labels and colors share one map, and both the ring and provider list reuse one segment calculation. Unused view-only payload fields and a one-call number-format wrapper were removed; locale updates remain subscribed."
+  ],
+  "validationNotes": [
+    "Four new behavior tests mount the actual editor and usage dashboard against synthetic fetch: confirmed creates, denied and malformed receipts, normalization, duplicate clicks, desktop proof, retained failed edits, obsolete reads/saves, StrictMode, article/organization/account transitions, logout, failed-load retry, sequential polling, failed-refresh recovery and timer cleanup.",
+    "The polling test advances a synthetic scheduler. It proves no interval overlap, recovery and cleanup; it does not benchmark production latency or simulate the native AbortSignal timeout clock.",
+    "13 focused files passed without skipped tests. Lint includes TypeScript and hook/i18n boundaries; all-frontend and desktop builds plus compact-layout checks passed. Earlier prune40-69 latest source baselines and final fingerprints were checked.",
+    "An initial TypeScript check caught lost string narrowing in the tag parser. Retaining the raw string fixed it before final verification."
+  ],
+  "limitations": [
+    "Frontend cancellation cannot undo an article write already accepted by the server. This batch does not alter backend persistence or prove that asynchronous knowledge indexing has completed; existing article response semantics remain unchanged.",
+    "Usage ownership remains per user across organizations, matching the existing backend. Polling waits after settlement rather than maintaining a fixed wall-clock cadence; response checks cover rendered fields rather than the full data schema.",
+    "No production API/model calls, user-record edits, native client acceptance, full-suite run, backend rebuild, commit, push, deployment or client restart were performed. This batch does not certify whole-project simplification complete."
+  ],
+  "remainingCandidates": [
+    "OrgMembers still has separate load/invite/delete request state and lacks scoped cancellation; member.id and userId differ, so direct collection-hook substitution needs contract review.",
+    "GitHubMCPBrowser search results can arrive after switching sources and errors are displayed like empty results; inspect cancellation and failure handling before merging renderers.",
+    "BusinessWorkbench has independently managed reads, binding/import operations and artifact cache lifetimes; no change was made to those flows in this batch."
+  ]
+}

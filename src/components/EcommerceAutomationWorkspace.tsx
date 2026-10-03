@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   ArrowRight,
   BarChart3,
@@ -26,9 +26,9 @@ import {
   type EcommerceModuleCopy,
   type EcommerceOutcomeId,
 } from '../i18n/locales/ecommerceModules';
-import { executeIndustryWorkflow, startIndustryWorkflow } from '../lib/industryWorkflowClient';
+import { useIndustryWorkflow } from '../hooks/useIndustryWorkflow';
 import type { EcommerceReportKind, EcommerceWorkbenchSnapshot } from '../../shared/ecommerce_workbench';
-import { EcommerceHub } from './EcommerceHub';
+import { EcommerceHub, type EcommerceWorkbenchDraft } from './EcommerceHub';
 
 export type EcommerceWorkspaceTarget =
   | 'reviews'
@@ -371,81 +371,49 @@ function ModuleVisualization({
   return <ContentServiceBoard module={module} lang={lang} />;
 }
 
-export function EcommerceAutomationWorkspace({
-  appId,
-  lang,
-  onOpenSettings,
-  snapshot,
-  onSnapshotChange,
-  onOpenWorkspace,
-  initialReportKind = 'orders',
-}: {
+interface EcommerceAutomationWorkspaceProps {
   appId: EcommerceOutcomeId;
+  draft?: EcommerceWorkbenchDraft;
+  onDraftChange?: (draft: EcommerceWorkbenchDraft) => void;
   lang: 'en' | 'zh';
   onOpenSettings: () => void;
   snapshot?: EcommerceWorkbenchSnapshot | null;
   onSnapshotChange?: (snapshot: EcommerceWorkbenchSnapshot | null) => void;
   onOpenWorkspace?: (target: EcommerceWorkspaceTarget) => void;
   initialReportKind?: EcommerceReportKind;
-}) {
+}
+
+export function EcommerceAutomationWorkspace(props: EcommerceAutomationWorkspaceProps) {
+  return <EcommerceAutomationContent key={props.appId} {...props} />;
+}
+
+function EcommerceAutomationContent({
+  appId,
+  draft,
+  onDraftChange,
+  lang,
+  onOpenSettings,
+  snapshot,
+  onSnapshotChange,
+  onOpenWorkspace,
+  initialReportKind = 'orders',
+}: EcommerceAutomationWorkspaceProps) {
   const module = ecommerceModuleCopy(lang, appId);
   const common = ecommerceModuleCommonCopy(lang);
   const [input, setInput] = useState('');
-  const [preparing, setPreparing] = useState(false);
-  const [taskId, setTaskId] = useState('');
-  const [result, setResult] = useState('');
-  const [workflowStatus, setWorkflowStatus] = useState('');
-  const [error, setError] = useState('');
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  useEffect(() => {
-    setInput('');
-    setTaskId('');
-    setResult('');
-    setWorkflowStatus('');
-    setError('');
-  }, [appId]);
+  const { busy: preparing, taskId, text: result, status: workflowStatus, error, run, stop, reset } = useIndustryWorkflow();
 
   if (appId === 'store-data') {
-    return <EcommerceHub lang={lang} initialReportKind={initialReportKind} workflowEntryId="store-data" onSnapshotChange={onSnapshotChange} />;
+    return <EcommerceHub draft={draft} onDraftChange={onDraftChange} lang={lang} initialReportKind={initialReportKind} workflowEntryId="store-data" onSnapshotChange={onSnapshotChange} />;
   }
 
   const prepare = async () => {
     const source = input.trim();
     if (!source || preparing) return;
-    setPreparing(true);
-    setResult('');
-    setWorkflowStatus('creating');
-    setError('');
-    try {
-      const workflow = await startIndustryWorkflow({ entryId: appId, sourceInput: source, source: 'ecommerce_workspace' });
-      setTaskId(workflow.task.id);
-      setWorkflowStatus('in_progress');
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const execution = await executeIndustryWorkflow({
-        taskId: workflow.task.id,
-        sourceInput: source,
-        prompt: `${workflow.handoffPrompt}\n\n${module.prompt}\n\n${module.inputLabel}:\n${source}\n\n${module.confirmation}`,
-        signal: controller.signal,
-        onProgress: progress => {
-          setResult(progress.text);
-          setWorkflowStatus(progress.status);
-        },
-      });
-      setResult(execution.text);
-      setWorkflowStatus(execution.status);
-    } catch (reason) {
-      if ((reason as any)?.name !== 'AbortError') {
-        setError(reason instanceof Error ? reason.message : String(reason));
-        setWorkflowStatus('blocked');
-      }
-    } finally {
-      abortRef.current = null;
-      setPreparing(false);
-    }
+    await run({
+      entryId: appId, sourceInput: source, source: 'ecommerce_workspace',
+      prompt: `${module.prompt}\n\n${module.inputLabel}:\n${source}\n\n${module.confirmation}`,
+    });
   };
 
   return (
@@ -476,7 +444,8 @@ export function EcommerceAutomationWorkspace({
             <p className="mt-3 text-sm leading-6 text-white/45">{module.objective}</p>
             <textarea
               value={input}
-              onChange={event => { setInput(event.target.value); setTaskId(''); setResult(''); setWorkflowStatus(''); }}
+              onChange={event => { setInput(event.target.value); reset(); }}
+              disabled={preparing}
               placeholder={module.inputPlaceholder}
               className="mt-4 min-h-28 w-full resize-y rounded-2xl border border-white/10 bg-black/25 p-4 text-sm leading-6 text-white/75 outline-none placeholder:text-white/22 focus:border-cyan-300/25"
             />
@@ -485,7 +454,7 @@ export function EcommerceAutomationWorkspace({
                 <TicketCheck size={16} />{preparing ? common.starting : common.start}<ArrowRight size={15} />
               </button>
               {preparing && (
-                <button type="button" onClick={() => abortRef.current?.abort()} className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-300/15 bg-rose-300/[0.06] px-4 text-xs font-black text-rose-100/65 hover:bg-rose-300/10">{common.stop}</button>
+                <button type="button" onClick={stop} className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-300/15 bg-rose-300/[0.06] px-4 text-xs font-black text-rose-100/65 hover:bg-rose-300/10">{common.stop}</button>
               )}
               {appId === 'today-operations' && onOpenWorkspace && (
                 <button type="button" onClick={() => onOpenWorkspace('reviews')} className="inline-flex h-10 items-center gap-2 rounded-xl border border-cyan-300/15 bg-cyan-300/[0.06] px-4 text-xs font-black text-cyan-100/65 hover:bg-cyan-300/10"><BarChart3 size={15} />{common.openStoreData}</button>
@@ -505,7 +474,7 @@ export function EcommerceAutomationWorkspace({
           </aside>
         </section>
 
-        {(preparing || result || taskId) && (
+        {(workflowStatus || result || taskId) && (
           <section className="rounded-3xl border border-cyan-300/12 bg-cyan-300/[0.025] p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <SectionHeading icon={<Sparkles size={17} />} title={common.liveResult} />

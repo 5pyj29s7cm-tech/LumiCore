@@ -1,3 +1,5 @@
+import { apiJson } from './apiClient';
+import type { getSystemStatsSnapshot } from '../../server/routes/system_routes';
 /**
  * System Service Bridge
  * Abstracts communication between the React frontend and the Desktop shell (Tauri/Electron).
@@ -10,22 +12,23 @@ export interface CommandResponse {
   exitCode?: number;
 }
 
-export interface TempReading {
-  label: string;
-  celsius: number;
-}
+export type SystemStats = Omit<Awaited<ReturnType<typeof getSystemStatsSnapshot>>, 'physicalCpus' | 'gpu'> & {
+  physicalCpus: number | null;
+  gpu: { name: string; util?: number | null } | null;
+};
 
-export interface LiveStats {
-  cpu_percent: number;
-  memory_used_gb: number;
-  memory_total_gb: number;
-  memory_percent: number;
-  gpu_vendor: string | null;
-  gpu_utilization: number | null;
-  temperatures: TempReading[];
-  fan_speed_rpm: number | null;
-  hostname: string;
-  uptime_seconds: number;
+function checkedSystemStats(value: SystemStats): SystemStats {
+  const nonnegative = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (!value || !['native_client', 'lumi_server_host'].includes(value.computerScope)
+    || ![value.cpu, value.ram?.used, value.ram?.total, value.ram?.percent, value.uptime].every(nonnegative)
+    || value.cpu > 100 || value.ram.percent > 100 || value.ram.total <= 0
+    || !Number.isInteger(value.logicalCpus) || value.logicalCpus < 1
+    || (value.physicalCpus !== null && (!Number.isInteger(value.physicalCpus) || value.physicalCpus < 1))
+    || ![value.hostname, value.platform, value.release, value.arch, value.cpuModel].every(item => typeof item === 'string')
+    || (value.gpu !== null && (typeof value.gpu?.name !== 'string' || (value.gpu.util != null && (!nonnegative(value.gpu.util) || value.gpu.util > 100))))) {
+    throw new Error('Invalid system statistics');
+  }
+  return value;
 }
 
 export interface WallpaperModeState {
@@ -39,6 +42,7 @@ export type WallpaperWorkspace = 'personal' | 'command-center' | 'organization';
 
 class SystemService {
   private isTauri: boolean;
+  private nativeInfo: Promise<any> | undefined;
   private isElectron: boolean;
 
   constructor() {
@@ -214,81 +218,31 @@ class SystemService {
     await getCurrentWindow().setAlwaysOnTop(enabled);
   }
 
-  /**
-   * Get system info (CPU, RAM, etc)
-   */
-  async getSystemStats(): Promise<any> {
+  async getSystemStats(signal: AbortSignal): Promise<SystemStats> {
+    signal.throwIfAborted();
     if (this.isTauri) {
+      let aborted = () => {};
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        return await invoke('get_system_info');
-      } catch (err) {
-        console.error("Failed to get system stats:", err);
-        return { cpu: 0, ram: 'N/A', disk: 'N/A' };
-      }
+        signal.throwIfAborted();
+        const cancellation = new Promise<never>((_, reject) => { aborted = () => reject(signal.reason); signal.addEventListener('abort', aborted, { once: true }); });
+        const [info, live] = await Promise.race([Promise.all([this.nativeInfo ??= invoke<any>('get_system_info'), invoke<any>('get_live_stats')]), cancellation]);
+        signal.throwIfAborted();
+        return checkedSystemStats({
+          computerScope: 'native_client', cpu: live.cpu_percent, cpuModel: info.cpu_model,
+          logicalCpus: info.logical_cpus, physicalCpus: info.cpus, cpus: info.logical_cpus,
+          ram: { used: live.memory_used_gb, total: live.memory_total_gb, percent: live.memory_percent },
+          platform: info.platform, release: info.release, arch: info.arch, hostname: live.hostname, uptime: live.uptime_seconds,
+          gpu: live.gpu_vendor ? { name: live.gpu_vendor, util: live.gpu_utilization } : null,
+        });
+      } catch {
+        this.nativeInfo = undefined;
+        signal.throwIfAborted();
+      } finally { signal.removeEventListener('abort', aborted); }
     }
-    if (this.isElectron) {
-      return { cpu: 'N/A', ram: 'N/A', disk: 'N/A', platform: 'electron' };
-    }
-    // Web: use browser APIs where available
-    const nav = navigator as any;
-    return {
-      cpu: nav.hardwareConcurrency || 'unknown',
-      ram: nav.deviceMemory ? `${nav.deviceMemory}GB` : 'unknown',
-      platform: navigator.platform,
-      userAgent: navigator.userAgent.slice(0, 80),
-    };
-  }
-
-  /**
-   * Get live system stats with CPU%, GPU, temperatures
-   */
-  async getLiveStats(): Promise<LiveStats> {
-    if (this.isTauri) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        return await invoke<LiveStats>('get_live_stats');
-      } catch (err) {
-        console.error("Failed to get live stats:", err);
-      }
-    }
-    return this.getServerStats();
-  }
-
-  /**
-   * Fallback: get system stats from Express server (works in web/dev mode)
-   */
-  async getServerStats(): Promise<LiveStats> {
-    try {
-      const res = await fetch('/api/system/stats');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const s = await res.json();
-      return {
-        cpu_percent: s.cpu ?? 0,
-        memory_used_gb: s.ram?.used ?? 0,
-        memory_total_gb: s.ram?.total ?? 0,
-        memory_percent: s.ram?.percent ?? 0,
-        gpu_vendor: s.gpu?.name ?? null,
-        gpu_utilization: s.gpu?.util ?? null,
-        temperatures: [],
-        fan_speed_rpm: null,
-        hostname: s.hostname ?? 'web',
-        uptime_seconds: s.uptime ?? 0,
-      };
-    } catch {
-      return {
-        cpu_percent: 0,
-        memory_used_gb: 0,
-        memory_total_gb: 0,
-        memory_percent: 0,
-        gpu_vendor: null,
-        gpu_utilization: null,
-        temperatures: [],
-        fan_speed_rpm: null,
-        hostname: 'web',
-        uptime_seconds: 0,
-      };
-    }
+    const stats = await apiJson<SystemStats>('/api/system/stats', { signal });
+    signal.throwIfAborted();
+    return checkedSystemStats(stats);
   }
 }
 

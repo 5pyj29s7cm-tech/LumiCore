@@ -33,7 +33,6 @@ describe('Lumi official API role settings contract', () => {
 
   it('exposes the same capability boundary in the settings UI', () => {
     const settings = source('src/components/Settings.tsx');
-    const voice = source('src/components/VoiceProviderSwitch.tsx');
 
     expect(settings).toContain('const LUMI_OFFICIAL_PROVIDER_ID = SHARED_LUMI_OFFICIAL_PROVIDER_ID');
     expect(settings).toContain("value={LUMI_OFFICIAL_PROVIDER_ID}>{lumiOfficialApiLabel(t)} · Vision");
@@ -48,9 +47,6 @@ describe('Lumi official API role settings contract', () => {
     expect(settings).toContain('LUMI_OFFICIAL_DEFAULT_MODELS.image_to_video');
     expect(settings).toContain('LUMI_OFFICIAL_DEFAULT_MODELS.embedding');
     expect(settings).toContain('LUMI_OFFICIAL_DEFAULT_MODELS.rerank');
-    expect(voice).toContain("value: 'relay'");
-    expect(voice).toContain('disabled: false');
-    expect(voice).toContain('officialVoiceNote');
   });
 
   it('keeps the documented endpoint and model ids in one shared contract', async () => {

@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, FileText, HelpCircle, Loader2, Shield, Upload } from 'lucide-react';
-import { toast } from 'sonner';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
 import type { LegalCaseFile } from '../../lib/legalCaseStore';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
 import { uiMessage } from '../../i18n/uiMessages';
+import { useLegalDocument, useLegalDocumentScope } from '../../hooks/useLegalDocument';
+import { runLegalRequest } from '../../lib/legalToolClient';
 import {
   chinaLegalCopy,
   parseChinaContractRisks,
@@ -15,94 +16,38 @@ import {
 type RiskItem = ChinaContractRisk;
 
 export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | null }) {
+  return <LegalContractDocument key={useLegalDocumentScope(caseFile?.id)} caseFile={caseFile} />;
+}
+
+function LegalContractDocument({ caseFile }: { caseFile?: LegalCaseFile | null }) {
   const t = useT();
   const { workDomain, orgConnection } = useApp();
-  const isZh = t.langCode !== 'en';
-  const ui = (zh: string, en: string) => (isZh ? zh : en);
-  const defaultContract = useMemo(() => (
-    (caseFile?.materials || []).find(material => material.type === 'contract' && material.content)?.content || ''
-  ), [caseFile]);
-  const [contract, setContract] = useState(defaultContract);
-  const [result, setResult] = useState('');
-  const [risks, setRisks] = useState<RiskItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [selectedRisk, setSelectedRisk] = useState<RiskItem | null>(null);
+  const { text: contract, setText: setContract, result, successfulResult, busy, upload: handleFileUpload, generate } = useLegalDocument(
+    (caseFile?.materials || []).find(material => material.type === 'contract' && material.content)?.content || '', {
+      error: uiMessage('legal-contract-review.error.1d47687da7'),
+      uploadFailed: uiMessage('legal-contract-review.file-upload-parsing-failed.2381d47571'),
+      empty: uiMessage('legal-contract-review.no-reviewable-text-extracted.a5b8b434b8'),
+      uploaded: uiMessage('legal-contract-review.file-parsed-into-contract-text.c0159991c0'),
+    },
+  );
+  const risks = useMemo(() => parseChinaContractRisks(successfulResult), [successfulResult]);
+  const [selected, setSelectedRisk] = useState<RiskItem | null>(null);
+  const selectedRisk = selected && risks.includes(selected) ? selected : risks[0];
+  const loading = busy === 'generate', uploading = busy === 'upload';
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    setContract(defaultContract);
-    setResult('');
-    setRisks([]);
-    setSelectedRisk(null);
-  }, [caseFile?.id]);
-
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      Array.from(files).forEach(file => formData.append('files', file));
-      const res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-contract-review.file-upload-parsing-failed.2381d47571'));
-      const text = (data.files || [])
-        .map((file: any) => String(file.content || file.preview || '').trim())
-        .filter(Boolean)
-        .join('\n\n');
-      if (!text) throw new Error(uiMessage('legal-contract-review.no-reviewable-text-extracted.a5b8b434b8'));
-      setContract(prev => [prev, text].filter(Boolean).join('\n\n'));
-      toast.success(uiMessage('legal-contract-review.file-parsed-into-contract-text.c0159991c0'));
-    } catch (err: any) {
-      const message = err?.message || uiMessage('legal-contract-review.file-upload-parsing-failed.2381d47571');
-      setResult(`${uiMessage('legal-contract-review.error.1d47687da7')}: ${message}`);
-      toast.error(message);
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
-
-  const review = async () => {
-    if (!contract.trim() || loading) return;
-    setLoading(true);
-    setResult('');
-    setRisks([]);
-    setSelectedRisk(null);
-    try {
-      const res = await fetch('/api/legal/contract-review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contract: contract.slice(0, 10000),
-          domain: workDomain,
-          orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
-          caseId: caseFile?.id,
-          caseName: caseFile ? (caseFile.title || caseFile.party || caseFile.caseNumber || undefined) : undefined,
-          caseType: caseFile?.cause || chinaLegalCopy('zh').contractReviewCaseType,
-          court: caseFile?.court,
-          persistCase: Boolean(caseFile),
-        }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-contract-review.contract-review-failed.05af7a7d1f'));
-      const text = data.text || data.response || data.reply || data.message || '';
-      const parsedRisks = parseChinaContractRisks(text);
-      setResult(text);
-      setRisks(parsedRisks);
-      setSelectedRisk(parsedRisks[0] || null);
-      if (caseFile?.id) {
-        window.dispatchEvent(new CustomEvent('lumi:org-legal-cases-changed', {
-          detail: { caseId: caseFile.id, toolName: 'legal_review_contract' },
-        }));
-      }
-    } catch (e: any) {
-      setResult(`${uiMessage('legal-contract-review.error.1d47687da7')}: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const review = () => {
+    if (!contract.trim()) return;
+    return generate(signal => runLegalRequest('/api/legal/contract-review', {
+      contract: contract.slice(0, 10000),
+      domain: workDomain,
+      orgId: workDomain === 'work' && orgConnection?.orgId ? orgConnection.orgId : undefined,
+      caseId: caseFile?.id,
+      caseName: caseFile ? (caseFile.title || caseFile.party || caseFile.caseNumber || undefined) : undefined,
+      caseType: caseFile?.cause || chinaLegalCopy('zh').contractReviewCaseType,
+      court: caseFile?.court,
+      persistCase: Boolean(caseFile),
+    }, 'legal_review_contract', caseFile?.id, signal));
   };
 
   return (
@@ -124,7 +69,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
 
         <LegalCaseContextBar
           caseFile={caseFile}
-          state={loading ? 'running' : result ? 'result' : 'input'}
+          state={loading ? 'running' : successfulResult ? 'result' : 'input'}
           detail={uiMessage('legal-contract-review.existing-case-contracts-are-prefilled.7b8235f485')}
         />
 
@@ -155,7 +100,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
               <p className="text-xs text-white/40">{uiMessage('legal-contract-review.the-first-10-000-characters.9326837798')}</p>
               <button
                 onClick={review}
-                disabled={loading || !contract.trim()}
+                disabled={Boolean(busy) || !contract.trim()}
                 className="inline-flex items-center gap-2 rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2.5 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
@@ -178,7 +123,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
               ) : (
                 <div className="max-h-72 space-y-2 overflow-y-auto custom-scrollbar">
                   {risks.map((risk, index) => {
-                    const meta = riskLevelMeta(risk.level, ui);
+                    const meta = riskLevelMeta(risk.level);
                     return (
                       <button
                         key={`${risk.level}-${index}`}
@@ -202,7 +147,7 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
             <section className="min-h-0 flex-1 rounded-lg border border-white/10 bg-white/[0.04] p-4">
               {selectedRisk ? (
                 <div className="space-y-3">
-                  <RiskBadge level={selectedRisk.level} ui={ui} />
+                  <RiskBadge level={selectedRisk.level} />
                   <div>
                     <p className="mb-1 text-xs text-white/40">{uiMessage('legal-contract-review.clause-issue.1a1690d0c3')}</p>
                     <p className="text-sm leading-6 text-white/80">{selectedRisk.clause}</p>
@@ -244,8 +189,8 @@ export function LegalContractReview({ caseFile }: { caseFile?: LegalCaseFile | n
   );
 }
 
-function RiskBadge({ level, ui }: { level: RiskItem['level']; ui: (zh: string, en: string) => string }) {
-  const meta = riskLevelMeta(level, ui);
+function RiskBadge({ level }: { level: RiskItem['level'] }) {
+  const meta = riskLevelMeta(level);
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${meta.panelClass} ${meta.textClass}`}>
       {meta.icon}
@@ -254,7 +199,7 @@ function RiskBadge({ level, ui }: { level: RiskItem['level']; ui: (zh: string, e
   );
 }
 
-function riskLevelMeta(level: RiskItem['level'], ui: (zh: string, en: string) => string) {
+function riskLevelMeta(level: RiskItem['level']) {
   const map = {
     high: {
       icon: <AlertTriangle size={14} className="text-red-300" />,

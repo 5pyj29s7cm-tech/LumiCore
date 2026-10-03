@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-02",
+  "batch": "prune38",
+  "baseline": "turn-start worktree including uncommitted prune35-prune37",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "beforeLines": 4978,
+      "afterLines": 4909,
+      "delta": -69,
+      "beforeSha256": "ecbf53bb8974809d726cfce33682925c7da9b04fb36d37f56c8bba0e90c89ea2",
+      "afterSha256": "a1b7090051a3c55c79440e8ca8badcf996f3bcd7b48b9fdd8f000fe1fbf118a2",
+      "utf8BytesDelta": -2580
+    },
+    {
+      "file": "src/components/org/CentralLumiChat.tsx",
+      "beforeLines": 886,
+      "afterLines": 828,
+      "delta": -58,
+      "beforeSha256": "dc6ed01d601c1e160eb0ecdb864be8a3697bfc6dbd4cd25b9e47c009af29135c",
+      "afterSha256": "1c3f860ae4e3f4a514c0e7cf5168da58acc2811bd99e23fe6dcd332053137461",
+      "utf8BytesDelta": -2384
+    },
+    {
+      "file": "src/lib/chatAttachmentReferences.ts",
+      "beforeLines": 265,
+      "afterLines": 297,
+      "delta": 32,
+      "beforeSha256": "0de0617a7161c524a6be4b198ab5220dcca6d47fb994877e09dc474c620f32a3",
+      "afterSha256": "b65c3f1e82ee2c3e437745eb11c97378e41c002a0179d54b27ce54d551507958",
+      "utf8BytesDelta": 1978
+    },
+    {
+      "file": "src/lib/chatAttachmentUploads.ts",
+      "beforeLines": 67,
+      "afterLines": 95,
+      "delta": 28,
+      "beforeSha256": "750bf204e23e3e85c45c03d559845ecde8dbd213f5306930ce409431c65b7fbc",
+      "afterSha256": "9d90082230799ad02104b572c1c173220b96110d6512553fe55295ffd81f9148",
+      "utf8BytesDelta": 1111
+    },
+    {
+      "file": "test/chat_page_fixture.ts",
+      "beforeLines": 102,
+      "afterLines": 102,
+      "delta": 0,
+      "beforeSha256": "1fc4b8e35733a94d7e37636e62d92e21d082c59c181592d3b7c9f641ab13cdc1",
+      "afterSha256": "6be9f0379ea1e4569436d44f038a2223eb278cdc3f7e8706ce2e1869941aa0e6",
+      "utf8BytesDelta": -35
+    },
+    {
+      "file": "test/chat_view_async_boundaries.test.ts",
+      "beforeLines": 207,
+      "afterLines": 249,
+      "delta": 42,
+      "beforeSha256": "8ed3b573c11c78d43d3615c3102542d12d2d814d46ebe8d0d2e927a4a61101c5",
+      "afterSha256": "98dfd7c3e7243cd31d9c20e86102d922aa80af77a3a3258147ae68ef2ea27fe5",
+      "utf8BytesDelta": 2852
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1086,
+        "lines": 366980
+      },
+      "tests": {
+        "files": 742,
+        "lines": 159788
+      },
+      "total": {
+        "files": 1828,
+        "lines": 526768
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1086,
+        "lines": 366913
+      },
+      "tests": {
+        "files": 742,
+        "lines": 159830
+      },
+      "total": {
+        "files": 1828,
+        "lines": 526743
+      }
+    }
+  },
+  "changes": [
+    "Shared imported attachment conversion in existing references module, preserving kind precedence, file identity, transcript metadata and scoped download URLs",
+    "Shared pending attachment merge retains occupied conversation slots, duplicate counts, overflow counts and channel-specific notifications",
+    "Shared native drop subscription in existing upload module; closed views ignore queued events and late subscriptions are disposed",
+    "Removed the two page-level mapper callbacks and duplicate successful-append branch; no new business module"
+  ],
+  "parity": {
+    "mappingComparisons": 1200,
+    "pendingComparisons": 800,
+    "nativeComparisons": 2,
+    "total": 2002,
+    "unchangedFunctions": 13,
+    "inputsUnmodified": true,
+    "staleEventFix": [
+      {
+        "file": "src/components/AgentChatPage.tsx",
+        "oldQueuedImportsAfterCleanup": 2,
+        "newQueuedImportsAfterCleanup": 0
+      },
+      {
+        "file": "src/components/org/CentralLumiChat.tsx",
+        "oldQueuedImportsAfterCleanup": 2,
+        "newQueuedImportsAfterCleanup": 0
+      }
+    ]
+  },
+  "tests": {
+    "files": 8,
+    "passed": 88,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      "native file drop listener ownership skips browsers and a view closed before native registration",
+      "native file drop listener ownership imports paths once, records the native drop, and ignores events after cleanup",
+      "native file drop listener ownership disposes a late registration and safely handles native registration failure"
+    ],
+    "removed": 0,
+    "comparisonBaseline": "matching files from prune34 full suite",
+    "names": [
+      "D:/lumiOS/src/hooks/useGeneratedLibrary.test.tsx",
+      "D:/lumiOS/test/chat_attachment_references.test.ts",
+      "D:/lumiOS/test/chat_attachment_upload_delivery.test.ts",
+      "D:/lumiOS/test/chat_conversation_transition.test.ts",
+      "D:/lumiOS/test/chat_view_async_boundaries.test.ts",
+      "D:/lumiOS/test/customer_output_projection_surfaces.test.ts",
+      "D:/lumiOS/test/frontend_response_finalization.test.ts",
+      "D:/lumiOS/test/large_ui_state.test.tsx"
+    ]
+  },
+  "verification": [
+    {
+      "step": "parity",
+      "startedAt": "2026-10-01T17:36:31.061Z",
+      "finishedAt": "2026-10-01T17:36:53.150Z",
+      "status": 0
+    },
+    {
+      "step": "focused",
+      "startedAt": "2026-10-01T17:36:53.152Z",
+      "finishedAt": "2026-10-01T17:36:59.988Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-01T17:36:59.989Z",
+      "finishedAt": "2026-10-01T17:37:44.746Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-01T17:37:44.746Z",
+      "finishedAt": "2026-10-01T17:37:56.037Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-01T17:37:56.038Z",
+      "finishedAt": "2026-10-01T17:38:07.669Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-01T17:38:07.670Z",
+      "finishedAt": "2026-10-01T17:38:08.192Z",
+      "status": 0
+    }
+  ],
+  "finalFingerprintsMatch": true,
+  "diffCheckPassed": true,
+  "preserved": [
+    "Existing chat upload HTTP methods, authorization scope, batch IDs, retry behavior and current-view guards",
+    "Organization upload endpoint and organization selection; no claim that organization pending-request isolation is fixed",
+    "Different transcript/toast/knowledge-notification behavior between the two chat surfaces",
+    "Eight-file limit across conversation context and pending attachments, and native/browser 700ms drop suppression",
+    "All 13 existing reference and persistence functions textually unchanged"
+  ],
+  "scope": {
+    "committed": false,
+    "pushed": false,
+    "restarted": false,
+    "realUserDataModified": false,
+    "newBusinessModules": 0,
+    "fullSuiteRerun": false,
+    "backendRebuild": false,
+    "desktopLiveAcceptance": false,
+    "actualModelLatencyMeasured": false,
+    "overallOptimizationComplete": false
+  },
+  "remaining": [
+    "Organization chat upload callbacks still lack the main chat view-work guard; delayed results across account/organization changes require separate behavioral reproduction and correction. This batch only isolates stale native event callbacks.",
+    "Other large interfaces and task adapters still require individual review."
+  ],
+  "rawArtifacts": [
+    ".codex-run/prune38-before.json",
+    ".codex-run/prune38-parity.json",
+    ".codex-run/prune38-focused-final.json",
+    ".codex-run/prune38-verification.json"
+  ]
+}

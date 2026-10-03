@@ -1,4 +1,4 @@
-import { FeedbackBanner, type Feedback } from './FeedbackBanner';
+import { FeedbackBanner } from './FeedbackBanner';
 import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
@@ -11,88 +11,58 @@ import {
   Search,
   User,
 } from 'lucide-react';
+import { useApp } from '../../contexts/AppContext';
+import { useAsyncOperation } from '../../hooks/useAsyncOperation';
+import { apiFetch, apiJson } from '../../services/apiClient';
 import { useT } from '../../lib/useT';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import type { AuditEntry as StoredAuditEntry } from '../../../server/org/db';
 
-interface AuditEntry {
-  id: string;
-  userId: string;
-  action: string;
-  resourceType: string;
-  resourceId: string;
-  details: string;
-  timestamp: string;
+type AuditEntry = Pick<StoredAuditEntry, 'id' | 'userId' | 'action' | 'resourceType' | 'resourceId' | 'details' | 'timestamp'>;
+
+function paramsFor(value: Record<string, string>) {
+  return new URLSearchParams(Object.fromEntries(Object.entries(value).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value)));
 }
 
 export function AuditLogViewer() {
-  const t = useT();
-  const isZh = t.langCode !== 'en';
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <AuditLog key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole])} /> : null;
+}
+function AuditLog() {
+  const t = useT(), isZh = t.langCode !== 'en';
+  const [records, setRecords] = useState<AuditEntry[] | null>(null);
   const [filters, setFilters] = useState({ userId: '', action: '', resourceType: '' });
-  const [showFilters, setShowFilters] = useState(false);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-
-  const loadEntries = useCallback(async (withFilters = filters) => {
-    setLoading(true);
-    setFeedback(null);
-    try {
-      const params = new URLSearchParams();
-      params.set('limit', '100');
-      if (withFilters.userId.trim()) params.set('userId', withFilters.userId.trim());
-      if (withFilters.action.trim()) params.set('action', withFilters.action.trim());
-      if (withFilters.resourceType.trim()) params.set('resourceType', withFilters.resourceType.trim());
-      const res = await fetch(`/api/org/audit?${params.toString()}`, { credentials: 'include' });
-      const data = await res.json().catch(() => []);
-      if (!res.ok) throw new Error((data as any).error || formatUiMessage('audit-log-viewer.audit-log-load-failed-value0.3784d1af66', { value0: res.status }));
-      setEntries(Array.isArray(data) ? data : []);
-    } catch (err: any) {
-      setFeedback({ type: 'error', text: err.message || String(err) });
-      setEntries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
-
-  useEffect(() => {
-    void loadEntries();
-  }, []); // initial load only; explicit filter button controls filtered reload
-
-  const handleFilter = () => {
-    void loadEntries(filters);
-  };
-
+  const [showFilters, setShowFilters] = useState(false), [message, setMessage] = useState('');
+  const { busy, error, run, cancel } = useAsyncOperation();
+  const entries = records || [], loading = busy === 'load' || (records === null && !error);
+  const feedback = error ? { type: 'error' as const, text: error } : message ? { type: 'success' as const, text: message } : null;
+  const loadEntries = useCallback((value = { userId: '', action: '', resourceType: '' }) => {
+    cancel(); setMessage('');
+    void run('load', async signal => {
+      const params = paramsFor(value); params.set('limit', '100');
+      const data = await apiJson('/api/org/audit?' + params, { signal });
+      if (!Array.isArray(data) || !data.every(item => item && ['id', 'userId', 'action', 'resourceType', 'timestamp'].every(field => typeof item[field] === 'string'))) throw new Error('Invalid audit log response');
+      return () => setRecords(data);
+    });
+  }, [run, cancel]);
+  useEffect(() => { loadEntries(); }, [loadEntries]);
+  const handleFilter = () => loadEntries(filters);
   const handleClear = () => {
-    const empty = { userId: '', action: '', resourceType: '' };
-    setFilters(empty);
-    void loadEntries(empty);
+    const empty = { userId: '', action: '', resourceType: '' }; setFilters(empty); loadEntries(empty);
   };
-
-  const handleExport = async () => {
-    setFeedback(null);
-    try {
-      const params = new URLSearchParams();
-      if (filters.userId.trim()) params.set('userId', filters.userId.trim());
-      if (filters.action.trim()) params.set('action', filters.action.trim());
-      if (filters.resourceType.trim()) params.set('resourceType', filters.resourceType.trim());
-      const res = await fetch(`/api/org/audit/export?${params.toString()}`, { credentials: 'include' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || formatUiMessage('audit-log-viewer.audit-export-failed-value0.7234f86e58', { value0: res.status }));
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `audit-export-${Date.now()}.csv`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
-      setFeedback({ type: 'success', text: uiMessage('audit-log-viewer.audit-csv-exported.e2579c1ff2') });
-    } catch (err: any) {
-      setFeedback({ type: 'error', text: err.message || String(err) });
-    }
+  const handleExport = () => {
+    setMessage('');
+    return run('export', async signal => {
+      const response = await apiFetch('/api/org/audit/export?' + paramsFor(filters), { signal });
+      if (!response.ok) throw new Error('Audit export failed: HTTP ' + response.status);
+      const blob = await response.blob();
+      return () => {
+        const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+        anchor.href = url; anchor.download = `audit-export-${Date.now()}.csv`;
+        document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+        setMessage(uiMessage('audit-log-viewer.audit-csv-exported.e2579c1ff2'));
+      };
+    }, 60_000);
   };
 
   const parseDetails = (details: string): Record<string, any> => {
@@ -135,6 +105,7 @@ export function AuditLogViewer() {
               </button>
               <button
                 onClick={handleExport}
+                disabled={Boolean(busy)}
                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white"
               >
                 <Download size={14} />

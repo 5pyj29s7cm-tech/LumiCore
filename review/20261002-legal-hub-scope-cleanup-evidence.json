@@ -1,0 +1,178 @@
+{
+  "batch": "prune44",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree including uncommitted prune35–43; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2363,
+      "after": 2322,
+      "delta": -41,
+      "beforeSha256": "863add5217125f6b153c82d388ecc651533d958b380666d824606a13d5369bc3",
+      "afterSha256": "20e70d44c99a37716e8036ab12a8ed942825b087011bfe6e2019b50587403617"
+    },
+    {
+      "file": "src/components/org/LegalBidWorkbench.tsx",
+      "before": 158,
+      "after": 157,
+      "delta": -1,
+      "beforeSha256": "fe231b69f5dd2c7508d2a8c37cb34c4083fdd23c0fcb1ff76b4b6cb053466cb3",
+      "afterSha256": "99185c44ad442a737e39c733b0c259cb933c58dbc2039902ac87d4bacc55a84d"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 69,
+      "after": 108,
+      "delta": 39,
+      "beforeSha256": "23590e4bc807079860e895f460b4a00d70589c3a152033ae050ccf3791f649a7",
+      "afterSha256": "4b2afbc11105db2521e8b71d4e219c0ce9db7d5f872f8f68436adbe222d03a1a"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366562
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160217
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526779
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366520
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160256
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526776
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -42
+      },
+      "tests": {
+        "files": 0,
+        "lines": 39
+      },
+      "total": {
+        "files": 0,
+        "lines": -3
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 16,
+    "failed": 6,
+    "failures": [
+      {
+        "name": "isolates the actual legal hub and late writes on organization",
+        "firstFailure": "AssertionError: expected <h2 …(1)></h2> to be null"
+      },
+      {
+        "name": "isolates the actual legal hub and late writes on account",
+        "firstFailure": "AssertionError: expected <h2 …(1)></h2> to be null"
+      },
+      {
+        "name": "isolates the actual legal hub and late writes on domain",
+        "firstFailure": "AssertionError: expected [ <p …(1)></p>, …(3) ] to have a length of +0 but got 4"
+      },
+      {
+        "name": "isolates the actual legal hub and late writes on disconnect",
+        "firstFailure": "AssertionError: expected [ <p …(1)></p>, …(3) ] to have a length of +0 but got 4"
+      },
+      {
+        "name": "isolates the actual legal hub and late writes on close",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "uses only the latest organization refresh, preserves edits from older reads, and releases listeners",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      }
+    ],
+    "method": "Identical final tests against an isolated turn-start LegalHub copy; original 15 workbench cases retained as controls. Six failing cases are not six independent bugs."
+  },
+  "focused": {
+    "testFiles": 9,
+    "passed": 95,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T10:23:23.593Z",
+      "finishedAt": "2026-10-02T10:23:27.739Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T10:23:27.740Z",
+      "finishedAt": "2026-10-02T10:23:55.163Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T10:23:55.164Z",
+      "finishedAt": "2026-10-02T10:24:02.900Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T10:24:02.900Z",
+      "finishedAt": "2026-10-02T10:24:10.686Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T10:24:10.686Z",
+      "finishedAt": "2026-10-02T10:24:11.025Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through43BaselinesMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "preserved": [
+    "Original case storage keys, stage labels, tool navigation order, request payloads and backend permissions.",
+    "Personal list/selection repair shared between initial load, local events and storage events; no API call in personal-list synchronization.",
+    "Only current organization refresh may change list/loading/errors; writes and notifications from a closed scope are suppressed.",
+    "An organization connection change does not clear personal draft state; language refresh retains the active scope."
+  ],
+  "limitations": [
+    "Component tests use mocked transport and synthetic case records; backend regression tests use isolated HTTP/database fixtures. No native-client or real-model acceptance.",
+    "No full-suite rerun or backend rebuild in this frontend-only batch.",
+    "Frontend abort does not roll back server writes. Rapid same-case optimistic edits can still finish out of order; this is not a full write-consistency fix.",
+    "Legacy personal-case storage is not separated by account. Storage format and real user data were not migrated.",
+    "Embedded case tool panels still have repeated reset/request state and require case-switch ownership checks.",
+    "No client restart, commit or push."
+  ],
+  "nextCandidates": [
+    "Consolidate repeated document-generation lifecycle in litigation packet, external research and strategy panels using the existing shared hook.",
+    "Cross-entry local-model endpoint persistence remains open from prune42."
+  ]
+}

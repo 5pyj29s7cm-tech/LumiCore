@@ -14,6 +14,7 @@ import {
 } from '../server/conversation/action_ledger';
 import { evaluateCapabilityRollout } from '../server/cognition/capability_rollout';
 import type { ToolExecutionRecord } from '../server/tools/types';
+import { extractSourceExpression } from './source_expression';
 
 function verifiedRecord(plan: ReturnType<typeof buildScheduledTaskExecutionPlan>): ToolExecutionRecord {
   const node = plan.nodes.find(candidate => candidate.toolName === 'scheduler_task_handler')!;
@@ -44,6 +45,44 @@ function verifiedRecord(plan: ReturnType<typeof buildScheduledTaskExecutionPlan>
 }
 
 describe('scheduler capability execution protocol', () => {
+  it.each([
+    ['weekly', 'every_7d', 7, 400, 10, 0.95, 'week_2026-10-02'],
+    ['monthly', '1 0 1 * *', 30, 600, 15, 0.97, 'month_2026-10'],
+    ['yearly', '0 0 1 1 *', 365, 800, 20, 1, 'year_2026'],
+  ] as const)('keeps %s review scope, budgets, metadata and per-user failure isolation', async (depth, cron, days, maxTokens, topicLimit, importance, keyword) => {
+    const now = Date.parse('2026-10-02T10:00:00Z'), cutoff = now - days * 86400000;
+    class Clock extends Date { constructor(value: any = now) { super(value); } static now() { return now; } }
+    const tasks: any[] = [], prompts: any[] = [], calls: any[] = [], saved: any[] = [];
+    const rows = [{}, { createdAt: new Date(cutoff - 1).toISOString(), type: 'preference' }, { domain: 'work' }, { orgId: 'organization' }, { userId: 'other' }, { avatarId: 'private' }]
+      .map(override => ({ userId: 'owner', createdAt: new Date(cutoff).toISOString(), type: 'fact', keywords: Array.from({ length: 25 }, (_, i) => `topic-${i}`), ...override }));
+    const getters = Array.from({ length: 12 }, () => () => null);
+    const register = extractSourceExpression('server/scheduler.ts', 'registerScheduledTasks', {
+      scheduler: { register: (task: any) => tasks.push(task) }, createReminderCheckTask: () => ({ id: 'reminder-fixture' }), Date: Clock,
+      resolveScheduledUserIds: () => ['failed', 'owner', 'no-config', 'empty'],
+      readDB: () => ({ memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] }),
+      personalityRegistry: { getForUser: (_: string, uid: string) => uid === 'no-config' ? null : { name: uid, version: '3' }, getEvolutionHistory: () => [{ timestamp: new Date(cutoff).toISOString() }, { timestamp: new Date(cutoff - 1).toISOString() }] },
+      isMemoryAvatarScoped: (row: any) => Boolean(row.avatarId), loadEmotionalState: () => ({ connection: 0.8 }),
+      generateReviewPrompt: (context: any) => { prompts.push(context); return context.personalityName; },
+      getUserPreferredLLMConfig: (userId: string, options: any) => ({ userId, ...options }),
+      makeLLMCall: async (_messages: any, _tools: any, config: any, ...actualGetters: any[]) => {
+        expect(actualGetters).toEqual(getters); calls.push(config);
+        if (config.userId === 'failed') throw new Error('synthetic provider failure');
+        return { text: config.userId === 'empty' ? '   ' : '  Review narrative.  ' };
+      },
+      require: (name: string) => { expect(name).toBe('./memory'); return { addMemory: (...args: any[]) => saved.push(args) }; },
+      console: { log: () => {}, error: () => {} }, redactSchedulerDiagnostic: String,
+    });
+    register(...getters);
+    const task = tasks.find(candidate => candidate.id === `${depth}_review`);
+    expect(task).toMatchObject({ cron, quiet: true, lastRun: null, executionClass: 'maintenance' });
+    expect(await task.handler()).toBe('[owner] Review narrative.');
+    expect(calls.map(call => call.userId)).toEqual(['failed', 'owner', 'empty']);
+    expect(calls.every(call => call.maxTokens === maxTokens && call.domain === 'personal' && call.orgId === '' && call.source === `scheduler_${depth}_review`)).toBe(true);
+    expect(prompts.find(context => context.personalityName === 'owner')).toMatchObject({ depth, newMemoryCount: 1, newInteractionCount: 2, totalFacts: 1, totalPreferences: 1, activeConversations: 1, topMemoryTopics: rows[0].keywords.slice(0, topicLimit), evolutionSteps: [{ timestamp: new Date(cutoff).toISOString() }] });
+    expect(saved).toEqual([[expect.objectContaining({ userId: 'owner', type: 'knowledge', content: `[${depth[0].toUpperCase() + depth.slice(1)} Review 2026-10-02] Review narrative.`, keywords: [`${depth}_review`, keyword], sourceInteractionId: `${depth}_review_scheduler` }),
+      { tier: 'growth', perspective: 'lumi_self', importance, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' }]]);
+  });
+
   it('runs proactive/background work only for registered users', () => {
     const db = {
       users: [

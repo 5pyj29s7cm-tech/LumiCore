@@ -7,6 +7,7 @@ import {
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
 import {
   guardTaskTargetToolCall,
+  parseTaskTargetJson,
   type AcceptedTaskTarget,
   type TaskTargetToolCallGuardResult,
 } from '../conversation/task_target_anchor';
@@ -54,21 +55,9 @@ export function isWpsCreateAndTypeTask(text: string, appTarget = ''): boolean {
   return isWpsCreateTask(text, appTarget) && WRITE_INTENT_RE.test(primaryTurnText(text));
 }
 
-function parseNestedJson(value: unknown): unknown {
-  let parsed = value;
-  for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth += 1) {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      break;
-    }
-  }
-  return parsed;
-}
-
 function recordFailed(record: ToolExecutionRecord): boolean {
   if (record.error || !String(record.result || '').trim()) return true;
-  const payload = parseNestedJson(record.result) as any;
+  const payload = parseTaskTargetJson(record.result) as any;
   const status = String(payload?.status || payload?.verification?.status || '').trim().toLowerCase();
   return payload?.ok === false
     || payload?.success === false
@@ -108,7 +97,7 @@ function nodeLooksLikeEditor(node: unknown): boolean {
 
 function snapshotShowsEditor(record: ToolExecutionRecord): boolean {
   if (record.name !== 'desktop_ui_snapshot' || recordFailed(record)) return false;
-  const parsed = parseNestedJson(record.result);
+  const parsed = parseTaskTargetJson(record.result);
   if (nodeLooksLikeEditor(parsed)) return true;
   const text = String(record.result || '');
   return /"(?:controlType|role|type)"\s*:\s*"Document"/i.test(text)
@@ -118,7 +107,7 @@ function snapshotShowsEditor(record: ToolExecutionRecord): boolean {
 function isCreateAction(record: ToolExecutionRecord): boolean {
   if (recordFailed(record)) return false;
   if (record.name === WPS_CREATE_DOCUMENT_TOOL) {
-    const payload = parseNestedJson(record.result) as any;
+    const payload = parseTaskTargetJson(record.result) as any;
     return payload?.status === 'verified'
       && payload?.documentCreated === true
       && payload?.exactTextMatch === true;
@@ -133,7 +122,7 @@ function isCreateAction(record: ToolExecutionRecord): boolean {
 function hasVerifiedWpsAutomation(records: ToolExecutionRecord[]): boolean {
   return records.some(record => {
     if (record.name !== WPS_CREATE_DOCUMENT_TOOL || recordFailed(record)) return false;
-    const payload = parseNestedJson(record.result) as any;
+    const payload = parseTaskTargetJson(record.result) as any;
     return payload?.ok === true
       && payload?.status === 'verified'
       && payload?.automation === 'KWPS.Application'

@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import { canonicalizeBranchSyncValue as canonicalize, branchSyncDigest as digest } from './branch_protocol';
+import type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt } from './branch_protocol';
+export type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt } from './branch_protocol';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
 import { authorizeOrganizationDevice, registerOrganizationDevice } from './resource_acl';
 
@@ -50,40 +53,6 @@ async function commitBranchSync(
 }
 
 type BranchSyncKind = 'memory' | 'interaction';
-
-export interface BranchSyncPayload {
-  orgId: string;
-  branchId: string;
-  batchId: string;
-  memories?: unknown[];
-  interactions?: unknown[];
-}
-
-export interface BranchSyncItemReceipt {
-  kind: BranchSyncKind;
-  sourceId: string;
-  targetId: string;
-  digest: string;
-  outcome: 'inserted' | 'updated' | 'unchanged';
-}
-
-export interface BranchSyncReceipt {
-  version: 1;
-  receiptId: string;
-  orgId: string;
-  branchId: string;
-  batchId: string;
-  payloadDigest: string;
-  verified: true;
-  accepted: number;
-  inserted: number;
-  updated: number;
-  unchanged: number;
-  rejected: number;
-  replayed: boolean;
-  items: BranchSyncItemReceipt[];
-  persistedAt: string;
-}
 
 interface BranchSyncLedgerItem {
   digest: string;
@@ -146,21 +115,6 @@ function validateStableId(value: unknown, field: string): string {
     throw new BranchSyncValidationError(`${field} contains unsupported characters`);
   }
   return id;
-}
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!isObject(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .filter(key => !key.startsWith('_synced'))
-      .sort()
-      .map(key => [key, canonicalize(value[key])]),
-  );
-}
-
-function digest(value: unknown): string {
-  return crypto.createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 }
 
 function targetId(branchId: string, kind: BranchSyncKind, sourceId: string): string {

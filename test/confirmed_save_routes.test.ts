@@ -39,6 +39,20 @@ describe('save responses wait for durable persistence', () => {
     } finally { flush.mockRestore(); }
   });
   afterAll(() => app.cleanup());
+  it('persists contact form fields without replacing notes, ownership or the interaction timestamp', async () => {
+    const request = async (method: string, path = '', body?: unknown) => {
+      const response = await fetch(`${app.url}/api/contacts${path}`, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });
+      expect(response.status).toBe(200); return response.json();
+    };
+    const fields = { name: 'Contact fields', phone: '12345', email: 'synthetic@example.invalid', company: 'Synthetic company', notes: 'Original notes', tags: ['known'] };
+    const created = await request('POST', '', fields); expect(created).toMatchObject(fields);
+    const updated = await request('PUT', `/${created.id}`, { phone: '', company: 'New company', userId: 'wrong-owner' });
+    expect(updated).toMatchObject({ ...fields, phone: '', company: 'New company', userId });
+    const interaction = await request('POST', `/${created.id}/interact`, { note: 'Follow up' });
+    expect(interaction.lastContacted).toBeTruthy(); expect(interaction.notes).toContain('Original notes'); expect(interaction.notes).toContain('Follow up');
+    expect((await request('GET')).contacts.find((item: any) => item.id === created.id)).toEqual(interaction);
+    await request('DELETE', `/${created.id}`); expect((await request('GET')).contacts.some((item: any) => item.id === created.id)).toBe(false);
+  });
   it.each([
     ['/contacts', { name: 'Synthetic contact', relationship: 'friend' }],
     ['/reminders', { content: 'Synthetic reminder', dueAt: '2030-01-01T00:00:00Z' }],

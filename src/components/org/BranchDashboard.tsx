@@ -13,86 +13,66 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { apiJson } from '../../services/apiClient';
+import { useAsyncOperation } from '../../hooks/useAsyncOperation';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
 import { formatUiMessage } from '../../i18n/uiMessages';
 import { getBranchDashboardCopy } from '../../i18n/locales/branchDashboard';
 
 interface DashboardStats {
-  memberCount: number;
-  kbArticleCount: number;
+  memberCount: number | null;
+  kbArticleCount: number | null;
   syncStatus: 'connected' | 'offline';
   lastSync: string | null;
 }
 
 export function BranchDashboard() {
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <Dashboard key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole])} /> : null;
+}
+function Dashboard() {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const copy = useMemo(() => getBranchDashboardCopy(isZh ? 'zh' : 'en'), [isZh]);
   const { orgConnection, workDomain } = useApp();
-  const [stats, setStats] = useState<DashboardStats>({
-    memberCount: 0,
-    kbArticleCount: 0,
-    syncStatus: 'connected',
-    lastSync: null,
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const readArray = useCallback(async (url: string) => {
-    const response = await fetch(url, { credentials: 'include' });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `${url} failed (${response.status})`);
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.articles)) return data.articles;
-    if (Array.isArray(data.members)) return data.members;
-    return [];
-  }, []);
-
-  const loadStats = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const statusResponse = await fetch('/api/org/status', { credentials: 'include' });
-      const status = await statusResponse.json().catch(() => ({}));
-      if (!statusResponse.ok) throw new Error(status.error || copy.statusLoadFailed);
-      let orgId = orgConnection?.orgId || status.orgId || '';
-      if (!orgId) {
-        const organizations = await readArray('/api/org/org');
-        orgId = organizations[0]?.id || organizations[0]?.orgId || '';
-      }
-      const partialErrors: string[] = [];
-      const [members, articles] = await Promise.all([
-        orgId ? readArray(`/api/org/org/${orgId}/members`).catch(cause => { partialErrors.push(cause.message); return []; }) : Promise.resolve([]),
-        readArray('/api/org/kb/articles?status=published').catch(cause => { partialErrors.push(cause.message); return []; }),
-      ]);
-      if (partialErrors.length > 0) setError(copy.partialDataUnavailable);
-      setStats({
-        memberCount: members.length,
-        kbArticleCount: articles.length,
-        syncStatus: status.connected ? 'connected' : 'offline',
-        lastSync: new Date().toISOString(),
-      });
-    } catch (cause: any) {
-      setError(cause?.message || copy.workspaceLoadFailed);
-      setStats(previous => ({ ...previous, syncStatus: 'offline' }));
-    } finally {
-      setLoading(false);
-    }
-  }, [copy.partialDataUnavailable, copy.statusLoadFailed, copy.workspaceLoadFailed, orgConnection?.orgId, readArray]);
-
-  useEffect(() => { void loadStats(); }, [loadStats]);
+  const [stats, setStats] = useState<DashboardStats>({ memberCount: null, kbArticleCount: null, syncStatus: 'offline', lastSync: null });
+  const [partialError, setPartialError] = useState('');
+  const { busy, error: requestError, run, cancel } = useAsyncOperation();
+  const error = requestError || partialError, loading = busy === 'load' || (!stats.lastSync && !error);
+  const loadStats = useCallback(() => run('load', async signal => {
+    const readArray = async (url: string) => {
+      const data = await apiJson(url, { signal }), items = Array.isArray(data) ? data : data?.articles || data?.members;
+      if (!Array.isArray(items)) throw new Error('Invalid organization list response');
+      return items;
+    };
+    const status = await apiJson('/api/org/status', { signal });
+    if (typeof status?.connected !== 'boolean') throw new Error(copy.statusLoadFailed);
+    let orgId = orgConnection?.orgId || status.orgId || '';
+    if (!orgId) orgId = (await readArray('/api/org/org'))[0]?.id || '';
+    const counts = await Promise.allSettled([
+      orgId ? readArray('/api/org/org/' + encodeURIComponent(orgId) + '/members') : Promise.resolve([]),
+      readArray('/api/org/kb/articles?status=published'),
+    ]);
+    return () => {
+      setPartialError(counts.some(value => value.status === 'rejected') ? copy.partialDataUnavailable : '');
+      setStats({ memberCount: counts[0].status === 'fulfilled' ? counts[0].value.length : null,
+        kbArticleCount: counts[1].status === 'fulfilled' ? counts[1].value.length : null,
+        syncStatus: status.connected ? 'connected' : 'offline', lastSync: new Date().toISOString() });
+    };
+  }), [run, orgConnection?.orgId, copy.statusLoadFailed, copy.partialDataUnavailable]);
+  useEffect(() => { void loadStats(); return cancel; }, [loadStats, cancel]);
 
   const cards = useMemo(() => [
     {
       label: t.orgMembers || copy.members,
-      value: stats.memberCount,
+      value: stats.memberCount ?? '—',
       icon: <Users size={18} />,
       tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-400/20',
     },
     {
       label: t.orgKB || copy.knowledgeBase,
-      value: stats.kbArticleCount,
+      value: stats.kbArticleCount ?? '—',
       icon: <BookOpen size={18} />,
       tone: 'text-blue-300 bg-blue-500/10 border-blue-400/20',
     },
@@ -114,9 +94,9 @@ export function BranchDashboard() {
               <p className="max-w-2xl text-sm leading-6 text-white/60">{copy.description}</p>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${stats.syncStatus === 'connected' ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-400/20 bg-amber-500/10 text-amber-300'}`}>
+              {stats.lastSync && <span className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${stats.syncStatus === 'connected' ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-400/20 bg-amber-500/10 text-amber-300'}`}>
                 {stats.syncStatus === 'connected' ? <Wifi size={14} /> : <WifiOff size={14} />}{stats.syncStatus === 'connected' ? copy.connected : copy.offline}
-              </span>
+              </span>}
               <button onClick={() => void loadStats()} disabled={loading} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-50" aria-label={copy.refresh}><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
             </div>
           </div>

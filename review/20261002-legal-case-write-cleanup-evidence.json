@@ -1,0 +1,226 @@
+{
+  "batch": "prune48",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune47, including previous uncommitted changes; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2094,
+      "after": 2041,
+      "delta": -53,
+      "beforeSha256": "dddb189cf6ca966afd12426f4d34dcb6a72b54c7fe46817ae8aaa17f8d144b9f",
+      "afterSha256": "db7df83cfd2411ffaf5fd714356dd7850262f2d2fc15ee78587f0bbf493312c7"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 225,
+      "after": 268,
+      "delta": 43,
+      "beforeSha256": "854838e57c0864486c6b5988b933b13d5b0f69178557250c5917b5ee9e963e7b",
+      "afterSha256": "207ce9d4caa1e4e35c10596c4bc0d3f1523f4afdfbb1b2d0b63e7222d1a40469"
+    },
+    {
+      "file": "test/org_workspace_information_architecture.test.ts",
+      "before": 119,
+      "after": 118,
+      "delta": -1,
+      "beforeSha256": "ba5edc4d90b92e63967a6b5521fe9d157c101de436056f7b11cd70ef2aa6ada8",
+      "afterSha256": "89978de2ad083685d3b708472184677b53e138c1c90312b403f1cde0db0bf87e"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366292
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160372
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526664
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366239
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160414
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526653
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -53
+      },
+      "tests": {
+        "files": 0,
+        "lines": 42
+      },
+      "total": {
+        "files": 0,
+        "lines": -11
+      }
+    },
+    "combinedPrune44Through48": {
+      "source": {
+        "files": 0,
+        "lines": -323
+      },
+      "tests": {
+        "files": 0,
+        "lines": 197
+      },
+      "total": {
+        "files": 0,
+        "lines": -126
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 56,
+    "failed": 9,
+    "failures": [
+      {
+        "name": "orders rapid edits, protects newer input and rolls back only failed writes (first fails: false)",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "orders rapid edits, protects newer input and rolls back only failed writes (first fails: true)",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "never sends queued case writes after organization changes",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "never sends queued case writes after account changes",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "never sends queued case writes after close changes",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "keeps server material IDs and does not show an archive until its write is confirmed",
+        "firstFailure": "AssertionError: expected { id: 'mat_1790941509174_65dy', …(5) } to not have property \"id\""
+      },
+      {
+        "name": "orders create after edits without losing another case selection or saved fields",
+        "firstFailure": "AssertionError: expected [ [ '/api/org/legal/cases', …(1) ] ] to have a length of +0 but got 1"
+      },
+      {
+        "name": "orders delete after edits without losing another case selection or saved fields",
+        "firstFailure": "AssertionError: expected [ [ …(2) ] ] to have a length of +0 but got 1"
+      },
+      {
+        "name": "rejects an empty successful response, restores the saved field and allows the next write",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called at least once"
+      }
+    ],
+    "method": "Identical final component tests against isolated turn-start LegalHub. Nine parameterized failures are not nine separate defects."
+  },
+  "focused": {
+    "testFiles": 10,
+    "passed": 142,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/organization_resource_acl_routes.test.ts"
+    ]
+  },
+  "parity": {
+    "readinessCasesCompared": 16387,
+    "readinessRowsCompared": 163870,
+    "navigationEntries": 12,
+    "workflowOrder": [
+      "workspace",
+      "import",
+      "external-research",
+      "case-search",
+      "asset-trace",
+      "contract-review",
+      "strategy",
+      "packet",
+      "verify",
+      "knowledge-sync"
+    ],
+    "result": "identical"
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T11:43:58.290Z",
+      "finishedAt": "2026-10-02T11:44:05.338Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T11:44:05.340Z",
+      "finishedAt": "2026-10-02T11:44:37.399Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T11:44:37.400Z",
+      "finishedAt": "2026-10-02T11:44:45.777Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T11:44:45.778Z",
+      "finishedAt": "2026-10-02T11:44:54.256Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T11:44:54.257Z",
+      "finishedAt": "2026-10-02T11:44:54.597Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through47LatestFingerprintsMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "changes": [
+    "Organization create/update/delete/material writes now use one scope-owned serial queue and server-confirmed case snapshot. Pending field edits merge into the current UI state, and failed patches are discarded after the queue drains.",
+    "Older list reads are aborted by writes. Refresh waits for the queued writes before reading; queued operations check their original owner signal before sending.",
+    "Create/delete no longer rebuild the organization list from a captured render snapshot. Personal create/delete read the latest local store. Organization material records use the server result instead of synthetic frontend IDs and optimistic append/rollback.",
+    "Empty successful mutation responses are rejected. Material persistence is reflected in the list only after confirmation.",
+    "Removed duplicate workflow-order declaration/sorting and separate readiness done flags. Readiness text is assembled once instead of up to eleven repeated assemblies. Existing labels, predicates, statuses, navigation order and actions remain equivalent.",
+    "Updated old mocked mutation responses to match real route return shapes, and removed one source-string DELETE assertion now covered by actual component request-order and deletion assertions."
+  ],
+  "preserved": [
+    "Original organization HTTP routes, request authorization and ACL, case IDs, local persistence schema and tool behavior.",
+    "Immediate field typing feedback; accepted patches retain typed whitespace until refresh.",
+    "Unrelated reminder/plan requests remain outside the case-write queue.",
+    "All earlier uncommitted changes and real user data."
+  ],
+  "limitations": [
+    "Queue is scoped to one mounted LegalHub. This is not a cross-client lock, database transaction or rollback of server writes. A failed/aborted response can occur after a server write.",
+    "Keystroke writes are ordered but not debounced or coalesced; this batch does not claim reduced API volume or lower model latency.",
+    "Component HTTP is mocked; backend permission/database regressions use isolated data. No real model invocation, native-client UI acceptance or full-suite rerun. Frontend-only edits did not require another backend build.",
+    "Material callback consumers that ignore persistence results, legacy personal data account isolation, multi-entry model endpoint persistence and remaining program zones are still open.",
+    "No commit, push or client restart."
+  ]
+}

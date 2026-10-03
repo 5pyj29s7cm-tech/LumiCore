@@ -1,0 +1,231 @@
+{
+  "batch": "prune47",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune46, including earlier uncommitted batches; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2150,
+      "after": 2094,
+      "delta": -56,
+      "beforeSha256": "90e04fea06bc69e9d17ca6d24f914374eb4cf48b9855a381ba2a2c8572177a52",
+      "afterSha256": "dddb189cf6ca966afd12426f4d34dcb6a72b54c7fe46817ae8aaa17f8d144b9f"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 179,
+      "after": 225,
+      "delta": 46,
+      "beforeSha256": "ad8f6d1fbd2b076cd49ef3ce74f1836a469dc126008a41dca4bb8ee56fd14f31",
+      "afterSha256": "854838e57c0864486c6b5988b933b13d5b0f69178557250c5917b5ee9e963e7b"
+    },
+    {
+      "file": "test/legal_semiauto_workflows.test.ts",
+      "before": 1623,
+      "after": 1622,
+      "delta": -1,
+      "beforeSha256": "3675e29af6726ca6de4de3acdabd372d52e79fe65add67a585db57dc868fa914",
+      "afterSha256": "569488a31de8b329c8247266a17ecf78c6d8434c0213abcfdf9661a10fe561db"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366348
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160327
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526675
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366292
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160372
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526664
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -56
+      },
+      "tests": {
+        "files": 0,
+        "lines": 45
+      },
+      "total": {
+        "files": 0,
+        "lines": -11
+      }
+    },
+    "combinedPrune44Through47": {
+      "source": {
+        "files": 0,
+        "lines": -270
+      },
+      "tests": {
+        "files": 0,
+        "lines": 155
+      },
+      "total": {
+        "files": 0,
+        "lines": -115
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 42,
+    "failed": 14,
+    "failures": [
+      {
+        "name": "engagement-letter workspace action serializes document actions, archives one personal result, and preserves prior material on failure",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "engagement-letter workspace action drops old results on case change and close while preserving the case search filter",
+        "firstFailure": "AssertionError: expected [ [ 'Case A', 2 ] ] to deeply equal [ [ 'Case B', 1 ] ]"
+      },
+      {
+        "name": "engagement-letter workspace action retains organization request details and avoids duplicating backend archives",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "reasoning-matrix workspace action serializes document actions, archives one personal result, and preserves prior material on failure",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "reasoning-matrix workspace action drops old results on case change and close while preserving the case search filter",
+        "firstFailure": "AssertionError: expected [ [ 'Case A', 2 ] ] to deeply equal [ [ 'Case B', 1 ] ]"
+      },
+      {
+        "name": "reasoning-matrix workspace action retains organization request details and avoids duplicating backend archives",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "delivery-gate workspace action serializes document actions, archives one personal result, and preserves prior material on failure",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "delivery-gate workspace action drops old results on case change and close while preserving the case search filter",
+        "firstFailure": "AssertionError: expected [ [ 'Case A', 2 ] ] to deeply equal [ [ 'Case B', 1 ] ]"
+      },
+      {
+        "name": "delivery-gate workspace action retains organization request details and avoids duplicating backend archives",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "notice extraction preserves parsed fields and source material together without duplicate clicks",
+        "firstFailure": "AssertionError: expected { Object (id, title, ...) } to match object { caseNumber: '(2026)测试民初1号', …(3) }"
+      },
+      {
+        "name": "stops notice processing when fields persistence fails",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "stops notice processing when material persistence fails",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "waits for source-material persistence and displays browser handoff without inventing download completion",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "name": "does not continue an old notice workflow after changing cases during field persistence",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      }
+    ],
+    "method": "Identical final component tests against an isolated turn-start LegalHub copy; other dependencies use current working tree. Fourteen parameterized failures do not mean fourteen independent bugs."
+  },
+  "focused": {
+    "testFiles": 10,
+    "passed": 133,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/organization_resource_acl_routes.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T11:14:37.210Z",
+      "finishedAt": "2026-10-02T11:14:43.929Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T11:14:43.932Z",
+      "finishedAt": "2026-10-02T11:15:16.329Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T11:15:16.329Z",
+      "finishedAt": "2026-10-02T11:15:25.017Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T11:15:25.018Z",
+      "finishedAt": "2026-10-02T11:15:33.700Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T11:15:33.701Z",
+      "finishedAt": "2026-10-02T11:15:34.093Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through46LatestFingerprintsMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "changes": [
+    "Four workspace request paths reuse useLegalDocument and a shared tool-result/archive operation; removed separate busy enums, completion strings and duplicated catch/finally logic.",
+    "Case identity changes reset workspace request, draft and selected material state; list search stays in the parent scope.",
+    "Personal updates/material appends reuse existing legalCaseStore functions so notice extraction no longer overwrites just-saved fields with a stale UI snapshot.",
+    "Notice preprocessing awaits field and source-material persistence; errors or case changes prevent the next tool call.",
+    "Organization tool results retain backend receipt-confirmed case archives without duplicate material POSTs. Personal results retain local case storage.",
+    "Workspace displays actual tool output (including authorized browser handoff) instead of unconditional fixed completion text.",
+    "Text/date input templates and three create-dialog fields share CaseField; the obsolete direct-call source-string assertion was removed in favor of actual component/API assertions."
+  ],
+  "preserved": [
+    "Tool endpoints, organization/case IDs, legal tool permission enforcement and backend persistence implementations.",
+    "Notice confirmedForKb=false, includeExtractedText=true, extractedTextLimit=8000, message and notice text.",
+    "Delivery content limit=24000, includeDocx=true, includePdf=false; reasoning writeFiles=true; engagement evidence and profile inputs.",
+    "Existing individual operation groups: notice and document actions use separate locks, with all document buttons disabled while a document action is active.",
+    "Personal storage schema and real user data untouched."
+  ],
+  "limitations": [
+    "Mocked component transport and synthetic case records, plus isolated backend HTTP/database regressions. No native-client acceptance, screenshot comparison or real-model invocation.",
+    "No full-suite rerun or backend rebuild for this frontend-only batch.",
+    "Frontend cancellation cannot roll back backend writes. A field save already sent remains owned by the parent hub; the cancelled workspace blocks subsequent material/tool steps.",
+    "Same-organization rapid optimistic field writes still need ordering and rollback work; this change confirms notice steps but does not make the whole case write transaction atomic.",
+    "Legacy personal storage account isolation, remaining material consumers that ignore persistence results, and cross-entry model-endpoint persistence remain open.",
+    "No commit, push or client restart."
+  ]
+}

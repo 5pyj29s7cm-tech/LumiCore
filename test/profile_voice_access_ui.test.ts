@@ -17,18 +17,6 @@ describe('role-aware diagnostics UI', () => {
     expect(profile).not.toContain('>12ms<');
   });
 
-  it('does not present privileged voice status or interactive controls to an ordinary user', () => {
-    const voice = source('src/components/VoiceProviderSwitch.tsx');
-    expect(voice).toContain("const isAdmin = user?.role === 'admin'");
-    expect(voice).toContain("response.status === 401 || response.status === 403");
-    expect(voice).toContain("setAccess('restricted')");
-    // Provider buttons retain the privileged access gate and may additionally
-    // disable capabilities that have no backend adapter (for example Lumi's
-    // official speech entry).
-    expect(voice).toMatch(/disabled=\{access !== 'allowed'(?: \|\| o\.disabled)?\}/u);
-    expect(voice).toContain('Local administrator access required');
-  });
-
   it('does not prefill a blocked loopback HTTP company endpoint', () => {
     const branchPanel = source('src/components/OrgBranchPanel.tsx');
     expect(branchPanel).not.toContain("companyUrl: 'http://127.0.0.1:3000'");

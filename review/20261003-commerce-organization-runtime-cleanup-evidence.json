@@ -1,0 +1,485 @@
+{
+  "batch": "prune74",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/EcommerceHub.tsx",
+      "before": 744,
+      "after": 734,
+      "delta": -10,
+      "beforeSha256": "5250b08801f400c4f774d9e7f91cc2752e1e3623f1f33c9c68e39e9f19bde72c",
+      "afterSha256": "9cd2a9c199d6a04d5524df38b6a262b114032904fe17c4dbc83dd8245aae445c"
+    },
+    {
+      "file": "src/components/EcommerceAutomationWorkspace.tsx",
+      "before": 487,
+      "after": 491,
+      "delta": 4,
+      "beforeSha256": "ab33fff9ffa1163e86baeb46722421c355bc39dff8d4fc8896ab3e66ce5d58fb",
+      "afterSha256": "57657d1e79cc1dbf9e0d09a12882a6972080c61bbc979e78a1cec6bdc01f49e4"
+    },
+    {
+      "file": "src/components/BusinessWorkbench.tsx",
+      "before": 138,
+      "after": 143,
+      "delta": 5,
+      "beforeSha256": "b80fb063c0cc6485cc6eadf28c48ab901b29c661c40b62a2f53abdfd308c541a",
+      "afterSha256": "972383ec3f1a6a9de11f1843c237d6e7319b4cdfe21cfc5d9b576207f289abd1"
+    },
+    {
+      "file": "src/lib/industryWorkflowClient.ts",
+      "before": 183,
+      "after": 183,
+      "delta": 0,
+      "beforeSha256": "7e19b039f4504d7f31a22124472b9bde2d7e97be3db20553a666ee48b3419cd1",
+      "afterSha256": "272fb9fcc8638ef48a19f3471346ef2b54efbe3f2bb547c73ca5891e284ea9b3"
+    },
+    {
+      "file": "src/lib/appConfirm.ts",
+      "before": 72,
+      "after": 110,
+      "delta": 38,
+      "beforeSha256": "43f485d801a237ff74808a09b4f56ba2ac461540676599b12becf27a38c6b98e",
+      "afterSha256": "7201442677aeba9b457551619a47d3447065afd9b348542e3168d9e80d7d0ba5"
+    },
+    {
+      "file": "src/components/org/OrgSettings.tsx",
+      "before": 280,
+      "after": 230,
+      "delta": -50,
+      "beforeSha256": "e0fd43cdebeae95db7fa48f91af9468406efd0127e86baad74e6aa7c89a363ba",
+      "afterSha256": "043c380298a5595a11a16c971d2a19de346293f5a9a3d226b76012ce9c4d59a5"
+    },
+    {
+      "file": "src/components/org/OrgMembers.tsx",
+      "before": 207,
+      "after": 208,
+      "delta": 1,
+      "beforeSha256": "5c681f184d43e68380500a87697816741c0a43bc416428742c31883807946354",
+      "afterSha256": "0ad341dbdba1353d76f994b8e158d75a78d28ddd4308efff87aab3b780c4bbf1"
+    },
+    {
+      "file": "src/components/OrgBranchPanel.tsx",
+      "before": 270,
+      "after": 192,
+      "delta": -78,
+      "beforeSha256": "1153612ab74cdf9ec8f48da9097c8d471c94a9ee26fd577a1f5d828b196477d0",
+      "afterSha256": "67611d946614f387e734a7a414245baf8e2f05f80216c075492dec0cb8e8b028"
+    },
+    {
+      "file": "src/components/org/OrganizationSettingsWorkspace.tsx",
+      "before": 56,
+      "after": 54,
+      "delta": -2,
+      "beforeSha256": "8cfc260002cc58b6458c39cfd9af48cdbdb9b151c264b25c028bd1a077e38450",
+      "afterSha256": "6a053cd7866858d3a3f081600110d463e6cae526d391c0c4c44dbe09c39c0ed0"
+    },
+    {
+      "file": "src/components/org/AuditLogViewer.tsx",
+      "before": 250,
+      "after": 228,
+      "delta": -22,
+      "beforeSha256": "7c47050a4424df5e4cde017a9b313f41b68066b7492669016a6626e47391b188",
+      "afterSha256": "4d3f9a9949e939ad804e0493bc112f08cca3b853e836fc58c8865cd243c76f98"
+    },
+    {
+      "file": "src/components/org/BranchDashboard.tsx",
+      "before": 156,
+      "after": 136,
+      "delta": -20,
+      "beforeSha256": "e3089eef2d641b04d4b6409ae6cc3cf2588a926cf6f0e8bcad08f559903e3065",
+      "afterSha256": "e73f5f70c5e3ab0fd3b1f2e4ffd2cb05b7d0a521be347b701b53bdccfa23e6f8"
+    },
+    {
+      "file": "src/components/org/JoinOrgPage.tsx",
+      "before": 148,
+      "after": 114,
+      "delta": -34,
+      "beforeSha256": "44a67ad2ec828300d3daaf57cefaa1e9874e6f8dbc838b05b0911b45648dc7d5",
+      "afterSha256": "080f1dafd175be0c5947ab57fd703129573092ade16e5e55eb635d13fcb15aad"
+    },
+    {
+      "file": "src/contexts/AppContext.tsx",
+      "before": 774,
+      "after": 766,
+      "delta": -8,
+      "beforeSha256": "61fe6d61483e3c11e726645307c4fcbbec76fdeef42f6a279cdd044e2b0dce37",
+      "afterSha256": "979c0b047b531ee83bf65487a95d08efe40a7c7e1014904a594ed42b9a0f2a4a"
+    },
+    {
+      "file": "src/hooks/useAsyncOperation.ts",
+      "before": 0,
+      "after": 42,
+      "delta": 42,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "aece1b76da8294b6b533e13511279701b8ffc3cede1044792766c7aefda2d21b"
+    },
+    {
+      "file": "src/components/EcommerceHub.test.tsx",
+      "before": 0,
+      "after": 50,
+      "delta": 50,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "63875fd8fa7764a28350b88374b7e6aa190acedabbc3554aefb6349c0a92a247"
+    },
+    {
+      "file": "src/lib/appConfirm.test.tsx",
+      "before": 0,
+      "after": 46,
+      "delta": 46,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "783ecd50c2b838f4243652169b466dd87635a0f6676c536d8cec13ac78afdae6"
+    },
+    {
+      "file": "src/components/org/OrganizationSettings.test.tsx",
+      "before": 0,
+      "after": 66,
+      "delta": 66,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "41993d735b693abfe0faa5f90b1129f9928adf214847ae469e33a1c139dce604"
+    },
+    {
+      "file": "src/components/AgentChatPage.tsx",
+      "before": 4909,
+      "after": 4910,
+      "delta": 1,
+      "beforeSha256": "a1b7090051a3c55c79440e8ca8badcf996f3bcd7b48b9fdd8f000fe1fbf118a2",
+      "afterSha256": "e2a79e42d54fa54cd19d60b70acf94587f2e9fe58eedf79decf29e3fa25be889"
+    },
+    {
+      "file": "src/components/KnowledgeBase.tsx",
+      "before": 921,
+      "after": 922,
+      "delta": 1,
+      "beforeSha256": "cb95bcd0f86dee40fcc8347e634afa2fa1f82cbd2880a0e11f2c0e470e9aeb01",
+      "afterSha256": "369f582be2436feea497068eed8b451853dab9ee8380b9897baac239645b2db0"
+    },
+    {
+      "file": "src/components/FeishuSettings.tsx",
+      "before": 401,
+      "after": 402,
+      "delta": 1,
+      "beforeSha256": "bce1791bd954f1e9f2b35bae1bad83f318db178a027dc838324834743b4daf73",
+      "afterSha256": "a2157ffef44a1bc55cc17f42ea885d57f62523d8aaabce3377380641774f35ec"
+    },
+    {
+      "file": "src/components/WeComSettings.tsx",
+      "before": 358,
+      "after": 359,
+      "delta": 1,
+      "beforeSha256": "2fc5cf052759cecad6321687a2b6d56ddb60437cee70b8b5770ff1d6d846d9e3",
+      "afterSha256": "e29df65707167bae6bbf07d3e26c2eabf802e42d05c811475ca54893af9e19ab"
+    },
+    {
+      "file": "src/hooks/useAsyncOperation.test.tsx",
+      "before": 0,
+      "after": 53,
+      "delta": 53,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "1acd52f9c99377000cd75531d32c5f29eef8ed279616362e877f3e4a32ff3807"
+    },
+    {
+      "file": "test/domain_switch_lifecycle.test.ts",
+      "before": 0,
+      "after": 38,
+      "delta": 38,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "e967e1356607e8a5d15570827b7029f9e790bd7eedcd0b6a909d90d084aa0059"
+    },
+    {
+      "file": "src/components/BusinessWorkbench.test.tsx",
+      "before": 79,
+      "after": 90,
+      "delta": 11,
+      "beforeSha256": "492c35f2f874a2c4a3129d11b9c29d495adfc3823a1e1c1be9ca7ec36e48a0a5",
+      "afterSha256": "2f760c4578436cea49bb06822e1b4e0af96d5dfa0638f98383499f906cf696a6"
+    },
+    {
+      "file": "src/i18n/locales/ecommerceWorkbench.ts",
+      "before": 228,
+      "after": 228,
+      "delta": 0,
+      "beforeSha256": "79233a87d9aaec14d1370f3d2fca59c0613286d2189f94006ad44012c36a73c8",
+      "afterSha256": "4eccfba2c306895948eb69da6b303ed228eebfa848fec80c5416f60737812744"
+    },
+    {
+      "file": "test/chat_recovery_auth_integration.test.ts",
+      "before": 168,
+      "after": 169,
+      "delta": 1,
+      "beforeSha256": "8d28ecc7ff9330dc0fcab1cb0deb1f2bfe058d258cae71e703f4a3ef99228791",
+      "afterSha256": "9be2dde31cb03ec0c95646f5ac0de1f22792ce2fa12b6e4f3fbf78d841deccd8"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 835,
+      "after": 836,
+      "delta": 1,
+      "beforeSha256": "bbd936e74e91c21613378df335e9fed4d8af9c3bc17c368672b984c09b990576",
+      "afterSha256": "48951416d7e8ac7fd692d8d2e43f9ebe75be6b65ef04108bf067b500bf9ad0ca"
+    },
+    {
+      "file": "server/skills/bundled/weather/package.json",
+      "before": 44,
+      "after": 44,
+      "delta": 0,
+      "beforeSha256": "f2c300765efbfa282260391906c2f38076a2ae43aee111903317e409334ed2cb",
+      "afterSha256": "ca7dd33b315bdec6ef4c6164af8ff250ee5e55c1cc6625644b7573ebbab5ff46"
+    },
+    {
+      "file": "server/skills/bundled/weather/index.ts",
+      "before": 39,
+      "after": 39,
+      "delta": 0,
+      "beforeSha256": "480388cd28acf0c9446c26910899aa63ecd30e99824396fac8c42509af64f8a0",
+      "afterSha256": "265f912b720dc44dd8ecb82114f53680a95ddb2925384e8bd29c9e2f321a803a"
+    },
+    {
+      "file": "server/marketplace/registry.ts",
+      "before": 311,
+      "after": 312,
+      "delta": 1,
+      "beforeSha256": "5e79b414612415ced29eaf2ca1ddc8901abbac139909dd8da8fae87baa7e78a9",
+      "afterSha256": "f63186dce8e360ce454b5bdc8ed8991b79c63e2ab93d981214ef04c87fcccc94"
+    },
+    {
+      "file": "server/marketplace/official_identity.ts",
+      "before": 459,
+      "after": 476,
+      "delta": 17,
+      "beforeSha256": "42072822396154b4045dabf4387decf805eae9c3f843d24f5d0bd81da123761a",
+      "afterSha256": "ef7c7a9e1a8f54e1dc235c047fcb8f1093ae8268a63665cdef37ec37d378d338"
+    },
+    {
+      "file": "test/marketplace_runtime_digest_scope.test.ts",
+      "before": 0,
+      "after": 30,
+      "delta": 30,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "f9f49568b89fee1dea00243788ebdacefb171d22244979362f3c964903734d1b"
+    },
+    {
+      "file": "server/routes/mcp_routes.ts",
+      "before": 278,
+      "after": 280,
+      "delta": 2,
+      "beforeSha256": "af59a0ee99fae64bdb3824cfab764eca4d073d212ad25cb2784a61f95cbf5bdb",
+      "afterSha256": "a7016bf585a3c2aec9bf6a3c5e34aa0881bd06ef94099115fe93404522ffbad9"
+    },
+    {
+      "file": "test/mcp_route_security.test.ts",
+      "before": 516,
+      "after": 529,
+      "delta": 13,
+      "beforeSha256": "389b3ceb25cda67171b5fc5e2b639775711e37182549fc6d364fc98e2c78bc3b",
+      "afterSha256": "a79cdd286d77cc38b03ae2e728e01d9e4ad545b02dca384cc765b2f582e93ca8"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1090,
+        "lines": 364670
+      },
+      "tests": {
+        "files": 747,
+        "lines": 162031
+      },
+      "total": {
+        "files": 1837,
+        "lines": 526701
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1091,
+        "lines": 364560
+      },
+      "tests": {
+        "files": 753,
+        "lines": 162340
+      },
+      "total": {
+        "files": 1844,
+        "lines": 526900
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 1,
+        "lines": -110
+      },
+      "tests": {
+        "files": 6,
+        "lines": 309
+      },
+      "total": {
+        "files": 7,
+        "lines": 199
+      }
+    }
+  },
+  "previousFingerprintsMatched": true,
+  "validation": {
+    "fullRegression": {
+      "files": 742,
+      "passed": 6952,
+      "failed": 0,
+      "skipped": 0,
+      "startedAt": "2026-10-03T13:01:44.961Z",
+      "report": "D:/LumiCore-Work/optimization-20261003/full-tests-final.json",
+      "scope": "Full suite passed before the final runtime-digest and malformed-MCP-name fixes."
+    },
+    "finalRuntimeRegression": {
+      "files": 7,
+      "passed": 82,
+      "failed": 0,
+      "skipped": 0,
+      "startedAt": "2026-10-03T13:28:37.115Z",
+      "report": "D:/LumiCore-Work/optimization-20261003/skill-final.json",
+      "scope": "Latest digest, identity, registry projection, installation, lifecycle and MCP-route code; supplemental to, not a replacement or rerun of, the full suite."
+    },
+    "checks": [
+      {
+        "log": "D:/LumiCore-Work/optimization-20261003/lint-complete.log",
+        "exitCode": 0,
+        "finishedAt": "2026-10-03T13:24:22.741Z"
+      },
+      {
+        "log": "D:/LumiCore-Work/optimization-20261003/build-server-complete.log",
+        "exitCode": 0,
+        "finishedAt": "2026-10-03T13:24:19.569Z"
+      },
+      {
+        "log": "D:/LumiCore-Work/optimization-20261003/build-frontends-complete.log",
+        "exitCode": 0,
+        "finishedAt": "2026-10-03T13:25:02.247Z"
+      },
+      {
+        "log": "D:/LumiCore-Work/optimization-20261003/build-desktop-complete.log",
+        "exitCode": 0,
+        "finishedAt": "2026-10-03T13:25:10.583Z"
+      },
+      {
+        "log": "D:/LumiCore-Work/optimization-20261003/layout-complete.log",
+        "exitCode": 0,
+        "finishedAt": "2026-10-03T13:25:10.889Z"
+      }
+    ],
+    "nativeClientAcceptance": false
+  },
+  "changes": [
+    "Commerce reports, names and mappings share one source bundle; imports and archive requests use one abortable operation owner. In-memory report drafts restore across workbench navigation and are isolated by account, role, domain, organization and store.",
+    "Organization settings, branch connection, audit export, dashboard reads and joining use shared request ownership and explicit response checks. Failed reads remain errors with retry, fields retain drafts after failure, and obsolete responses cannot commit into another scope.",
+    "Confirmation dialogs belong to the initiating view, cancel on navigation/scope disposal, trap keyboard focus and return it when appropriate. Domain transitions are serialized, time-bounded and accept only a matching server-confirmed organization/role/token receipt.",
+    "Read-only skill discovery shares hashes of common runtime files within one synchronous discovery only; installs and execution revalidate outside that scope. Errors discard the snapshot. No persistent integrity cache or trust bypass was introduced.",
+    "A malformed legacy MCP name no longer breaks the entire tool list. Its own public status is invalid_configuration and unusable; valid entries remain accessible. Weather package and server versions now reflect the prior behavior change."
+  ],
+  "runtimeRepair": {
+    "method": "Existing authenticated local acceptance harness and managed bundled install APIs; disabled official old packages only.",
+    "receipts": [
+      {
+        "name": "ecommerce-ops",
+        "fromVersion": "1.3.0",
+        "toVersion": "1.5.2",
+        "removed": true,
+        "installed": true,
+        "usable": true,
+        "toolCount": 9,
+        "registeredToolNames": [
+          "mcp_ecommerce-ops_product_listing_optimizer",
+          "mcp_ecommerce-ops_ecommerce_order_profit",
+          "mcp_ecommerce-ops_inventory_restock_plan",
+          "mcp_ecommerce-ops_platform_settlement_reconcile",
+          "mcp_ecommerce-ops_campaign_roi_analyzer",
+          "mcp_ecommerce-ops_after_sales_risk_report",
+          "mcp_ecommerce-ops_review_insight_analyzer",
+          "mcp_ecommerce-ops_review_source_normalizer",
+          "mcp_ecommerce-ops_ecommerce_snapshot_analyzer"
+        ]
+      },
+      {
+        "name": "finance-office",
+        "fromVersion": "1.2.0",
+        "toVersion": "1.5.0",
+        "removed": true,
+        "installed": true,
+        "usable": true,
+        "toolCount": 12,
+        "registeredToolNames": [
+          "mcp_finance-office_expense_summary",
+          "mcp_finance-office_cashflow_forecast",
+          "mcp_finance-office_finance_report_outline",
+          "mcp_finance-office_vat_invoice_review",
+          "mcp_finance-office_tax_period_checklist",
+          "mcp_finance-office_tax_position_estimator",
+          "mcp_finance-office_ar_ap_aging",
+          "mcp_finance-office_ecommerce_tax_workpaper",
+          "mcp_finance-office_ledger_reconciliation",
+          "mcp_finance-office_financial_ratio_analysis",
+          "mcp_finance-office_budget_variance_analysis",
+          "mcp_finance-office_statement_consistency_review"
+        ]
+      },
+      {
+        "name": "weather",
+        "fromVersion": "1.0.0",
+        "toVersion": "1.0.1",
+        "removed": true,
+        "installed": true,
+        "usable": true,
+        "toolCount": 1,
+        "registeredToolNames": [
+          "mcp_weather_get_weather"
+        ]
+      }
+    ],
+    "statusReport": "D:/LumiCore-Work/optimization-20261003/skills-after.json",
+    "timings": {
+      "beforeMarketplaceMs": 12607,
+      "after": [
+        {
+          "route": "/marketplace/skills?lang=en",
+          "milliseconds": 1960,
+          "status": 200
+        },
+        {
+          "route": "/skills",
+          "milliseconds": 37,
+          "status": 200
+        },
+        {
+          "route": "/mcp",
+          "milliseconds": 11,
+          "status": 200
+        }
+      ],
+      "limitation": "One local before/after observation, not a controlled benchmark or a guarantee of model-response latency."
+    },
+    "malformedMcpList": {
+      "beforeHttpStatus": 500,
+      "afterHttpStatus": 200,
+      "legacyName": "PDF Analyzer",
+      "legacyConfigDeleted": false
+    },
+    "remaining": [
+      "Several old third-party/runtime entries remain unconfigured or blocked by the existing trust rules; they were not enabled.",
+      "memory_auto_organize remains quarantined with its prior unknown outcome."
+    ],
+    "temporaryBackend": {
+      "pids": [
+        42640,
+        31840
+      ],
+      "stoppedVia": "POST /api/runtime/shutdown with expectedPid; response ok=true,status=saved",
+      "stopped": true
+    }
+  },
+  "limitations": [
+    "Draft restoration is within the current application session, not disk persistence across restart. Cancellation cannot undo a server-side write already accepted; failed writes are not automatically replayed.",
+    "Native automation was unavailable (native pipe os error 2). Actual client conversation, task continuation and workflow reuse acceptance remain unverified; component/integration tests and API receipts are not called native acceptance.",
+    "The original client and backend exited at about 20:49:53; cause is unconfirmed and clarification was requested. This work did not issue a client stop/restart. The temporary backend was used only after that exit and was gracefully closed.",
+    "Business source decreases 110 lines; regression tests add 309 lines, so the total increases 199 lines. Whole-project optimization is not declared complete.",
+    "No commit, push or client restart was performed."
+  ]
+}

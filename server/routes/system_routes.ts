@@ -583,14 +583,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // separate from the cheap cached /health response so monitoring can choose
   // when to incur a network probe.
   router.get("/llm/local/health", requireAuth, requireAdmin, requireLocalRequest, async (_req, res) => {
-    const current = {
-      ollama: getLocalModelConfig('ollama'),
-      lmstudio: getLocalModelConfig('lmstudio'),
-    };
-    const [ollama, lmstudio] = await Promise.all([
-      refreshLocalModelConfig('ollama', current.ollama.baseUrl, { timeoutMs: 2500, inferenceTimeoutMs: 20_000 }),
-      refreshLocalModelConfig('lmstudio', current.lmstudio.baseUrl, { timeoutMs: 2500, inferenceTimeoutMs: 20_000 }),
-    ]);
+    await Promise.allSettled((['ollama', 'lmstudio'] as const).map(provider => refreshLocalModelConfig(provider, undefined, { timeoutMs: 2500, inferenceTimeoutMs: 20_000 })));
+    const ollama = getLocalModelConfig('ollama'), lmstudio = getLocalModelConfig('lmstudio');
     const status = ollama.detected || lmstudio.detected ? 'ok' : 'degraded';
     res.status(status === 'ok' ? 200 : 503).json({
       status,
@@ -1350,37 +1344,19 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
     });
   });
 
-  // ── Ollama local model config ──
-  // GET: return saved Ollama URL + detection status
-  router.get("/ollama/config", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
-    res.json(getLocalModelConfig('ollama'));
-  });
-
-  // PUT: save Ollama URL and trigger re-detection
-  router.put("/ollama/config", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
-    try {
-      const { baseUrl } = req.body || {};
-      const result = await refreshLocalModelConfig('ollama', baseUrl, { timeoutMs: 5000 });
-      res.json(result);
-    } catch (err: any) {
-      res.status(400).json({ error: sanitizedProviderError(err) });
-    }
-  });
-
-  // ── LM Studio local model config ──
-  // GET: return saved LM Studio URL + detection status
-  router.get("/lmstudio/config", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
-    res.json(getLocalModelConfig('lmstudio'));
-  });
-
-  // PUT: save LM Studio URL and trigger re-detection
-  router.put("/lmstudio/config", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
-    try {
-      const { baseUrl } = req.body || {};
-      const result = await refreshLocalModelConfig('lmstudio', baseUrl, { timeoutMs: 5000 });
-      res.json(result);
-    } catch (err: any) {
-      res.status(400).json({ error: sanitizedProviderError(err) });
-    }
-  });
+  // Local model configuration requires the same authenticated, local administrator.
+  for (const provider of ['ollama', 'lmstudio'] as const) {
+    router.get(`/${provider}/config`, requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
+      res.json(getLocalModelConfig(provider));
+    });
+    router.put(`/${provider}/config`, requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
+      try {
+        const { baseUrl } = req.body || {};
+        const result = await refreshLocalModelConfig(provider, baseUrl, { timeoutMs: 5000 });
+        res.json(result);
+      } catch (err: any) {
+        res.status(400).json({ error: sanitizedProviderError(err) });
+      }
+    });
+  }
 }

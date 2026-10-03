@@ -27,17 +27,19 @@ export function setVoiceDevicePreference(
   kind: 'input' | 'output',
   deviceId: string,
   storage: WritableStorage | null = browserStorage(),
-): void {
+): boolean {
+  if (!storage) return false;
   const key = kind === 'input' ? VOICE_INPUT_DEVICE_KEY : VOICE_OUTPUT_DEVICE_KEY;
   try {
-    if (deviceId) storage?.setItem(key, deviceId);
-    else storage?.removeItem(key);
-  } catch {}
+    if (deviceId) storage.setItem(key, deviceId);
+    else storage.removeItem(key);
+  } catch { return false; }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(VOICE_DEVICE_PREFERENCE_CHANGED, {
       detail: { kind, deviceId },
     }));
   }
+  return true;
 }
 
 export function buildPreferredVoiceInputConstraints(

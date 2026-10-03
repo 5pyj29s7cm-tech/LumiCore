@@ -1,3 +1,5 @@
+import { listenForNativeChatFileDrop, type ChatUploadKind, type ChatUploadSource } from '../../lib/chatAttachmentUploads';
+import { ChatViewWorkRegistry } from '../../lib/chatViewWork';
 import { useConversationAttachments } from '../../hooks/useConversationAttachments';
 import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -20,9 +22,8 @@ import {
 } from '../../lib/agentResponseDelivery';
 import {
   MAX_CHAT_ATTACHMENTS,
-  isImageFileName, isAudioFileName, extractAudioTranscript, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
-  createChatAttachmentReference,
-  mergeChatAttachmentReferences,
+  serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
+  mergeChatAttachmentReferences, mergePendingChatAttachments, mapImportedChatAttachments,
   type ChatAttachmentReference,
 } from '../../lib/chatAttachmentReferences';
 import { shouldReloadPersistedConversation } from '../../lib/conversationSync';
@@ -72,6 +73,12 @@ function normalizeHistoryMessage(item: any, language: 'zh' | 'en'): Message | nu
 }
 
 export function CentralLumiChat() {
+  const { user, workDomain, orgConnection } = useApp();
+  const scope = JSON.stringify([user?.uid || user?.username, user?.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole]);
+  return <CentralLumiChatView key={scope} />;
+}
+
+function CentralLumiChatView() {
   const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const t = useT();
   const socket = useSocket();
@@ -85,12 +92,21 @@ export function CentralLumiChat() {
     timestamp: Date.now(),
     source: 'system',
   }), []);
-  const [messages, setMessages] = useState<Message[]>(() => [greeting()]);
+  const [messages, setMessageState] = useState<Message[]>(() => [greeting()]);
+  const messagesRef = useRef(messages);
+  const historyReadRef = useRef<AbortController | null>(null);
+  const setMessages = useCallback((update: React.SetStateAction<Message[]>) => {
+    const next = typeof update === 'function' ? update(messagesRef.current) : update;
+    messagesRef.current = next;
+    setMessageState(next);
+  }, []);
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const chatViewWorkRef = useRef(new ChatViewWorkRegistry());
+  const uploadWorkRef = useRef<ReturnType<ChatViewWorkRegistry['begin']> | null>(null);
   const [loading, setLoading] = useState(false);
   const [requestNotice, setRequestNotice] = useState('');
   const [modelPreference, setModelPreference] = useState<LumiModelPreference | null>(null);
@@ -103,6 +119,12 @@ export function CentralLumiChat() {
   const nativeDropHandledAtRef = useRef(0);
   const attachmentContextStoragePrefix = `lumi_org_chat_attachment_context:${user?.uid || user?.username || 'anonymous'}:${orgConnection?.orgId || 'unbound'}`;
   const resetAttachmentConversationView = useCallback(() => {
+    chatViewWorkRef.current.invalidate();
+    historyReadRef.current?.abort();
+    uploadWorkRef.current = null;
+    setUploading(false);
+    pendingAttachmentsRef.current = [];
+    setPendingAttachments([]);
     setPreviewFile(null);
   }, []);
   const { conversationAttachments, conversationAttachmentsRef, attachmentConversationIdRef,
@@ -118,10 +140,7 @@ export function CentralLumiChat() {
       // deliberate conversation boundary and old extracted text is discarded.
       localStorage.removeItem(attachmentContextStoragePrefix);
     } catch {}
-    bindAttachmentContextToConversation('');
-    pendingAttachmentsRef.current = [];
-    setPendingAttachments([]);
-  }, [attachmentContextStoragePrefix, bindAttachmentContextToConversation]);
+  }, [attachmentContextStoragePrefix]);
 
   const clearActiveRequest = useCallback(() => {
     if (timeoutRef.current) {
@@ -134,6 +153,11 @@ export function CentralLumiChat() {
     setLoading(false);
     setRequestNotice('');
   }, []);
+  useEffect(() => () => {
+    chatViewWorkRef.current.invalidate();
+    historyReadRef.current?.abort();
+    clearActiveRequest();
+  }, [clearActiveRequest]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -190,55 +214,22 @@ export function CentralLumiChat() {
   }, [clearStoredAttachments]);
 
   const appendPendingAttachments = useCallback((incoming: ChatAttachment[]) => {
-    const occupied = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
-    ).attachments;
-    const availability = mergeChatAttachmentReferences(occupied, incoming);
-    const pendingMerge = mergeChatAttachmentReferences(pendingAttachmentsRef.current, availability.added);
-    if (pendingMerge.added.length > 0) {
-      pendingAttachmentsRef.current = pendingMerge.attachments;
-      setPendingAttachments(pendingMerge.attachments);
+    const result = mergePendingChatAttachments(conversationAttachmentsRef.current, pendingAttachmentsRef.current, incoming);
+    if (result.added.length > 0) {
+      pendingAttachmentsRef.current = result.attachments;
+      setPendingAttachments(result.attachments);
     }
-    if (availability.duplicateCount > 0) {
+    if (result.duplicateCount > 0) {
       toast.info(uiMessage('agent-chat-page.file-already-attached.24544e870a'));
     }
-    if (availability.overflowCount > 0) {
+    if (result.overflowCount > 0) {
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
     }
-    return pendingMerge.added;
+    return result.added;
   }, [conversationAttachmentsRef]);
 
-  const mapImportedAttachments = useCallback((files: any[]): ChatAttachment[] => files.map(file => {
-    const fileName = file.name || file.displayName || file.id || 'attachment';
-    const mimeType = file.mimeType || '';
-    const kind: ChatAttachment['kind'] =
-      file.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
-      file.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
-      'file';
-    const transcript = kind === 'audio'
-      ? extractAudioTranscript(file.transcript || file.content || file.preview || null)
-      : null;
-    return createChatAttachmentReference({
-      fileId: file.id || fileName,
-      fileName,
-      path: file.path,
-      content: file.content || null,
-      preview: file.preview || null,
-      mimeType,
-      rawSize: file.rawSize || file.size || 0,
-      kind,
-      downloadUrl: file.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`) : undefined,
-      transcript,
-      transcriptionStatus: file.extractionStatus || (transcript ? 'indexed' : ''),
-      transcriptionError: file.extractionError || file.syncError || null,
-      transcriptionProvider: file.extractionProvider || undefined,
-      transcriptionModel: file.extractionModel || undefined,
-    });
-  }), [scopedFileUrl]);
-
   const acceptImportedAttachments = useCallback((files: any[], skippedCount = 0) => {
-    const uploadedAttachments = mapImportedAttachments(files);
+    const uploadedAttachments = mapImportedChatAttachments(files, scopedFileUrl);
     const added = appendPendingAttachments(uploadedAttachments);
     notifyKnowledgeUpdated(uploadedAttachments.map(item => ({
       id: item.fileId || item.path || item.fileName,
@@ -251,113 +242,67 @@ export function CentralLumiChat() {
     if (skippedCount > 0) {
       toast.info(formatUiMessage('agent-chat-page.some-dropped-files-skipped.d3df0abf37', { value0: skippedCount }));
     }
-  }, [appendPendingAttachments, mapImportedAttachments, notifyKnowledgeUpdated]);
+  }, [appendPendingAttachments, scopedFileUrl, notifyKnowledgeUpdated]);
 
-  const uploadChatAttachments = useCallback(async (files: FileList | null) => {
-    const selectedFiles = Array.from(files || []);
-    if (selectedFiles.length === 0 || uploading) return;
+  const runAttachmentImport = useCallback(async (kind: ChatUploadKind, sources: ChatUploadSource[]) => {
+    if (sources.length === 0 || uploadWorkRef.current) return;
     if (!orgConnection?.orgId) {
-      toast.error('Please connect an organization workspace first.');
+      if (kind === 'files') toast.error('Please connect an organization workspace first.');
       return;
     }
-
-    const occupiedCount = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
+    const remainingSlots = MAX_CHAT_ATTACHMENTS - mergeChatAttachmentReferences(
+      conversationAttachmentsRef.current, pendingAttachmentsRef.current,
     ).attachments.length;
-    const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
     if (remainingSlots <= 0) {
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
       return;
     }
+    const work = chatViewWorkRef.current.begin();
+    uploadWorkRef.current = work;
     setUploading(true);
     try {
-      const formData = new FormData();
-      selectedFiles.slice(0, remainingSlots).forEach(file => formData.append('files', file));
-      formData.append('domain', 'work');
-      formData.append('orgId', orgConnection.orgId);
-
-      const res = await fetch('/api/files/upload', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error || `Upload failed (${res.status})`);
+      const selected = sources.slice(0, remainingSlots);
+      let res: Response;
+      if (kind === 'files') {
+        const formData = new FormData();
+        selected.forEach(file => formData.append('files', file as File));
+        formData.append('domain', 'work');
+        formData.append('orgId', orgConnection.orgId);
+        res = await fetch('/api/files/upload', { method: 'POST', body: formData, credentials: 'include', signal: work.signal });
+      } else {
+        res = await fetch(scopedFileUrl('/api/files/import-paths'), {
+          method: 'POST', credentials: 'include', signal: work.signal,
+          headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
+          body: JSON.stringify({ paths: selected }),
+        });
       }
-
-      const uploadedFiles = Array.isArray(data.files) ? data.files : [];
-      if (uploadedFiles.length === 0) {
-        throw new Error('No files were returned by upload.');
-      }
-      acceptImportedAttachments(uploadedFiles, Math.max(0, selectedFiles.length - remainingSlots));
-    } catch (err: any) {
-      toast.error(err?.message || 'Upload failed.');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  }, [conversationAttachmentsRef, acceptImportedAttachments, orgConnection?.orgId, uploading]);
-
-  const importChatAttachmentPaths = useCallback(async (paths: string[]) => {
-    const uniquePaths = [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))];
-    if (uniquePaths.length === 0 || uploading || !orgConnection?.orgId) return;
-    const occupiedCount = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
-    ).attachments.length;
-    const remainingSlots = MAX_CHAT_ATTACHMENTS - occupiedCount;
-    if (remainingSlots <= 0) {
-      toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
-      return;
-    }
-    setUploading(true);
-    try {
-      const importPaths = uniquePaths.slice(0, remainingSlots);
-      const res = await fetch(scopedFileUrl('/api/files/import-paths'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Lumi-Desktop-Import': 'file-drop' },
-        body: JSON.stringify({ paths: importPaths }),
-        credentials: 'include',
-      });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Upload failed.');
-      acceptImportedAttachments(data.files || [], (data.skipped || []).length + Math.max(0, uniquePaths.length - importPaths.length));
+      if (!work.isCurrent()) return;
+      if (!res.ok) throw new Error(data.error || (kind === 'files' ? `Upload failed (${res.status})` : 'Upload failed.'));
+      const files = Array.isArray(data.files) ? data.files : [];
+      if (kind === 'files' && files.length === 0) throw new Error('No files were returned by upload.');
+      acceptImportedAttachments(files, Math.max(0, sources.length - selected.length) + (kind === 'paths' && Array.isArray(data.skipped) ? data.skipped.length : 0));
     } catch (err: any) {
-      toast.error(err?.message || 'Upload failed.');
+      if (work.isCurrent()) toast.error(err?.message || 'Upload failed.');
     } finally {
-      setUploading(false);
+      if (work.isCurrent()) {
+        uploadWorkRef.current = null;
+        setUploading(false);
+        if (kind === 'files' && fileInputRef.current) fileInputRef.current.value = '';
+      }
+      work.finish();
     }
-  }, [conversationAttachmentsRef, acceptImportedAttachments, orgConnection?.orgId, scopedFileUrl, uploading]);
+  }, [conversationAttachmentsRef, acceptImportedAttachments, orgConnection?.orgId, scopedFileUrl]);
+
+  const uploadChatAttachments = useCallback((files: FileList | null) => (
+    runAttachmentImport('files', Array.from(files || []))
+  ), [runAttachmentImport]);
+  const importChatAttachmentPaths = useCallback((paths: string[]) => (
+    runAttachmentImport('paths', [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))])
+  ), [runAttachmentImport]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    const setup = async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        if (cancelled) return;
-        unlisten = await getCurrentWindow().onDragDropEvent((event: any) => {
-          const payload = event?.payload;
-          if (payload?.type === 'enter' || payload?.type === 'over') {
-            setDragActive(true);
-            return;
-          }
-          if (payload?.type === 'drop') {
-            nativeDropHandledAtRef.current = Date.now();
-            setDragActive(false);
-            void importChatAttachmentPaths(Array.isArray(payload.paths) ? payload.paths : []);
-            return;
-          }
-          setDragActive(false);
-        });
-        if (cancelled) unlisten?.();
-      } catch {}
-    };
-    void setup();
-    return () => { cancelled = true; unlisten?.(); };
+    return listenForNativeChatFileDrop(setDragActive, nativeDropHandledAtRef, importChatAttachmentPaths);
   }, [importChatAttachmentPaths]);
 
   const removePendingAttachment = useCallback((id: string) => {
@@ -368,42 +313,75 @@ export function CentralLumiChat() {
     });
   }, []);
 
+  const loadConversationMessages = useCallback(async (conversationId: string) => {
+    historyReadRef.current?.abort();
+    const controller = new AbortController();
+    historyReadRef.current = controller;
+    const visibleMessages = messagesRef.current;
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages?domain=work&limit=80`, {
+        credentials: 'include', signal: controller.signal,
+      });
+      const body = await res.json();
+      if (!res.ok || controller.signal.aborted || !Array.isArray(body.messages)
+        || conversationId !== attachmentConversationIdRef.current
+        || visibleMessages !== messagesRef.current || activeRequestIdRef.current) return;
+      const history = body.messages.map((item: any) => normalizeHistoryMessage(item, locale)).filter(Boolean) as Message[];
+      streamingMessageIdRef.current = null;
+      streamingRawTextRef.current = '';
+      setMessages(history.length > 0 ? history : [greeting()]);
+    } catch {} finally {
+      if (historyReadRef.current === controller) historyReadRef.current = null;
+    }
+  }, [attachmentConversationIdRef, greeting, locale, setMessages]);
+
   useEffect(() => {
-    let cancelled = false;
-    const loadConversation = async () => {
+    const controller = new AbortController();
+    const ownsView = chatViewWorkRef.current.capture(), visibleMessages = messagesRef.current;
+    void (async () => {
       try {
-        const activeRes = await fetch('/api/conversations/active?domain=work&agentId=lumi', {
-          credentials: 'include',
-        });
-        const activeData = await activeRes.json().catch(() => ({}));
-        const conversationId = activeData.activeConversation?.id;
-        if (!activeRes.ok || !conversationId) {
-          if (!cancelled) setMessages(prev => (prev.length ? prev : [greeting()]));
-          return;
-        }
+        const res = await fetch('/api/conversations/active?domain=work&agentId=lumi', { credentials: 'include', signal: controller.signal });
+        const body = await res.json();
+        const conversationId = body.activeConversation?.id;
+        if (!res.ok || !conversationId || controller.signal.aborted || !ownsView()
+          || visibleMessages !== messagesRef.current || activeRequestIdRef.current) return;
         bindAttachmentContextToConversation(conversationId);
-        const messagesRes = await fetch(`/api/conversations/${conversationId}/messages?domain=work&limit=80`, {
-          credentials: 'include',
-        });
-        const messagesData = await messagesRes.json().catch(() => ({}));
-        if (!messagesRes.ok) return;
-        const history = Array.isArray(messagesData.messages)
-          ? messagesData.messages.map((item: any) => normalizeHistoryMessage(item, locale)).filter(Boolean) as Message[]
-          : [];
-        if (!cancelled) setMessages(history.length > 0 ? history : [greeting()]);
-      } catch {
-        if (!cancelled) setMessages(prev => (prev.length ? prev : [greeting()]));
-      }
-    };
-    loadConversation();
-    return () => { cancelled = true; };
-  }, [bindAttachmentContextToConversation, greeting, locale, orgConnection?.orgId, user?.uid, user?.username]);
+        await loadConversationMessages(conversationId);
+      } catch {}
+    })();
+    return () => { controller.abort(); historyReadRef.current?.abort(); };
+  }, [bindAttachmentContextToConversation, loadConversationMessages]);
 
   useEffect(() => {
     if (!socket) return;
+    let listening = true;
 
     const isCurrent = (data?: { requestId?: string }) => {
-      return Boolean(activeRequestIdRef.current && data?.requestId === activeRequestIdRef.current);
+      return listening && Boolean(activeRequestIdRef.current && data?.requestId === activeRequestIdRef.current);
+    };
+
+    const updateReply = (content: string, details: Pick<Message, 'fileArtifacts' | 'conversationId'> = {}) => {
+      setMessages(prev => {
+        const streamingId = streamingMessageIdRef.current;
+        if (streamingId) {
+          return prev.map(message => (
+            message.id === streamingId
+              ? { ...message, content: content || message.content, ...details }
+              : message
+          ));
+        }
+        if (!content) return prev;
+        const nextId = makeMessageId('org-response');
+        streamingMessageIdRef.current = nextId;
+        return [...prev, {
+          id: nextId,
+          role: 'assistant',
+          content,
+          ...details,
+          timestamp: Date.now(),
+          source: 'socket',
+        }];
+      });
     };
 
     const onChunk = (data: { text?: string; agentName?: string; requestId?: string }) => {
@@ -412,26 +390,7 @@ export function CentralLumiChat() {
       setRequestNotice('');
       streamingRawTextRef.current += data.text;
       const publicText = sanitizeAgentStreamingTextForDisplay(streamingRawTextRef.current, locale);
-      if (!publicText) return;
-      setMessages(prev => {
-        const streamingId = streamingMessageIdRef.current;
-        if (streamingId) {
-          return prev.map(message => (
-            message.id === streamingId
-              ? { ...message, content: publicText }
-              : message
-          ));
-        }
-        const nextId = makeMessageId('org-stream');
-        streamingMessageIdRef.current = nextId;
-        return [...prev, {
-          id: nextId,
-          role: 'assistant',
-          content: publicText,
-          timestamp: Date.now(),
-          source: 'socket',
-        }];
-      });
+      if (publicText) updateReply(publicText);
     };
 
     const onResponse = (data: AgentResponseDelivery & { requestId?: string; fileArtifacts?: ChatArtifact[]; conversationId?: string }) => {
@@ -446,26 +405,7 @@ export function CentralLumiChat() {
         clearActiveRequest();
         return;
       }
-      setMessages(prev => {
-        const streamingId = streamingMessageIdRef.current;
-        if (streamingId) {
-          return prev.map(message => (
-            message.id === streamingId
-              ? { ...message, content: finalText || message.content, fileArtifacts: data.fileArtifacts, conversationId: data.conversationId }
-              : message
-          ));
-        }
-        if (!finalText) return prev;
-        return [...prev, {
-          id: makeMessageId('org-response'),
-          role: 'assistant',
-          content: finalText,
-          fileArtifacts: data.fileArtifacts,
-          conversationId: data.conversationId,
-          timestamp: Date.now(),
-          source: 'socket',
-        }];
-      });
+      updateReply(finalText, { fileArtifacts: data.fileArtifacts, conversationId: data.conversationId });
       clearActiveRequest();
     };
 
@@ -508,7 +448,7 @@ export function CentralLumiChat() {
       rolledOver?: boolean;
       previousConversationId?: string;
     }) => {
-      if (data.agentId !== 'lumi' || !data.conversationId) return;
+      if (!listening || data.agentId !== 'lumi' || !data.conversationId) return;
       const currentConversationId = attachmentConversationIdRef.current;
       const shouldReload = shouldReloadPersistedConversation({
         event: data,
@@ -522,20 +462,7 @@ export function CentralLumiChat() {
           carryCurrent: data.rolledOver === true || !currentConversationId,
         });
       }
-      streamingMessageIdRef.current = null;
-      streamingRawTextRef.current = '';
-      fetch(`/api/conversations/${data.conversationId}/messages?domain=work&limit=80`, {
-        credentials: 'include',
-      })
-        .then(response => response.json().then(body => ({ ok: response.ok, body })))
-        .then(({ ok, body }) => {
-          if (!ok || !Array.isArray(body.messages)) return;
-          const history = body.messages
-            .map((item: any) => normalizeHistoryMessage(item, locale))
-            .filter(Boolean) as Message[];
-          setMessages(history.length > 0 ? history : [greeting()]);
-        })
-        .catch(() => {});
+      void loadConversationMessages(data.conversationId);
     };
 
     socket.on('agent:chunk', onChunk);
@@ -545,14 +472,14 @@ export function CentralLumiChat() {
     socket.on('chat:conversation_updated', onConversationUpdated);
 
     return () => {
+      listening = false;
       socket.off('agent:chunk', onChunk);
       socket.off('agent:response', onResponse);
       socket.off('agent:status', onStatus);
       socket.off('agent:error', onError);
       socket.off('chat:conversation_updated', onConversationUpdated);
-      clearActiveRequest();
     };
-  }, [attachmentConversationIdRef, bindAttachmentContextToConversation, clearActiveRequest, greeting, locale, socket]);
+  }, [attachmentConversationIdRef, bindAttachmentContextToConversation, clearActiveRequest, loadConversationMessages, locale, setMessages, socket]);
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -580,7 +507,7 @@ export function CentralLumiChat() {
       conversationAttachmentsRef.current.map(serializeChatAttachment),
       directAttachments,
     ).attachments;
-    if ((!text && directAttachments.length === 0) || loading || uploading) return;
+    if ((!text && directAttachments.length === 0) || loading || uploadWorkRef.current) return;
     setRequestNotice('');
     if (!socket) {
       setMessages(prev => [...prev, {

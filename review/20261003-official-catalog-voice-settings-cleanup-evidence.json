@@ -1,0 +1,161 @@
+{
+  "batch": "prune67",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/Settings.tsx",
+      "before": 3060,
+      "after": 2995,
+      "delta": -65,
+      "beforeSha256": "a5d4aab69e63b7f64c3e04fc83104ae44d192b55675366b00be3b9546340f7e3",
+      "afterSha256": "d48b15ea9d27f9ea8e9123eb76c26e79f172610e77f192430d6663e9d636687e"
+    },
+    {
+      "file": "src/components/VoiceProviderSwitch.tsx",
+      "before": 204,
+      "after": 101,
+      "delta": -103,
+      "beforeSha256": "ad5d26244e9037b0405e570b26afc0a65c1ed435236b3a6a0d5cd45f5011bdfb",
+      "afterSha256": "ad6b0b3e17d05f4db3681921666fb1ba9f3146d183f1390db1b957088edc72c5"
+    },
+    {
+      "file": "src/hooks/useLumiOfficialCatalog.ts",
+      "before": 0,
+      "after": 33,
+      "delta": 33,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "12a834fd951d375e17d0a418196e804a18e9cb62771af0536349569961f1fa72"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 582,
+      "after": 671,
+      "delta": 89,
+      "beforeSha256": "c413a7d7dd930a88762c94b54f862da858be8f1ae965a1669d3df642770a7c74",
+      "afterSha256": "0860a01086f5e9007b7404138bc83f081d60a75a34d89390338c72f03e7922e9"
+    },
+    {
+      "file": "test/profile_voice_access_ui.test.ts",
+      "before": 36,
+      "after": 24,
+      "delta": -12,
+      "beforeSha256": "9c87d6b2310603a804be9dc3d76fe8f3d11d5d643ce56648f147729eeaa7b99e",
+      "afterSha256": "a1c6ccf5fa223aff4ee938fd103f9a0c6d3808cc3bbdd059d67d3420942c6918"
+    },
+    {
+      "file": "test/official_api_role_settings_contract.test.ts",
+      "before": 71,
+      "after": 67,
+      "delta": -4,
+      "beforeSha256": "de4523a6f3170fc31fe149204f108789651f0829ab9a347d4a30abca3ade36a1",
+      "afterSha256": "e8779dfbe7a74153320d07e1e97692cbcf566b22e0ab4ec447655933e9c23249"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1088,
+        "lines": 365131
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161555
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526686
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1089,
+        "lines": 364996
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161628
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526624
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 1,
+        "lines": -135
+      },
+      "tests": {
+        "files": 0,
+        "lines": 73
+      },
+      "total": {
+        "files": 1,
+        "lines": -62
+      }
+    }
+  },
+  "focused": {
+    "files": 16,
+    "passed": 240,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T08:36:01.711Z",
+      "finishedAt": "2026-10-03T08:36:26.388Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T08:36:26.389Z",
+      "finishedAt": "2026-10-03T08:37:00.886Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T08:37:00.886Z",
+      "finishedAt": "2026-10-03T08:37:10.008Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T08:37:10.009Z",
+      "finishedAt": "2026-10-03T08:37:19.151Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T08:37:19.151Z",
+      "finishedAt": "2026-10-03T08:37:19.536Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "Removed the global official catalog value/promise cache and its independent refresh event. Settings and voice use one account/scope-owned hook and the existing verified key-change event. Only relay credential/address changes refresh the catalog; refresh aborts the previous request and late results cannot overwrite the new directory.",
+    "Official catalog metadata uses the existing backend type, validates rendering-relevant model/role fields, and stays null on failed or malformed reads. Closing, changing identity or work scope cancels the request; reopening performs a fresh read rather than reusing an old account cache.",
+    "Voice provider status and updates share one request lifecycle. A successful POST already returns pref and active, so the extra status GET, catalog GET and intent-based fallback event are deleted. The change event carries only a validated backend confirmation.",
+    "STT/TTS controls share a role-driven renderer and save function. Provider selection sends only its own role, and model selection only its own model field. Switching a provider leaves the other role and backend model/default selection intact.",
+    "Voice model selectors preserve the confirmed explicit model or effective server default when a directory is absent or omits it. The first catalog entry no longer replaces the effective default shown by the server.",
+    "Ordinary accounts do not mount privileged voice controls or fetch their status/catalog. Account/work-scope changes remount voice and settings state, aborting old operations. Repeated writes are blocked per view and failures retain the last confirmed selection.",
+    "Settings provider-status refreshes now cancel earlier reads, validate responses, clear failed results and have a 15-second signal instead of allowing old responses to overwrite newer provider status.",
+    "Official role apply reuses useModelOperation for serialization, cancellation and status. Its configuration event still refreshes AppContext but no longer remounts its own settings receipt, preserving displayed outcomes."
+  ],
+  "validationNotes": [
+    "Six new behavior cases cover official apply publication/cancellation, settings provider refresh and receipt lifetime, in-flight official catalog replacement/key filtering/reopen, catalog identity/scope isolation, confirmed voice writes/default model display, and voice permission/failure/logout behavior.",
+    "Existing provider/relay tests now observe the canonical keys-changed event instead of the deleted catalog-specific event. One source-text-only privilege test and obsolete disabled-flag/voice-option source assertions were replaced by mounted behavior coverage.",
+    "Catalog and voice tests mount the actual hook/components and use the real authenticated API transport with synthetic fetch. Settings and official apply tests execute production functions with substituted layout/child components; HTTP integration suites use isolated databases and mock upstreams.",
+    "Initial UI test failures were missing fixture globals/constants (window, CustomEvent and documentation URL), not production failures. Final validation ran after correcting fixtures and after adding effective backend-default model display.",
+    "All 16 focused files, lint/type checks, all-frontend and desktop builds, and compact-layout checks passed. Final fingerprints preserve the latest prune40-66 baselines."
+  ],
+  "limitations": [
+    "The common catalog hook owns one read per mounted consumer; it deliberately retains no global cache and does not deduplicate separately mounted consumers or cache across page visits. No upstream latency benchmark was performed.",
+    "Catalog failures keep existing documented fallback lists for model settings, and a saved/effective voice model remains selectable even if metadata omits it; the backend still decides whether a requested model is permitted. Catalog retry occurs on reopening, identity/scope change or a verified relay-key change.",
+    "Voice preferences remain the existing instance-wide administrator configuration. View/account isolation does not create per-user backend voice storage or cross-window transactions, and confirmation does not add stronger disk durability than the existing endpoint provides.",
+    "Canceling frontend requests cannot undo server-accepted updates. Fifteen-second signals bound fetch waiting; they do not cancel upstream work already executing on the backend.",
+    "No full-suite run, real provider/credential or user-data operation, microphone/audio playback acceptance, native GUI acceptance, backend rebuild, commit, push or client restart."
+  ]
+}

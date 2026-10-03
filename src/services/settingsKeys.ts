@@ -7,6 +7,7 @@ export interface SaveKeysResult {
   saved: string[];
   deleted: string[];
   ignored?: string[];
+  status: KeyStatus;
 }
 
 async function readJsonSafely(response: Response): Promise<any> {
@@ -23,17 +24,21 @@ async function readJsonSafely(response: Response): Promise<any> {
   }
 }
 
-export async function getSavedKeyStatus(): Promise<KeyStatus> {
-  const response = await apiFetch('/api/settings/keys');
+export async function getSavedKeyStatus(signal?: AbortSignal): Promise<KeyStatus> {
+  const response = await apiFetch('/api/settings/keys', { signal });
   const data = await readJsonSafely(response);
   if (!response.ok) {
     throw new Error(data.error || `Failed to load key status (${response.status})`);
   }
+  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.values(data).some(value => typeof value !== 'boolean')) {
+    throw new Error('Invalid saved key status');
+  }
   return data as KeyStatus;
 }
 
-export async function saveServerKeys(keys: Record<string, string>): Promise<SaveKeysResult> {
+export async function saveServerKeys(keys: Record<string, string>, signal?: AbortSignal): Promise<SaveKeysResult> {
   const response = await apiFetch('/api/settings/keys', {
+    signal,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -50,7 +55,7 @@ export async function saveServerKeys(keys: Record<string, string>): Promise<Save
     throw new Error(`Unsupported key name(s): ${ignored.join(', ')}`);
   }
 
-  const status = await getSavedKeyStatus();
+  const status = await getSavedKeyStatus(signal);
   for (const [name, value] of Object.entries(keys)) {
     const shouldExist = value.trim().length > 0;
     if (shouldExist && !status[name]) {
@@ -61,11 +66,12 @@ export async function saveServerKeys(keys: Record<string, string>): Promise<Save
     }
   }
 
+  signal?.throwIfAborted();
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('lumi:keys-changed', {
       detail: { saved, deleted },
     }));
   }
 
-  return { success: true, saved, deleted, ignored };
+  return { success: true, saved, deleted, ignored, status };
 }

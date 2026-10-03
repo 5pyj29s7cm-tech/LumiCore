@@ -1,0 +1,193 @@
+{
+  "batch": "prune45",
+  "date": "2026-10-02",
+  "baseline": "Working tree after prune44; no commit or working tree reset",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2322,
+      "after": 2238,
+      "delta": -84,
+      "beforeSha256": "20e70d44c99a37716e8036ab12a8ed942825b087011bfe6e2019b50587403617",
+      "afterSha256": "c501b9b7d801a56fc3a04e9b40c081936ef7d32f8c74214b2d5c4f3225c817fe"
+    },
+    {
+      "file": "src/hooks/useLegalDocument.ts",
+      "before": 63,
+      "after": 63,
+      "delta": 0,
+      "beforeSha256": "a3edb0a48d3f9f59a35ae5e970c192dd2286c06ff25772738483f3139e4b5dd1",
+      "afterSha256": "32b746dc4cbf3e88670b35202249d5cdde9b8bc1d160330105c99102408c61c6"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 108,
+      "after": 136,
+      "delta": 28,
+      "beforeSha256": "4b2afbc11105db2521e8b71d4e219c0ce9db7d5f872f8f68436adbe222d03a1a",
+      "afterSha256": "85abd6e8a542d6adc2202c4ad8878e00e2376d54866f614e5ac5385536af0e6e"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366520
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160256
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526776
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366436
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160284
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526720
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -84
+      },
+      "tests": {
+        "files": 0,
+        "lines": 28
+      },
+      "total": {
+        "files": 0,
+        "lines": -56
+      }
+    },
+    "combinedPrune44And45": {
+      "source": {
+        "files": 0,
+        "lines": -126
+      },
+      "tests": {
+        "files": 0,
+        "lines": 67
+      },
+      "total": {
+        "files": 0,
+        "lines": -59
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 25,
+    "failed": 6,
+    "failures": [
+      {
+        "name": "packet embedded legal tool serializes generation, rejects failed output as an archive, and archives successful personal output",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "packet embedded legal tool keeps edits on metadata/language refresh but drops an old result when the case changes",
+        "firstFailure": "AssertionError: expected <article …(1)></article> to be null"
+      },
+      {
+        "name": "research embedded legal tool serializes generation, rejects failed output as an archive, and archives successful personal output",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "research embedded legal tool keeps edits on metadata/language refresh but drops an old result when the case changes",
+        "firstFailure": "AssertionError: expected <article …(1)></article> to be null"
+      },
+      {
+        "name": "strategy embedded legal tool serializes generation, rejects failed output as an archive, and archives successful personal output",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "strategy embedded legal tool keeps edits on metadata/language refresh but drops an old result when the case changes",
+        "firstFailure": "AssertionError: expected <pre …(1)></pre> to be null"
+      }
+    ],
+    "method": "Identical final tests against an isolated turn-start LegalHub copy; dependency modules use the current working tree. Six failures directly assert duplicate requests or old output after a case change; this is not six independent bugs."
+  },
+  "focused": {
+    "testFiles": 9,
+    "passed": 104,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T10:32:24.194Z",
+      "finishedAt": "2026-10-02T10:32:28.346Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T10:32:28.347Z",
+      "finishedAt": "2026-10-02T10:32:55.642Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T10:32:55.642Z",
+      "finishedAt": "2026-10-02T10:33:03.297Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T10:33:03.297Z",
+      "finishedAt": "2026-10-02T10:33:11.077Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T10:33:11.077Z",
+      "finishedAt": "2026-10-02T10:33:11.438Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through44LatestFingerprintsMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "preserved": [
+    "Three original legal tool endpoints and role/claims/facts/evidence/research parameter handling, with caseId/orgId/persistCase preserved.",
+    "Personal successful results archive through the existing case-material callback; organization generation retains automatic persistence without a second manual archive action.",
+    "Metadata and language refresh keep drafts and pending requests; case identity changes reset all panel fields and cancel the old client request.",
+    "Existing bid/contract import and generation tests remain passing after making unused upload messages optional for generation-only consumers."
+  ],
+  "changes": [
+    "Removed three result/loading/reset/request lifecycles and reused useLegalDocument.",
+    "Strategy output reuses LegalTwoPaneTool; its outer width, grid breakpoint and output spacing now follow packet/research panels. No buttons or inputs removed.",
+    "Error output is displayed but is not tagged result-ready and cannot be manually archived."
+  ],
+  "limitations": [
+    "Tests use mocked network and synthetic case data or isolated backend fixtures. No real model invocation, native-client acceptance or visual screenshot comparison.",
+    "No full-suite rerun or backend rebuild in this frontend-only batch.",
+    "Frontend cancellation does not roll back server writes or prove backend tasks stopped.",
+    "Other embedded tools (citation verification, case workspace notice/document actions, knowledge sync and judgment import) retain separate lifecycles and require further audit.",
+    "Same-case optimistic save ordering/rollback, legacy personal storage account isolation and cross-entry model-endpoint persistence remain unresolved.",
+    "No client restart, commit or push."
+  ]
+}

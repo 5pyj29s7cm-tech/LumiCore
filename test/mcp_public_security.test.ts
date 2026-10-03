@@ -35,6 +35,15 @@ describe('MCP public security projections', () => {
     expect(normalizeRemoteDeviceConfig([])).toBeNull();
   });
 
+  it('retains userinfo-only endpoints and supports device names without prototype setters', () => {
+    const current = JSON.parse('{"__proto__":"wss://synthetic-user:synthetic-pass@device.invalid/mcp"}');
+    const projected = projectRemoteDeviceConfig(current);
+    expect(Object.keys(projected)).toEqual(['__proto__']);
+    expect(projected.__proto__).toBe('wss://device.invalid/mcp');
+    expect(normalizeRemoteDeviceConfig(projected, current)).toEqual(current);
+    expect(normalizeRemoteDeviceConfig({ new: 'wss://device.invalid/mcp?token=%5bconfigured%5d' })).toBeNull();
+  });
+
   it('projects health without raw internal failures and targets only local administrators', () => {
     const health = projectMcpServerHealth({
       private: {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Scale, FileText, Search, Crosshair, Shield, Brain, CheckCircle, Upload,
   Calendar, ClipboardList, Plus, FolderOpen, Gavel, AlertTriangle, RefreshCw, Loader2, Database,
@@ -13,16 +13,23 @@ import { LegalDataSourcesSettings } from './LegalDataSourcesSettings';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
 import { useT } from '../../lib/useT';
 import { useApp } from '../../contexts/AppContext';
+import { useLegalDocument, useLegalDocumentScope } from '../../hooks/useLegalDocument';
+import { apiJson } from '../../services/apiClient';
 import { runLegalTool } from '../../lib/legalToolClient';
 import {
+  addLegalCaseMaterial,
   clearLegalConsultationCaseId,
   createEmptyLegalCase,
   getActiveLegalCaseId,
   getLegalConsultationCaseId,
+  hasLegacyLegalCases,
+  importLegacyLegalCases,
+  isLegalCaseAccount,
   LEGAL_CASES_CHANGED_EVENT,
   readLegalCaseFiles,
   setActiveLegalCaseId,
   setLegalConsultationCaseId,
+  updateLegalCase,
   writeLegalCaseFiles,
   type LegalCaseFile,
   type LegalCaseMaterial,
@@ -45,19 +52,6 @@ interface NavItem {
 
 type LegalCaseCreateInput = Pick<LegalCaseFile, 'title' | 'caseNumber' | 'party' | 'cause' | 'stage' | 'notes'>;
 
-const LEGAL_WORKFLOW_ORDER: LegalView[] = [
-  'workspace',
-  'import',
-  'external-research',
-  'case-search',
-  'asset-trace',
-  'contract-review',
-  'strategy',
-  'packet',
-  'verify',
-  'knowledge-sync',
-];
-
 function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
   if (!caseFile) return 'Untitled legal case';
   return caseFile.title || caseFile.party || caseFile.caseNumber || 'Untitled legal case';
@@ -65,6 +59,17 @@ function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
 
 function resolveLegalCaseActiveId(cases: LegalCaseFile[], requestedId: string): string {
   return cases.some(item => item.id === requestedId) ? requestedId : (cases[0]?.id || '');
+}
+
+function legalStageLabels(): Record<LegalCaseStage, string> {
+  return {
+    consultation: uiMessage('legal-hub.consultation.7a3d850bb4'),
+    filing: uiMessage('legal-hub.filing.84e2c4dc09'),
+    trial: uiMessage('legal-hub.trial.26f80dc45f'),
+    judgment: uiMessage('legal-hub.judgment.407839a173'),
+    enforcement: uiMessage('legal-hub.enforcement.10a7440dfb'),
+    closed: uiMessage('legal-hub.closed.8d3c2a38e3'),
+  };
 }
 
 function buildLegalCaseKnowledgeMarkdown(caseFile: LegalCaseFile): string {
@@ -139,49 +144,36 @@ const LEGAL_CASE_READINESS_TOOLS: Record<string, string> = {
   delivery: 'legal_finalize_delivery_package',
 };
 
-function legalCaseMaterialText(caseFile: LegalCaseFile): string {
-  return [
-    caseFile.notes,
-    ...(caseFile.materials || []).map(material => [
-      material.type,
-      material.title,
-      material.source || '',
-      material.content || '',
-    ].join('\n')),
-  ].join('\n').toLowerCase();
-}
-
-function legalCaseHasSignal(caseFile: LegalCaseFile, patterns: RegExp[]): boolean {
-  const text = legalCaseMaterialText(caseFile);
-  return patterns.some(pattern => pattern.test(text));
-}
-
 function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessItem[] {
+  const text = [
+    caseFile.notes,
+    ...(caseFile.materials || []).map(material => [material.type, material.title, material.source || '', material.content || ''].join('\n')),
+  ].join('\n').toLowerCase();
+  const hasSignal = (patterns: RegExp[]) => patterns.some(pattern => pattern.test(text));
   const materials = caseFile.materials || [];
   const hasIntake = Boolean(caseFile.notes.trim() || materials.length > 0);
   const hasIdentity = Boolean(caseFile.party.trim())
-    && legalCaseHasSignal(caseFile, [/身份证|营业执照|统一社会信用代码|主体资格|授权委托|律所函|律师证/i]);
+    && hasSignal([/身份证|营业执照|统一社会信用代码|主体资格|授权委托|律所函|律师证/i]);
   const hasFacts = Boolean(caseFile.notes.trim().length >= 20)
-    || legalCaseHasSignal(caseFile, [/事实摘要|案件事实|时间线|履行|付款|交付|解除|侵权|庭审|会议纪要/i]);
-  const hasReasoning = legalCaseHasSignal(caseFile, [/三段论|大前提|小前提|涵摄|legal_case_reasoning_matrix|法律分析三段论/i]);
+    || hasSignal([/事实摘要|案件事实|时间线|履行|付款|交付|解除|侵权|庭审|会议纪要/i]);
+  const hasReasoning = hasSignal([/三段论|大前提|小前提|涵摄|legal_case_reasoning_matrix|法律分析三段论/i]);
   const hasEvidence = materials.some(material => material.type === 'evidence')
-    || legalCaseHasSignal(caseFile, [/证据目录|证明目的|三性|真实性|合法性|关联性|质证/i]);
-  const hasSources = legalCaseHasSignal(caseFile, [/来源登记|外部检索|法源|类案|裁判文书|人民法院案例库|legal_external_research_plan|legal_search_external_authorities/i]);
+    || hasSignal([/证据目录|证明目的|三性|真实性|合法性|关联性|质证/i]);
+  const hasSources = hasSignal([/来源登记|外部检索|法源|类案|裁判文书|人民法院案例库|legal_external_research_plan|legal_search_external_authorities/i]);
   const hasWorkProduct = materials.some(material => material.type === 'pleading' || material.type === 'contract')
-    || legalCaseHasSignal(caseFile, [/起诉状|答辩状|质证意见|代理词|法律意见书|合同审查|合同起草|投标书|标书|诉讼策略/i]);
-  const hasLawBlocked = legalCaseHasSignal(caseFile, [/现行有效法律预检：未通过|硬门槛未通过|正式交付包未生成|不得标记为正式成果|已废止/i]);
-  const hasLawPassed = !hasLawBlocked && legalCaseHasSignal(caseFile, [/现行有效法律预检：通过|现行有效法律硬门槛：通过|引用核验|引用校验|citation-verification-report/i]);
-  const hasFiling = legalCaseHasSignal(caseFile, [/半自动立案交接单|立案网交接单|法院在线服务|legal_prepare_filing_handoff/i]);
-  const hasDeliveryGate = legalCaseHasSignal(caseFile, [/正式交付包|现行有效法律硬门槛|引用核验|引用校验|source-register|来源登记表|legal_finalize_delivery_package/i]);
+    || hasSignal([/起诉状|答辩状|质证意见|代理词|法律意见书|合同审查|合同起草|投标书|标书|诉讼策略/i]);
+  const hasLawBlocked = hasSignal([/现行有效法律预检：未通过|硬门槛未通过|正式交付包未生成|不得标记为正式成果|已废止/i]);
+  const hasLawPassed = !hasLawBlocked && hasSignal([/现行有效法律预检：通过|现行有效法律硬门槛：通过|引用核验|引用校验|citation-verification-report/i]);
+  const hasFiling = hasSignal([/半自动立案交接单|立案网交接单|法院在线服务|legal_prepare_filing_handoff/i]);
+  const hasDeliveryGate = hasSignal([/正式交付包|现行有效法律硬门槛|引用核验|引用校验|source-register|来源登记表|legal_finalize_delivery_package/i]);
 
-  const items: LegalCaseReadinessItem[] = [
+  const items: Omit<LegalCaseReadinessItem, 'done'>[] = [
     {
       key: 'intake',
       label: uiMessage('legal-hub.intake.795643fe2e'),
       detail: hasIntake ? uiMessage('legal-hub.archived.1638832a14') : uiMessage('legal-hub.missing.3a25cf328c'),
       status: hasIntake ? 'done' : 'missing',
       nextStep: uiMessage('legal-hub.import-meeting-notes-pleadings-evidence.76c0fc3d9c'),
-      done: hasIntake,
       view: 'import',
     },
     {
@@ -190,7 +182,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasIdentity ? uiMessage('legal-hub.checked.9642f15399') : caseFile.party ? uiMessage('legal-hub.needs-check.bc00456c9a') : uiMessage('legal-hub.missing.2623bb38bf'),
       status: hasIdentity ? 'done' : caseFile.party ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.add-identity-authority-and-service.8e402725fd'),
-      done: hasIdentity,
       view: 'workspace',
     },
     {
@@ -199,7 +190,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasFacts ? uiMessage('legal-hub.prepared.9c28beac05') : hasIntake ? uiMessage('legal-hub.ready.2ade9ebc78') : uiMessage('legal-hub.missing.2623bb38bf'),
       status: hasFacts ? 'done' : hasIntake ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.build-a-timeline-of-parties.17d8b862d0'),
-      done: hasFacts,
       view: 'workspace',
     },
     {
@@ -208,7 +198,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasReasoning ? uiMessage('legal-hub.ready.3280ebf66e') : uiMessage('legal-hub.required.de4a95adb4'),
       status: hasReasoning ? 'done' : hasFacts || hasEvidence ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.generate-the-authority-evidence-and.46ae098910'),
-      done: hasReasoning,
       view: 'strategy',
     },
     {
@@ -217,7 +206,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasEvidence ? uiMessage('legal-hub.prepared.9c28beac05') : uiMessage('legal-hub.missing.293c592854'),
       status: hasEvidence ? 'done' : hasIntake ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.map-proof-purpose-original-status.0f3a872b6e'),
-      done: hasEvidence,
       view: 'packet',
     },
     {
@@ -228,7 +216,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       nextStep: hasLawBlocked
         ? uiMessage('legal-hub.replace-or-verify-blocking-authorities.d6248457ac')
         : uiMessage('legal-hub.verify-all-statutes-interpretations-and.4348622a41'),
-      done: hasLawPassed,
       view: 'verify',
     },
     {
@@ -237,7 +224,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasSources ? uiMessage('legal-hub.logged.2bd1b41ec1') : uiMessage('legal-hub.missing.b1cd9e1420'),
       status: hasSources ? 'done' : hasFacts || hasReasoning ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.log-authorities-from-supreme-high.adfac8a04d'),
-      done: hasSources,
       view: 'external-research',
     },
     {
@@ -246,7 +232,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasWorkProduct ? uiMessage('legal-hub.drafted.ded8cf6f43') : uiMessage('legal-hub.missing.ee4d2a7e05'),
       status: hasWorkProduct ? 'done' : hasEvidence && hasReasoning ? 'ready' : 'missing',
       nextStep: uiMessage('legal-hub.generate-complaint-answer-cross-exam.f2aab3a8b7'),
-      done: hasWorkProduct,
       view: 'packet',
     },
     {
@@ -255,7 +240,6 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       detail: hasFiling ? uiMessage('legal-hub.handoff-ready.bf79982539') : hasWorkProduct ? uiMessage('legal-hub.manual.24f17bdf15') : uiMessage('legal-hub.not-ready.b358df0cab'),
       status: hasFiling ? 'done' : hasWorkProduct ? 'manual' : 'missing',
       nextStep: uiMessage('legal-hub.prepare-court-platform-fields-and.29f878ee91'),
-      done: hasFiling,
       view: 'packet',
     },
     {
@@ -266,11 +250,10 @@ function buildLegalCaseReadiness(caseFile: LegalCaseFile): LegalCaseReadinessIte
       nextStep: hasLawBlocked
         ? uiMessage('legal-hub.fix-authorities-before-formal-delivery.b2e1639fb7')
         : uiMessage('legal-hub.run-the-formal-delivery-gate.3a08dedc0f'),
-      done: hasDeliveryGate && !hasLawBlocked,
       view: 'verify',
     },
   ];
-  return items.map(item => ({ ...item, tool: LEGAL_CASE_READINESS_TOOLS[item.key] }));
+  return items.map(item => ({ ...item, done: item.status === 'done', tool: LEGAL_CASE_READINESS_TOOLS[item.key] }));
 }
 
 function legalReadinessTone(status: LegalCaseReadinessItem['status']): string {
@@ -301,103 +284,136 @@ function legalCaseToolArgs(caseFile?: LegalCaseFile | null, orgId?: string): Rec
 }
 
 export function LegalHub() {
+  const scopeKey = useLegalDocumentScope();
+  const { workDomain, orgConnection } = useApp();
+  return <LegalHubScope key={`${scopeKey}:${workDomain === 'work' && Boolean(orgConnection?.connected)}`} />;
+}
+
+function LegalHubScope() {
+  const { user, workDomain, orgConnection } = useApp();
   const [view, setView] = useState<LegalView>('workspace');
-  const [cases, setCases] = useState<LegalCaseFile[]>(() => readLegalCaseFiles());
+  const [caseFilter, setCaseFilter] = useState('');
+  const [cases, setCases] = useState<LegalCaseFile[]>(() => workDomain === 'work' ? [] : readLegalCaseFiles());
   const [activeCaseId, setActiveCaseIdState] = useState(() => getActiveLegalCaseId());
   const [orgCasesLoading, setOrgCasesLoading] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<LegalCaseFile | null>(null);
-  const [caseMutation, setCaseMutation] = useState<'create' | 'delete' | ''>('');
-  const { workDomain, orgConnection } = useApp();
+  const mutation = useLegalDocument('', { error: uiMessage('legal-hub.failed-to-save-case.90f7d722b2') });
+  const lifetime = useRef<AbortController | null>(null);
+  const reading = useRef<AbortController | null>(null);
+  const writing = useRef<Promise<void> | null>(null);
+  const pendingEdit = useRef<{ id: string; patch: Partial<LegalCaseFile>; result: Promise<boolean> } | null>(null);
+  const confirmedCases = useRef(cases);
   const t = useT();
   const useOrgCases = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const canDeleteCases = !useOrgCases || ['owner', 'admin'].includes(String(orgConnection?.orgRole || '').toLowerCase());
+  const isCurrent = () => isLegalCaseAccount(user?.uid) && !lifetime.current?.signal.aborted;
 
   const refreshCases = useCallback(async () => {
+    if (!lifetime.current || !isCurrent()) return;
     if (!useOrgCases) {
-      const loaded = readLegalCaseFiles();
+      const loaded = workDomain === 'work' ? [] : readLegalCaseFiles();
       const storedActiveId = getActiveLegalCaseId();
       const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
       setCases(loaded);
       setActiveCaseIdState(resolvedActiveId);
-      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
+      if (workDomain !== 'work' && storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
       return;
     }
 
+    reading.current?.abort();
+    const request = new AbortController();
+    reading.current = request;
     setOrgCasesLoading(true);
     try {
-      const res = await fetch('/api/org/legal/cases', { credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-load-organization-cases.9523d68ad5'));
+      if (writing.current) await writing.current;
+      if (request.signal.aborted || !isCurrent()) return;
+      const data = await apiJson('/api/org/legal/cases', { signal: request.signal });
+      if (request.signal.aborted || !isCurrent()) return;
       const loaded = Array.isArray(data.cases) ? data.cases : [];
+      confirmedCases.current = loaded;
       setCases(loaded);
-      setActiveCaseIdState(prev => (prev && loaded.some((item: LegalCaseFile) => item.id === prev)) ? prev : (loaded[0]?.id || ''));
+      setActiveCaseIdState(prev => resolveLegalCaseActiveId(loaded, prev));
     } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-hub.failed-to-load-organization-cases.9523d68ad5'));
+      if (!request.signal.aborted) toast.error(err?.message || uiMessage('legal-hub.failed-to-load-organization-cases.9523d68ad5'));
     } finally {
-      setOrgCasesLoading(false);
+      if (!request.signal.aborted) setOrgCasesLoading(false);
     }
-  }, [useOrgCases]);
+  }, [useOrgCases, workDomain, user?.uid]);
 
   useEffect(() => {
-    const syncCases = () => {
-      if (useOrgCases) return;
-      const loaded = readLegalCaseFiles();
-      const storedActiveId = getActiveLegalCaseId();
-      const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
-      setCases(loaded);
-      setActiveCaseIdState(resolvedActiveId);
-      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
-    };
+    const owner = new AbortController();
+    lifetime.current = owner;
+    const eventName = useOrgCases ? 'lumi:org-legal-cases-changed' : LEGAL_CASES_CHANGED_EVENT;
     const syncStorage = (event: StorageEvent) => {
-      if (!event.key || event.key.startsWith('lumi_legal_')) syncCases();
+      if (!useOrgCases && (!event.key || event.key.startsWith('lumi_legal_'))) void refreshCases();
     };
-    window.addEventListener(LEGAL_CASES_CHANGED_EVENT, syncCases);
+    void refreshCases();
+    window.addEventListener(eventName, refreshCases);
     window.addEventListener('storage', syncStorage);
     return () => {
-      window.removeEventListener(LEGAL_CASES_CHANGED_EVENT, syncCases);
+      owner.abort();
+      reading.current?.abort();
+      window.removeEventListener(eventName, refreshCases);
       window.removeEventListener('storage', syncStorage);
     };
-  }, [useOrgCases]);
+  }, [refreshCases, useOrgCases]);
 
-  useEffect(() => {
-    if (!useOrgCases) {
-      const loaded = readLegalCaseFiles();
-      const storedActiveId = getActiveLegalCaseId();
-      const resolvedActiveId = resolveLegalCaseActiveId(loaded, storedActiveId);
-      setCases(loaded);
-      setActiveCaseIdState(resolvedActiveId);
-      if (storedActiveId !== resolvedActiveId) setActiveLegalCaseId(resolvedActiveId);
-      return;
-    }
-    void refreshCases();
-    window.addEventListener('lumi:org-legal-cases-changed', refreshCases);
-    return () => {
-      window.removeEventListener('lumi:org-legal-cases-changed', refreshCases);
+  const scopedRequest = async <T,>(url: string, body: unknown, method = 'POST') => {
+    const owner = lifetime.current?.signal;
+    if (!owner || !isCurrent()) throw new DOMException('View closed', 'AbortError');
+    const signal = AbortSignal.any([owner, AbortSignal.timeout(15_000)]);
+    const data = await apiJson<T>(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal,
+    });
+    signal.throwIfAborted();
+    if (!isCurrent()) throw new DOMException('View closed', 'AbortError');
+    return data;
+  };
+  const reportFailure = (error: any, fallback: string) => {
+    if (isCurrent()) toast.error(error?.message || fallback);
+  };
+  const writeOrgCase = <T,>(path: string, method: string, body: unknown, apply: (current: LegalCaseFile[], data: T) => LegalCaseFile[]) => {
+    pendingEdit.current = null;
+    const signal = lifetime.current?.signal;
+    reading.current?.abort();
+    setOrgCasesLoading(false);
+    const execute = async () => {
+      if (pendingEdit.current?.patch === body) pendingEdit.current = null;
+      if (!signal || signal.aborted) throw new DOMException('View closed', 'AbortError');
+      const data = await scopedRequest<T>(`/api/org/legal/cases${path}`, body, method);
+      signal.throwIfAborted();
+      const receipt = data as { id?: string; success?: boolean };
+      if (method === 'DELETE' ? receipt?.success !== true : !receipt?.id) throw new Error(uiMessage('legal-hub.failed-to-save-case.90f7d722b2'));
+      confirmedCases.current = apply(confirmedCases.current, data);
+      return data;
     };
-  }, [orgConnection?.orgId, refreshCases, useOrgCases]);
+    const result = writing.current ? writing.current.then(execute) : execute();
+    const settled = result.then(() => {}, () => {}).then(() => {
+      if (writing.current !== settled) return;
+      writing.current = null;
+      if (!signal?.aborted) setCases(confirmedCases.current);
+    });
+    writing.current = settled;
+    return result;
+  };
 
   const navItems: NavItem[] = useMemo(() => [
     { id: 'workspace', label: uiMessage('legal-hub.case-workspace.9f165fc920'), icon: <FolderOpen size={16} /> },
-    { id: 'packet', label: uiMessage('legal-hub.packet.1758eaea66'), icon: <ClipboardList size={16} /> },
+    { id: 'import', label: t.legalImportJudgment, icon: <Upload size={16} /> },
     { id: 'external-research', label: uiMessage('legal-hub.research.fd18b45d25'), icon: <Search size={16} /> },
-    { id: 'data-sources', label: uiMessage('legal-hub.data-sources.5ed118a719'), icon: <Database size={16} /> },
-    { id: 'bid', label: t.legalBidWorkbench, icon: <FileText size={16} /> },
     { id: 'case-search', label: t.legalCaseSearch, icon: <Search size={16} /> },
     { id: 'asset-trace', label: t.legalAssetTrace, icon: <Crosshair size={16} /> },
     { id: 'contract-review', label: t.legalContractReview, icon: <Shield size={16} /> },
     { id: 'strategy', label: t.legalCaseStrategy, icon: <Brain size={16} /> },
+    { id: 'packet', label: uiMessage('legal-hub.packet.1758eaea66'), icon: <ClipboardList size={16} /> },
     { id: 'verify', label: t.legalVerifyCitation, icon: <CheckCircle size={16} /> },
-    { id: 'import', label: t.legalImportJudgment, icon: <Upload size={16} /> },
     { id: 'knowledge-sync', label: uiMessage('legal-hub.sync-to-kb.f5314698c5'), icon: <Archive size={16} /> },
+    { id: 'bid', label: t.legalBidWorkbench, icon: <FileText size={16} /> },
+    { id: 'data-sources', label: uiMessage('legal-hub.data-sources.5ed118a719'), icon: <Database size={16} /> },
   ], [t]);
 
-  const workflowNavItems = useMemo(() => {
-    const order = new Map(LEGAL_WORKFLOW_ORDER.map((id, index) => [id, index]));
-    return navItems
-      .filter(item => item.id !== 'data-sources' && item.id !== 'bid')
-      .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
-  }, [navItems]);
+  const workflowNavItems = useMemo(() => navItems.filter(item => item.id !== 'data-sources' && item.id !== 'bid'), [navItems]);
   const specialToolNavItems = useMemo(() => navItems.filter(item => item.id === 'bid'), [navItems]);
   const utilityNavItems = useMemo(() => navItems.filter(item => item.id === 'data-sources'), [navItems]);
 
@@ -407,149 +423,79 @@ export function LegalHub() {
   const workflowStepIndex = workflowNavItems.findIndex(item => item.id === view);
   const isWorkflowView = workflowStepIndex >= 0;
   const isSpecialToolView = specialToolNavItems.some(item => item.id === view);
-  const activeStepIndex = isWorkflowView ? workflowStepIndex : 0;
-  const currentStep = isWorkflowView ? workflowNavItems[activeStepIndex] : navItems.find(item => item.id === view);
-  const nextStep = isWorkflowView ? (workflowNavItems[activeStepIndex + 1] || null) : null;
+  const currentStep = navItems.find(item => item.id === view);
+  const nextStep = isWorkflowView ? (workflowNavItems[workflowStepIndex + 1] || null) : null;
   const legalOrgId = useOrgCases ? orgConnection?.orgId : undefined;
 
-  const saveCases = (next: LegalCaseFile[], nextActiveId = activeCaseId) => {
-    const resolvedActiveId = resolveLegalCaseActiveId(next, nextActiveId);
-    setCases(next);
-    setActiveCaseIdState(resolvedActiveId);
-    if (!useOrgCases) writeLegalCaseFiles(next, resolvedActiveId);
-    else setActiveLegalCaseId(resolvedActiveId);
-  };
-
-  const createCase = async (input: LegalCaseCreateInput) => {
+  const createCase = (input: LegalCaseCreateInput) => mutation.save(async () => {
+    if (!isCurrent()) return false;
     const nextCase = {
       ...createEmptyLegalCase(),
       ...input,
       title: input.title.trim() || input.party.trim() || input.caseNumber.trim() || uiMessage('legal-hub.untitled-case.796e2578d9'),
     };
-    setCaseMutation('create');
-    try {
-      if (useOrgCases) {
-        const res = await fetch('/api/org/legal/cases', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(nextCase),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-case.d77857142e'));
-        saveCases([data, ...cases], data.id);
-      } else {
-        saveCases([nextCase, ...cases], nextCase.id);
-      }
-      setCreateDialogOpen(false);
-      setView('workspace');
-      toast.success(uiMessage('legal-hub.case-file-created.24082b4003'));
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-case.d77857142e'));
-    } finally {
-      setCaseMutation('');
+    if (useOrgCases) {
+      const data = await writeOrgCase<LegalCaseFile>('', 'POST', nextCase, (current, created) => [created, ...current]);
+      setActiveCaseIdState(data.id);
+      setActiveLegalCaseId(data.id);
+    } else {
+      writeLegalCaseFiles([nextCase, ...readLegalCaseFiles()], nextCase.id);
     }
-  };
+    setCreateDialogOpen(false);
+    setView('workspace');
+    return true;
+  }, uiMessage('legal-hub.case-file-created.24082b4003'));
 
-  const deleteCase = async () => {
-    if (!deleteTarget || caseMutation) return;
-    setCaseMutation('delete');
-    try {
-      if (useOrgCases) {
-        const res = await fetch(`/api/org/legal/cases/${encodeURIComponent(deleteTarget.id)}`, {
-          method: 'DELETE',
-          credentials: 'include',
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-delete-case.34167edea4'));
-      }
-
-      const next = cases.filter(item => item.id !== deleteTarget.id);
-      const nextActiveId = activeCaseId === deleteTarget.id ? (next[0]?.id || '') : activeCaseId;
-      if (getLegalConsultationCaseId() === deleteTarget.id) clearLegalConsultationCaseId();
-      saveCases(next, nextActiveId);
-      setDeleteTarget(null);
-      setView('workspace');
-      toast.success(uiMessage('legal-hub.case-deleted.6afeed7983'));
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-hub.failed-to-delete-case.34167edea4'));
-    } finally {
-      setCaseMutation('');
+  const deleteCase = () => mutation.save(async () => {
+    if (!isCurrent() || !deleteTarget) return false;
+    if (useOrgCases) {
+      await writeOrgCase(`/${encodeURIComponent(deleteTarget.id)}`, 'DELETE', undefined, current => current.filter(item => item.id !== deleteTarget.id));
+      const nextActiveId = resolveLegalCaseActiveId(confirmedCases.current, getActiveLegalCaseId());
+      setActiveCaseIdState(nextActiveId);
+      setActiveLegalCaseId(nextActiveId);
+    } else {
+      const next = readLegalCaseFiles().filter(item => item.id !== deleteTarget.id);
+      writeLegalCaseFiles(next, resolveLegalCaseActiveId(next, getActiveLegalCaseId()));
     }
-  };
+    if (getLegalConsultationCaseId() === deleteTarget.id) clearLegalConsultationCaseId();
+    setDeleteTarget(null);
+    setView('workspace');
+    return true;
+  }, uiMessage('legal-hub.case-deleted.6afeed7983'));
 
   const updateCase = (id: string, patch: Partial<LegalCaseFile>) => {
-    const next = cases.map(item => item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item);
-    saveCases(next, id);
-    if (useOrgCases) {
-      void fetch(`/api/org/legal/cases/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(patch),
-      }).then(async res => {
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || uiMessage('legal-hub.failed-to-save-case.90f7d722b2'));
-        }
-      }).catch((err: any) => toast.error(err?.message || uiMessage('legal-hub.failed-to-save-case.90f7d722b2')));
+    if (!isCurrent()) return false;
+    if (!useOrgCases) return Boolean(updateLegalCase(id, patch));
+    setCases(current => current.map(item => item.id === id ? { ...item, ...patch } : item));
+    if (pendingEdit.current?.id === id) {
+      Object.assign(pendingEdit.current.patch, patch);
+      return pendingEdit.current.result;
     }
+    const queued = Boolean(writing.current);
+    const result = writeOrgCase<LegalCaseFile>(`/${encodeURIComponent(id)}`, 'PUT', patch, (current, saved) => current.map(item => item.id === id ? saved : item))
+      .then(() => true).catch(error => { reportFailure(error, uiMessage('legal-hub.failed-to-save-case.90f7d722b2')); return false; });
+    if (queued) pendingEdit.current = { id, patch, result };
+    return result;
   };
 
   const addMaterial = (type: LegalCaseMaterial['type'], title: string, content?: string, source: LegalCaseMaterial['source'] = 'manual') => {
+    if (!isCurrent()) return false;
     if (!activeCase) {
       toast.info(uiMessage('legal-hub.create-a-case-file-first.a26c342dec'));
-      return;
+      return false;
     }
-    const material: LegalCaseMaterial = {
-      id: `mat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      type,
-      title,
-      content,
-      source,
-      createdAt: new Date().toISOString(),
-    };
-    if (useOrgCases) {
-      setCases(prev => prev.map(item => item.id === activeCase.id ? {
-        ...item,
-        materials: [material, ...(item.materials || [])],
-        updatedAt: new Date().toISOString(),
-      } : item));
-      void fetch(`/api/org/legal/cases/${encodeURIComponent(activeCase.id)}/materials`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(material),
-      }).then(async res => {
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
-        }
-      }).catch((err: any) => {
-        setCases(prev => prev.map(item => item.id === activeCase.id ? {
-          ...item,
-          materials: (item.materials || []).filter(existing => existing.id !== material.id),
-        } : item));
-        toast.error(err?.message || uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
-      });
-    } else {
-      updateCase(activeCase.id, { materials: [material, ...(activeCase.materials || [])] });
-    }
+    if (!useOrgCases) return Boolean(addLegalCaseMaterial(activeCase.id, { type, title, content, source }));
+    return writeOrgCase<LegalCaseMaterial>(`/${encodeURIComponent(activeCase.id)}/materials`, 'POST', { type, title, content, source }, (current, material) => current.map(item => item.id === activeCase.id ? {
+      ...item, materials: [material, ...(item.materials || [])],
+    } : item)).then(() => true).catch(error => { reportFailure(error, uiMessage('legal-hub.failed-to-archive-material.4ed52ef083')); return false; });
   };
 
   const createReminder = async (content: string, dueAt?: string) => {
     try {
-      const res = await fetch('/api/reminders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ content, dueAt: dueAt ? `${dueAt}T09:00:00` : null }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-reminder.880d5a66e2'));
+      await scopedRequest('/api/reminders', { content, dueAt: dueAt ? `${dueAt}T09:00:00` : null });
       toast.success(uiMessage('legal-hub.reminder-added.5dba21bd39'));
     } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-reminder.880d5a66e2'));
+      reportFailure(err, uiMessage('legal-hub.failed-to-create-reminder.880d5a66e2'));
     }
   };
 
@@ -560,33 +506,27 @@ export function LegalHub() {
     }
     const title = `${uiMessage('legal-hub.case-plan.66f8396b22')}: ${activeCase.title || activeCase.party || activeCase.caseNumber || activeCase.id}`;
     try {
-      const res = await fetch('/api/plans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          title,
-          description: activeCase.notes || activeCase.cause || '',
-          tags: ['legal', activeCase.stage, activeCase.cause].filter(Boolean),
-          source: 'user',
-          priority: activeCase.stage === 'trial' || activeCase.stage === 'judgment' ? 'high' : 'medium',
-          steps: [
-            { title: uiMessage('legal-hub.organize-party-statements-and-evidence.dd4cfb3b29'), description: activeCase.notes || '' },
-            { title: uiMessage('legal-hub.search-similar-cases-and-identify.bc6a84e94c'), description: activeCase.cause || '' },
-            { title: uiMessage('legal-hub.draft-documents-for-lawyer-review.8ad498dd83'), description: activeCase.caseNumber || '' },
-          ],
-        }),
+      await scopedRequest('/api/plans', {
+        title,
+        description: activeCase.notes || activeCase.cause || '',
+        tags: ['legal', activeCase.stage, activeCase.cause].filter(Boolean),
+        source: 'user',
+        priority: activeCase.stage === 'trial' || activeCase.stage === 'judgment' ? 'high' : 'medium',
+        steps: [
+          { title: uiMessage('legal-hub.organize-party-statements-and-evidence.dd4cfb3b29'), description: activeCase.notes || '' },
+          { title: uiMessage('legal-hub.search-similar-cases-and-identify.bc6a84e94c'), description: activeCase.cause || '' },
+          { title: uiMessage('legal-hub.draft-documents-for-lawyer-review.8ad498dd83'), description: activeCase.caseNumber || '' },
+        ],
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-create-case-plan.c0b35de7a9'));
       toast.success(uiMessage('legal-hub.case-plan-created.2289f19321'));
       window.dispatchEvent(new CustomEvent('lumi:client-action', { detail: { action: 'open_plans' } }));
     } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-hub.failed-to-create-case-plan.c0b35de7a9'));
+      reportFailure(err, uiMessage('legal-hub.failed-to-create-case-plan.c0b35de7a9'));
     }
   };
 
   const startConsultation = () => {
+    if (!isCurrent()) return;
     if (!activeCase) {
       toast.info(uiMessage('legal-hub.create-a-case-file-first.a26c342dec'));
       return;
@@ -599,8 +539,9 @@ export function LegalHub() {
         resetNotes: true,
         legalCaseId: activeCase.id,
         legalCaseTitle: activeCase.title || activeCase.party || activeCase.caseNumber || uiMessage('legal-hub.untitled-case.796e2578d9'),
-        respond: () => toast.success(uiMessage('legal-hub.consultation-capture-started-the-report.bfd4c10bbd')),
+        respond: () => { if (!lifetime.current?.signal.aborted) toast.success(uiMessage('legal-hub.consultation-capture-started-the-report.bfd4c10bbd')); },
         reject: (message: string) => {
+          if (lifetime.current?.signal.aborted) return;
           clearLegalConsultationCaseId();
           toast.error(message || uiMessage('legal-hub.failed-to-start-consultation-capture.99681efb6d'));
         },
@@ -619,12 +560,15 @@ export function LegalHub() {
       case 'workspace':
         return (
           <LegalCaseWorkspace
+            key={activeCase?.id}
+            caseFilter={caseFilter}
+            setCaseFilter={setCaseFilter}
             cases={cases}
             activeCase={activeCase}
-            activeCaseId={activeCase?.id || ''}
             onCreateCase={() => setCreateDialogOpen(true)}
             onDeleteCase={setDeleteTarget}
             onSelectCase={(id) => {
+              if (!isCurrent()) return;
               setActiveCaseIdState(id);
               setActiveLegalCaseId(id);
             }}
@@ -642,17 +586,17 @@ export function LegalHub() {
             refreshing={orgCasesLoading}
           />
       );
-      case 'packet': return <LegalPacketView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
-      case 'external-research': return <LegalExternalResearchView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'packet': return <LegalPacketView key={activeCase?.id} caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'external-research': return <LegalExternalResearchView key={activeCase?.id} caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'data-sources': return <LegalDataSourcesPanel />;
-      case 'bid': return <LegalBidWorkbench onSwitchView={setView} caseFile={activeCase} orgId={legalOrgId} />;
+      case 'bid': return <LegalBidWorkbench caseFile={activeCase} orgId={legalOrgId} />;
       case 'case-search': return <LegalCaseSearch caseFile={activeCase} onAddMaterial={addMaterial} />;
       case 'asset-trace': return <LegalAssetTrace caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
       case 'contract-review': return <LegalContractReview caseFile={activeCase} />;
-      case 'strategy': return <LegalStrategyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
-      case 'verify': return <LegalVerifyView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
-      case 'import': return <LegalImportView caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
-      case 'knowledge-sync': return <LegalKnowledgeSyncView caseFile={activeCase} />;
+      case 'strategy': return <LegalStrategyView key={activeCase?.id} caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'verify': return <LegalVerifyView key={activeCase?.id} caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'import': return <LegalImportView key={activeCase?.id} caseFile={activeCase} orgId={legalOrgId} onAddMaterial={addMaterial} />;
+      case 'knowledge-sync': return <LegalKnowledgeSyncView key={activeCase?.id} caseFile={activeCase} />;
       default: return <LegalCaseSearch />;
     }
   };
@@ -698,13 +642,16 @@ export function LegalHub() {
               <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
             </button>
           ))}
-          {specialToolNavItems.length > 0 && (
-            <>
+          {[
+            { items: specialToolNavItems, title: uiMessage('legal-hub.special-tools.77554fcb98'), activeClass: 'border-violet-400/20 bg-violet-500/10 text-violet-200' },
+            { items: utilityNavItems, title: uiMessage('legal-hub.settings.57cc04dce6'), activeClass: 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200' },
+          ].map(group => group.items.length > 0 && (
+            <React.Fragment key={group.title}>
               <div className="lumi-org-module-tool-copy my-2 border-t border-white/[0.08]" />
               <div className="lumi-org-module-tool-copy px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
-                {uiMessage('legal-hub.special-tools.77554fcb98')}
+                {group.title}
               </div>
-              {specialToolNavItems.map(item => (
+              {group.items.map(item => (
                 <button
                   key={item.id}
                   onClick={() => setView(item.id)}
@@ -712,7 +659,7 @@ export function LegalHub() {
                   aria-label={item.label}
                   className={`lumi-org-module-tool-button flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
                     view === item.id
-                      ? 'border-violet-400/20 bg-violet-500/10 text-violet-200'
+                      ? group.activeClass
                       : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
                   }`}
                 >
@@ -720,35 +667,18 @@ export function LegalHub() {
                   <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
                 </button>
               ))}
-            </>
-          )}
-          {utilityNavItems.length > 0 && (
-            <>
-              <div className="lumi-org-module-tool-copy my-2 border-t border-white/[0.08]" />
-              <div className="lumi-org-module-tool-copy px-3 pb-1 pt-1 text-[10px] font-black uppercase tracking-[0.14em] text-white/28">
-                {uiMessage('legal-hub.settings.57cc04dce6')}
-              </div>
-              {utilityNavItems.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => setView(item.id)}
-                  title={item.label}
-                  aria-label={item.label}
-                  className={`lumi-org-module-tool-button flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
-                    view === item.id
-                      ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-200'
-                      : 'border-transparent text-white/45 hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-white/80'
-                  }`}
-                >
-                  <span className="lumi-org-module-tool-icon shrink-0">{item.icon}</span>
-                  <span className="lumi-org-module-tool-copy min-w-0 truncate">{item.label}</span>
-                </button>
-              ))}
-            </>
-          )}
+            </React.Fragment>
+          ))}
         </nav>
       </div>
       <div data-wallpaper-tool="organization-module-workspace" className="lumi-org-module-workspace lumi-legal-workspace flex min-w-0 flex-1 flex-col bg-black/10">
+        {!useOrgCases && hasLegacyLegalCases() && <div role="status" className="border-b border-amber-400/20 p-4 text-sm text-amber-100">
+          <p>{uiMessage('legal-hub.legacy-cases-unassigned')}</p>
+          <button type="button" className="lumi-button mt-2 px-3 py-2" onClick={() => {
+            if (!window.confirm(uiMessage('legal-hub.confirm-legacy-case-ownership'))) return;
+            void mutation.save(async () => isCurrent() && importLegacyLegalCases(), uiMessage('legal-hub.case-file-created.24082b4003'));
+          }}>{uiMessage('legal-hub.import-legacy-cases')}</button>
+        </div>}
         <div data-wallpaper-tool="organization-module-context" className="lumi-legal-context border-b border-white/[0.08] bg-black/25 px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -757,7 +687,7 @@ export function LegalHub() {
                 {isWorkflowView && (
                   <>
                     <span className="text-white/25">/</span>
-                    <span>{activeStepIndex + 1}/{workflowNavItems.length}</span>
+                    <span>{workflowStepIndex + 1}/{workflowNavItems.length}</span>
                   </>
                 )}
               </div>
@@ -799,16 +729,16 @@ export function LegalHub() {
       </div>
       {createDialogOpen && (
         <LegalCaseCreateDialog
-          busy={caseMutation === 'create'}
-          onClose={() => !caseMutation && setCreateDialogOpen(false)}
+          busy={Boolean(mutation.busy)}
+          onClose={() => !mutation.busy && setCreateDialogOpen(false)}
           onSubmit={createCase}
         />
       )}
       {deleteTarget && (
         <LegalCaseDeleteDialog
           caseFile={deleteTarget}
-          busy={caseMutation === 'delete'}
-          onClose={() => !caseMutation && setDeleteTarget(null)}
+          busy={Boolean(mutation.busy)}
+          onClose={() => !mutation.busy && setDeleteTarget(null)}
           onConfirm={deleteCase}
         />
       )}
@@ -849,15 +779,6 @@ function LegalCaseCreateDialog({
     });
   };
 
-  const stages: Array<{ value: LegalCaseStage; label: string }> = [
-    { value: 'consultation', label: uiMessage('legal-hub.consultation.7a3d850bb4') },
-    { value: 'filing', label: uiMessage('legal-hub.filing.84e2c4dc09') },
-    { value: 'trial', label: uiMessage('legal-hub.trial.26f80dc45f') },
-    { value: 'judgment', label: uiMessage('legal-hub.judgment.407839a173') },
-    { value: 'enforcement', label: uiMessage('legal-hub.enforcement.10a7440dfb') },
-    { value: 'closed', label: uiMessage('legal-hub.closed.8d3c2a38e3') },
-  ];
-
   return (
     <div data-wallpaper-modal="legal-case-create" className="lumi-legal-modal fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label={uiMessage('legal-hub.close-new-case.cc85fb0c91')} />
@@ -890,22 +811,13 @@ function LegalCaseCreateDialog({
               placeholder={uiMessage('legal-hub.example-alpha-v-beta-sales.b1bd15cfe1')}
             />
           </label>
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{uiMessage('legal-hub.party.9f6b14598d')}</span>
-            <input value={draft.party} onChange={event => updateDraft('party', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{uiMessage('legal-hub.case-number.1adfaa625a')}</span>
-            <input value={draft.caseNumber} onChange={event => updateDraft('caseNumber', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-xs text-white/48">{uiMessage('legal-hub.cause.8d47df5928')}</span>
-            <input value={draft.cause} onChange={event => updateDraft('cause', event.target.value)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50" />
-          </label>
+          <CaseField label={uiMessage('legal-hub.party.9f6b14598d')} value={draft.party} onChange={value => updateDraft('party', value)} />
+          <CaseField label={uiMessage('legal-hub.case-number.1adfaa625a')} value={draft.caseNumber} onChange={value => updateDraft('caseNumber', value)} />
+          <CaseField label={uiMessage('legal-hub.cause.8d47df5928')} value={draft.cause} onChange={value => updateDraft('cause', value)} />
           <label className="space-y-1.5">
             <span className="text-xs text-white/48">{uiMessage('legal-hub.current-stage.44a8df1018')}</span>
             <select value={draft.stage} onChange={event => updateDraft('stage', event.target.value as LegalCaseStage)} className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50">
-              {stages.map(stage => <option key={stage.value} value={stage.value}>{stage.label}</option>)}
+              {Object.entries(legalStageLabels()).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           <label className="space-y-1.5 md:col-span-2">
@@ -970,9 +882,10 @@ function LegalCaseDeleteDialog({
 }
 
 function LegalCaseWorkspace({
+  caseFilter,
+  setCaseFilter,
   cases,
   activeCase,
-  activeCaseId,
   onCreateCase,
   onDeleteCase,
   onSelectCase,
@@ -989,41 +902,33 @@ function LegalCaseWorkspace({
   orgId,
   refreshing,
 }: {
+  caseFilter: string;
+  setCaseFilter: (value: string) => void;
   cases: LegalCaseFile[];
   activeCase: LegalCaseFile | null;
-  activeCaseId: string;
   onCreateCase: () => void;
   onDeleteCase: (caseFile: LegalCaseFile) => void;
   onSelectCase: (id: string) => void;
-  onUpdateCase: (id: string, patch: Partial<LegalCaseFile>) => void;
+  onUpdateCase: (id: string, patch: Partial<LegalCaseFile>) => boolean | Promise<boolean>;
   onSetView: (view: LegalView) => void;
   onStartConsultation: () => void;
   onOpenMeetingNotes: () => void;
   onCreateReminder: (content: string, dueAt?: string) => void;
   onCreatePlan: () => void;
-  onAddMaterial: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
   onRefreshCases: () => void;
   orgBacked: boolean;
   canDeleteCases: boolean;
   orgId?: string;
   refreshing: boolean;
 }) {
-  const [noticeText, setNoticeText] = useState('');
-  const [noticeStatus, setNoticeStatus] = useState('');
-  const [noticeLoading, setNoticeLoading] = useState(false);
-  const [documentStatus, setDocumentStatus] = useState('');
-  const [documentLoading, setDocumentLoading] = useState<'engagement' | 'reasoning' | 'delivery' | ''>('');
+  const notice = useLegalDocument('', { error: 'Error' });
+  const { text: noticeText, setText: setNoticeText, result: noticeStatus, busy: noticeLoading } = notice;
+  const documents = useLegalDocument('', { error: 'Error' });
+  const { result: documentStatus, busy: documentLoading } = documents;
   const [selectedMaterialId, setSelectedMaterialId] = useState('');
-  const [caseFilter, setCaseFilter] = useState('');
 
-  const stageLabels: Record<LegalCaseStage, string> = {
-    consultation: uiMessage('legal-hub.consultation.7a3d850bb4'),
-    filing: uiMessage('legal-hub.filing.84e2c4dc09'),
-    trial: uiMessage('legal-hub.trial.26f80dc45f'),
-    judgment: uiMessage('legal-hub.judgment.407839a173'),
-    enforcement: uiMessage('legal-hub.enforcement.10a7440dfb'),
-    closed: uiMessage('legal-hub.closed.8d3c2a38e3'),
-  };
+  const stageLabels = legalStageLabels();
 
   const update = (patch: Partial<LegalCaseFile>) => {
     if (!activeCase) return;
@@ -1072,8 +977,8 @@ function LegalCaseWorkspace({
     void onCreateReminder(`${label}: ${caseName}`, date);
   };
 
-  const extractNotice = () => {
-    if (!activeCase || !noticeText.trim()) return;
+  const extractNotice = async (signal: AbortSignal) => {
+    if (!activeCase || !noticeText.trim()) return '';
     const caseNumber = noticeText.match(/[（(]\d{4}[）)][^，。；;\n]{2,80}(?:号|字第?\d+号?)/)?.[0] || '';
     const court = noticeText.match(/[\u4e00-\u9fa5]{2,40}(?:人民法院|法院)/)?.[0] || '';
     const dateMatch = noticeText.match(/(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?(?:\s*(\d{1,2})[:：时](\d{1,2})?分?)?/);
@@ -1085,89 +990,62 @@ function LegalCaseWorkspace({
     if (court && !activeCase.court) patch.court = court;
     if (hearingDate) patch.hearingDate = hearingDate;
     patch.notes = [activeCase.notes, uiMessage('legal-hub.hearing-notice.ce5d4e47fe'), noticeText].filter(Boolean).join('\n');
-    onUpdateCase(activeCase.id, patch);
-    onAddMaterial('note', uiMessage('legal-hub.hearing-notice-sms.10239017c5'), noticeText, 'notice');
-    setNoticeStatus(uiMessage('legal-hub.notice-extracted-review-case-number.77a3bafd0a'));
+    if (!await onUpdateCase(activeCase.id, patch)) throw new Error(uiMessage('legal-hub.failed-to-save-case.90f7d722b2'));
+    signal.throwIfAborted();
+    if (!await onAddMaterial('note', uiMessage('legal-hub.hearing-notice-sms.10239017c5'), noticeText, 'notice')) throw new Error(uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
+    signal.throwIfAborted();
+    return uiMessage('legal-hub.notice-extracted-review-case-number.77a3bafd0a');
   };
 
-  const processNoticeLink = async () => {
-    if (!activeCase || !noticeText.trim() || noticeLoading) return;
-    if (!/https?:\/\/\S+/i.test(noticeText)) {
-      extractNotice();
-      setNoticeStatus(uiMessage('legal-hub.notice-extracted-no-downloadable-link.44ba9b77e8'));
-      return;
-    }
-    setNoticeLoading(true);
-    setNoticeStatus('');
-    try {
-      extractNotice();
-      const report = await runLegalTool('legal_process_notice_link', {
-        ...legalCaseToolArgs(activeCase, orgId),
+  const executeCaseTool = async (signal: AbortSignal, tool: string, args: Record<string, any>, type: LegalCaseMaterial['type'], title: string) => {
+    signal.throwIfAborted();
+    const report = await runLegalTool(tool, { ...legalCaseToolArgs(activeCase, orgId), ...args }, signal);
+    signal.throwIfAborted();
+    if (!report.trim()) throw new Error(`${tool} failed`);
+    if (!orgId && !await onAddMaterial(type, title, report, 'tool')) throw new Error(uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
+    signal.throwIfAborted();
+    return report;
+  };
+
+  const processNoticeLink = () => {
+    if (!activeCase || !noticeText.trim()) return;
+    return notice.generate(async signal => {
+      await extractNotice(signal);
+      if (!/https?:\/\/\S+/i.test(noticeText)) return uiMessage('legal-hub.notice-extracted-no-downloadable-link.44ba9b77e8');
+      return executeCaseTool(signal, 'legal_process_notice_link', {
         message: noticeText,
         noticeText,
         title: CHINA_LEGAL_TOOL_COPY.noticeLinkMaterial,
         confirmedForKb: false,
         includeExtractedText: true,
         extractedTextLimit: 8000,
-      });
-      if (!report.trim()) throw new Error(uiMessage('legal-hub.notice-link-result-is-empty.8480219467'));
-      onAddMaterial('note', uiMessage('legal-hub.notice-link-processing-result.ba3682e3c6'), report, 'tool');
-      setNoticeStatus(uiMessage('legal-hub.notice-link-processed-and-archived.ca52301c48'));
-    } catch (err: any) {
-      setNoticeStatus(err?.message || uiMessage('legal-hub.notice-link-processing-failed.b6c4f793c8'));
-    } finally {
-      setNoticeLoading(false);
-    }
+      }, 'note', uiMessage('legal-hub.notice-link-processing-result.ba3682e3c6'));
+    });
   };
 
-  const generateEngagementLetter = async () => {
-    if (!activeCase || documentLoading) return;
-    setDocumentLoading('engagement');
-    setDocumentStatus('');
+  const generateEngagementLetter = () => {
+    if (!activeCase) return;
     const caseProfile = buildChinaLegalCaseProfile(activeCase, stageLabels[activeCase.stage] || activeCase.stage);
-
-    try {
-      const draft = await runLegalTool('legal_generate_litigation_packet', {
-        ...legalCaseToolArgs(activeCase, orgId),
-        role: activeCase.party ? CHINA_LEGAL_TOOL_COPY.clientOrParty : CHINA_LEGAL_TOOL_COPY.party,
-        facts: caseProfile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseEngagementFacts,
-        claims: CHINA_LEGAL_TOOL_COPY.engagementClaim,
-        evidence: (activeCase.materials || []).slice(0, 8).map(item => `${item.title}（${item.type}）`).join('\n'),
-      });
-      if (!draft.trim()) throw new Error(uiMessage('legal-hub.engagement-letter-draft-is-empty.4b8b7ac964'));
-      onAddMaterial('pleading', uiMessage('legal-hub.engagement-letter-draft.f24d4df695'), draft, 'tool');
-      setDocumentStatus(uiMessage('legal-hub.engagement-letter-draft-generated-and.736bcca40e'));
-    } catch (err: any) {
-      setDocumentStatus(err?.message || uiMessage('legal-hub.failed-to-draft-engagement-letter.da1f0cf7bb'));
-    } finally {
-      setDocumentLoading('');
-    }
+    return documents.generate(signal => executeCaseTool(signal, 'legal_generate_litigation_packet', {
+      role: activeCase.party ? CHINA_LEGAL_TOOL_COPY.clientOrParty : CHINA_LEGAL_TOOL_COPY.party,
+      facts: caseProfile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseEngagementFacts,
+      claims: CHINA_LEGAL_TOOL_COPY.engagementClaim,
+      evidence: (activeCase.materials || []).slice(0, 8).map(item => `${item.title}（${item.type}）`).join('\n'),
+    }, 'pleading', uiMessage('legal-hub.engagement-letter-draft.f24d4df695')));
   };
 
-  const generateReasoningMatrix = async () => {
-    if (!activeCase || documentLoading) return;
-    setDocumentLoading('reasoning');
-    setDocumentStatus('');
-    try {
-      const profile = legalCaseDraftContext(activeCase);
-      const draft = await runLegalTool('legal_case_reasoning_matrix', {
-        ...legalCaseToolArgs(activeCase, orgId),
-        facts: profile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseReasoningFacts,
-        materials: profile,
-        writeFiles: true,
-      });
-      if (!draft.trim()) throw new Error(uiMessage('legal-hub.reasoning-matrix-is-empty.11a8fdc054'));
-      onAddMaterial('note', uiMessage('legal-hub.legal-reasoning-matrix.6511ae764d'), draft, 'tool');
-      setDocumentStatus(uiMessage('legal-hub.reasoning-matrix-generated-and-archived.bab25bd4e7'));
-    } catch (err: any) {
-      setDocumentStatus(err?.message || uiMessage('legal-hub.reasoning-matrix-generation-failed.2f463a82fa'));
-    } finally {
-      setDocumentLoading('');
-    }
+  const generateReasoningMatrix = () => {
+    if (!activeCase) return;
+    const profile = legalCaseDraftContext(activeCase);
+    return documents.generate(signal => executeCaseTool(signal, 'legal_case_reasoning_matrix', {
+      facts: profile || activeCase.notes || CHINA_LEGAL_TOOL_COPY.sparseReasoningFacts,
+      materials: profile,
+      writeFiles: true,
+    }, 'note', uiMessage('legal-hub.legal-reasoning-matrix.6511ae764d')));
   };
 
-  const runDeliveryGate = async () => {
-    if (!activeCase || documentLoading) return;
+  const runDeliveryGate = () => {
+    if (!activeCase) return;
     const pickedMaterial = (activeCase.materials || []).find(material => material.id === selectedMaterialId) || null;
     const candidate = pickedMaterial?.content
       ? pickedMaterial
@@ -1183,24 +1061,12 @@ function LegalCaseWorkspace({
       onSetView('packet');
       return;
     }
-    setDocumentLoading('delivery');
-    setDocumentStatus('');
-    try {
-      const report = await runLegalTool('legal_finalize_delivery_package', {
-        ...legalCaseToolArgs(activeCase, orgId),
-        documentType: inferChinaLegalDocumentType(candidate.title, candidate.type),
-        content: candidate.content.slice(0, 24000),
-        includeDocx: true,
-        includePdf: false,
-      });
-      if (!report.trim()) throw new Error(uiMessage('legal-hub.delivery-gate-result-is-empty.f8a71afa2b'));
-      onAddMaterial('note', `${candidate.title} ${uiMessage('legal-hub.delivery-gate-record.410a32f38e')}`, report, 'tool');
-      setDocumentStatus(uiMessage('legal-hub.delivery-gate-completed-and-archived.a3ad6b85db'));
-    } catch (err: any) {
-      setDocumentStatus(err?.message || uiMessage('legal-hub.delivery-gate-failed.733db09c91'));
-    } finally {
-      setDocumentLoading('');
-    }
+    return documents.generate(signal => executeCaseTool(signal, 'legal_finalize_delivery_package', {
+      documentType: inferChinaLegalDocumentType(candidate.title, candidate.type),
+      content: candidate.content.slice(0, 24000),
+      includeDocx: true,
+      includePdf: false,
+    }, 'note', `${candidate.title} ${uiMessage('legal-hub.delivery-gate-record.410a32f38e')}`));
   };
 
   if (!activeCase) {
@@ -1294,7 +1160,7 @@ function LegalCaseWorkspace({
                 <div
                   key={item.id}
                   className={`group flex items-center rounded-xl border transition-colors ${
-                    item.id === activeCaseId
+                    item.id === activeCase?.id
                       ? 'border-amber-400/20 bg-amber-500/[0.12] text-amber-200'
                       : 'border-transparent bg-white/[0.03] text-white/58 hover:border-white/[0.08] hover:bg-white/[0.06] hover:text-white/75'
                   }`}
@@ -1421,10 +1287,10 @@ function LegalCaseWorkspace({
               <button
                 type="button"
                 onClick={generateReasoningMatrix}
-                disabled={documentLoading === 'reasoning'}
+                disabled={Boolean(documentLoading)}
                 className="lumi-button h-9 px-3 text-xs"
               >
-                {documentLoading === 'reasoning' ? uiMessage('legal-hub.generating.634308f29b') : uiMessage('legal-hub.reasoning-matrix.7e54736217')}
+                {uiMessage('legal-hub.reasoning-matrix.7e54736217')}
               </button>
               <button type="button" onClick={() => onSetView('external-research')} className="lumi-button h-9 px-3 text-xs">
                 {uiMessage('legal-hub.sources.2c0ee0fd12')}
@@ -1435,10 +1301,10 @@ function LegalCaseWorkspace({
               <button
                 type="button"
                 onClick={runDeliveryGate}
-                disabled={documentLoading === 'delivery'}
+                disabled={Boolean(documentLoading)}
                 className="lumi-button h-9 px-3 text-xs"
               >
-                {documentLoading === 'delivery' ? uiMessage('legal-hub.checking.913563d226') : uiMessage('legal-hub.delivery-gate.de13676f0a')}
+                {uiMessage('legal-hub.delivery-gate.de13676f0a')}
               </button>
             </div>
           </section>
@@ -1449,9 +1315,9 @@ function LegalCaseWorkspace({
               <h3 className="text-sm font-bold">{uiMessage('legal-hub.deadlines-and-hearings.804d0a2db1')}</h3>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <DateField label={uiMessage('legal-hub.hearing-date.e3930c19c4')} value={activeCase.hearingDate} onChange={value => update({ hearingDate: value })} onReminder={() => createDateReminder('hearing')} />
-              <DateField label={uiMessage('legal-hub.judgment-date.abf2b584c3')} value={activeCase.judgmentDate} onChange={value => update({ judgmentDate: value })} />
-              <DateField label={uiMessage('legal-hub.appeal-deadline.0e3e1ebb0f')} value={activeCase.appealDeadline} onChange={value => update({ appealDeadline: value })} onReminder={() => createDateReminder('appeal')} />
+              <CaseField type="date" label={uiMessage('legal-hub.hearing-date.e3930c19c4')} value={activeCase.hearingDate} onChange={value => update({ hearingDate: value })} onReminder={() => createDateReminder('hearing')} />
+              <CaseField type="date" label={uiMessage('legal-hub.judgment-date.abf2b584c3')} value={activeCase.judgmentDate} onChange={value => update({ judgmentDate: value })} />
+              <CaseField type="date" label={uiMessage('legal-hub.appeal-deadline.0e3e1ebb0f')} value={activeCase.appealDeadline} onChange={value => update({ appealDeadline: value })} onReminder={() => createDateReminder('appeal')} />
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={calculateAppealDeadline} className="lumi-button h-9 px-3 text-xs">
@@ -1479,20 +1345,20 @@ function LegalCaseWorkspace({
               />
               <div className="mt-3 flex items-center gap-3">
                 <button
-                  onClick={extractNotice}
-                  disabled={!noticeText.trim() || noticeLoading}
+                  onClick={() => notice.generate(extractNotice)}
+                  disabled={!noticeText.trim() || Boolean(noticeLoading)}
                   className="lumi-button-primary h-9 border-amber-400/25 bg-amber-500/15 px-4 text-xs text-amber-200 hover:bg-amber-500/25"
                 >
                   {uiMessage('legal-hub.extract.c127c363a4')}
                 </button>
                 <button
                   onClick={processNoticeLink}
-                  disabled={!noticeText.trim() || noticeLoading}
+                  disabled={!noticeText.trim() || Boolean(noticeLoading)}
                   className="lumi-button h-9 px-3 text-xs"
                 >
                   {noticeLoading ? uiMessage('legal-hub.processing.45c0c78af6') : uiMessage('legal-hub.process-link.7a43f618ce')}
                 </button>
-                {noticeStatus && <span className="text-xs text-emerald-300/70">{noticeStatus}</span>}
+                {noticeStatus && <span className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs ${notice.successfulResult ? 'text-emerald-300/70' : 'text-red-300'}`}>{noticeStatus}</span>}
               </div>
             </div>
 
@@ -1504,17 +1370,14 @@ function LegalCaseWorkspace({
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={generateEngagementLetter}
-                  disabled={documentLoading === 'engagement'}
+                  disabled={Boolean(documentLoading)}
                   className="lumi-button h-9 px-3 text-xs"
                 >
-                  {documentLoading === 'engagement' ? uiMessage('legal-hub.drafting.7a57e7e31f') : uiMessage('legal-hub.engagement-letter.260ac284a3')}
+                  {uiMessage('legal-hub.engagement-letter.260ac284a3')}
                 </button>
                 <LegalMeetingInlineButton
                   label={uiMessage('legal-hub.trial-notes.25b8c590da')}
-                  onClick={() => {
-                    setDocumentStatus(uiMessage('legal-hub.trial-consultation-transcription-started-notes.d47206cbc8'));
-                    onStartConsultation();
-                  }}
+                  onClick={onStartConsultation}
                 />
                 <button onClick={() => onSetView('contract-review')} className="lumi-button h-9 px-3 text-xs">
                   {uiMessage('legal-hub.contract-review.798c7d6913')}
@@ -1523,11 +1386,12 @@ function LegalCaseWorkspace({
                   {uiMessage('legal-hub.asset-trace.24d93c8873')}
                 </button>
               </div>
+              {documentLoading && <Loader2 size={16} className="mt-3 animate-spin text-white/50" />}
               {documentStatus && (
-                <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-                  /失败|错误|empty|failed|Error/i.test(documentStatus)
-                    ? 'border-red-400/20 bg-red-500/[0.08] text-red-200/80'
-                    : 'border-emerald-400/[0.18] bg-emerald-500/[0.08] text-emerald-200/78'
+                <div className={`mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border px-3 py-2 text-xs ${
+                  documents.successfulResult
+                    ? 'border-emerald-400/[0.18] bg-emerald-500/[0.08] text-emerald-200/78'
+                    : 'border-red-400/20 bg-red-500/[0.08] text-red-200/80'
                 }`}>
                   {documentStatus}
                 </div>
@@ -1567,26 +1431,13 @@ function LegalCaseWorkspace({
   );
 }
 
-function CaseField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="space-y-1.5">
-      <span className="text-xs text-white/42">{label}</span>
-      <input
-        value={value}
-        onChange={event => onChange(event.target.value)}
-        className="lumi-field h-10 w-full rounded-lg focus:border-amber-400/50"
-      />
-    </label>
-  );
-}
-
-function DateField({ label, value, onChange, onReminder }: { label: string; value: string; onChange: (value: string) => void; onReminder?: () => void }) {
+function CaseField({ label, value, onChange, type = 'text', onReminder }: { label: string; value: string; onChange: (value: string) => void; type?: 'text' | 'date'; onReminder?: () => void }) {
   return (
     <label className="space-y-1.5">
       <span className="text-xs text-white/42">{label}</span>
       <div className="flex gap-2">
         <input
-          type="date"
+          type={type}
           value={value}
           onChange={event => onChange(event.target.value)}
           className="lumi-field h-10 min-w-0 flex-1 rounded-lg focus:border-amber-400/50"
@@ -1675,54 +1526,30 @@ function LegalPacketView({
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
-  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
 }) {
-  const t = useT();
-  const isZh = t.langCode !== 'en';
-  const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
-  const defaultEvidence = useMemo(() => (
+  const { text: facts, setText: setFacts, result, successfulResult, busy, save, generate: run } = useLegalDocument(legalCaseDraftContext(caseFile), { error: 'Error' });
+  const [evidence, setEvidence] = useState(() => (
     (caseFile?.materials || [])
       .filter(material => material.type === 'evidence')
       .map(material => `${material.title}\n${material.content || ''}`)
       .join('\n\n')
-  ), [caseFile]);
+  ));
   const [role, setRole] = useState('plaintiff');
-  const [facts, setFacts] = useState(defaultFacts);
   const [claims, setClaims] = useState('');
-  const [evidence, setEvidence] = useState(defaultEvidence);
-  const [result, setResult] = useState('');
-  const [loading, setLoading] = useState(false);
+  const loading = Boolean(busy);
 
-  useEffect(() => {
-    setFacts(defaultFacts);
-    setEvidence(defaultEvidence);
-    setResult('');
-  }, [caseFile?.id]);
-
-  const generate = async () => {
-    if ((!facts.trim() && !evidence.trim()) || loading) return;
-    setLoading(true);
-    setResult('');
-    try {
-      const text = await runLegalTool('legal_generate_litigation_packet', {
-        ...legalCaseToolArgs(caseFile, orgId),
-        role,
-        claims,
-        facts,
-        evidence,
-      });
-      setResult(text);
-    } catch (err: any) {
-      setResult(`Error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const generate = () => {
+    if (!facts.trim() && !evidence.trim()) return;
+    return run(signal => runLegalTool('legal_generate_litigation_packet', {
+      ...legalCaseToolArgs(caseFile, orgId),
+      role,
+      claims,
+      facts,
+      evidence,
+    }, signal));
   };
 
-  const archive = () => {
-    if (!result || !onAddMaterial) return;
-    onAddMaterial('pleading', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 半自动文书包`, result, 'tool');
-  };
 
   return (
     <LegalTwoPaneTool
@@ -1752,9 +1579,10 @@ function LegalPacketView({
         </>
       )}
       result={result}
+      successfulResult={successfulResult}
       emptyText={uiMessage('legal-hub.the-packet-will-appear-here.52a02955fa')}
       archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
-      onArchive={!orgId && result ? archive : undefined}
+      onArchive={!orgId && successfulResult && onAddMaterial ? () => save(() => onAddMaterial('pleading', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 半自动文书包`, successfulResult, 'tool')) : undefined}
     />
   );
 }
@@ -1766,47 +1594,23 @@ function LegalExternalResearchView({
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
-  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
 }) {
-  const t = useT();
-  const isZh = t.langCode !== 'en';
-  const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
+  const { text: facts, setText: setFacts, result, successfulResult, busy, save, generate: run } = useLegalDocument(legalCaseDraftContext(caseFile), { error: 'Error' });
   const [issues, setIssues] = useState(caseFile?.cause || '');
   const [companies, setCompanies] = useState(caseFile?.party || '');
-  const [facts, setFacts] = useState(defaultFacts);
-  const [result, setResult] = useState('');
-  const [loading, setLoading] = useState(false);
+  const loading = Boolean(busy);
 
-  useEffect(() => {
-    setIssues(caseFile?.cause || '');
-    setCompanies(caseFile?.party || '');
-    setFacts(defaultFacts);
-    setResult('');
-  }, [caseFile?.id]);
-
-  const generate = async () => {
+  const generate = () => {
     if (!facts.trim() && !issues.trim() && !companies.trim()) return;
-    setLoading(true);
-    setResult('');
-    try {
-      const text = await runLegalTool('legal_external_research_plan', {
-        ...legalCaseToolArgs(caseFile, orgId),
-        facts,
-        issues: issues.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
-        companyNames: companies.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
-      });
-      setResult(text);
-    } catch (err: any) {
-      setResult(`Error: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    return run(signal => runLegalTool('legal_external_research_plan', {
+      ...legalCaseToolArgs(caseFile, orgId),
+      facts,
+      issues: issues.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
+      companyNames: companies.split(/[，,；;\n]/).map(item => item.trim()).filter(Boolean),
+    }, signal));
   };
 
-  const archive = () => {
-    if (!result || !onAddMaterial) return;
-    onAddMaterial('note', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 外部检索行动单`, result, 'tool');
-  };
 
   return (
     <LegalTwoPaneTool
@@ -1828,9 +1632,10 @@ function LegalExternalResearchView({
         </>
       )}
       result={result}
+      successfulResult={successfulResult}
       emptyText={uiMessage('legal-hub.external-research-plan-will-appear.701d667eed')}
       archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
-      onArchive={!orgId && result ? archive : undefined}
+      onArchive={!orgId && successfulResult && onAddMaterial ? () => save(() => onAddMaterial('note', `${caseFile?.title || caseFile?.caseNumber || uiMessage('legal-hub.case.8a53cf13fb')} 外部检索行动单`, successfulResult, 'tool')) : undefined}
     />
   );
 }
@@ -1844,18 +1649,20 @@ function LegalTwoPaneTool({
   running = false,
   left,
   result,
+  successfulResult,
   emptyText,
   archiveLabel,
   onArchive,
 }: {
   icon: React.ReactNode;
-  accent: 'amber' | 'emerald' | 'cyan';
+  accent: 'amber' | 'emerald' | 'cyan' | 'blue';
   title: string;
   desc: string;
   caseFile?: LegalCaseFile | null;
   running?: boolean;
   left: React.ReactNode;
   result: string;
+  successfulResult: string;
   emptyText: string;
   archiveLabel?: string;
   onArchive?: () => void;
@@ -1864,6 +1671,7 @@ function LegalTwoPaneTool({
     amber: 'border-amber-400/20 bg-amber-500/10 text-amber-300 focus:border-amber-400/35',
     emerald: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300 focus:border-emerald-400/35',
     cyan: 'border-cyan-400/20 bg-cyan-500/10 text-cyan-300 focus:border-cyan-400/35',
+    blue: 'border-blue-400/20 bg-blue-500/10 text-blue-300 focus:border-blue-400/35',
   }[accent];
   return (
     <div className="h-full overflow-y-auto p-6 text-white">
@@ -1879,14 +1687,14 @@ function LegalTwoPaneTool({
             </div>
           </div>
         </section>
-        <LegalCaseContextBar caseFile={caseFile} state={running ? 'running' : result ? 'result' : 'input'} />
+        <LegalCaseContextBar caseFile={caseFile} state={running ? 'running' : successfulResult ? 'result' : 'input'} />
         <section className="grid min-h-[560px] gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">{left}</div>
           <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-sm font-medium text-white">Output</h3>
               {onArchive && (
-                <button onClick={onArchive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
+                <button onClick={onArchive} disabled={running} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
                   <FolderOpen size={14} />
                   {archiveLabel || 'Archive'}
                 </button>
@@ -1894,7 +1702,7 @@ function LegalTwoPaneTool({
             </div>
             <div className="min-h-[460px] flex-1 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 custom-scrollbar">
               {result ? (
-                <article className="whitespace-pre-wrap text-sm leading-7 text-white/78">{result}</article>
+                <article className={`whitespace-pre-wrap text-sm leading-7 ${successfulResult ? 'text-white/78' : 'text-red-300'}`}>{result}</article>
               ) : (
                 <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
                   <FileText size={32} className="text-white/20" />
@@ -1916,103 +1724,50 @@ function LegalStrategyView({
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
-  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const defaultFacts = useMemo(() => legalCaseDraftContext(caseFile), [caseFile]);
-  const [facts, setFacts] = useState(defaultFacts);
-  const [result, setResult] = useState('');
-  const [loading, setLoading] = useState(false);
+  const { text: facts, setText: setFacts, result, successfulResult, busy, save, generate } = useLegalDocument(legalCaseDraftContext(caseFile), { error: 'Error' });
+  const loading = Boolean(busy);
 
-  useEffect(() => {
-    setFacts(defaultFacts);
-    setResult('');
-  }, [caseFile?.id]);
-
-  const analyze = async () => {
-    if (!facts.trim() || loading) return;
-    setLoading(true);
-    setResult('');
-    try {
-      const text = await runLegalTool('legal_case_strategy', {
-        ...legalCaseToolArgs(caseFile, orgId),
-        facts,
-      });
-      setResult(text);
-    } catch (e: any) {
-      setResult(`Error: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const archive = () => {
-    if (!result || !onAddMaterial) return;
-    onAddMaterial('note', `${legalCaseTitle(caseFile)} 诉讼策略分析`, result, 'tool');
-    toast.success(uiMessage('legal-hub.strategy-analysis-archived-to-the.7220b483ae'));
+  const analyze = () => {
+    if (!facts.trim()) return;
+    return generate(signal => runLegalTool('legal_case_strategy', { ...legalCaseToolArgs(caseFile, orgId), facts }, signal));
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 text-white">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4">
-        <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-amber-400/20 bg-amber-500/10 text-amber-300">
-              <Brain size={22} />
-            </span>
-            <div>
-              <h2 className="text-xl font-semibold text-white">{t.legalCaseStrategyTitle}</h2>
-              <p className="mt-1 text-sm leading-6 text-white/50">{t.legalCaseStrategyDesc}</p>
-            </div>
-          </div>
-        </section>
-
-        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : result ? 'result' : 'input'} />
-
-        <section className="grid min-h-[520px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.case-facts.a83dee9a30')}</label>
-            <textarea
-              value={facts}
-              onChange={e => setFacts(e.target.value)}
-              placeholder={t.legalCaseStrategyPlaceholder}
-              className="min-h-[360px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35"
-            />
-            <button
-              onClick={analyze}
-              disabled={loading || !facts.trim()}
-              className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-amber-400/20 bg-amber-500/15 px-4 py-2.5 text-sm font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:opacity-50"
-            >
-              {loading ? <Loader2 size={16} className="animate-spin" /> : <Brain size={16} />}
-              {loading ? uiMessage('legal-hub.analyzing.3b98929aff') : t.legalCaseStrategyAnalyze}
-            </button>
-          </div>
-
-          <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            {result ? (
-              <div className="flex h-full min-h-[420px] flex-col gap-3">
-                {!orgId && (
-                  <div className="flex justify-end">
-                    <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
-                      <FolderOpen size={14} />
-                      {uiMessage('legal-hub.archive-to-case.6dc41a223d')}
-                    </button>
-                  </div>
-                )}
-                <pre className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
-                  {result}
-                </pre>
-              </div>
-            ) : (
-              <div className="flex h-full min-h-[420px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
-                <Brain size={32} className="text-white/20" />
-                <span>{uiMessage('legal-hub.strategy-analysis-will-appear-here.61c7ee7a79')}</span>
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
+    <LegalTwoPaneTool
+      icon={<Brain size={22} />}
+      accent="amber"
+      title={t.legalCaseStrategyTitle}
+      desc={t.legalCaseStrategyDesc}
+      caseFile={caseFile}
+      running={loading}
+      left={(
+        <div className="flex min-h-0 flex-col">
+          <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.case-facts.a83dee9a30')}</label>
+          <textarea
+            value={facts}
+            onChange={e => setFacts(e.target.value)}
+            placeholder={t.legalCaseStrategyPlaceholder}
+            className="min-h-[360px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-amber-400/35"
+          />
+          <button
+            onClick={analyze}
+            disabled={loading || !facts.trim()}
+            className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-amber-400/20 bg-amber-500/15 px-4 py-2.5 text-sm font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Brain size={16} />}
+            {loading ? uiMessage('legal-hub.analyzing.3b98929aff') : t.legalCaseStrategyAnalyze}
+          </button>
+        </div>
+      )}
+      result={result}
+      successfulResult={successfulResult}
+      emptyText={uiMessage('legal-hub.strategy-analysis-will-appear-here.61c7ee7a79')}
+      archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
+      onArchive={!orgId && successfulResult && onAddMaterial ? () => save(() => onAddMaterial('note', `${legalCaseTitle(caseFile)} 诉讼策略分析`, successfulResult, 'tool'), uiMessage('legal-hub.strategy-analysis-archived-to-the.7220b483ae')) : undefined}
+    />
   );
 }
 
@@ -2023,130 +1778,72 @@ function LegalVerifyView({
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
-  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const defaultText = useMemo(() => (
+  const { text, setText, result, successfulResult, busy, save, generate } = useLegalDocument(
     (caseFile?.materials || []).find(material => (
       Boolean(material.content) && (material.type === 'pleading' || material.type === 'contract')
-    ))?.content || ''
-  ), [caseFile]);
-  const [text, setText] = useState(defaultText);
-  const [results, setResults] = useState<any[] | null>(null);
-  const [loading, setLoading] = useState(false);
+    ))?.content || '', { error: 'Error' });
+  const loading = Boolean(busy);
 
-  useEffect(() => {
-    setText(defaultText);
-    setResults(null);
-  }, [caseFile?.id]);
-
-  const verify = async () => {
-    if (!text.trim() || loading) return;
-    setLoading(true);
-    try {
-      const verification = await runLegalTool('legal_verify_citation', {
-        ...legalCaseToolArgs(caseFile, orgId),
-        text,
-      });
-      setResults([{ content: verification || uiMessage('legal-hub.verification-complete.684377838d') }]);
-    } catch (e: any) {
-      setResults([{ error: e.message }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const verificationText = (results || []).map((item: any) => item.content || item.error || '').filter(Boolean).join('\n\n');
-  const archive = () => {
-    if (!verificationText || !onAddMaterial) return;
-    onAddMaterial('note', `${legalCaseTitle(caseFile)} 引用校验`, verificationText, 'tool');
-    toast.success(uiMessage('legal-hub.citation-verification-archived-to-the.9d6dce0d48'));
+  const verify = () => {
+    if (!text.trim()) return;
+    return generate(signal => runLegalTool('legal_verify_citation', { ...legalCaseToolArgs(caseFile, orgId), text }, signal));
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 text-white">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4">
-        <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-400/20 bg-emerald-500/10 text-emerald-300">
-              <CheckCircle size={22} />
-            </span>
-            <div>
-              <h2 className="text-xl font-semibold text-white">{t.legalVerifyCitationTitle}</h2>
-              <p className="mt-1 text-sm leading-6 text-white/50">{t.legalVerifyCitationDesc}</p>
-            </div>
-          </div>
-        </section>
-
-        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : verificationText ? 'result' : 'input'} />
-
-        <section className="grid min-h-[500px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.text-to-verify.e83f5c99d9')}</label>
-            <textarea
-              value={text}
-              onChange={e => setText(e.target.value)}
-              placeholder={t.legalVerifyCitationPlaceholder}
-              className="min-h-[340px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-emerald-400/35"
-            />
-            <button
-              onClick={verify}
-              disabled={loading || !text.trim()}
-              className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
-            >
-              {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
-              {loading ? uiMessage('legal-hub.verifying.1c01a1f8ae') : t.legalVerifyCitationVerify}
-            </button>
-          </div>
-
-          <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            {results && results.length > 0 ? (
-              <div className="flex h-full min-h-[400px] flex-col gap-3">
-                <div className="flex justify-end">
-                  <button onClick={archive} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white">
-                    <FolderOpen size={14} />
-                    {uiMessage('legal-hub.archive-to-case.6dc41a223d')}
-                  </button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
-                  {results.map((r: any, i: number) => (
-                    <div key={i} className={r.error ? 'text-red-300' : 'whitespace-pre-wrap'}>{r.content || r.error}</div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
-                <CheckCircle size={32} className="text-white/20" />
-                <span>{uiMessage('legal-hub.citation-verification-results-will-appear.7fa754234b')}</span>
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
+    <LegalTwoPaneTool
+      icon={<CheckCircle size={22} />}
+      accent="emerald"
+      title={t.legalVerifyCitationTitle}
+      desc={t.legalVerifyCitationDesc}
+      caseFile={caseFile}
+      running={loading}
+      left={(
+        <div className="flex min-h-0 flex-col">
+          <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.text-to-verify.e83f5c99d9')}</label>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder={t.legalVerifyCitationPlaceholder}
+            className="min-h-[340px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-emerald-400/35"
+          />
+          <button
+            onClick={verify}
+            disabled={loading || !text.trim()}
+            className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-emerald-400/20 bg-emerald-500/15 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+            {loading ? uiMessage('legal-hub.verifying.1c01a1f8ae') : t.legalVerifyCitationVerify}
+          </button>
+        </div>
+      )}
+      result={result}
+      successfulResult={successfulResult}
+      emptyText={uiMessage('legal-hub.citation-verification-results-will-appear.7fa754234b')}
+      archiveLabel={uiMessage('legal-hub.archive-to-case.6dc41a223d')}
+      onArchive={successfulResult && onAddMaterial ? () => save(() => onAddMaterial('note', `${legalCaseTitle(caseFile)} 引用校验`, successfulResult, 'tool')) : undefined}
+    />
   );
 }
 
 function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null }) {
-  const t = useT();
-  const isZh = t.langCode !== 'en';
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState('');
+  const { result: status, successfulResult, busy, generate } = useLegalDocument('', { error: 'Error' });
+  const loading = Boolean(busy);
   const caseTitle = legalCaseTitle(caseFile);
   const articleTitle = `${caseTitle} - ${uiMessage('legal-hub.case-knowledge-archive.fb5aa7cf62')}`;
   const articleContent = useMemo(() => (
     caseFile ? buildLegalCaseKnowledgeMarkdown(caseFile) : ''
   ), [caseFile]);
 
-  const syncToKnowledgeBase = async () => {
-    if (!caseFile || loading) return;
-    setLoading(true);
-    setStatus('');
-    try {
-      const res = await fetch('/api/org/kb/articles', {
+  const syncToKnowledgeBase = () => {
+    if (!caseFile) return;
+    return generate(async signal => {
+      const data = await apiJson('/api/org/kb/articles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        signal,
         body: JSON.stringify({
           title: articleTitle,
           content: articleContent,
@@ -2155,9 +1852,9 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
           status: 'published',
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('legal-hub.failed-to-sync-to-knowledge.c0a55da5a1'));
-      const articleId = data.id || data.article?.id || data.articleId || '';
+      signal.throwIfAborted();
+      const articleId = data?.id || data?.article?.id || data?.articleId;
+      if (typeof articleId !== 'string' || !articleId.trim()) throw new Error(uiMessage('legal-hub.failed-to-sync-to-knowledge.c0a55da5a1'));
       window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
         detail: {
           domain: 'work',
@@ -2165,15 +1862,9 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
         },
       }));
       window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-      setStatus(uiMessage('legal-hub.synced-to-the-organization-knowledge.f95c36e4c6'));
       toast.success(uiMessage('legal-hub.case-synced-to-organization-knowledge.e5d9130fb8'));
-    } catch (err: any) {
-      const message = err?.message || uiMessage('legal-hub.failed-to-sync-to-knowledge.c0a55da5a1');
-      setStatus(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
+      return uiMessage('legal-hub.synced-to-the-organization-knowledge.f95c36e4c6');
+    });
   };
 
   if (!caseFile) {
@@ -2217,9 +1908,9 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
           </div>
           {status && (
             <div className={`mt-4 rounded-lg border px-3 py-2 text-sm ${
-              /失败|failed|error/i.test(status)
-                ? 'border-red-400/20 bg-red-500/[0.08] text-red-200'
-                : 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-100'
+              successfulResult
+                ? 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-100'
+                : 'border-red-400/20 bg-red-500/[0.08] text-red-200'
             }`}>
               {status}
             </div>
@@ -2242,7 +1933,7 @@ function LegalKnowledgeSyncView({ caseFile }: { caseFile?: LegalCaseFile | null 
           </div>
         </section>
 
-        <LegalCaseContextBar caseFile={caseFile} state={status ? 'result' : loading ? 'running' : 'input'} />
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : successfulResult ? 'result' : 'input'} />
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -2277,87 +1968,59 @@ function LegalImportView({
 }: {
   caseFile?: LegalCaseFile | null;
   orgId?: string;
-  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => void;
+  onAddMaterial?: (type: LegalCaseMaterial['type'], title: string, content?: string, source?: LegalCaseMaterial['source']) => boolean | Promise<boolean>;
 }) {
   const t = useT();
-  const isZh = t.langCode !== 'en';
-  const [content, setContent] = useState('');
-  const [status, setStatus] = useState('');
-  const [loading, setLoading] = useState(false);
+  const { text: content, setText: setContent, result, successfulResult, busy, generate } = useLegalDocument('', { error: 'Error' });
+  const loading = Boolean(busy);
 
-  const importJudgment = async () => {
-    if (!content.trim() || loading) return;
-    setLoading(true);
-    setStatus('');
-    try {
+  const importJudgment = () => {
+    if (!content.trim()) return;
+    return generate(async signal => {
       const reply = await runLegalTool('legal_import_judgment', {
         ...legalCaseToolArgs(caseFile, orgId),
         content,
-      });
+      }, signal);
+      signal.throwIfAborted();
       if (caseFile && onAddMaterial) {
         const title = inferLegalMaterialTitle(content, uiMessage('legal-hub.judgment-document.3349b60486'));
-        onAddMaterial('judgment', title, content, 'import');
-        setStatus(`${reply}\n\n${uiMessage('legal-hub.archived-to-the-current-case.e823bb894a')}`);
-      } else {
-        setStatus(reply);
+        if (!await onAddMaterial('judgment', title, content, 'import')) throw new Error(uiMessage('legal-hub.failed-to-archive-material.4ed52ef083'));
+        signal.throwIfAborted();
       }
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
+      return reply;
+    });
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 text-white">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4">
-        <section className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-start gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-blue-400/20 bg-blue-500/10 text-blue-300">
-              <Upload size={22} />
-            </span>
-            <div>
-              <h2 className="text-xl font-semibold text-white">{t.legalImportJudgmentTitle}</h2>
-              <p className="mt-1 text-sm leading-6 text-white/50">{t.legalImportJudgmentDesc}</p>
-            </div>
-          </div>
-        </section>
-
-        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : status ? 'result' : 'input'} />
-
-        <section className="grid min-h-[560px] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="flex min-h-0 flex-col rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.judgment-document-content.a5f6676889')}</label>
-            <textarea
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              placeholder={uiMessage('legal-hub.paste-judgment-document-content-here.2534452d81')}
-              className="min-h-[420px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 font-mono text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-blue-400/35"
-            />
-            <button
-              onClick={importJudgment}
-              disabled={loading || !content.trim()}
-              className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2.5 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
-            >
-              {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-              {loading ? uiMessage('legal-hub.importing.ec01cb1a24') : t.legalImportJudgment}
-            </button>
-          </div>
-
-          <div className="min-h-0 rounded-lg border border-white/10 bg-white/[0.04] p-4">
-            {status ? (
-              <pre className="h-full min-h-[460px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-4 text-sm leading-7 text-white/76 custom-scrollbar">
-                {status}
-              </pre>
-            ) : (
-              <div className="flex h-full min-h-[460px] flex-col items-center justify-center gap-2 text-center text-sm text-white/40">
-                <Upload size={32} className="text-white/20" />
-                <span>{uiMessage('legal-hub.import-result-and-archive-status.ef57344682')}</span>
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
+    <LegalTwoPaneTool
+      icon={<Upload size={22} />}
+      accent="blue"
+      title={t.legalImportJudgmentTitle}
+      desc={t.legalImportJudgmentDesc}
+      caseFile={caseFile}
+      running={loading}
+      left={(
+        <div className="flex min-h-0 flex-col">
+          <label className="mb-2 text-sm font-medium text-white">{uiMessage('legal-hub.judgment-document-content.a5f6676889')}</label>
+          <textarea
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            placeholder={uiMessage('legal-hub.paste-judgment-document-content-here.2534452d81')}
+            className="min-h-[420px] flex-1 resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-3 font-mono text-sm leading-6 text-white outline-none placeholder:text-white/35 focus:border-blue-400/35"
+          />
+          <button
+            onClick={importJudgment}
+            disabled={loading || !content.trim()}
+            className="mt-3 inline-flex items-center justify-center gap-2 self-end rounded-lg border border-blue-400/20 bg-blue-500/15 px-4 py-2.5 text-sm font-medium text-blue-100 transition hover:bg-blue-500/25 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {loading ? uiMessage('legal-hub.importing.ec01cb1a24') : t.legalImportJudgment}
+          </button>
+        </div>
+      )}
+      result={result}
+      successfulResult={successfulResult}
+      emptyText={uiMessage('legal-hub.import-result-and-archive-status.ef57344682')}
+    />
   );
 }

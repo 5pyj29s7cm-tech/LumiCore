@@ -479,9 +479,7 @@ export function useVoiceprint(options?: UseVoiceprintOptions) {
         const data = await res.json();
         const source = data.source === 'speechbrain'
           ? 'speechbrain'
-          : data.source === 'local'
-            ? 'server-local'
-            : 'server-local';
+          : 'server-local';
         matchResult = {
           isOwnerSpeaking: data.isOwnerSpeaking === true,
           confidence: Math.round(Number(data.confidence || 0) * 100) / 100,

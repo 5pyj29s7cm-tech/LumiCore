@@ -115,17 +115,12 @@ type SourceImageFieldProps = {
   label: string;
   required: boolean;
   requiredText: string;
-  placeholder: string;
+  copy: ReturnType<typeof mediaGenerationCopy>;
   value: string;
   artifacts: MediaGenerationArtifact[];
   selectedArtifactId?: string;
   disabled: boolean;
-  uploadLabel: string;
-  chooseLabel: string;
-  clearLabel: string;
-  onChange: (value: string) => void;
-  onChoose: (artifact: MediaGenerationArtifact) => void;
-  onClear: () => void;
+  onChange: (value: string, artifact?: MediaGenerationArtifact) => void;
   onUpload?: () => void;
 };
 
@@ -133,17 +128,12 @@ function SourceImageField({
   label,
   required,
   requiredText,
-  placeholder,
+  copy,
   value,
   artifacts,
   selectedArtifactId,
   disabled,
-  uploadLabel,
-  chooseLabel,
-  clearLabel,
   onChange,
-  onChoose,
-  onClear,
   onUpload,
 }: SourceImageFieldProps) {
   return (
@@ -159,7 +149,7 @@ function SourceImageField({
             className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-bold text-white/48 transition-colors hover:bg-white/[0.08] hover:text-white/75 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Upload size={12} />
-            {uploadLabel}
+            {copy.uploadSourceImage}
           </button>
         )}
       </div>
@@ -167,7 +157,7 @@ function SourceImageField({
         <input
           value={value}
           onChange={event => onChange(event.target.value)}
-          placeholder={placeholder}
+          placeholder={copy.sourceImagePlaceholder}
           aria-label={label}
           aria-required={required}
           className="h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 pr-10 text-xs text-white/75 outline-none placeholder:text-white/22 focus:border-cyan-200/35"
@@ -175,9 +165,9 @@ function SourceImageField({
         {value && (
           <button
             type="button"
-            onClick={onClear}
-            aria-label={clearLabel}
-            title={clearLabel}
+            onClick={() => onChange('')}
+            aria-label={copy.clearSourceImage}
+            title={copy.clearSourceImage}
             className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-white/32 transition-colors hover:bg-white/10 hover:text-white/75"
           >
             <X size={13} />
@@ -187,7 +177,7 @@ function SourceImageField({
       {required && !value.trim() && <p className="text-[10px] text-amber-100/55">{requiredText}</p>}
       {artifacts.length > 0 && (
         <div className="space-y-2 pt-1">
-          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-white/28">{chooseLabel}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-white/28">{copy.chooseFromArtifacts}</p>
           <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {artifacts.map(artifact => {
               const selected = selectedArtifactId === artifact.id
@@ -196,7 +186,7 @@ function SourceImageField({
                 <button
                   key={artifact.id}
                   type="button"
-                  onClick={() => onChoose(artifact)}
+                  onClick={() => onChange(artifact.path || artifact.url, artifact)}
                   title={artifact.fileName || label}
                   aria-pressed={selected}
                   className={`h-16 w-20 shrink-0 overflow-hidden rounded-xl border bg-black/35 transition-colors ${
@@ -597,17 +587,12 @@ export function MediaGenerationStudio({
                 label={copy.primaryImage}
                 required
                 requiredText={copy.primaryImageRequired}
-                placeholder={copy.sourceImagePlaceholder}
+                copy={copy}
                 value={primaryImage}
                 artifacts={selectableImageArtifacts}
                 selectedArtifactId={primaryArtifactId}
                 disabled={isWorking}
-                uploadLabel={copy.uploadSourceImage}
-                chooseLabel={copy.chooseFromArtifacts}
-                clearLabel={copy.clearSourceImage}
-                onChange={value => setPrimarySource(value)}
-                onChoose={artifact => setPrimarySource(artifact.path || artifact.url, artifact)}
-                onClear={() => setPrimarySource('')}
+                onChange={setPrimarySource}
                 onUpload={onRequestSourceImage
                   ? () => onRequestSourceImage('image_edit', 'primary')
                   : undefined}
@@ -616,17 +601,12 @@ export function MediaGenerationStudio({
                 label={copy.editReferenceImage}
                 required={false}
                 requiredText=""
-                placeholder={copy.sourceImagePlaceholder}
+                copy={copy}
                 value={editReferenceImage}
                 artifacts={selectableImageArtifacts.filter(artifact => artifact.id !== primaryArtifactId)}
                 selectedArtifactId={referenceArtifactIds[0]}
                 disabled={isWorking}
-                uploadLabel={copy.uploadSourceImage}
-                chooseLabel={copy.chooseFromArtifacts}
-                clearLabel={copy.clearSourceImage}
-                onChange={value => setEditReferenceSource(value)}
-                onChoose={artifact => setEditReferenceSource(artifact.path || artifact.url, artifact)}
-                onClear={() => setEditReferenceSource('')}
+                onChange={setEditReferenceSource}
                 onUpload={onRequestSourceImage
                   ? () => onRequestSourceImage('image_edit', 'reference')
                   : undefined}
@@ -639,17 +619,12 @@ export function MediaGenerationStudio({
               label={copy.videoReferenceImage}
               required
               requiredText={copy.videoReferenceRequired}
-              placeholder={copy.sourceImagePlaceholder}
+              copy={copy}
               value={referenceImage}
               artifacts={selectableImageArtifacts}
               selectedArtifactId={referenceArtifactId}
               disabled={isWorking}
-              uploadLabel={copy.uploadSourceImage}
-              chooseLabel={copy.chooseFromArtifacts}
-              clearLabel={copy.clearSourceImage}
-              onChange={value => setVideoReferenceSource(value)}
-              onChoose={artifact => setVideoReferenceSource(artifact.path || artifact.url, artifact)}
-              onClear={() => setVideoReferenceSource('')}
+              onChange={setVideoReferenceSource}
               onUpload={onRequestSourceImage
                 ? () => onRequestSourceImage('image_to_video', 'first_frame')
                 : undefined}

@@ -1,23 +1,48 @@
+import { useCallback, useEffect, useRef } from 'react';
+
 export interface AppConfirmOptions {
   title?: string;
   message: string;
   confirmText?: string;
   cancelText?: string;
   tone?: 'default' | 'danger';
+  signal?: AbortSignal;
+}
+
+let cancelActive: (() => void) | undefined;
+export function cancelAppConfirm() { cancelActive?.(); }
+
+export function useAppConfirm(scope = '') {
+  const owner = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController(); owner.current = controller;
+    return () => controller.abort();
+  }, [scope]);
+  return useCallback((options: string | AppConfirmOptions) => {
+    if (!owner.current || owner.current.signal.aborted) return Promise.resolve(false);
+    const config = typeof options === 'string' ? { message: options } : options;
+    const signal = config.signal ? AbortSignal.any([owner.current.signal, config.signal]) : owner.current.signal;
+    return appConfirm({ ...config, signal });
+  }, []);
 }
 
 export function appConfirm(options: string | AppConfirmOptions): Promise<boolean> {
   const config: AppConfirmOptions = typeof options === 'string' ? { message: options } : options;
 
-  if (typeof document === 'undefined') {
+  if (typeof document === 'undefined' || config.signal?.aborted) {
     return Promise.resolve(false);
   }
 
+  cancelActive?.();
   return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm';
 
     const panel = document.createElement('div');
+    panel.setAttribute('role', 'alertdialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', config.title || 'Confirm');
     panel.className = 'w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-950/95 p-5 shadow-2xl shadow-black/40';
 
     const title = document.createElement('div');
@@ -47,13 +72,23 @@ export function appConfirm(options: string | AppConfirmOptions): Promise<boolean
     const cleanup = (value: boolean) => {
       if (settled) return;
       settled = true;
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, true);
+      config.signal?.removeEventListener('abort', cancelDialog);
+      for (const event of ['lumi:navigate', 'lumi:domain-changed', 'pagehide']) window.removeEventListener(event, cancelDialog);
+      if (cancelActive === cancelDialog) cancelActive = undefined;
+      const restoreFocus = overlay.contains(document.activeElement);
       overlay.remove();
+      if (restoreFocus && previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
       resolve(value);
     };
+    const cancelDialog = () => cleanup(false);
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!['Escape', 'Enter', 'Tab'].includes(event.key)) return;
+      event.stopImmediatePropagation(); event.preventDefault();
+      if (event.isComposing || event.repeat) return;
       if (event.key === 'Escape') cleanup(false);
-      if (event.key === 'Enter') cleanup(true);
+      if (event.key === 'Enter' && (event.target === confirm || event.target === cancel)) cleanup(event.target === confirm);
+      if (event.key === 'Tab') (document.activeElement === cancel ? confirm : cancel).focus();
     };
 
     cancel.addEventListener('click', () => cleanup(false));
@@ -61,12 +96,15 @@ export function appConfirm(options: string | AppConfirmOptions): Promise<boolean
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) cleanup(false);
     });
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
+    cancelActive = cancelDialog;
+    config.signal?.addEventListener('abort', cancelDialog, { once: true });
+    for (const event of ['lumi:navigate', 'lumi:domain-changed', 'pagehide']) window.addEventListener(event, cancelDialog);
 
     actions.append(cancel, confirm);
     panel.append(title, message, actions);
     overlay.append(panel);
     document.body.append(overlay);
-    confirm.focus();
+    cancel.focus();
   });
 }

@@ -1,6 +1,8 @@
-import { getDesktopSessionProof } from '../services/authService';
+import { apiFetch, apiJson } from '../services/apiClient';
 
-const DESKTOP_SESSION_HEADER = 'x-lumi-desktop-session';
+function postWorkflow<T = Record<string, any>>(path: string, body: unknown, signal?: AbortSignal) {
+  return apiJson<T>('/api/industry/workflows' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+}
 
 export interface IndustryWorkflowTaskRef {
   id: string;
@@ -61,16 +63,10 @@ export async function startIndustryWorkflow(input: {
   source?: string;
   context?: Record<string, unknown>;
   idempotencyKey?: string;
-}): Promise<IndustryWorkflowStartResponse> {
-  const response = await fetch('/api/industry/workflows', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(input),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Unable to start industry workflow (${response.status})`);
-  return data as IndustryWorkflowStartResponse;
+}, signal?: AbortSignal): Promise<IndustryWorkflowStartResponse> {
+  const data = await postWorkflow<IndustryWorkflowStartResponse>('', input, signal);
+  if (typeof data?.task?.id !== 'string' || !data.task.id || typeof data.handoffPrompt !== 'string' || data.contract?.entryId !== input.entryId) throw new Error('Workflow start was not confirmed');
+  return data;
 }
 
 export async function verifyIndustryWorkflow(input: {
@@ -79,21 +75,15 @@ export async function verifyIndustryWorkflow(input: {
   filePaths?: string[];
   workbenchInput?: Record<string, unknown>;
   source?: string;
-}): Promise<Record<string, any>> {
-  const response = await fetch(`/api/industry/workflows/${encodeURIComponent(input.taskId)}/verify`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      resultText: input.resultText || '',
-      filePaths: input.filePaths || [],
-      source: input.source || 'industry_client',
-      ...(input.workbenchInput ? { workbenchInput: input.workbenchInput } : {}),
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Unable to verify industry workflow (${response.status})`);
-  return data as Record<string, any>;
+}, signal?: AbortSignal): Promise<Record<string, any>> {
+  const data = await postWorkflow(`/${encodeURIComponent(input.taskId)}/verify`, {
+    resultText: input.resultText || '',
+    filePaths: input.filePaths || [],
+    source: input.source || 'industry_client',
+    ...(input.workbenchInput ? { workbenchInput: input.workbenchInput } : {}),
+  }, signal);
+  if (data?.task?.id !== input.taskId || !data.verification) throw new Error('Workflow verification was not confirmed');
+  return data;
 }
 
 export async function executeIndustryWorkflow(input: {
@@ -104,14 +94,9 @@ export async function executeIndustryWorkflow(input: {
   signal?: AbortSignal;
   onProgress?: (result: IndustryWorkflowExecutionResult) => void;
 }): Promise<IndustryWorkflowExecutionResult> {
-  const desktopSessionProof = getDesktopSessionProof();
-  const response = await fetch('/api/chat?stream=true', {
+  const response = await apiFetch('/api/chat?stream=true', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(desktopSessionProof ? { [DESKTOP_SESSION_HEADER]: desktopSessionProof } : {}),
-    },
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     signal: input.signal,
     body: JSON.stringify({
       industryWorkflowTaskId: input.taskId,
@@ -126,6 +111,8 @@ export async function executeIndustryWorkflow(input: {
   if (!response.body) throw new Error('Industry workflow stream is unavailable.');
 
   const reader = response.body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  input.signal?.addEventListener('abort', cancel, { once: true });
   let terminalReceived = false;
   const decoder = new TextDecoder();
   let buffer = '';
@@ -133,7 +120,8 @@ export async function executeIndustryWorkflow(input: {
   let status = 'in_progress';
   let workflow: Record<string, unknown> | undefined;
   const applyEvent = (event: Record<string, unknown> | null) => {
-    if (!event) return;
+    input.signal?.throwIfAborted();
+    if (!event || terminalReceived) return;
     if (event.failed || event.error) throw new Error(String(event.error || 'Workflow execution failed'));
     if (event.done === true) terminalReceived = true;
     if (typeof event.chunk === 'string') text += event.chunk;
@@ -145,17 +133,24 @@ export async function executeIndustryWorkflow(input: {
     input.onProgress?.({ text, status, workflow });
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() || '';
-    blocks.forEach(block => applyEvent(parseIndustryWorkflowStreamEvent(block)));
-    if (done) break;
+  try {
+    input.signal?.throwIfAborted();
+    while (true) {
+      const { value, done } = await reader.read();
+      input.signal?.throwIfAborted();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || '';
+      blocks.forEach(block => applyEvent(parseIndustryWorkflowStreamEvent(block)));
+      if (done || terminalReceived) break;
+    }
+    if (!terminalReceived) applyEvent(parseIndustryWorkflowStreamEvent(buffer));
+    if (!terminalReceived) throw new Error('Workflow connection ended before a final receipt arrived.');
+    return { text, status, workflow };
+  } finally {
+    input.signal?.removeEventListener('abort', cancel);
+    cancel(); reader.releaseLock();
   }
-  applyEvent(parseIndustryWorkflowStreamEvent(buffer));
-  if (!terminalReceived) throw new Error('Workflow connection ended before a final receipt arrived.');
-  return { text, status, workflow };
 }
 
 export async function executeFinanceDeliveryWorkflow(input: {
@@ -163,20 +158,9 @@ export async function executeFinanceDeliveryWorkflow(input: {
   financeInput: Record<string, unknown>;
   signal?: AbortSignal;
 }): Promise<FinanceDeliveryExecutionResult> {
-  const desktopSessionProof = getDesktopSessionProof();
-  const response = await fetch(`/api/industry/workflows/${encodeURIComponent(input.taskId)}/finance-delivery`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(desktopSessionProof ? { [DESKTOP_SESSION_HEADER]: desktopSessionProof } : {}),
-    },
-    credentials: 'include',
-    signal: input.signal,
-    body: JSON.stringify({ financeInput: input.financeInput }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Unable to execute Finance delivery (${response.status})`);
-  return data as FinanceDeliveryExecutionResult;
+  const data = await postWorkflow<FinanceDeliveryExecutionResult>(`/${encodeURIComponent(input.taskId)}/finance-delivery`, { financeInput: input.financeInput }, input.signal);
+  if (data?.ok !== true || data.status !== 'verified' || data.persisted !== true || data.task?.id !== input.taskId || !Array.isArray(data.artifacts)) throw new Error('Finance delivery was not confirmed');
+  return data;
 }
 
 export async function buildIndustryWorkflowIdempotencyKey(input: {

@@ -1,0 +1,150 @@
+{
+  "batch": "prune56",
+  "date": "2026-10-02",
+  "baseline": "Working tree after prune55, not HEAD; all earlier changes preserved.",
+  "files": [
+    {
+      "file": "src/components/MediaGenerationStudio.tsx",
+      "before": 812,
+      "after": 787,
+      "delta": -25,
+      "beforeSha256": "4a4b3114fcb3814305970b5860cd39d3fb79aa3476ffd24d27569e6b9f2ff0d4",
+      "afterSha256": "78857dcc1496a7cfa70e7a3822bde0eb1c39f9d835c7e208edd498904277cd83"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365791
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526593
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365766
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526568
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -25
+      },
+      "tests": {
+        "files": 0,
+        "lines": 0
+      },
+      "total": {
+        "files": 0,
+        "lines": -25
+      }
+    },
+    "combinedPrune54Through56": {
+      "source": {
+        "files": -1,
+        "lines": -50
+      },
+      "tests": {
+        "files": 0,
+        "lines": 25
+      },
+      "total": {
+        "files": -1,
+        "lines": -25
+      }
+    },
+    "combinedPrune44Through56": {
+      "source": {
+        "files": 0,
+        "lines": -796
+      },
+      "tests": {
+        "files": 1,
+        "lines": 585
+      },
+      "total": {
+        "files": 1,
+        "lines": -211
+      }
+    }
+  },
+  "focused": {
+    "testFiles": 5,
+    "passed": 36,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "src/components/MediaGenerationStudio.test.tsx",
+      "src/components/frontendBusinessContracts.test.tsx",
+      "test/authenticated_file_resources.test.tsx",
+      "test/media_generation_artifacts.test.ts",
+      "test/media_artifact_socket_receipt.test.ts"
+    ]
+  },
+  "combinedPrune54Through56Verification": {
+    "testFiles": 23,
+    "passed": 262,
+    "note": "Union of the three focused runs; not a full-suite run."
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T15:11:11.977Z",
+      "finishedAt": "2026-10-02T15:11:14.085Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T15:11:14.087Z",
+      "finishedAt": "2026-10-02T15:11:41.375Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T15:11:41.375Z",
+      "finishedAt": "2026-10-02T15:11:48.942Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T15:11:48.943Z",
+      "finishedAt": "2026-10-02T15:11:56.890Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T15:11:56.891Z",
+      "finishedAt": "2026-10-02T15:11:57.198Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through55LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "The private SourceImageField owns the shared localized labels and routes input, artifact selection and clearing through one onChange callback. Removed redundant onChoose/onClear props and all three repeated caller adapters.",
+    "Retained separate image-edit primary, optional reference and image-to-video first-frame operations/slots, upload callbacks and source filtering. Artifact selection still prefers path over URL and includes the artifact; manual input and clearing omit artifact identity.",
+    "No new business modules or tests; existing generation UI, business contracts and artifact resource tests run unchanged."
+  ],
+  "limitations": [
+    "Existing mounted component tests use simulated dependencies; no real media/model generation, native-client or visual acceptance, full-suite rerun, backend rebuild, commit, push or restart.",
+    "This is source-selector plumbing consolidation, not a change to generation model routing, timing or media capabilities.",
+    "Personal-case cache ownership, AppContext model read-error/retry presentation and other application partitions remain open."
+  ]
+}

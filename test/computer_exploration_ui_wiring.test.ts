@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SystemExplorer } from '../src/components/SystemExplorer';
-const fixture = vi.hoisted(() => ({ api: vi.fn(), sensors: vi.fn(), uid: 'first', authorized: true }));
+import { extractSourceExpression } from './source_expression';
+const fixture = vi.hoisted(() => ({ api: vi.fn(), sensors: vi.fn(), native: vi.fn(), uid: 'first', authorized: true }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: fixture.native }));
 vi.mock('../src/services/apiClient', async () => ({ apiJson: (await import('./source_expression')).extractSourceExpression('src/services/apiClient.ts', 'apiJson', { apiFetch: fixture.api }) }));
 vi.mock('../src/services/sensorPermissionService', () => ({ getSensorPermissionSnapshot: fixture.sensors, SENSOR_PERMISSIONS_CHANGED: 'sensors-changed' }));
 vi.mock('../src/hooks/usePlatform', () => ({ usePlatform: () => ({ isDesktop: false, isTauri: false }) }));
@@ -22,11 +24,78 @@ const reply = (data: any, ok = true) => ({ ok, status: ok ? 200 : 403, json: asy
 const defaultReply = (url: string) => reply(url.endsWith('/status') ? { authorized: fixture.authorized, latest: snapshot(fixture.uid) } : url.endsWith('/history') ? { snapshots: [snapshot('history-only')] } : {});
 function pending() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => { fixture.uid = 'first'; fixture.authorized = true; fixture.api.mockImplementation(async (url: string) => defaultReply(url)); fixture.sensors.mockResolvedValue({ microphone: 'granted' }); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); fixture.api.mockReset(); fixture.sensors.mockReset(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); fixture.api.mockReset(); fixture.sensors.mockReset(); fixture.native.mockReset(); });
 
 function source(relativePath: string): string {
   return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
 }
+
+const telemetry = { computerScope: 'lumi_server_host', cpu: 24, cpuModel: 'Synthetic CPU', logicalCpus: 8, physicalCpus: null, cpus: 8,
+  ram: { used: 6, total: 16, percent: 37.5 }, gpu: null, platform: 'test-os', release: 'release', arch: 'x64', hostname: 'server-machine', uptime: 200 };
+const nativeInfo = { cpu_model: 'Native CPU', logical_cpus: 12, cpus: 6, platform: 'native-os', release: 'native-release', arch: 'arm64' };
+const nativeLive = { cpu_percent: 0, memory_used_gb: 4, memory_total_gb: 32, memory_percent: 12.5, gpu_vendor: 'Native GPU', gpu_utilization: 0, hostname: 'native-machine', uptime_seconds: 0 };
+async function telemetryService(host = 'web') {
+  if (host !== 'web') vi.stubGlobal(host === 'tauri' ? '__TAURI_INTERNALS__' : 'lumiElectron', {});
+  vi.resetModules(); return (await import('../src/services/systemService')).systemService;
+}
+
+it.each(['web', 'electron'])('%s telemetry propagates read errors and malformed samples instead of zero statistics', async host => {
+  const service = await telemetryService(host), signal = new AbortController().signal;
+  for (const response of [reply({ error: 'Stats denied' }, false), reply({}), reply({ ...telemetry, cpu: NaN })]) {
+    fixture.api.mockResolvedValueOnce(response); await expect(service.getSystemStats(signal)).rejects.toThrow();
+  }
+  fixture.api.mockResolvedValueOnce(reply(telemetry)); expect(await service.getSystemStats(signal)).toEqual(telemetry);
+  expect(fixture.api).toHaveBeenCalledTimes(4); expect(fixture.api.mock.calls.every(([, init]) => init.signal === signal)).toBe(true);
+});
+
+it('keeps native samples together and falls back to a complete server snapshot without mixing machines', async () => {
+  const service = await telemetryService('tauri'), signal = new AbortController().signal;
+  fixture.native.mockImplementation(async command => command === 'get_system_info' ? nativeInfo : nativeLive);
+  const first = await service.getSystemStats(signal); expect(first).toMatchObject({ computerScope: 'native_client', hostname: 'native-machine', cpu: 0, cpuModel: 'Native CPU', uptime: 0, physicalCpus: 6, ram: { total: 32 }, gpu: { name: 'Native GPU', util: 0 } });
+  await service.getSystemStats(signal); expect(fixture.native.mock.calls.filter(([name]) => name === 'get_system_info')).toHaveLength(1); expect(fixture.api).not.toHaveBeenCalled();
+  fixture.native.mockRejectedValueOnce(new Error('Native read failed')); fixture.api.mockResolvedValueOnce(reply(telemetry)); expect(await service.getSystemStats(signal)).toEqual(telemetry);
+  fixture.native.mockResolvedValue({}); fixture.api.mockResolvedValueOnce(reply({ error: 'Backend unavailable' }, false)); await expect(service.getSystemStats(signal)).rejects.toThrow('Backend unavailable');
+});
+
+it('ends a stalled native wait on cancellation without a fallback read or leaked abort listener', async () => {
+  const service = await telemetryService('tauri'), deferred = pending(), owner = new AbortController();
+  const add = vi.spyOn(owner.signal, 'addEventListener'), remove = vi.spyOn(owner.signal, 'removeEventListener');
+  fixture.native.mockImplementation(command => command === 'get_system_info' ? Promise.resolve(nativeInfo) : deferred.promise);
+  const result = service.getSystemStats(owner.signal); await vi.waitFor(() => expect(fixture.native).toHaveBeenCalledTimes(2));
+  owner.abort(new Error('Telemetry deadline')); await expect(result).rejects.toThrow('Telemetry deadline'); expect(fixture.api).not.toHaveBeenCalled();
+  expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1]); deferred.resolve(nativeLive);
+});
+
+async function monitor() {
+  const deps: any = { React, Suspense: React.Suspense, useState: React.useState, useEffect: React.useEffect, AbortController, AbortSignal, setTimeout, clearTimeout,
+    useApp: () => ({ user: fixture.uid ? { uid: fixture.uid, role: 'admin' } : null }), systemService: await telemetryService(), uiMessage: (key: string) => key.split('.')[1],
+    SystemExplorer: () => React.createElement('div', {}, 'Computer exploration remains available'), LazyPanelFallback: () => null, Cpu: () => null, Monitor: () => null,
+    motion: { div: ({ children, style }: any) => React.createElement('div', { 'data-testid': style?.minWidth ? 'sample' : undefined }, children) } };
+  deps.KernelMonitorView = extractSourceExpression('src/components/DesktopUI.tsx', 'KernelMonitorView', deps);
+  return extractSourceExpression('src/components/DesktopUI.tsx', 'KernelMonitorApp', deps);
+}
+
+it('monitor serializes slow reads, removes failed samples and recovers without displaying false idle data', async () => {
+  vi.useFakeTimers(); const Panel = await monitor(), first = pending(); fixture.api.mockReturnValueOnce(first.promise); const view = render(React.createElement(Panel, { t: {} }));
+  expect(screen.getByRole('status').textContent).toBe('Loading'); expect(screen.queryByText(/IDLE/)).toBeNull();
+  await act(async () => vi.advanceTimersByTimeAsync(6000)); expect(fixture.api).toHaveBeenCalledOnce();
+  await act(async () => first.resolve(reply({ error: 'Telemetry offline' }, false))); expect(screen.getByRole('alert').textContent).toBe('Telemetry offline'); expect(screen.queryByText(/IDLE/)).toBeNull();
+  fixture.api.mockResolvedValue(reply(telemetry)); await act(async () => vi.advanceTimersByTimeAsync(2000));
+  expect(screen.queryByRole('alert')).toBeNull(); expect(screen.getByText(/server-machine/).textContent).toContain('lumi-server-host'); expect(screen.getAllByTestId('sample')).toHaveLength(1);
+  await act(async () => vi.advanceTimersByTimeAsync(2000)); expect(screen.getAllByTestId('sample')).toHaveLength(2);
+  fixture.api.mockResolvedValue(reply({ ...telemetry, hostname: 'replacement-machine' })); await act(async () => vi.advanceTimersByTimeAsync(2000)); expect(screen.getAllByTestId('sample')).toHaveLength(1);
+  fixture.api.mockResolvedValue(reply({ error: 'Read lost' }, false)); await act(async () => vi.advanceTimersByTimeAsync(2000));
+  expect(screen.getByRole('alert').textContent).toBe('Read lost'); expect(screen.queryByText(/server-machine/)).toBeNull(); expect(screen.queryAllByTestId('sample')).toHaveLength(0);
+  expect(screen.getByText('Computer exploration remains available')).toBeTruthy(); view.unmount(); const calls = fixture.api.mock.calls.length;
+  await act(async () => vi.advanceTimersByTimeAsync(5000)); expect(fixture.api).toHaveBeenCalledTimes(calls);
+});
+
+it('monitor isolates account changes and ignores late results after unmount', async () => {
+  const Panel = await monitor(), old = pending(); fixture.api.mockReturnValueOnce(old.promise); const view = render(React.createElement(Panel, { t: {} })); const signal = fixture.api.mock.calls[0][1].signal;
+  fixture.uid = 'next'; fixture.api.mockResolvedValue(reply(telemetry)); view.rerender(React.createElement(Panel, { t: {} })); await screen.findByText(/server-machine/); expect(signal.aborted).toBe(true);
+  await act(async () => old.resolve(reply({ ...telemetry, hostname: 'old-machine' }))); expect(screen.queryByText(/old-machine/)).toBeNull();
+  fixture.uid = ''; view.rerender(React.createElement(Panel, { t: {} })); expect(screen.queryByText(/server-machine/)).toBeNull(); expect(fixture.api.mock.calls.at(-1)![1].signal.aborted).toBe(true);
+});
 
 describe('computer exploration UI wiring', () => {
   it('offers explicit allow and decline actions in System Explorer', () => {

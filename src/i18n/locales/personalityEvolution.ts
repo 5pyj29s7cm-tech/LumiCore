@@ -2,6 +2,9 @@ import { getLocale, type Locale } from '../runtime';
 
 const PERSONALITY_EVOLUTION_COPY = {
   en: {
+    retry: 'Retry',
+    noChange: 'No new evolution was produced.',
+    unconfirmed: 'The change was not confirmed. Refresh before trying again.',
     dimensions: {
       analytical: 'Analytical',
       intuitive: 'Intuitive',
@@ -14,6 +17,9 @@ const PERSONALITY_EVOLUTION_COPY = {
     },
   },
   zh: {
+    retry: '重试',
+    noChange: '本次没有产生新的进化。',
+    unconfirmed: '未确认修改结果，请刷新后再试。',
     dimensions: {
       analytical: '分析',
       intuitive: '直觉',

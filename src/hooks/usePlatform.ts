@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { isTauriRuntime } from '@/services/apiBridge';
 
 export type Platform = 'web' | 'electron' | 'tauri' | 'ios' | 'android';
 
@@ -10,14 +11,14 @@ export interface SensorData {
 }
 
 export function usePlatform() {
-  const [platform, setPlatform] = useState<Platform>(() => {
+  const [platform] = useState<Platform>(() => {
     if (typeof window !== 'undefined') {
       if ((window as any).lumiElectron || navigator.userAgent.toLowerCase().includes('electron')) {
         return 'electron';
       }
-      if ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__ || (window as any).__TAURI__) {
-        return 'tauri';
-      }
+      if (isTauriRuntime()) return 'tauri';
+      const mobile = (window as any).Capacitor?.platform;
+      if (mobile === 'ios' || mobile === 'android') return mobile;
     }
     return 'web';
   });
@@ -25,31 +26,7 @@ export function usePlatform() {
   const [sensors, setSensors] = useState<SensorData>({});
 
   useEffect(() => {
-    // Check for Electron
-    if (window && (window as any).lumiElectron) {
-      setPlatform('electron');
-      return;
-    }
-
-    // Check for Tauri
-    if (window && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__ || (window as any).__TAURI__)) {
-      setPlatform('tauri');
-      return;
-    }
-
-    // Check for Capacitor/Cordova (Mobile)
-    const win = window as any;
-    const isMobile = !!(win.Capacitor && win.Capacitor.platform !== 'web');
-    
-    if (isMobile) {
-      setPlatform(win.Capacitor.platform as Platform);
-    } else {
-      setPlatform('web');
-    }
-  }, []);
-
-  const startSensorSync = useCallback(() => {
-    setIsSyncing(true);
+    if (!isSyncing) return;
     const cleanupFns: (() => void)[] = [];
 
     // Real GPS via Geolocation API
@@ -90,9 +67,8 @@ export function usePlatform() {
 
     return () => {
       cleanupFns.forEach(fn => fn());
-      setIsSyncing(false);
     };
-  }, []);
+  }, [isSyncing]);
 
   return {
     platform,
@@ -102,7 +78,7 @@ export function usePlatform() {
     isMobile: platform === 'ios' || platform === 'android',
     isWeb: platform === 'web',
     electronAPI: (window as any).lumiElectron || null,
-    startSensorSync,
+    setSensorSyncEnabled: setIsSyncing,
     sensors,
     isSyncing
   };

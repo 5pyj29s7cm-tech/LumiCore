@@ -1,5 +1,5 @@
 import { unifiedCoreCopy } from '../i18n/locales/unifiedCore';
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Shield,
@@ -41,7 +41,10 @@ import { VoiceProviderSwitch } from './VoiceProviderSwitch';
 import { VoiceDeviceSelector } from './VoiceDeviceSelector';
 import { MCPSettings } from './MCPSettings';
 import { getSavedKeyStatus, saveServerKeys } from '@/services/settingsKeys';
-import { apiFetch } from '@/services/apiClient';
+import { apiFetch, apiJson } from '@/services/apiClient';
+import { useLocalModelConfig } from '../hooks/useLocalModelConfig';
+import { useLumiOfficialCatalog } from '../hooks/useLumiOfficialCatalog';
+import type { OfficialApiModelCatalog as LumiOfficialCatalog } from '../../server/llm/official_api';
 import {
   BACKGROUND_FACE_PRESENCE_CHANGED,
   BACKGROUND_FACE_PRESENCE_ENABLED_KEY,
@@ -56,12 +59,7 @@ import {
   type SensorPermissionState,
 } from '@/services/sensorPermissionService';
 import { formatUiMessage, uiMessage, type UiMessageKey } from '../i18n/uiMessages';
-import {
-  CHINA_LEGAL_DATA_SOURCES,
-  chinaLegalCopy,
-  type ChinaLegalDataSourceDefinition,
-  type ChinaLegalDataSourceField,
-} from '../i18n/regions/cn/legal';
+import { LegalDataSourcesSettings } from './org/LegalDataSourcesSettings';
 import {
   LUMI_OFFICIAL_BASE_URL,
   normalizeLumiOfficialBaseUrl,
@@ -90,56 +88,6 @@ const LUMI_OFFICIAL_APPLY_FAILED_KEY = 'settings.lumi-official-apply-failed.e6f7
 const LUMI_OFFICIAL_ADAPTER_UNAVAILABLE_KEY = 'settings.lumi-official-adapter-unavailable.a8b9c0d1e2' as const;
 const LUMI_OFFICIAL_CONFIG_NOT_READY_KEY = 'settings.lumi-official-config-not-ready.b9c0d1e2f3' as const;
 const LUMI_RELAY_BASE_URL_PLACEHOLDER = LUMI_OFFICIAL_BASE_URL;
-const LUMI_OFFICIAL_CATALOG_REFRESH_EVENT = 'lumi:official-model-catalog-refresh';
-
-type LumiOfficialCatalog = {
-  models: Array<{ id: string; capability: string; endpoint?: string; ownedBy?: string }>;
-  byRole: Partial<Record<LumiModelRoleId, string[]>>;
-};
-
-let lumiOfficialCatalogCache: LumiOfficialCatalog | null = null;
-let lumiOfficialCatalogPromise: Promise<LumiOfficialCatalog> | null = null;
-
-async function loadLumiOfficialCatalog(force = false): Promise<LumiOfficialCatalog> {
-  if (force) lumiOfficialCatalogCache = null;
-  if (lumiOfficialCatalogCache) return lumiOfficialCatalogCache;
-  if (!lumiOfficialCatalogPromise) {
-    lumiOfficialCatalogPromise = apiFetch('/api/preferences/official/models', { credentials: 'include' })
-      .then(async response => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok || body.ok !== true) throw new Error(body.error || `HTTP ${response.status}`);
-        const catalog: LumiOfficialCatalog = {
-          models: Array.isArray(body.models) ? body.models : [],
-          byRole: body.byRole && typeof body.byRole === 'object' ? body.byRole : {},
-        };
-        lumiOfficialCatalogCache = catalog;
-        return catalog;
-      })
-      .finally(() => { lumiOfficialCatalogPromise = null; });
-  }
-  return lumiOfficialCatalogPromise;
-}
-
-function useLumiOfficialCatalog(): LumiOfficialCatalog | null {
-  const [catalog, setCatalog] = useState<LumiOfficialCatalog | null>(lumiOfficialCatalogCache);
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = (force = false) => {
-      void loadLumiOfficialCatalog(force)
-        .then(next => { if (!cancelled) setCatalog(next); })
-        .catch(() => { if (!cancelled) setCatalog(null); });
-    };
-    const onRefresh = () => refresh(true);
-    refresh(false);
-    window.addEventListener(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT, onRefresh);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT, onRefresh);
-    };
-  }, []);
-  return catalog;
-}
-
 function officialModelOptions(
   catalog: LumiOfficialCatalog | null,
   role: LumiModelRoleId,
@@ -147,10 +95,6 @@ function officialModelOptions(
 ): string[] {
   const live = catalog?.byRole?.[role];
   return Array.isArray(live) && live.length > 0 ? live : fallback;
-}
-
-function refreshLumiOfficialCatalog(): void {
-  window.dispatchEvent(new Event(LUMI_OFFICIAL_CATALOG_REFRESH_EVENT));
 }
 
 function readStoredRelayBaseUrl(): string {
@@ -161,19 +105,6 @@ function readStoredRelayBaseUrl(): string {
     return normalized;
   } catch {
     return '';
-  }
-}
-
-/**
- * Relay credentials used to be mirrored in localStorage by both relay rows.
- * Keep a one-time cleanup here for installations upgraded from that build;
- * the server-side credential store remains the source of truth.
- */
-function clearLegacyRelaySecret(): void {
-  try {
-    localStorage.removeItem('lumi_relay_key');
-  } catch {
-    // Browser storage may be unavailable in non-DOM/test runtimes.
   }
 }
 
@@ -256,7 +187,12 @@ function buildSidebarGroups(t: any) {
   ];
 }
 
-export function Settings({
+export function Settings(props: Parameters<typeof SettingsView>[0]) {
+  const { user, workDomain, orgConnection } = useApp();
+  return <SettingsView key={JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId])} {...props} />;
+}
+
+function SettingsView({
   t,
   lang,
   setLang,
@@ -283,31 +219,35 @@ export function Settings({
   const externalConnectionsTab = activeSection === 'applications' ? 'applications' : 'data-sources';
 
   useEffect(() => {
-    let cancelled = false;
+    if (!user?.uid) return;
+    let request: AbortController | undefined;
     const loadProviderStatus = async () => {
+      request?.abort();
+      const owner = new AbortController(); request = owner;
+      const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
       try {
-        const response = await apiFetch('/api/llm/providers');
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || `Provider status failed (${response.status})`);
-        if (!cancelled) setProviderStatus(data.providers || {});
+        const data = await apiJson('/api/llm/providers', { signal });
+        signal.throwIfAborted();
+        if (!data?.providers || typeof data.providers !== 'object' || Array.isArray(data.providers)) throw new Error('Invalid provider status');
+        setProviderStatus(data.providers);
       } catch (err: any) {
-        if (!cancelled) {
+        if (!owner.signal.aborted) {
+          setProviderStatus({});
           toast.error(err?.message || t.failedToLoadProviderStatus || uiMessage('settings.failed-to-load-provider-status.6411dc3232'));
         }
       }
     };
     void loadProviderStatus();
-    const onKeysChanged = () => { void loadProviderStatus(); };
-    window.addEventListener('lumi:keys-changed', onKeysChanged);
+    window.addEventListener('lumi:keys-changed', loadProviderStatus);
     return () => {
-      cancelled = true;
-      window.removeEventListener('lumi:keys-changed', onKeysChanged);
+      request?.abort();
+      window.removeEventListener('lumi:keys-changed', loadProviderStatus);
     };
-  }, []);
+  }, [user?.uid, t.failedToLoadProviderStatus]);
 
   useEffect(() => {
-    const handleModelConfigurationChanged = () => {
-      setModelConfigurationRevision(previous => previous + 1);
+    const handleModelConfigurationChanged = (event: Event) => {
+      if ((event as CustomEvent).detail?.source !== 'official-settings') setModelConfigurationRevision(previous => previous + 1);
     };
     window.addEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
     return () => window.removeEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
@@ -880,43 +820,18 @@ function SettingsDisclosure({
   );
 }
 
-async function runLLMConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
-  const response = await apiFetch('/api/llm/test', {
+async function runModelConnectionTest(kind: 'llm' | 'llm/route' | 'vision', provider?: string, model = '', signal?: AbortSignal): Promise<{ latencyMs: number; model: string }> {
+  const response = await apiFetch(`/api/${kind}/test`, {
+    signal,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ provider, model }),
+    ...(kind === 'llm/route' ? {} : { body: JSON.stringify({ provider, model }) }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok !== true) {
-    throw new Error(data.error || `Connection test failed (${response.status})`);
-  }
-  return { latencyMs: Number(data.latencyMs) || 0, model: data.model || model };
-}
-
-async function runConfiguredReasoningRouteTest(): Promise<{ latencyMs: number; model: string }> {
-  const response = await apiFetch('/api/llm/route/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok !== true) {
-    throw new Error(data.error || `Route test failed (${response.status})`);
-  }
-  return { latencyMs: Number(data.latencyMs) || 0, model: data.model || '' };
-}
-
-async function runVisionConnectionTest(provider: string, model: string): Promise<{ latencyMs: number; model: string }> {
-  const response = await apiFetch('/api/vision/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ provider, model }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok !== true) {
-    throw new Error(data.error || `Vision test failed (${response.status})`);
+    const label = { llm: 'Connection', 'llm/route': 'Route', vision: 'Vision' }[kind];
+    throw new Error(data.error || `${label} test failed (${response.status})`);
   }
   return { latencyMs: Number(data.latencyMs) || 0, model: data.model || model };
 }
@@ -939,9 +854,9 @@ type OfficialRoleApplyResponse = {
   roles: Record<string, OfficialRoleReceipt>;
 };
 
-async function applyOfficialModelRoles(): Promise<OfficialRoleApplyResponse> {
+async function applyOfficialModelRoles(signal: AbortSignal): Promise<OfficialRoleApplyResponse> {
   const response = await apiFetch('/api/preferences/official/apply', {
-    method: 'POST',
+    signal, method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({}),
@@ -995,87 +910,152 @@ async function applyOfficialModelRoles(): Promise<OfficialRoleApplyResponse> {
   };
 }
 
-function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled = false, serverKey, t }: {
+function useModelOperation(scope = '') {
+  const { user } = useApp();
+  const request = useRef<AbortController | null>(null);
+  const [result, setResult] = useState({ state: 'idle' as ProviderTestState | 'saving', message: '' });
+  const reset = useCallback(() => {
+    request.current?.abort(); request.current = null;
+    setResult({ state: 'idle', message: '' });
+  }, []);
+  useEffect(() => { reset(); return () => request.current?.abort(); }, [scope, user?.uid, reset]);
+  const run = async (state: 'testing' | 'saving', action: (signal: AbortSignal) => Promise<string | false>, failureKey: UiMessageKey = 'settings.live-call-failed.cd19d46055') => {
+    if (request.current) return false;
+    const owner = new AbortController(); request.current = owner;
+    const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(state === 'saving' ? 15_000 : 60_000)]);
+    setResult({ state, message: '' });
+    try {
+      const message = await action(signal);
+      if (owner.signal.aborted) return false;
+      signal.throwIfAborted();
+      setResult({ state: message === false ? 'error' : 'ok', message: message || '' });
+      if (state === 'saving' && message) toast.success(message);
+      return message !== false;
+    } catch (error: any) {
+      if (!owner.signal.aborted) {
+        const message = error?.message || uiMessage(failureKey);
+        setResult({ state: 'error', message });
+        if (state === 'saving') toast.error(message);
+      }
+      return false;
+    } finally { if (request.current === owner) request.current = null; }
+  };
+  return { ...result, reset, run, busy: result.state === 'saving' || result.state === 'testing', saving: result.state === 'saving', testing: result.state === 'testing' };
+}
+
+function useServerCredentials(storageKey: string, t?: any) {
+  const [status, setStatus] = useState<Record<string, boolean> | null>(null);
+  const [loadError, setLoadError] = useState(''), [attempt, setAttempt] = useState(0);
+  const operation = useModelOperation(storageKey);
+  useEffect(() => {
+    const owner = new AbortController(), signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
+    try { localStorage.removeItem(storageKey); } catch {}
+    setStatus(null); setLoadError('');
+    getSavedKeyStatus(signal)
+      .then(data => { signal.throwIfAborted(); setStatus(data); })
+      .catch(error => { if (!owner.signal.aborted) setLoadError(error?.message || String(error)); });
+    return () => owner.abort();
+  }, [storageKey, attempt]);
+  const changeKeys = (keys: Record<string, string>, remove: boolean, confirmed: () => void) => {
+    if (!status) return;
+    return operation.run('saving', async signal => {
+      const result = await saveServerKeys(keys, signal);
+      signal.throwIfAborted(); setStatus(result.status); confirmed();
+      return remove ? (t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94')) : (t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
+    }, remove ? 'settings.failed-to-remove-key.065616ae8b' : 'settings.failed-to-save-key-to.be32a67a8a');
+  };
+  return { status, loadError, reload: () => setAttempt(value => value + 1), operation, changeKeys };
+}
+
+function useModelSettings<T extends Record<string, any>>(endpoint: string, initial: T, loadErrorKey: UiMessageKey) {
+  const { user } = useApp();
+  const [value, setValue] = useState(initial), [attempt, setAttempt] = useState(0);
+  const [load, setLoad] = useState({ uid: user?.uid, ready: false, error: '' });
+  const defaults = useRef(initial), operation = useModelOperation();
+  const request = useCallback(async (signal: AbortSignal, draft?: T) => {
+    const data = await apiJson<T>(endpoint, { signal, ...(draft ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) } : {}) });
+    signal.throwIfAborted();
+    if (!matchesModelSettings(defaults.current, data)) throw new Error('Model settings confirmation missing or invalid');
+    return data;
+  }, [endpoint]);
+  useEffect(() => {
+    const owner = new AbortController(); setLoad({ uid: user?.uid, ready: false, error: '' });
+    void request(AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]))
+      .then(data => { if (!owner.signal.aborted) { setValue(data); setLoad({ uid: user?.uid, ready: true, error: '' }); } })
+      .catch(error => { if (!owner.signal.aborted) setLoad({ uid: user?.uid, ready: false, error: error?.message || uiMessage(loadErrorKey) }); });
+    return () => owner.abort();
+  }, [request, user?.uid, loadErrorKey, attempt]);
+  const ready = load.uid === user?.uid && load.ready;
+  return { value, ready, error: load.uid === user?.uid ? load.error : '', reload: () => setAttempt(current => current + 1), operation,
+    edit: (next: React.SetStateAction<T>) => { operation.reset(); setValue(next); },
+    persist: async (signal: AbortSignal) => { if (!ready) throw new Error(uiMessage(loadErrorKey)); const data = await request(signal, value); setValue(data); return data; },
+  };
+}
+
+function matchesModelSettings(expected: any, value: any): boolean {
+  if (typeof expected !== 'object') return typeof value === typeof expected && (typeof value !== 'number' || Number.isFinite(value));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(expected).every(([key, sample]) => key === 'models'
+    ? value.models && typeof value.models === 'object' && !Array.isArray(value.models) && Object.values(value.models).every(model => typeof model === 'string')
+    : matchesModelSettings(sample, value[key]));
+}
+
+function ModelSettingsStatus({ error, retry }: { error: string; retry: () => void }) {
+  return <div className="flex min-h-40 flex-col items-center justify-center gap-3 text-sm text-white/55">
+    {error ? <><p role="alert">{error}</p><Button onClick={retry}>{uiMessage('knowledge-base.retry.9db2a8180b')}</Button></> : <Loader2 className="animate-spin text-white/45" />}
+  </div>;
+}
+
+function useProviderModel(providerId: string, defaultModel: string, testScope: string) {
+  const { aiConfig, updateAIConfig, user } = useApp();
+  const savedModel = aiConfig.models?.[providerId] || (aiConfig.provider === providerId ? aiConfig.model : '') || defaultModel;
+  const scope = JSON.stringify([providerId, user?.uid]);
+  const [model, setModel] = useState(savedModel);
+  const confirmed = useRef({ model, revision: 0, scope });
+  const revision = useRef(0), lifetime = useRef<AbortController | null>(null);
+  const test = useModelOperation(JSON.stringify([providerId, model, testScope]));
+  const resetTest = test.reset;
+  useEffect(() => {
+    const previous = confirmed.current;
+    confirmed.current = { ...previous, model: savedModel, scope };
+    setModel(draft => previous.scope !== scope || draft === previous.model ? savedModel : draft);
+  }, [savedModel, scope]);
+  useEffect(() => { const owner = new AbortController(); lifetime.current = owner; return () => owner.abort(); }, [providerId, user?.uid]);
+  const changeModel = async (nextModel: string) => {
+    const owner = lifetime.current, current = ++revision.current;
+    setModel(nextModel); resetTest();
+    const saved = await updateAIConfig(aiConfig.provider === providerId ? { model: nextModel } : {}, { [providerId]: nextModel }).catch(() => false);
+    if (!owner || owner.signal.aborted) return;
+    if (saved && current > confirmed.current.revision) confirmed.current = { model: nextModel, revision: current, scope };
+    if (!saved && current === revision.current) setModel(confirmed.current.model);
+  };
+  const testModel = () => model.trim() && test.run('testing', async signal => {
+    const result = await runModelConnectionTest('llm', providerId, model.trim(), signal);
+    return formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs });
+  });
+  return { model, changeModel, testModel, resetTest, testState: test.state, testMessage: test.message };
+}
+
+function LLMProviderRow(props: Parameters<typeof LLMProviderEditor>[0]) {
+  const { user } = useApp();
+  return user ? <LLMProviderEditor key={JSON.stringify([user.uid, user.role, props.providerId, props.serverKey])} {...props} /> : null;
+}
+
+function LLMProviderEditor({ icon, label, providerId, models, placeholder, disabled = false, serverKey, t }: {
   icon: React.ReactNode; label: string; providerId: string; models: string[];
   placeholder: string; disabled?: boolean; serverKey: string; t?: any;
 }) {
-  const { aiConfig, updateAIConfig } = useApp();
-  // Provider secrets are write-only server credentials.  Do not hydrate them
-  // from (or write them to) browser storage; an upgraded installation is
-  // cleaned up as soon as this row mounts.
-  const [keyValue, setKeyValue] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [serverConfigured, setServerConfigured] = useState(false);
-  const [showKey, setShowKey] = useState(false);
-  const [keyDirty, setKeyDirty] = useState(false);
-  const [testState, setTestState] = useState<ProviderTestState>('idle');
-  const [testMessage, setTestMessage] = useState('');
-
-  const savedModels = (() => {
-    try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
-  })();
-  const [model, setModel] = useState(() => {
-    return savedModels[providerId] || models[0];
-  });
-
-  useEffect(() => {
-    try { localStorage.removeItem(`lumi_${providerId}_key`); } catch {}
-    getSavedKeyStatus()
-      .then(data => setServerConfigured(!!data[serverKey]))
-      .catch(() => {});
-  }, [serverKey]);
-
-  const handleRemoveKey = () => {
-    saveServerKeys({ [serverKey]: '' }).then(() => {
-      localStorage.removeItem(`lumi_${providerId}_key`);
-      setServerConfigured(false);
-      setKeyValue('');
-      setKeyDirty(false);
-      setTestState('idle');
-      setTestMessage('');
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
+  const { aiConfig } = useApp();
+  const [keyValue, setKeyValue] = useState(''), [showKey, setShowKey] = useState(false);
+  const { status, loadError, reload, operation, changeKeys } = useServerCredentials(`lumi_${providerId}_key`, t);
+  const serverConfigured = Boolean(status?.[serverKey]);
+  const { model, changeModel: handleModelChange, testModel, resetTest, testState, testMessage } = useProviderModel(providerId, models[0] || '', JSON.stringify([serverConfigured, keyValue, operation.busy]));
+  const changeKey = (remove: boolean) => {
+    if (disabled || (!remove && !keyValue.trim())) return;
+    resetTest();
+    return changeKeys({ [serverKey]: remove ? '' : keyValue.trim() }, remove, () => setKeyValue(''));
   };
-
-  const handleSaveKey = () => {
-    if (!keyValue.trim()) return;
-    saveServerKeys({ [serverKey]: keyValue.trim() }).then(() => {
-      try { localStorage.removeItem(`lumi_${providerId}_key`); } catch {}
-      setServerConfigured(true);
-      setKeyValue('');
-      setKeyDirty(false);
-      setTestState('idle');
-      setTestMessage('');
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key.58568a4911')));
-  };
-
-  const handleModelChange = async (nextModel: string) => {
-    const previousModel = model;
-    setModel(nextModel);
-    setTestState('idle');
-    setTestMessage('');
-    const saved = await updateAIConfig(aiConfig.provider === providerId ? { model: nextModel } : {}, { [providerId]: nextModel });
-    if (saved === false) setModel(previousModel);
-  };
-
-  const handleTest = async () => {
-    if (!serverConfigured || keyDirty || !model.trim()) return;
-    setTestState('testing');
-    setTestMessage('');
-    try {
-      const result = await runLLMConnectionTest(providerId, model.trim());
-      setTestState('ok');
-      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
-    } catch (error: any) {
-      setTestState('error');
-      setTestMessage(error?.message || uiMessage('settings.live-call-failed.cd19d46055'));
-    }
-  };
+  const handleTest = () => { if (!disabled && !operation.busy && serverConfigured && !keyValue.trim()) { operation.reset(); void testModel(); } };
 
   return (
     <SettingsDisclosure
@@ -1085,18 +1065,17 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
       badges={<>
         {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
         {aiConfig.provider === providerId && <span className="rounded-full border border-celestial-saturn/20 bg-celestial-saturn/10 px-2 py-0.5 text-[11px] font-semibold text-celestial-saturn">{t?.activeBadge || uiMessage('settings.active.0aac32bf1d')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
       </>}
     >
-      <div className="space-y-3">
+      {!status ? <ModelSettingsStatus error={loadError} retry={reload} /> : <div className="space-y-3">
       <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
         <div className="relative flex-1">
           <input
-            disabled={disabled}
+            disabled={disabled || operation.busy}
             type={showKey ? 'text' : 'password'}
             value={keyValue}
-            onChange={e => { setKeyValue(e.target.value); setKeyDirty(true); setTestState('idle'); setTestMessage(''); }}
-            onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
+            onChange={e => { setKeyValue(e.target.value); operation.reset(); resetTest(); }}
+            onKeyDown={e => e.key === 'Enter' && changeKey(false)}
             placeholder={serverConfigured && !keyValue ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server.1ca0422100')) : placeholder}
             className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-14 font-mono text-sm text-white outline-none transition-colors focus:border-celestial-saturn/50 disabled:opacity-50"
           />
@@ -1108,22 +1087,22 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
           </div>
         </div>
         <Button
-          onClick={handleSaveKey}
-          disabled={disabled || !keyValue.trim()}
+          onClick={() => changeKey(false)}
+          disabled={disabled || operation.busy || !keyValue.trim()}
           className="h-11 rounded-lg bg-celestial-saturn px-4 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
-          onClick={handleRemoveKey}
-          disabled={disabled || (!keyValue && !serverConfigured)}
+          onClick={() => changeKey(true)}
+          disabled={disabled || operation.busy || (!keyValue && !serverConfigured)}
           className="h-11 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
         <Button
           onClick={handleTest}
-          disabled={disabled || !serverConfigured || keyDirty || !model.trim() || testState === 'testing'}
+          disabled={disabled || operation.busy || !serverConfigured || Boolean(keyValue.trim()) || !model.trim() || testState === 'testing'}
           className="h-11 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {testState === 'testing' ? <Loader2 size={16} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
@@ -1133,8 +1112,9 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
         <span className="text-xs font-semibold text-white/50">{uiMessage('settings.model.44c0cd4289')}</span>
         <span>
           <input
+            disabled={disabled || operation.busy}
             value={model}
-            onChange={event => handleModelChange(event.target.value)}
+            onChange={event => { operation.reset(); void handleModelChange(event.target.value); }}
             list={`provider-models-${providerId}`}
             className="h-10 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-xs text-white outline-none focus:border-celestial-saturn/50"
           />
@@ -1143,12 +1123,12 @@ function LLMProviderRow({ icon, label, providerId, models, placeholder, disabled
           </datalist>
         </span>
       </label>
-      {testMessage && (
-        <p className={`text-xs ${testState === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
-          {testMessage}
+      {(operation.message || testMessage) && (
+        <p className={`text-xs ${(operation.message ? operation.state : testState) === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
+          {operation.message || testMessage}
         </p>
       )}
-      </div>
+      </div>}
     </SettingsDisclosure>
   );
 }
@@ -1180,7 +1160,8 @@ function VoicePreferenceToggle({ storageKey, label }: { storageKey: string; labe
 }
 
 function VisionRoleSettings({ t }: { t: any }) {
-  const { visionConfig, updateVisionConfig } = useApp();
+  const { visionConfig, updateVisionConfig, reloadModelPreferences } = useApp();
+  if (!visionConfig.ready) return <ModelSettingsStatus error={visionConfig.loadError} retry={() => void reloadModelPreferences('vision')} />;
   return (
     <SettingsSection title={uiMessage('settings.visual-perception-model.c74ca64c0f')} icon={<Camera size={18} className="text-cyan-300" />}>
       <div className="border-y border-white/10 py-5">
@@ -1327,70 +1308,24 @@ function GenerationModelInput({
 }
 
 function GenerativeModelsPage({ t }: { t: any }) {
-  const [preferences, setPreferences] = useState<GenerationPreferences>(DEFAULT_GENERATION_PREFERENCES);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const { value: preferences, edit: setPreferences, ready, error, reload, persist, operation } = useModelSettings<GenerationPreferences>('/api/preferences/generation', DEFAULT_GENERATION_PREFERENCES, 'settings.failed-to-load-generative-models.6f0ef4ec18');
+  const { saving } = operation;
   const officialCatalog = useLumiOfficialCatalog();
   const relayImageModels = officialModelOptions(officialCatalog, 'image_generation', GENERATION_MODEL_OPTIONS.relayImage);
   const relayImageEditModels = officialModelOptions(officialCatalog, 'image_edit', GENERATION_MODEL_OPTIONS.relayImageEdit);
   const relayVideoModels = officialModelOptions(officialCatalog, 'video_generation', GENERATION_MODEL_OPTIONS.relayVideo);
   const relayImageToVideoModels = officialModelOptions(officialCatalog, 'image_to_video', GENERATION_MODEL_OPTIONS.relayImageToVideo);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/api/preferences/generation')
-      .then(async response => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-        return body;
-      })
-      .then(body => {
-        if (!cancelled) setPreferences(body as GenerationPreferences);
-      })
-      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-generative-models.6f0ef4ec18')))
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const setImageProvider = (provider: string) => {
+  const setProvider = (role: 'image' | 'video' | 'imageToVideo', provider: string) => {
+    const officialModels = role === 'image' ? relayImageModels : role === 'video' ? relayVideoModels : relayImageToVideoModels;
+    const providers = role === 'image' ? IMAGE_GENERATION_PROVIDERS : VIDEO_GENERATION_PROVIDERS;
     setPreferences(previous => ({
       ...previous,
-      image: {
-        ...previous.image,
+      [role]: {
+        ...previous[role],
         provider,
-        model: provider === 'auto'
-          ? ''
-          : previous.image.models[provider]
-            || (provider === LUMI_OFFICIAL_PROVIDER_ID ? relayImageModels[0] : IMAGE_GENERATION_PROVIDERS[provider]?.models[0])
-            || '',
-      },
-    }));
-  };
-
-  const setVideoProvider = (provider: string) => {
-    setPreferences(previous => ({
-      ...previous,
-      video: {
-        ...previous.video,
-        provider,
-        model: previous.video.models[provider]
-          || (provider === LUMI_OFFICIAL_PROVIDER_ID ? relayVideoModels[0] : VIDEO_GENERATION_PROVIDERS[provider]?.models[0])
-          || '',
-      },
-    }));
-  };
-
-  const setImageToVideoProvider = (provider: string) => {
-    setPreferences(previous => ({
-      ...previous,
-      imageToVideo: {
-        ...previous.imageToVideo,
-        provider,
-        model: previous.imageToVideo.models[provider]
-          || (provider === LUMI_OFFICIAL_PROVIDER_ID
-            ? relayImageToVideoModels[0]
-            : VIDEO_GENERATION_PROVIDERS[provider]?.models[0])
-          || '',
+        model: role === 'image' && provider === 'auto' ? '' : previous[role].models[provider]
+          || (provider === LUMI_OFFICIAL_PROVIDER_ID ? officialModels[0] : providers[provider]?.models[0]) || '',
       },
     }));
   };
@@ -1406,27 +1341,12 @@ function GenerativeModelsPage({ t }: { t: any }) {
     }));
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const response = await apiFetch('/api/preferences/generation', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(preferences),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setPreferences(body as GenerationPreferences);
-      toast.success(uiMessage('settings.generative-models-saved.478e2f8603'));
-    } catch (error: any) {
-      toast.error(error?.message || uiMessage('settings.failed-to-save-generative-models.12ea083f89'));
-    } finally {
-      setSaving(false);
-    }
-  };
+  const save = () => operation.run('saving', async signal => {
+    await persist(signal);
+    return uiMessage('settings.generative-models-saved.478e2f8603');
+  }, 'settings.failed-to-save-generative-models.12ea083f89');
 
-  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+  if (!ready) return <ModelSettingsStatus error={error} retry={reload} />;
 
   const imageProvider = preferences.image.provider === LUMI_OFFICIAL_PROVIDER_ID
     ? { ...IMAGE_GENERATION_PROVIDERS.relay, models: relayImageModels }
@@ -1451,7 +1371,7 @@ function GenerativeModelsPage({ t }: { t: any }) {
               </div>
               <select
                 value={preferences.image.provider}
-                onChange={event => setImageProvider(event.target.value)}
+                onChange={event => setProvider('image', event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
               >
                 <option value="auto">{uiMessage('settings.automatic-provider.58089561bd')}</option>
@@ -1501,7 +1421,7 @@ function GenerativeModelsPage({ t }: { t: any }) {
               </div>
               <select
                 value={preferences.video.provider}
-                onChange={event => setVideoProvider(event.target.value)}
+                onChange={event => setProvider('video', event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
               >
                 {Object.entries(VIDEO_GENERATION_PROVIDERS).map(([provider, definition]) => (
@@ -1528,7 +1448,7 @@ function GenerativeModelsPage({ t }: { t: any }) {
               </div>
               <select
                 value={preferences.imageToVideo.provider}
-                onChange={event => setImageToVideoProvider(event.target.value)}
+                onChange={event => setProvider('imageToVideo', event.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-celestial-saturn/45"
               >
                 <option value="minimax">MiniMax</option>
@@ -1564,11 +1484,6 @@ type WorldPreference = {
   provider: string;
   model: string;
   models: Record<string, string>;
-  resolved?: {
-    provider: string;
-    model: string;
-    inheritedFromVision: boolean;
-  };
 };
 
 const WORLD_MODEL_OPTIONS: Record<string, string[]> = {
@@ -1582,29 +1497,16 @@ const WORLD_MODEL_OPTIONS: Record<string, string[]> = {
 };
 
 function WorldActionModelPage({ t }: { t: any }) {
-  const [preference, setPreference] = useState<WorldPreference>({ provider: 'inherit_vision', model: '', models: {} });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testMessage, setTestMessage] = useState('');
+  const { visionConfig, reloadModelPreferences } = useApp();
+  const { value: preference, edit: setPreference, ready, error, reload, persist, operation } = useModelSettings<WorldPreference>('/api/preferences/world', { provider: 'inherit_vision', model: '', models: {} }, 'settings.failed-to-load-world-model.3111ba80e6');
+  const { saving, testing, busy, message: testMessage, reset } = operation;
   const officialCatalog = useLumiOfficialCatalog();
-
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/api/preferences/world')
-      .then(async response => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-        return body;
-      })
-      .then(body => { if (!cancelled) setPreference(body as WorldPreference); })
-      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-world-model.3111ba80e6')))
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+  const inherited = preference.provider === 'inherit_vision';
+  const activeProvider = inherited ? visionConfig.provider : preference.provider;
+  const activeModel = inherited ? visionConfig.model : preference.model;
+  useEffect(reset, [activeProvider, activeModel, reset]);
 
   const setProvider = (provider: string) => {
-    setTestMessage('');
     setPreference(previous => ({
       ...previous,
       provider,
@@ -1613,7 +1515,6 @@ function WorldActionModelPage({ t }: { t: any }) {
   };
 
   const setModel = (model: string) => {
-    setTestMessage('');
     setPreference(previous => ({
       ...previous,
       model,
@@ -1621,52 +1522,25 @@ function WorldActionModelPage({ t }: { t: any }) {
     }));
   };
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const response = await apiFetch('/api/preferences/world', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(preference),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setPreference(body as WorldPreference);
-      toast.success(uiMessage('settings.world-model-saved.c98e892ead'));
-    } catch (error: any) {
-      toast.error(error?.message || uiMessage('settings.failed-to-save-world-model.5d460901d9'));
-    } finally {
-      setSaving(false);
-    }
-  };
+  const save = () => operation.run('saving', async signal => {
+    await persist(signal);
+    return uiMessage('settings.world-model-saved.c98e892ead');
+  }, 'settings.failed-to-save-world-model.5d460901d9');
 
-  const test = async () => {
-    const provider = preference.provider === 'inherit_vision' ? preference.resolved?.provider : preference.provider;
-    const model = preference.provider === 'inherit_vision' ? preference.resolved?.model : preference.model;
-    if (!provider || !model) return;
-    setTesting(true);
-    setTestMessage('');
-    try {
-      const result = await runVisionConnectionTest(provider, model);
-      setTestMessage(formatUiMessage('settings.world-model-call-passed-value0-ms.386cfeaf91', { value0: result.latencyMs }));
-    } catch (error: any) {
-      setTestMessage(error?.message || uiMessage('settings.world-model-call-failed.814cb05bd8'));
-    } finally {
-      setTesting(false);
-    }
-  };
+  const test = () => activeProvider && activeModel && operation.run('testing', async signal => {
+    const result = await runModelConnectionTest('vision', activeProvider, activeModel, signal);
+    return formatUiMessage('settings.world-model-call-passed-value0-ms.386cfeaf91', { value0: result.latencyMs });
+  }, 'settings.world-model-call-failed.814cb05bd8');
 
-  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+  if (!ready) return <ModelSettingsStatus error={error} retry={reload} />;
 
-  const inherited = preference.provider === 'inherit_vision';
+  if (inherited && visionConfig.ready === false) return <ModelSettingsStatus error={visionConfig.loadError} retry={() => void reloadModelPreferences('vision')} />;
+
   const modelOptions = inherited
     ? []
     : preference.provider === LUMI_OFFICIAL_PROVIDER_ID
       ? officialModelOptions(officialCatalog, 'world', WORLD_MODEL_OPTIONS.relay)
       : WORLD_MODEL_OPTIONS[preference.provider] || [];
-  const activeProvider = inherited ? preference.resolved?.provider : preference.provider;
-  const activeModel = inherited ? preference.resolved?.model : preference.model;
 
   return (
     <div className="space-y-8">
@@ -1715,11 +1589,11 @@ function WorldActionModelPage({ t }: { t: any }) {
         </div>
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <Button onClick={test} disabled={testing || !activeProvider || !activeModel} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+          <Button onClick={test} disabled={busy || !activeProvider || !activeModel} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
             {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
             {uiMessage('settings.test-effective-model.c9648a120e')}
           </Button>
-          <Button onClick={save} disabled={saving} className="h-10 rounded-lg bg-cyan-300 px-4 text-xs font-bold text-black hover:bg-cyan-200 disabled:opacity-40">
+          <Button onClick={save} disabled={busy} className="h-10 rounded-lg bg-cyan-300 px-4 text-xs font-bold text-black hover:bg-cyan-200 disabled:opacity-40">
             {saving ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Save size={15} className="mr-2" />}
             {uiMessage('settings.save-desktop-action-model.1fb3f1157c')}
           </Button>
@@ -1804,11 +1678,8 @@ function retrievalProviderLabel(provider: string, t?: any): string {
 }
 
 function RetrievalModelSettings({ t }: { t?: any }) {
-  const [preferences, setPreferences] = useState<RetrievalModelPreferences>(DEFAULT_RETRIEVAL_MODEL_PREFERENCES);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testMessage, setTestMessage] = useState('');
+  const { value: preferences, edit: setPreferences, ready, error, reload, persist, operation } = useModelSettings<RetrievalModelPreferences>('/api/preferences/retrieval-model', DEFAULT_RETRIEVAL_MODEL_PREFERENCES, 'settings.failed-to-load-model-roles.2db04d5ff2');
+  const { saving, testing, busy, message: testMessage } = operation;
   const officialCatalog = useLumiOfficialCatalog();
   const embeddingOptions = (provider: string) => provider === LUMI_OFFICIAL_PROVIDER_ID
     ? officialModelOptions(officialCatalog, 'embedding', EMBEDDING_MODELS.relay)
@@ -1817,97 +1688,41 @@ function RetrievalModelSettings({ t }: { t?: any }) {
     ? officialModelOptions(officialCatalog, 'rerank', RERANK_MODELS.relay)
     : RERANK_MODELS[provider] || [];
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/api/preferences/retrieval-model')
-      .then(async response => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-        return body;
-      })
-      .then(body => { if (!cancelled) setPreferences(body as RetrievalModelPreferences); })
-      .catch(error => toast.error(error?.message || uiMessage('settings.failed-to-load-model-roles.2db04d5ff2')))
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const setEmbedding = (patch: Partial<EmbeddingModelSelection>) => {
-    setTestMessage('');
-    setPreferences(previous => ({
-      ...previous,
-      embedding: { ...previous.embedding, ...patch },
-    }));
-  };
-
-  const setRerank = (patch: Partial<RerankModelSelection>) => {
-    setTestMessage('');
-    setPreferences(previous => ({
-      ...previous,
-      rerank: { ...previous.rerank, ...patch },
-    }));
+  const setRole = <K extends keyof RetrievalModelPreferences>(role: K, patch: Partial<RetrievalModelPreferences[K]>) => {
+    setPreferences(previous => ({ ...previous, [role]: { ...previous[role], ...patch } }));
   };
 
   const setProvider = (provider: string) => {
     const model = EMBEDDING_MODELS[provider]?.[0] || '';
-    setEmbedding({ provider, model });
+    setRole('embedding', { provider, model });
   };
 
   const setFallbackProvider = (fallbackProvider: string) => {
     const fallbackModel = fallbackProvider ? EMBEDDING_MODELS[fallbackProvider]?.[0] || '' : '';
-    setEmbedding({ fallbackProvider, fallbackModel });
+    setRole('embedding', { fallbackProvider, fallbackModel });
   };
 
   const setRerankProvider = (provider: string) => {
-    setRerank({ provider, model: RERANK_MODELS[provider]?.[0] || '' });
+    setRole('rerank', { provider, model: RERANK_MODELS[provider]?.[0] || '' });
   };
 
-  const save = async (showToast = true): Promise<boolean> => {
-    setSaving(true);
-    try {
-      const response = await apiFetch('/api/preferences/retrieval-model', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(preferences),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setPreferences(body as RetrievalModelPreferences);
-      if (showToast) toast.success(uiMessage('settings.model-role-saved.48ed509208'));
-      return true;
-    } catch (error: any) {
-      toast.error(error?.message || uiMessage('settings.failed-to-save-model-role.f325b221b0'));
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
+  const save = () => operation.run('saving', async signal => {
+    await persist(signal);
+    return uiMessage('settings.model-role-saved.48ed509208');
+  }, 'settings.failed-to-save-model-role.f325b221b0');
 
-  const test = async () => {
-    if (!(await save(false))) return;
-    setTesting(true);
-    setTestMessage('');
-    try {
-      const response = await apiFetch('/api/retrieval-model/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || body.ok === false) throw new Error(body.error || `HTTP ${response.status}`);
-      const embeddingLatency = Number(body.embedding?.latencyMs) || 0;
-      const rerankStatus = body.rerank?.enabled
-        ? `Rerank ${Number(body.rerank?.latencyMs) || 0} ms`
-        : `Rerank ${uiMessage('settings.disabled.2caae825fe')}`;
-      setTestMessage(`Embedding ${embeddingLatency} ms · ${rerankStatus}`);
-    } catch (error: any) {
-      setTestMessage(error?.message || uiMessage('settings.model-role-test-failed.6f17ba0837'));
-    } finally {
-      setTesting(false);
-    }
-  };
+  const test = () => operation.run('testing', async signal => {
+    await persist(signal);
+    const body = await apiJson<any>('/api/retrieval-model/test', { method: 'POST', signal });
+    if (body?.ok !== true || !body.embedding) throw new Error(body?.error || uiMessage('settings.model-role-test-failed.6f17ba0837'));
+    const embeddingLatency = Number(body.embedding.latencyMs) || 0;
+    const rerankStatus = body.rerank?.enabled
+      ? `Rerank ${Number(body.rerank.latencyMs) || 0} ms`
+      : `Rerank ${uiMessage('settings.disabled.2caae825fe')}`;
+    return `Embedding ${embeddingLatency} ms · ${rerankStatus}`;
+  }, 'settings.model-role-test-failed.6f17ba0837');
 
-  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="animate-spin text-white/45" /></div>;
+  if (!ready) return <ModelSettingsStatus error={error} retry={reload} />;
 
   return (
     <SettingsSection title={uiMessage('settings.retrieval-model-role.7d25a85198')} icon={<Search size={18} className="text-emerald-300" />}>
@@ -1931,7 +1746,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
             label={uiMessage('settings.model.44c0cd4289')}
             value={preferences.embedding.model}
             options={embeddingOptions(preferences.embedding.provider)}
-            onChange={model => setEmbedding({ model })}
+            onChange={model => setRole('embedding', { model })}
           />
           <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
             <span className="text-xs font-bold text-white/55">{uiMessage('settings.fallback-model.562ec1697f')}</span>
@@ -1946,7 +1761,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
               label={uiMessage('settings.fallback-model-id.31f402c7ca')}
               value={preferences.embedding.fallbackModel}
               options={embeddingOptions(preferences.embedding.fallbackProvider)}
-              onChange={fallbackModel => setEmbedding({ fallbackModel })}
+              onChange={fallbackModel => setRole('embedding', { fallbackModel })}
             />
           )}
         </section>
@@ -1962,7 +1777,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
               role="switch"
               aria-checked={preferences.rerank.enabled}
               aria-label={uiMessage('settings.enable-rerank.17ba5b1376')}
-              onClick={() => setRerank({ enabled: !preferences.rerank.enabled })}
+              onClick={() => setRole('rerank', { enabled: !preferences.rerank.enabled })}
               className={`h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors ${preferences.rerank.enabled ? 'bg-emerald-500' : 'bg-white/15'}`}
             >
               <span className={`block h-5 w-5 rounded-full bg-white transition-transform ${preferences.rerank.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
@@ -1981,7 +1796,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
                 label={uiMessage('settings.model.44c0cd4289')}
                 value={preferences.rerank.model}
                 options={rerankOptions(preferences.rerank.provider)}
-                onChange={model => setRerank({ model })}
+                onChange={model => setRole('rerank', { model })}
               />
               <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)] md:items-center">
                 <span className="text-xs font-bold text-white/55">{uiMessage('settings.rerank-top-n.5fa98399c8')}</span>
@@ -1990,7 +1805,7 @@ function RetrievalModelSettings({ t }: { t?: any }) {
                   min={1}
                   max={50}
                   value={preferences.rerank.topN}
-                  onChange={event => setRerank({ topN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })}
+                  onChange={event => setRole('rerank', { topN: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })}
                   className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-sm text-white outline-none"
                 />
               </label>
@@ -2000,11 +1815,11 @@ function RetrievalModelSettings({ t }: { t?: any }) {
       </div>
       <LumiOfficialCapabilityBadge t={t} supported={true} capabilityKey="settings.capability-embedding.e1f2a3b4c5" />
       <div className="mt-5 flex flex-wrap justify-end gap-2">
-        <Button onClick={test} disabled={saving || testing || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+        <Button onClick={test} disabled={busy || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
           {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
           {uiMessage('settings.test.9408c1ff3a')}
         </Button>
-        <Button onClick={() => { void save(); }} disabled={saving || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+        <Button onClick={save} disabled={busy || !preferences.embedding.model.trim() || (preferences.rerank.enabled && !preferences.rerank.model.trim())} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
           {saving ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Save size={15} className="mr-2" />}
           {uiMessage('settings.save.ec8e6d5819')}
         </Button>
@@ -2014,175 +1829,13 @@ function RetrievalModelSettings({ t }: { t?: any }) {
   );
 }
 
-function dataSourceFieldLabel(field: ChinaLegalDataSourceField): string {
-  if (field.keyName.endsWith('_APP_KEY')) return uiMessage('settings.app-key.48d8312e26');
-  if (field.keyName.endsWith('_SECRET_KEY')) return uiMessage('settings.secret-key.e44bdd0d82');
-  if (field.keyName.endsWith('_API_KEY')) return uiMessage('settings.api-key.8f242c55e5');
-  if (field.keyName.endsWith('_TOKEN')) return uiMessage('settings.access-token.9e3cac6ad8');
-  if (field.keyName.endsWith('_MCP_URL')) return uiMessage('settings.mcp-url.6ddedb1520');
-  if (field.label === 'API Base URL') return uiMessage('settings.api-base-url.f17b3d297b');
-  return uiMessage('settings.base-url.f44ed563c9');
-}
-
-function isDataSourceConfigured(source: ChinaLegalDataSourceDefinition, status: Record<string, boolean>): boolean {
-  if (source.id === 'qichacha') return Boolean(status.QICHACHA_APP_KEY && status.QICHACHA_SECRET_KEY);
-  if (source.id === 'tianyancha') return Boolean(status.TIANYANCHA_API_KEY);
-  if (source.id === 'pkulaw') {
-    return Boolean((status.PKULAW_API_KEY || status.PKULAW_TOKEN) && (status.PKULAW_BASE_URL || status.PKULAW_MCP_URL));
-  }
-  if (source.id === 'farui') return Boolean(status.FARUI_API_KEY && status.FARUI_BASE_URL);
-  return source.fields.some(field => status[field.keyName]);
-}
-
-function DataSourceConnections({ t }: { t: any }) {
-  const isZh = t?.langCode !== 'en';
-  const copy = chinaLegalCopy(isZh ? 'zh' : 'en');
-  const [status, setStatus] = useState<Record<string, boolean>>({});
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [busySource, setBusySource] = useState('');
-
-  const refreshStatus = async () => {
-    const next = await getSavedKeyStatus();
-    setStatus(next);
-  };
-
-  useEffect(() => {
-    void refreshStatus().catch(() => {});
-  }, []);
-
-  const clearDrafts = (source: ChinaLegalDataSourceDefinition) => {
-    setDrafts(previous => {
-      const next = { ...previous };
-      for (const field of source.fields) delete next[field.keyName];
-      return next;
-    });
-  };
-
-  const saveSource = async (source: ChinaLegalDataSourceDefinition) => {
-    const keys = Object.fromEntries(
-      source.fields
-        .map(field => [field.keyName, (drafts[field.keyName] || '').trim()] as const)
-        .filter(([, value]) => value.length > 0),
-    );
-    if (Object.keys(keys).length === 0) return;
-    setBusySource(source.id);
-    try {
-      await saveServerKeys(keys);
-      clearDrafts(source);
-      await refreshStatus();
-      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-saved.aa9bdea122'));
-    } catch (error: any) {
-      toast.error(error?.message || uiMessage('legal-data-sources-settings.save-failed.5b5ea27d01'));
-    } finally {
-      setBusySource('');
-    }
-  };
-
-  const removeSource = async (source: ChinaLegalDataSourceDefinition) => {
-    setBusySource(source.id);
-    try {
-      await saveServerKeys(Object.fromEntries(source.fields.map(field => [field.keyName, ''])));
-      clearDrafts(source);
-      await refreshStatus();
-      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-removed.a6062630fb'));
-    } catch (error: any) {
-      toast.error(error?.message || uiMessage('legal-data-sources-settings.remove-failed.415d663686'));
-    } finally {
-      setBusySource('');
-    }
-  };
-
-  return (
-    <SettingsSection title={uiMessage('settings.data-sources.9f7efbc2df')} icon={<Database size={18} className="text-cyan-300" />}>
-      <p className="mb-4 text-sm leading-relaxed text-white/45">
-        {uiMessage('settings.data-sources-description.68775d0d92')}
-      </p>
-      <div className="border-y border-white/10">
-        {CHINA_LEGAL_DATA_SOURCES.map(source => {
-          const providerCopy = copy.dataSources[source.id];
-          const configured = isDataSourceConfigured(source, status);
-          const busy = busySource === source.id;
-          const hasDraft = source.fields.some(field => Boolean((drafts[field.keyName] || '').trim()));
-          const hasStoredField = source.fields.some(field => status[field.keyName]);
-          return (
-            <SettingsDisclosure
-              key={source.id}
-              icon={<Database size={18} className="text-cyan-300" />}
-              label={providerCopy.label}
-              badges={(
-                <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${configured ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-white/45'}`}>
-                  {configured
-                    ? uiMessage('legal-data-sources-settings.configured.b0740e7ebe')
-                    : uiMessage('legal-data-sources-settings.not-configured.8b6c7ecc15')}
-                </span>
-              )}
-            >
-              <div className="space-y-4">
-                <p className="text-xs leading-5 text-white/45">{providerCopy.boundary}</p>
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {source.fields.map(field => {
-                    const fieldConfigured = Boolean(status[field.keyName]);
-                    const value = drafts[field.keyName] || '';
-                    return (
-                      <label key={field.keyName} htmlFor={`data-source-${field.keyName}`} className="grid min-w-0 gap-2">
-                        <span className="flex items-center justify-between gap-2 text-xs font-medium text-white/60">
-                          <span>
-                            {dataSourceFieldLabel(field)}
-                            {field.required && <span className="ml-1 text-cyan-200">*</span>}
-                          </span>
-                          {fieldConfigured && <CheckCircle size={13} className="shrink-0 text-emerald-300" />}
-                        </span>
-                        <input
-                          id={`data-source-${field.keyName}`}
-                          type={field.kind === 'secret' ? 'password' : 'text'}
-                          value={value}
-                          onChange={event => setDrafts(previous => ({ ...previous, [field.keyName]: event.target.value }))}
-                          onKeyDown={event => {
-                            if (event.key === 'Enter') void saveSource(source);
-                          }}
-                          placeholder={fieldConfigured && !value
-                            ? uiMessage('legal-data-sources-settings.saved-type-to-replace.bbdf5a8d1e')
-                            : field.placeholder}
-                          className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/25 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-300/35"
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 border-t border-white/8 pt-4">
-                  <Button
-                    onClick={() => { void removeSource(source); }}
-                    disabled={busy || (!hasStoredField && !hasDraft)}
-                    className="h-9 rounded-lg border border-red-400/20 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/15 disabled:opacity-30"
-                  >
-                    {busy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Trash2 size={14} className="mr-2" />}
-                    {uiMessage('settings.remove-provider.47319e8331')}
-                  </Button>
-                  <Button
-                    onClick={() => { void saveSource(source); }}
-                    disabled={busy || !hasDraft}
-                    className="h-9 rounded-lg bg-celestial-saturn px-4 text-xs font-semibold text-black hover:bg-yellow-300 disabled:opacity-30"
-                  >
-                    {busy ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Save size={14} className="mr-2" />}
-                    {uiMessage('settings.save-provider.2882e9668b')}
-                  </Button>
-                </div>
-              </div>
-            </SettingsDisclosure>
-          );
-        })}
-      </div>
-    </SettingsSection>
-  );
-}
-
 function ApplicationConnections({ t }: { t: any }) {
   return (
     <SettingsSection title={uiMessage('settings.application-service-connections.4c05e32d49')} icon={<FileText size={18} className="text-sky-300" />}>
       <div className="border-y border-white/10">
-        <ApiKeyField compact icon={<Wrench size={18} className="text-white/70" />} label="GitHub" placeholder="Personal access token" storageKey="lumi_github_token" serverKey="GITHUB_TOKEN" t={t} />
-        <ApiKeyField compact icon={<FileText size={18} className="text-white/70" />} label="Notion" placeholder="Integration token" storageKey="lumi_notion_api_key" serverKey="NOTION_API_KEY" t={t} />
-        <ApiKeyField compact icon={<Sparkle size={18} className="text-pink-300" />} label="Figma" placeholder="Access token" storageKey="lumi_figma_access_token" serverKey="FIGMA_ACCESS_TOKEN" t={t} />
+        <ApiKeyField icon={<Wrench size={18} className="text-white/70" />} label="GitHub" placeholder="Personal access token" storageKey="lumi_github_token" serverKey="GITHUB_TOKEN" t={t} />
+        <ApiKeyField icon={<FileText size={18} className="text-white/70" />} label="Notion" placeholder="Integration token" storageKey="lumi_notion_api_key" serverKey="NOTION_API_KEY" t={t} />
+        <ApiKeyField icon={<Sparkle size={18} className="text-pink-300" />} label="Figma" placeholder="Access token" storageKey="lumi_figma_access_token" serverKey="FIGMA_ACCESS_TOKEN" t={t} />
       </div>
     </SettingsSection>
   );
@@ -2235,7 +1888,7 @@ function ExternalConnectionsPage({
       </div>
 
       {tab === 'data-sources'
-        ? <DataSourceConnections t={t} />
+        ? <LegalDataSourcesSettings />
         : <ApplicationConnections t={t} />}
     </div>
   );
@@ -2246,7 +1899,7 @@ function ToolRuntimeConnections({ t }: { t: any }) {
     <div className="space-y-8">
       <SettingsSection title={uiMessage('settings.tool-runtime-connections.3942c3052f')} icon={<Cpu size={18} className="text-violet-300" />}>
         <div className="border-y border-white/10">
-          <ApiKeyField compact icon={<Cpu size={18} className="text-violet-300" />} label="E2B Code Sandbox" placeholder="API Key" storageKey="lumi_e2b_api_key" serverKey="E2B_API_KEY" t={t} />
+          <ApiKeyField icon={<Cpu size={18} className="text-violet-300" />} label="E2B Code Sandbox" placeholder="API Key" storageKey="lumi_e2b_api_key" serverKey="E2B_API_KEY" t={t} />
         </div>
       </SettingsSection>
       <MCPSettings t={t} />
@@ -2359,20 +2012,19 @@ const REASONING_MODEL_OPTIONS: Record<string, string[]> = {
 };
 
 function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
-  const { aiConfig, updateAIConfig } = useApp();
+  const { aiConfig, updateAIConfig, reloadModelPreferences } = useApp();
   const [model, setModel] = useState(aiConfig.model);
-  const [fallbackText, setFallbackText] = useState(() => (
-    (aiConfig.fallbackCandidates || []).map(candidate => `${candidate.provider}/${candidate.model}`).join('\n')
-  ));
-  const [testing, setTesting] = useState(false);
-  const [testMessage, setTestMessage] = useState('');
+  const savedFallbackText = (aiConfig.fallbackCandidates || []).map(candidate => `${candidate.provider}/${candidate.model}`).join('\n');
+  const [fallbackText, setFallbackText] = useState(savedFallbackText);
+  const confirmed = useRef({ provider: aiConfig.provider, model: aiConfig.model, fallbackText: savedFallbackText });
   const officialCatalog = useLumiOfficialCatalog();
 
   useEffect(() => {
-    setModel(aiConfig.model);
-    setFallbackText((aiConfig.fallbackCandidates || []).map(candidate => `${candidate.provider}/${candidate.model}`).join('\n'));
-    setTestMessage('');
-  }, [aiConfig.model, aiConfig.provider, aiConfig.fallbackCandidates]);
+    const previous = confirmed.current, switched = previous.provider !== aiConfig.provider;
+    setModel(draft => switched || draft === previous.model ? aiConfig.model : draft);
+    setFallbackText(draft => switched || draft === previous.fallbackText ? savedFallbackText : draft);
+    confirmed.current = { provider: aiConfig.provider, model: aiConfig.model, fallbackText: savedFallbackText };
+  }, [aiConfig.model, aiConfig.provider, savedFallbackText]);
 
   useEffect(() => {
     const migration = aiConfig.legacyMigration;
@@ -2397,25 +2049,16 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
     })
     .filter(candidate => candidate.provider && candidate.model);
 
-  const saveReasoningRoute = () => {
-    updateAIConfig({
-      model: model.trim(),
-      selectionMode,
-      fallbackCandidates: selectionMode === 'ordered_fallback' || selectionMode === 'auto'
-        ? parseFallbackCandidates()
-        : [],
-      allowCloudFallback: aiConfig.allowCloudFallback,
-    });
+  const route = {
+    model: model.trim(), selectionMode,
+    fallbackCandidates: selectionMode === 'ordered_fallback' || selectionMode === 'auto' ? parseFallbackCandidates() : [],
+    allowCloudFallback: aiConfig.allowCloudFallback,
   };
+  const operation = useModelOperation(JSON.stringify([aiConfig.provider, route]));
+  const { testing, busy, message: testMessage } = operation;
+  const saveReasoningRoute = () => operation.run('saving', async () => (await updateAIConfig(route)) ? '' : false);
 
-  const configuredModel = (() => {
-    try {
-      const models = JSON.parse(localStorage.getItem('lumi_llm_models') || '{}');
-      return String(models[aiConfig.provider] || providerStatus[aiConfig.provider]?.model || '');
-    } catch {
-      return '';
-    }
-  })();
+  const configuredModel = aiConfig.models?.[aiConfig.provider] || providerStatus[aiConfig.provider]?.model || '';
   const extensionProviders = Object.entries(providerStatus).filter(([, status]) => status.extension === true);
   const selectedExtensionModels = (providerStatus[aiConfig.provider]?.models || [])
     .map(item => typeof item === 'string' ? item : String(item.id || ''))
@@ -2423,22 +2066,16 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
   const selectedExtensionUnavailable = aiConfig.provider.startsWith('ext_')
     && !providerStatus[aiConfig.provider];
 
-  const test = async () => {
-    if (!aiConfig.provider || !model.trim()) return;
-    setTesting(true);
-    setTestMessage('');
-    try {
-      const result = selectionMode === 'pinned'
-        ? await runLLMConnectionTest(aiConfig.provider, model.trim())
-        : await runConfiguredReasoningRouteTest();
-      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
-    } catch (error: any) {
-      setTestMessage(error?.message || uiMessage('settings.live-call-failed.cd19d46055'));
-    } finally {
-      setTesting(false);
+  const test = () => aiConfig.provider && model.trim() && operation.run('testing', async signal => {
+    if (selectionMode !== 'pinned') {
+      if (!(await updateAIConfig(route))) throw new Error(uiMessage('settings.failed-to-save-model-role.f325b221b0'));
+      signal.throwIfAborted();
     }
-  };
+    const result = await runModelConnectionTest(selectionMode === 'pinned' ? 'llm' : 'llm/route', aiConfig.provider, model.trim(), signal);
+    return formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs });
+  });
 
+  if (aiConfig.ready === false) return <ModelSettingsStatus error={aiConfig.loadError} retry={() => void reloadModelPreferences('llm')} />;
   return (
     <SettingsSection title={uiMessage('settings.reasoning-model-role.70c69a008d')} icon={<BrainCircuit size={18} className="text-celestial-saturn" />}>
       <div className="space-y-4 border-y border-white/10 py-5">
@@ -2447,6 +2084,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
           <select
             value={aiConfig.provider}
             onChange={event => {
+              operation.reset();
               const provider = event.target.value;
               updateAIConfig({
                 provider,
@@ -2483,6 +2121,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
           <select
             value={selectionMode}
             onChange={event => {
+              operation.reset();
               const next = event.target.value as 'pinned' | 'ordered_fallback' | 'auto';
               if (next === 'auto') updateAIConfig({ provider: 'auto', selectionMode: 'auto' });
               else updateAIConfig({
@@ -2508,7 +2147,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
               ? officialModelOptions(officialCatalog, 'reasoning', REASONING_MODEL_OPTIONS.relay)
               : REASONING_MODEL_OPTIONS[aiConfig.provider] || []),
           ].filter(Boolean)}
-          onChange={value => { setModel(value); setTestMessage(''); }}
+          onChange={value => { operation.reset(); setModel(value); }}
         />
         {(selectionMode === 'ordered_fallback' || selectionMode === 'auto') && (
           <label className="grid gap-2 md:grid-cols-[170px_minmax(0,1fr)]">
@@ -2516,7 +2155,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
             <div className="space-y-2">
               <textarea
                 value={fallbackText}
-                onChange={event => setFallbackText(event.target.value)}
+                onChange={event => { operation.reset(); setFallbackText(event.target.value); }}
                 placeholder={'ollama/qwen2.5:7b\nlmstudio/local-model\nopenai/gpt-4o-mini'}
                 rows={3}
                 className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 font-mono text-xs text-white outline-none focus:border-celestial-saturn/45"
@@ -2525,7 +2164,7 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
                 <input
                   type="checkbox"
                   checked={aiConfig.allowCloudFallback}
-                  onChange={event => updateAIConfig({ allowCloudFallback: event.target.checked })}
+                  onChange={event => { operation.reset(); updateAIConfig({ allowCloudFallback: event.target.checked }); }}
                 />
                 Allow explicitly configured cloud fallback
               </label>
@@ -2540,11 +2179,11 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
         <LumiOfficialCapabilityBadge t={t} supported={true} capabilityKey="settings.capability-reasoning.f2a3b4c5d6" />
       </div>
       <div className="mt-5 flex flex-wrap justify-end gap-2">
-        <Button onClick={test} disabled={testing || !model.trim()} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
+        <Button onClick={test} disabled={busy || !model.trim()} className="h-10 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-bold text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40">
           {testing ? <Loader2 size={15} className="mr-2 animate-spin" /> : <Zap size={15} className="mr-2" />}
           {uiMessage('settings.test.9408c1ff3a')}
         </Button>
-        <Button onClick={saveReasoningRoute} disabled={!model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
+        <Button onClick={saveReasoningRoute} disabled={busy || !model.trim()} className="h-10 rounded-lg bg-celestial-saturn px-4 text-xs font-bold text-black hover:bg-yellow-300 disabled:opacity-40">
           <Save size={15} className="mr-2" />
           {uiMessage('settings.save.ec8e6d5819')}
         </Button>
@@ -2556,46 +2195,23 @@ function ReasoningRoleSettings({ t, providerStatus }: { t: any; providerStatus: 
 
 function OfficialProviderSettings({ t }: { t: any }) {
   const locale = t?.langCode === 'en' ? 'en' : 'zh';
-  const [applying, setApplying] = useState(false);
+  const operation = useModelOperation();
+  const applying = operation.saving;
   const [applyResult, setApplyResult] = useState<OfficialRoleApplyResponse | null>(null);
   const officialCatalog = useLumiOfficialCatalog();
   const catalogSummary = officialCatalog
     ? { modelCount: officialCatalog.models.length, roleCount: Object.keys(officialCatalog.byRole).length }
     : null;
 
-  const applyOfficialApi = async () => {
-    if (applying) return;
-    setApplying(true);
+  const applyOfficialApi = () => operation.run('saving', async signal => {
     setApplyResult(null);
-    try {
-      const result = await applyOfficialModelRoles();
-      setApplyResult(result);
-      if (result.applied.length > 0) {
-        // AppContext refreshes its in-memory reasoning/vision state from the
-        // server. World and retrieval pages reload their own preferences when
-        // opened, so no secret or model value is copied into the browser.
-        window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
-      }
-      if (result.code === 'OFFICIAL_API_NOT_CONFIGURED') {
-        toast.error(uiMessage(LUMI_OFFICIAL_APPLY_NOT_CONFIGURED_KEY, locale));
-      } else if (result.failed.length > 0) {
-        toast.error(formatUiMessage(LUMI_OFFICIAL_APPLY_PARTIAL_KEY, {
-          value0: result.applied.length,
-          value1: result.failed.length,
-        }, locale));
-      } else if (result.applied.length > 0) {
-        toast.success(formatUiMessage(LUMI_OFFICIAL_APPLY_SUCCESS_KEY, {
-          value0: result.applied.length,
-        }, locale));
-      }
-    } catch (error: any) {
-      const message = error?.message || uiMessage(LUMI_OFFICIAL_APPLY_FAILED_KEY, locale);
-      setApplyResult({ ok: false, applied: [], skipped: [], failed: [{ role: 'request', reason: message }], roles: {} });
-      toast.error(message);
-    } finally {
-      setApplying(false);
-    }
-  };
+    const result = await applyOfficialModelRoles(signal);
+    signal.throwIfAborted(); setApplyResult(result);
+    if (result.applied.length > 0) window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed', { detail: { source: 'official-settings' } }));
+    if (result.code === 'OFFICIAL_API_NOT_CONFIGURED') throw new Error(uiMessage(LUMI_OFFICIAL_APPLY_NOT_CONFIGURED_KEY, locale));
+    if (result.failed.length > 0) throw new Error(formatUiMessage(LUMI_OFFICIAL_APPLY_PARTIAL_KEY, { value0: result.applied.length, value1: result.failed.length }, locale));
+    return result.applied.length > 0 ? formatUiMessage(LUMI_OFFICIAL_APPLY_SUCCESS_KEY, { value0: result.applied.length }, locale) : '';
+  }, LUMI_OFFICIAL_APPLY_FAILED_KEY);
 
   const roleLabels: Record<string, string> = {
     reasoning: uiMessage('settings.reasoning.6a171d96b4', locale),
@@ -2663,6 +2279,7 @@ function OfficialProviderSettings({ t }: { t: any }) {
             {uiMessage(LUMI_OFFICIAL_APPLY_LABEL_KEY, locale)}
           </Button>
         </div>
+        {operation.state === 'error' && operation.message && <p role="alert" className="mt-3 text-xs text-red-300">{operation.message}</p>}
         {applyResult && (
           <div className="mt-3 grid gap-1.5 border-t border-white/10 pt-3 text-[11px] text-white/55" role="status" aria-live="polite">
             {Object.entries(applyResult.roles).map(([role, result]) => (
@@ -2687,6 +2304,8 @@ function OfficialProviderSettings({ t }: { t: any }) {
 }
 
 function ServiceProviderSettings({ t, providerStatus }: { t: any; providerStatus: Record<string, ProviderRuntimeStatus> }) {
+  const { aiConfig, reloadModelPreferences } = useApp();
+  if (!aiConfig.ready) return <ModelSettingsStatus error={aiConfig.loadError} retry={() => void reloadModelPreferences('llm')} />;
   const failedProbes = Object.entries(providerStatus)
     // Relay belongs to the Lumi Official column; local runtimes belong to Local.
     // Keep the health banner scoped to the providers rendered in this column.
@@ -2722,9 +2341,9 @@ function ServiceProviderSettings({ t, providerStatus }: { t: any; providerStatus
           <LLMProviderRow icon={<BrainCircuit size={18} className="text-blue-400" />} label={`Google Gemini${providerStatus.gemini?.available ? ` (${providerStatus.gemini.model})` : ''}`} providerId="gemini" models={['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']} placeholder={providerStatus.gemini?.available ? (t.connectedViaEnv || uiMessage('settings.connected-via-environment.2dcffe5622')) : (t.noKeyConfigured || uiMessage('settings.no-key-configured.633defef78'))} serverKey="GEMINI_API_KEY" t={t} />
           <LLMProviderRow icon={<MessagesSquare size={18} className="text-green-400" />} label="OpenAI" providerId="openai" models={['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']} placeholder="sk-..." serverKey="OPENAI_API_KEY" t={t} />
           <LLMProviderRow icon={<Sparkle size={18} className="text-purple-400" />} label="Anthropic Claude" providerId="anthropic" models={['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5']} placeholder="sk-ant-..." serverKey="ANTHROPIC_API_KEY" t={t} />
-          <ApiKeyField compact icon={<Sparkle size={18} className="text-rose-300" />} label="MiniMax" placeholder="sk-..." storageKey="lumi_minimax_key" serverKey="MINIMAX_API_KEY" consoleUrl="https://platform.minimaxi.com" hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')} t={t} />
-          <ApiKeyField compact icon={<Sparkle size={18} className="text-emerald-300" />} label="SiliconFlow" placeholder="sk-..." storageKey="lumi_siliconflow_key" serverKey="SILICONFLOW_API_KEY" consoleUrl="https://cloud.siliconflow.cn" hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')} t={t} />
-          <ApiKeyField compact icon={<Volume2 size={18} className="text-emerald-300" />} label={t.doubaoSpeechLabel || 'Doubao Speech'} placeholder="New-console API Key value" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" consoleUrl="https://console.volcengine.com/speech/new/setting/apikeys" testEndpoint="/api/voice/doubao/probe" persistInBrowser={false} hint={uiMessage('settings.doubao-speech-api-key-only.4ab619f21d')} t={t} />
+          <ApiKeyField icon={<Sparkle size={18} className="text-rose-300" />} label="MiniMax" placeholder="sk-..." storageKey="lumi_minimax_key" serverKey="MINIMAX_API_KEY" consoleUrl="https://platform.minimaxi.com" hint={uiMessage('settings.minimax-generation-provider-hint.2c939bd0f7')} t={t} />
+          <ApiKeyField icon={<Sparkle size={18} className="text-emerald-300" />} label="SiliconFlow" placeholder="sk-..." storageKey="lumi_siliconflow_key" serverKey="SILICONFLOW_API_KEY" consoleUrl="https://cloud.siliconflow.cn" hint={uiMessage('settings.siliconflow-generation-provider-hint.73aa2ce8e7')} t={t} />
+          <ApiKeyField icon={<Volume2 size={18} className="text-emerald-300" />} label={t.doubaoSpeechLabel || 'Doubao Speech'} placeholder="New-console API Key value" storageKey="lumi_doubao_speech" serverKey="DOUBAO_SPEECH_KEY" consoleUrl="https://console.volcengine.com/speech/new/setting/apikeys" testEndpoint="/api/voice/doubao/probe" hint={uiMessage('settings.doubao-speech-api-key-only.4ab619f21d')} t={t} />
         </div>
       </SettingsSection>
     </div>
@@ -2732,11 +2351,13 @@ function ServiceProviderSettings({ t, providerStatus }: { t: any; providerStatus
 }
 
 function LocalProviderSettings({ t }: { t: any }) {
+  const { aiConfig, reloadModelPreferences } = useApp();
+  if (!aiConfig.ready) return <ModelSettingsStatus error={aiConfig.loadError} retry={() => void reloadModelPreferences('llm')} />;
   return (
     <SettingsSection title={uiMessage('settings.local-model-providers.8e1c4b6a20')}>
       <div className="border-y border-white/10">
-        <OllamaProviderRow t={t} />
-        <LmStudioProviderRow t={t} />
+        <LocalLLMProviderRow providerId="ollama" label="Ollama (Local AI)" defaultUrl="http://127.0.0.1:11434" defaultModel="qwen2.5:7b" accent="emerald" t={t} />
+        <LocalLLMProviderRow providerId="lmstudio" label="LM Studio (Local AI)" defaultUrl="http://127.0.0.1:1234" defaultModel="local-model" accent="amber" t={t} />
       </div>
     </SettingsSection>
   );
@@ -2745,8 +2366,6 @@ function LocalProviderSettings({ t }: { t: any }) {
 function LocalLLMProviderRow({
   providerId,
   label,
-  endpoint,
-  storageKey,
   defaultUrl,
   defaultModel,
   accent,
@@ -2754,113 +2373,25 @@ function LocalLLMProviderRow({
 }: {
   providerId: 'ollama' | 'lmstudio';
   label: string;
-  endpoint: string;
-  storageKey: string;
   defaultUrl: string;
   defaultModel: string;
   accent: 'emerald' | 'amber';
   t?: any;
 }) {
   const { aiConfig, updateAIConfig } = useApp();
-  const [baseUrl, setBaseUrl] = useState(() => {
-    try { return localStorage.getItem(storageKey) || defaultUrl; } catch { return defaultUrl; }
-  });
-  const [detected, setDetected] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-  const [checking, setChecking] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
-  const [testState, setTestState] = useState<ProviderTestState>('idle');
-  const [testMessage, setTestMessage] = useState('');
-  const [model, setModel] = useState(() => {
-    try {
-      const savedModels = JSON.parse(localStorage.getItem('lumi_llm_models') || '{}');
-      return savedModels[providerId] || defaultModel;
-    } catch {
-      return defaultModel;
-    }
-  });
-  const generationModels = models.filter(modelName => !/(?:embed|embedding|whisper|rerank|re-rank|bge[-_]|nomic[-_]?embed)/i.test(modelName));
+  const { url: baseUrl, setUrl: setBaseUrl, detected, models: generationModels, checking, saved, error: configError, detect } = useLocalModelConfig(providerId, defaultUrl);
+  const { model, changeModel: persistModel, testModel, resetTest, testState, testMessage } = useProviderModel(providerId, defaultModel, JSON.stringify([baseUrl, detected, checking]));
+  const error = configError || (generationModels.length > 0 && model.trim() && !generationModels.includes(model.trim())
+    ? `Selected model "${model.trim()}" is not currently loaded. The selection was preserved; load that exact model or choose another one explicitly.` : '');
 
-  const persistModel = async (nextModel: string) => {
-    const previousModel = model;
-    setModel(nextModel);
-    setTestState('idle');
-    setTestMessage('');
-    const saved = await updateAIConfig(aiConfig.provider === providerId ? { model: nextModel } : {}, { [providerId]: nextModel });
-    if (saved === false) setModel(previousModel);
-  };
-
-  useEffect(() => {
-    apiFetch(endpoint, { credentials: 'include' })
-      .then(async r => {
-        const cfg = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(cfg.error || 'Failed to load local model config');
-        return cfg;
-      })
-      .then(cfg => {
-        setBaseUrl(cfg.baseUrl || defaultUrl);
-        setDetected(!!cfg.detected);
-        setModels(cfg.models || []);
-        setError(cfg.lastError || '');
-      })
-      .catch(() => {});
-  }, [defaultUrl, endpoint]);
-
-  useEffect(() => {
-    if (generationModels.length > 0 && model.trim() && !generationModels.includes(model.trim())) {
-      setError(`Selected model "${model.trim()}" is not currently loaded. The selection was preserved; load that exact model or choose another one explicitly.`);
-    }
-  }, [generationModels.join('\u0000')]);
-
-  const handleDetect = async () => {
-    setChecking(true);
-    setError('');
-    setTestState('idle');
-    setTestMessage('');
-    try {
-      const resp = await apiFetch(endpoint, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ baseUrl }),
-      });
-      const cfg = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(cfg.error || 'Local model detection failed');
-      setDetected(!!cfg.detected);
-      setModels(cfg.models || []);
-      setBaseUrl(cfg.baseUrl || baseUrl);
-      setError(cfg.lastError || '');
-      localStorage.setItem(storageKey, cfg.baseUrl || baseUrl);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (caught: any) {
-      setDetected(false);
-      setModels([]);
-      setError(caught?.message || uiMessage('settings.local-model-detection-failed.639dea570a'));
-    } finally {
-      setChecking(false);
-    }
-  };
+  const handleDetect = () => { resetTest(); void detect(); };
 
   const handleUse = () => {
     if (!model.trim()) return;
     updateAIConfig({ provider: providerId, model: model.trim() });
   };
 
-  const handleTest = async () => {
-    if (!detected || !model.trim()) return;
-    setTestState('testing');
-    setTestMessage('');
-    try {
-      const result = await runLLMConnectionTest(providerId, model.trim());
-      setTestState('ok');
-      setTestMessage(formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: result.latencyMs }));
-    } catch (caught: any) {
-      setTestState('error');
-      setTestMessage(caught?.message || uiMessage('settings.live-call-failed.cd19d46055'));
-    }
-  };
+  const handleTest = () => { if (detected) void testModel(); };
 
   const accentClasses = accent === 'emerald'
     ? { icon: 'text-emerald-400', button: 'bg-emerald-600 hover:bg-emerald-500', focus: 'focus:border-emerald-400/50' }
@@ -2882,7 +2413,7 @@ function LocalLLMProviderRow({
         <input
           type="text"
           value={baseUrl}
-          onChange={e => { setBaseUrl(e.target.value); setSaved(false); setDetected(false); setTestState('idle'); setTestMessage(''); }}
+          onChange={e => { setBaseUrl(e.target.value); resetTest(); }}
           onKeyDown={e => e.key === 'Enter' && handleDetect()}
           placeholder={defaultUrl}
           className={`h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors ${accentClasses.focus}`}
@@ -2931,14 +2462,6 @@ function LocalLLMProviderRow({
   );
 }
 
-function OllamaProviderRow({ t }: { t?: any }) {
-  return <LocalLLMProviderRow providerId="ollama" label="Ollama (Local AI)" endpoint="/api/ollama/config" storageKey="lumi_ollama_url" defaultUrl="http://127.0.0.1:11434" defaultModel="qwen2.5:7b" accent="emerald" t={t} />;
-}
-
-function LmStudioProviderRow({ t }: { t?: any }) {
-  return <LocalLLMProviderRow providerId="lmstudio" label="LM Studio (Local AI)" endpoint="/api/lmstudio/config" storageKey="lumi_lmstudio_url" defaultUrl="http://127.0.0.1:1234" defaultModel="local-model" accent="amber" t={t} />;
-}
-
 function VoiceServicesPage({ t }: { t: any }) {
   return (
     <div className="space-y-8">
@@ -2985,97 +2508,31 @@ function VoiceServicesPage({ t }: { t: any }) {
   );
 }
 
-function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, testEndpoint, persistInBrowser = false, compact = false, secret = true, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey?: string, hint?: string, consoleUrl?: string, testEndpoint?: string, persistInBrowser?: boolean, compact?: boolean, secret?: boolean, t?: any }) {
-  const isZh = t?.langCode !== 'en';
-  const [value, setValue] = useState(() => {
-    if (!persistInBrowser) return '';
-    try { return localStorage.getItem(storageKey) || ''; } catch { return ''; }
-  });
-  const [saved, setSaved] = useState(false);
-  const [serverConfigured, setServerConfigured] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+function ApiKeyField(props: Parameters<typeof ServerApiKeyField>[0]) {
+  const { user } = useApp();
+  return user ? <ServerApiKeyField key={JSON.stringify([user.uid, user.role, props.serverKey])} {...props} /> : null;
+}
 
-  useEffect(() => {
-    if (!persistInBrowser) {
-      try { localStorage.removeItem(storageKey); } catch { /* localStorage may be unavailable */ }
-    }
-  }, [persistInBrowser, storageKey]);
-
-  useEffect(() => {
-    if (!serverKey) return;
-    getSavedKeyStatus()
-      .then(data => setServerConfigured(!!data[serverKey]))
-      .catch(() => {});
-  }, [serverKey]);
-
-  const handleRemove = () => {
-    const removeLocal = () => {
-      localStorage.removeItem(storageKey);
-      setServerConfigured(false);
-      setValue('');
-      setSaved(true);
-      setTestResult(null);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
-    };
-    if (serverKey) {
-      saveServerKeys({ [serverKey]: '' })
-        .then(removeLocal)
-        .catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove-key.065616ae8b')));
-      return;
-    }
-    removeLocal();
+function ServerApiKeyField({ icon, label, placeholder, disabled = false, storageKey, serverKey, hint, consoleUrl, testEndpoint, t }: { icon: React.ReactNode, label: string, placeholder: string, disabled?: boolean, storageKey: string, serverKey: string, hint?: string, consoleUrl?: string, testEndpoint?: string, t?: any }) {
+  const [value, setValue] = useState('');
+  const { status, loadError, reload, operation, changeKeys } = useServerCredentials(storageKey, t);
+  const serverConfigured = Boolean(status?.[serverKey]);
+  const changeKey = (remove: boolean) => {
+    if (disabled || (!remove && !value.trim())) return;
+    return changeKeys({ [serverKey]: remove ? '' : value.trim() }, remove, () => setValue(''));
   };
 
-  const handleSave = () => {
-    if (!value.trim()) return;
-    const saveLocal = () => {
-      if (persistInBrowser) localStorage.setItem(storageKey, value.trim());
-      else localStorage.removeItem(storageKey);
-      setServerConfigured(!!serverKey || serverConfigured);
-      if (!persistInBrowser) setValue('');
-      setSaved(true);
-      setTestResult(null);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
-    };
-    if (serverKey) {
-      saveServerKeys({ [serverKey]: value.trim() })
-        .then(saveLocal)
-        .catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save-key-to.be32a67a8a')));
-      return;
-    }
-    saveLocal();
-  };
-
-  const handleTest = async () => {
-    if (!testEndpoint || !serverConfigured || testing) return;
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const response = await apiFetch(testEndpoint, { method: 'POST', credentials: 'include' });
+  const handleTest = () => {
+    if (disabled || !testEndpoint || !serverConfigured || value.trim()) return;
+    return operation.run('testing', async signal => {
+      const response = await apiFetch(testEndpoint, { method: 'POST', credentials: 'include', signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload?.ok !== true) {
-        const details = [payload?.streamingStt?.error, payload?.speechSynthesis?.error, payload?.error]
-          .filter(Boolean)
-          .join(' | ');
+        const details = [payload?.streamingStt?.error, payload?.speechSynthesis?.error, payload?.error].filter(Boolean).join(' | ');
         throw new Error(details || uiMessage('settings.live-call-failed.cd19d46055'));
       }
-      const message = formatUiMessage(
-        'settings.live-call-passed-value0-ms.9f3242a245',
-        { value0: Number(payload.latencyMs || 0) },
-        isZh ? 'zh' : 'en',
-      );
-      setTestResult({ ok: true, message });
-      toast.success(message);
-    } catch (error: any) {
-      const message = error?.message || uiMessage('settings.live-call-failed.cd19d46055');
-      setTestResult({ ok: false, message });
-      toast.error(message);
-    } finally {
-      setTesting(false);
-    }
+      return formatUiMessage('settings.live-call-passed-value0-ms.9f3242a245', { value0: Number(payload.latencyMs || 0) }, t?.langCode === 'en' ? 'en' : 'zh');
+    });
   };
 
   return (
@@ -3084,10 +2541,9 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       label={label}
       badges={<>
         {serverConfigured && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{t?.configured || uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
       </>}
     >
-      <div className="space-y-3">
+      {!status ? <ModelSettingsStatus error={loadError} retry={reload} /> : <div className="space-y-3">
       {consoleUrl && (
         <a href={consoleUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300/70 hover:text-cyan-200">
           {uiMessage('settings.provider-console.f2138df9a1')} <ExternalLink size={12} />
@@ -3096,18 +2552,18 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="relative flex-1">
           <input
-            disabled={disabled}
-            type={secret ? 'password' : 'text'}
+            disabled={disabled || operation.busy}
+            type="password"
             value={value}
-            onChange={e => setValue(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSave()}
+            onChange={e => { setValue(e.target.value); operation.reset(); }}
+            onKeyDown={e => e.key === 'Enter' && changeKey(false)}
             placeholder={serverConfigured && !value ? (t?.keySavedOnServer || uiMessage('settings.key-saved-on-server-type.3b51321a15')) : placeholder}
             className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 pr-20 font-mono text-sm text-white outline-none transition-colors focus:border-celestial-saturn/50 disabled:opacity-50"
           />
           <button
             type="button"
-            onClick={handleRemove}
-            disabled={disabled || (!value && !serverConfigured)}
+            onClick={() => changeKey(true)}
+            disabled={disabled || operation.busy || (!value && !serverConfigured)}
             className="absolute right-1.5 top-1.5 h-8 rounded-md border border-red-500/20 bg-red-500/10 px-2.5 text-[11px] font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
           >
             {t?.remove || uiMessage('settings.remove.78190c6054')}
@@ -3115,8 +2571,8 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
         </div>
         <div className="flex gap-2">
           <Button
-            onClick={handleSave}
-            disabled={disabled || !value.trim()}
+            onClick={() => changeKey(false)}
+            disabled={disabled || operation.busy || !value.trim()}
             className="h-11 rounded-lg bg-celestial-saturn px-5 text-xs font-semibold text-black transition-all hover:bg-celestial-saturn/90 disabled:cursor-not-allowed disabled:opacity-30"
           >
             {t?.save || uiMessage('settings.save.ec8e6d5819')}
@@ -3125,79 +2581,43 @@ function ApiKeyField({ icon, label, placeholder, disabled = false, storageKey, s
             <Button
               variant="outline"
               onClick={handleTest}
-              disabled={disabled || !serverConfigured || testing}
+              disabled={disabled || operation.busy || !serverConfigured || Boolean(value.trim())}
               className="h-11 rounded-lg border-white/15 px-4 text-xs font-semibold text-white/75 disabled:cursor-not-allowed disabled:opacity-30"
             >
-              {testing ? <Loader2 size={14} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
+              {operation.testing ? <Loader2 size={14} className="animate-spin" /> : uiMessage('settings.test.9408c1ff3a')}
             </Button>
           )}
         </div>
       </div>
       {hint && <p className="text-[12px] text-white/45 leading-relaxed">{hint}</p>}
-      {testResult && (
-        <p className={`text-[12px] leading-relaxed ${testResult.ok ? 'text-emerald-300' : 'text-red-300'}`}>
-          {testResult.message}
+      {operation.message && (
+        <p className={`text-[12px] leading-relaxed ${operation.state === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
+          {operation.message}
         </p>
       )}
-      </div>
+      </div>}
     </SettingsDisclosure>
   );
 }
 
 
-function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
-  // Relay secrets belong in the server credential store, never in browser
-  // localStorage. Existing installations are cleaned up on mount below.
+function RelayProviderRow(props: Parameters<typeof RelayProviderEditor>[0]) {
+  const { user } = useApp();
+  return user ? <RelayProviderEditor key={JSON.stringify([user.uid, user.role])} {...props} /> : null;
+}
+
+function RelayProviderEditor({ t, label }: { t?: any; label?: string }) {
   const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState(() => {
-    return readStoredRelayBaseUrl() || LUMI_OFFICIAL_BASE_URL;
-  });
-  const [serverKeyOk, setServerKeyOk] = useState(false);
-  const [serverUrlOk, setServerUrlOk] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    clearLegacyRelaySecret();
-    getSavedKeyStatus()
-      .then(data => {
-        setServerKeyOk(!!data['RELAY_API_KEY']);
-        setServerUrlOk(!!data['RELAY_BASE_URL']);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleSave = () => {
-    const enteredKey = apiKey.trim();
-    if ((!enteredKey && !serverKeyOk) || !baseUrl.trim()) return;
-    saveServerKeys({
-      RELAY_BASE_URL: baseUrl.trim(),
-      ...(enteredKey ? { RELAY_API_KEY: enteredKey } : {}),
-    }).then(() => {
-      clearLegacyRelaySecret();
-      localStorage.setItem('lumi_relay_url', baseUrl.trim());
-      setApiKey('');
-      setServerKeyOk(true);
-      setServerUrlOk(true);
-      setSaved(true);
-      refreshLumiOfficialCatalog();
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeySaved || uiMessage('settings.api-key-saved.a1dc4d42fb'));
-    }).catch(err => toast.error(err.message || t?.failedToSaveKey || uiMessage('settings.failed-to-save.465b88f9c0')));
-  };
-
-  const handleRemove = () => {
-    saveServerKeys({ RELAY_API_KEY: '', RELAY_BASE_URL: '' }).then(() => {
-      localStorage.removeItem('lumi_relay_key');
-      localStorage.removeItem('lumi_relay_url');
-      setServerKeyOk(false);
-      setServerUrlOk(false);
-      setApiKey('');
-      setBaseUrl('');
-      setSaved(true);
-      refreshLumiOfficialCatalog();
-      setTimeout(() => setSaved(false), 2000);
-      toast.success(t?.apiKeyRemoved || uiMessage('settings.api-key-removed.bae3220b94'));
-    }).catch(err => toast.error(err.message || t?.failedToRemoveKey || uiMessage('settings.failed-to-remove.5c5d9c7827')));
+  const [baseUrl, setBaseUrl] = useState(() => readStoredRelayBaseUrl() || LUMI_OFFICIAL_BASE_URL);
+  const { status, loadError, reload, operation, changeKeys } = useServerCredentials('lumi_relay_key', t);
+  const serverKeyOk = Boolean(status?.RELAY_API_KEY), serverUrlOk = Boolean(status?.RELAY_BASE_URL);
+  const changeRelay = (remove: boolean) => {
+    const enteredKey = apiKey.trim(), url = baseUrl.trim();
+    if (!remove && ((!enteredKey && !serverKeyOk) || !url)) return;
+    return changeKeys(remove ? { RELAY_API_KEY: '', RELAY_BASE_URL: '' } : { RELAY_BASE_URL: url, ...(enteredKey ? { RELAY_API_KEY: enteredKey } : {}) }, remove, () => {
+      try { if (remove) localStorage.removeItem('lumi_relay_url'); else localStorage.setItem('lumi_relay_url', url); } catch {}
+      setApiKey(''); setBaseUrl(remove ? '' : url);
+    });
   };
 
   return (
@@ -3206,44 +2626,48 @@ function RelayProviderRow({ t, label }: { t?: any; label?: string }) {
       label={label || t?.apiRelayLabel || 'API Relay'}
       badges={<>
         {serverKeyOk && serverUrlOk && <span className="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[11px] font-semibold text-green-400">{uiMessage('settings.configured.d7f5ed6e15')}</span>}
-        {saved && <CheckCircle size={14} className="text-green-400" />}
       </>}
     >
+      {!status ? <ModelSettingsStatus error={loadError} retry={reload} /> : <>
       <div className="space-y-3">
         <input
+          disabled={operation.busy}
           type="password"
           value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSave()}
+          onChange={e => { setApiKey(e.target.value); operation.reset(); }}
+          onKeyDown={e => e.key === 'Enter' && changeRelay(false)}
           placeholder="API Key"
           className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
         />
         <input
+          disabled={operation.busy}
           type="text"
           value={baseUrl}
-          onChange={e => setBaseUrl(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSave()}
+          onChange={e => { setBaseUrl(e.target.value); operation.reset(); }}
+          onKeyDown={e => e.key === 'Enter' && changeRelay(false)}
           placeholder={LUMI_RELAY_BASE_URL_PLACEHOLDER}
           className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 font-mono text-sm text-white outline-none transition-colors focus:border-cyan-400/50"
         />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button
-          onClick={handleSave}
-          disabled={(!apiKey.trim() && !serverKeyOk) || !baseUrl.trim()}
+          onClick={() => changeRelay(false)}
+          disabled={operation.busy || (!apiKey.trim() && !serverKeyOk) || !baseUrl.trim()}
           className="h-10 rounded-lg bg-cyan-600 px-4 text-xs font-semibold text-white transition-all hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {t?.save || uiMessage('settings.save.ec8e6d5819')}
         </Button>
         <Button
-          onClick={handleRemove}
-          disabled={!apiKey && !serverKeyOk && !serverUrlOk}
+          onClick={() => changeRelay(true)}
+          disabled={operation.busy || (!apiKey && !serverKeyOk && !serverUrlOk)}
           className="h-10 rounded-lg border border-red-500/20 bg-red-500/10 px-4 text-xs font-semibold text-red-400 transition-all hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-20"
         >
           {t?.remove || uiMessage('settings.remove.78190c6054')}
         </Button>
       </div>
       <p className="mt-3 text-[12px] leading-relaxed text-amber-200/65">{uiMessage('settings.lumi-official-endpoint-warning.f7a8b9c0d1')}</p>
+      {operation.message && <p className={operation.state === 'ok' ? 'text-emerald-300' : 'text-red-300'}>{operation.message}</p>}
+      </>}
     </SettingsDisclosure>
   );
 }

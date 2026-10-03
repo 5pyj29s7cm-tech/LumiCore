@@ -1,0 +1,220 @@
+{
+  "batch": "prune52",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune51, not HEAD; earlier uncommitted changes preserved.",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/Settings.tsx",
+      "before": 3454,
+      "after": 3334,
+      "delta": -120,
+      "beforeSha256": "80853786134ef52f9a73863641163e023697ceacd30a36458376b0927b7811da",
+      "afterSha256": "d28df859f6ea9fd2052c82adca50adecc4bfa65996b2d03ae1e01709b7496d3d"
+    },
+    {
+      "file": "test/setup_wizard.test.tsx",
+      "before": 130,
+      "after": 220,
+      "delta": 90,
+      "beforeSha256": "4ef94e1c4b1b1b3675c3d8e2095a84f618c851b177fd08667726dc632e0cd966",
+      "afterSha256": "e234a000fd53f849a4ccc627f7c48178814032ab9edfdaccb62451676b24b245"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1088,
+        "lines": 365995
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160629
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526624
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1088,
+        "lines": 365875
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160719
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526594
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -120
+      },
+      "tests": {
+        "files": 0,
+        "lines": 90
+      },
+      "total": {
+        "files": 0,
+        "lines": -30
+      }
+    },
+    "combinedPrune44Through52": {
+      "source": {
+        "files": 1,
+        "lines": -687
+      },
+      "tests": {
+        "files": 1,
+        "lines": 502
+      },
+      "total": {
+        "files": 2,
+        "lines": -185
+      }
+    }
+  },
+  "baselineRegression": {
+    "passed": 2,
+    "failed": 13,
+    "skipped": 18,
+    "failures": [
+      {
+        "name": "GenerativeModelsPage preserves edited drafts after an obsolete save and suppresses closed loads",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 3 times"
+      },
+      {
+        "name": "WorldActionModelPage preserves edited drafts after an obsolete save and suppresses closed loads",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 3 times"
+      },
+      {
+        "name": "RetrievalModelSettings preserves edited drafts after an obsolete save and suppresses closed loads",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 3 times"
+      },
+      {
+        "name": "retrieval test locks the save/test chain and honors saved saves",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 4 times"
+      },
+      {
+        "name": "retrieval test locks the save/test chain and honors rejected saves",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 4 times"
+      },
+      {
+        "name": "retrieval test locks the save/test chain and honors edited saves",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 4 times"
+      },
+      {
+        "name": "retrieval test locks the save/test chain and honors closed saves",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 2 times, but got 4 times"
+      },
+      {
+        "name": "world tests track the current inherited vision model and ignore obsolete responses",
+        "firstFailure": "Error: Unable to find an element with the text: openai / current-vision. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "reasoning tests use the edited route after confirmation (saved)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { model: 'new-model', …(3) } ]"
+      },
+      {
+        "name": "reasoning tests use the edited route after confirmation (rejected)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { model: 'new-model', …(3) } ]"
+      },
+      {
+        "name": "reasoning tests use the edited route after confirmation (edited)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { model: 'new-model', …(3) } ]"
+      },
+      {
+        "name": "reasoning tests use the edited route after confirmation (closed)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { model: 'new-model', …(3) } ]"
+      },
+      {
+        "name": "reasoning preserves newer edits across configuration refresh and a pending save confirmation",
+        "firstFailure": "AssertionError: expected <input …(2)></input> to have property \"value\" with value 'new-draft'"
+      }
+    ],
+    "method": "Fifteen targeted final component tests against an isolated turn-start Settings copy; dependencies are mocked. Thirteen parameterized cases fail, two preserved-behavior cases pass. Failures can stop at their first assertion and do not represent thirteen independent defects. Eighteen other cases excluded from the baseline-only run."
+  },
+  "focused": {
+    "testFiles": 14,
+    "passed": 181,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "src/contexts/frontendPreferenceContracts.test.tsx",
+      "test/model_failover_probe.test.ts",
+      "test/model_preference_writes.test.ts",
+      "test/setup_wizard.test.tsx",
+      "test/model_switching_stability.test.ts",
+      "test/model_role_preferences.test.ts",
+      "test/model_service_settings.test.ts",
+      "test/settings.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/official_api_role_settings_contract.test.ts",
+      "test/chat_recovery_auth_integration.test.ts",
+      "test/client_domain_ui_state.test.ts",
+      "test/proactive_voice_delivery.test.tsx",
+      "test/voice_hot_switch.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T13:55:27.270Z",
+      "finishedAt": "2026-10-02T13:55:36.738Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T13:55:36.740Z",
+      "finishedAt": "2026-10-02T13:56:08.677Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T13:56:08.678Z",
+      "finishedAt": "2026-10-02T13:56:17.856Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T13:56:17.856Z",
+      "finishedAt": "2026-10-02T13:56:26.606Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T13:56:26.606Z",
+      "finishedAt": "2026-10-02T13:56:26.980Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through51LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "Cloud/local provider, reasoning-route, world-model and retrieval tests share operation state, immediate duplicate locking and cancellation ownership. Busy status is derived, and obsolete operations cannot clear a newer operation or report results after edits/unmount/account changes.",
+    "Generation, world and retrieval preference pages share load/PUT/confirmation handling, replacing three duplicated request/parsing/state implementations. Empty/missing top-level confirmations and explicit failure envelopes are rejected. Editing invalidates pending view updates while preserving the new draft.",
+    "Retrieval testing holds one operation from save through test; save rejection, edit or unmount prevents its continuation. Test results require ok:true and embedding data. Save/test buttons share the same busy guard.",
+    "Ordered/automatic reasoning-route tests save the visible route through the existing AppContext queue before testing the persisted route. Pinned tests continue to send explicit provider/model directly. Failed saves or an invalidated view do not launch the route test.",
+    "Reasoning drafts no longer reset because fallback array identity changed. A previous save confirmation cannot overwrite newer model/fallback edits; a provider switch still synchronizes the form. World inheritance derives its current model from confirmed vision context instead of the one-time resolved preference snapshot.",
+    "Image, video and image-to-video provider changes reuse one setter, preserving role-specific options, saved models, image auto mode and the separately configured image-edit role."
+  ],
+  "preserved": [
+    "Existing setting entry points, role defaults and supported providers; authenticated API transport and backend routes.",
+    "Fixed, ordered-fallback and auto routing policy; independent generation roles; local/cloud provider credential and discovery behavior.",
+    "All previous prune40–51 changes as verified by their latest recorded fingerprints."
+  ],
+  "limitations": [
+    "Component tests execute production expressions with mocked dependencies. Four existing tests mount the real AppProvider; there is no complete Settings-to-AppProvider-to-live-server/native-client acceptance in this batch.",
+    "No real model/API calls, visual acceptance, latency benchmark, full-suite run, backend source change, backend rebuild, client restart, commit or push. No real user preferences or data were modified.",
+    "Client aborts cannot undo accepted server writes. Separate pages/windows/clients are not coordinated by a database transaction; an acknowledged save followed by another client write can change what a persisted-route test uses.",
+    "Shared read/save requests have a 15-second signal and tests a 60-second signal. Reasoning saves still use the AppContext queue, whose 15-second timeout starts when dequeued and cannot be canceled by this panel; a pending accepted save may finish after closing. These signals do not guarantee server-side inference termination.",
+    "Preference confirmation validation checks required top-level fields, not full nested schemas. Initial load failure still exposes the default/existing draft after showing an error; a safe reload/retry gate remains to be designed.",
+    "Model browser caches are not account-keyed. Case-write coalescing, personal-case cache isolation and other program partitions remain open."
+  ]
+}

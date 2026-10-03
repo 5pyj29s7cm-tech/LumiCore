@@ -2656,210 +2656,85 @@ Output ONLY the reflection — no preamble, no labels.`;
     },
   });
 
-  // Weekly review — every 7 days: Lumi reflects on what she learned this week
-  scheduler.register({
-    id: 'weekly_review',
-    cron: 'every_7d',
-    quiet: true,
-    lastRun: null,
-    executionClass: 'maintenance',
-    handler: async () => {
-      const userIds = getAllUserIds();
-      const messages: string[] = [];
-      for (const userId of userIds) {
-        try {
-          const config = personalityRegistry.getForUser('lumi', userId);
-          if (!config) continue;
-          const db = readDB();
-          const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  // One review flow; each period keeps its schedule, scope, budget and memory metadata.
+  for (const { depth, cron, days, maxTokens, topicLimit, label, period, dateLength, importance } of [
+    { depth: 'weekly', cron: 'every_7d', days: 7, maxTokens: 400, topicLimit: 10,
+      label: 'Weekly', period: 'week', dateLength: 10, importance: 0.95 },
+    { depth: 'monthly', cron: '1 0 1 * *', days: 30, maxTokens: 600, topicLimit: 15,
+      label: 'Monthly', period: 'month', dateLength: 7, importance: 0.97 },
+    { depth: 'yearly', cron: '0 0 1 1 *', days: 365, maxTokens: 800, topicLimit: 20,
+      label: 'Yearly', period: 'year', dateLength: 4, importance: 1.0 },
+  ] as const) {
+    const reviewId = `${depth}_review`;
+    scheduler.register({
+      id: reviewId,
+      cron,
+      quiet: true,
+      lastRun: null,
+      executionClass: 'maintenance',
+      handler: async () => {
+        const userIds = getAllUserIds();
+        const messages: string[] = [];
+        for (const userId of userIds) {
+          try {
+            const config = personalityRegistry.getForUser('lumi', userId);
+            if (!config) continue;
+            const db = readDB();
+            const periodStart = new Date(Date.now() - days * 86400000).toISOString();
 
-          const weekMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= weekAgo,
-          );
-          const weekInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= weekAgo,
-          );
-          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
-          const weekEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= weekAgo);
-
-          const prompt = generateReviewPrompt({
-            depth: 'weekly',
-            personalityName: config.name,
-            currentVersion: config.version,
-            evolutionSteps: weekEvolutions,
-            newMemoryCount: weekMemories.length,
-            newInteractionCount: weekInteractions.length,
-            topMemoryTopics: [...new Set<string>(weekMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 10),
-            connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
-          });
-
-          const result = await makeLLMCall(
-            [{ role: 'user', content: prompt }],
-            [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 400, domain: 'personal', orgId: '', source: 'scheduler_weekly_review' }),
-            getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-              getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
+            const memories = (db.memories || []).filter((m: any) =>
+              m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m),
             );
-          const narrative = result.text?.trim();
-          if (narrative) {
-            // Store as a special growth memory
-            const { addMemory } = await import('./memory');
-            addMemory({
-              userId, type: 'knowledge',
-              content: `[Weekly Review ${new Date().toISOString().slice(0, 10)}] ${narrative}`,
-              keywords: ['weekly_review', `week_${new Date().toISOString().slice(0, 10)}`],
-              confidence: 1.0,
-              sourceInteractionId: 'weekly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.95, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[WeeklyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
-            messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
-          }
-        } catch (err: any) {
-          console.error(`[WeeklyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
-        }
-      }
-      return messages.length > 0 ? messages.join('\n') : null;
-    },
-  });
-
-  // Monthly review — 1st of each month: Lumi reflects on monthly growth trajectory
-  scheduler.register({
-    id: 'monthly_review',
-    cron: '1 0 1 * *',
-    quiet: true,
-    lastRun: null,
-    executionClass: 'maintenance',
-    handler: async () => {
-      const userIds = getAllUserIds();
-      const messages: string[] = [];
-      for (const userId of userIds) {
-        try {
-          const config = personalityRegistry.getForUser('lumi', userId);
-          if (!config) continue;
-          const db = readDB();
-          const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
-
-          const monthMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= monthAgo,
-          );
-          const monthInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= monthAgo,
-          );
-          const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
-          const monthEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= monthAgo);
-
-          const prompt = generateReviewPrompt({
-            depth: 'monthly',
-            personalityName: config.name,
-            currentVersion: config.version,
-            evolutionSteps: monthEvolutions,
-            newMemoryCount: monthMemories.length,
-            newInteractionCount: monthInteractions.length,
-            topMemoryTopics: [...new Set<string>(monthMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 15),
-            connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
-          });
-
-          const result = await makeLLMCall(
-            [{ role: 'user', content: prompt }],
-            [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 600, domain: 'personal', orgId: '', source: 'scheduler_monthly_review' }),
-            getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-              getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
+            const periodMemories = memories.filter((m: any) => m.createdAt >= periodStart);
+            const periodInteractions = (db.interactions || []).filter((i: any) =>
+              i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= periodStart,
             );
-          const narrative = result.text?.trim();
-          if (narrative) {
-            const { addMemory } = await import('./memory');
-            addMemory({
-              userId, type: 'knowledge',
-              content: `[Monthly Review ${new Date().toISOString().slice(0, 10)}] ${narrative}`,
-              keywords: ['monthly_review', `month_${new Date().toISOString().slice(0, 7)}`],
-              confidence: 1.0,
-              sourceInteractionId: 'monthly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 0.97, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[MonthlyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
-            messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
+            const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
+            const periodEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= periodStart);
+
+            const prompt = generateReviewPrompt({
+              depth,
+              personalityName: config.name,
+              currentVersion: config.version,
+              evolutionSteps: periodEvolutions,
+              newMemoryCount: periodMemories.length,
+              newInteractionCount: periodInteractions.length,
+              topMemoryTopics: [...new Set<string>(periodMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, topicLimit),
+              connectionScore: loadEmotionalState(userId).connection,
+              totalFacts: memories.filter((m: any) => m.type === 'fact').length,
+              totalPreferences: memories.filter((m: any) => m.type === 'preference').length,
+              activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
+            });
+
+            const result = await makeLLMCall(
+              [{ role: 'user', content: prompt }],
+              [],
+              getUserPreferredLLMConfig(userId, { maxTokens, domain: 'personal', orgId: '', source: `scheduler_${reviewId}` }),
+              getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
+                getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
+              );
+            const narrative = result.text?.trim();
+            if (narrative) {
+              // Store as a special growth memory
+              const { addMemory } = await import('./memory');
+              addMemory({
+                userId, type: 'knowledge',
+                content: `[${label} Review ${new Date().toISOString().slice(0, 10)}] ${narrative}`,
+                keywords: [reviewId, `${period}_${new Date().toISOString().slice(0, dateLength)}`],
+                confidence: 1.0,
+                sourceInteractionId: `${reviewId}_scheduler`,
+              } as any, { tier: 'growth', perspective: 'lumi_self', importance, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
+              console.log(`[${label}Review] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
+              messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
+            }
+          } catch (err: any) {
+            console.error(`[${label}Review] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
           }
-        } catch (err: any) {
-          console.error(`[MonthlyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
         }
-      }
-      return messages.length > 0 ? messages.join('\n') : null;
-    },
-  });
-
-  // Yearly review — Jan 1st: Lumi's deep annual retrospective
-  scheduler.register({
-    id: 'yearly_review',
-    cron: '0 0 1 1 *',
-    quiet: true,
-    lastRun: null,
-    executionClass: 'maintenance',
-    handler: async () => {
-      const userIds = getAllUserIds();
-      const messages: string[] = [];
-      for (const userId of userIds) {
-        try {
-          const config = personalityRegistry.getForUser('lumi', userId);
-          if (!config) continue;
-          const db = readDB();
-          const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();
-
-          const yearMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= yearAgo,
-          );
-          const yearInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= yearAgo,
-          );
-          const fullEvolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
-          const yearEvolutions = fullEvolutionHistory.filter((e: any) => e.timestamp >= yearAgo);
-
-          const prompt = generateReviewPrompt({
-            depth: 'yearly',
-            personalityName: config.name,
-            currentVersion: config.version,
-            evolutionSteps: yearEvolutions,
-            newMemoryCount: yearMemories.length,
-            newInteractionCount: yearInteractions.length,
-            topMemoryTopics: [...new Set<string>(yearMemories.map((m: any) => (m.keywords || []) as string[]).flat())].slice(0, 20),
-            connectionScore: loadEmotionalState(userId).connection,
-            totalFacts: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'fact').length,
-            totalPreferences: (db.memories || []).filter((m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.type === 'preference').length,
-            activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
-          });
-
-          const result = await makeLLMCall(
-            [{ role: 'user', content: prompt }],
-            [],
-            getUserPreferredLLMConfig(userId, { maxTokens: 800, domain: 'personal', orgId: '', source: 'scheduler_yearly_review' }),
-            getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen,
-              getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay,
-            );
-          const narrative = result.text?.trim();
-          if (narrative) {
-            const { addMemory } = await import('./memory');
-            addMemory({
-              userId, type: 'knowledge',
-              content: `[Yearly Review ${new Date().toISOString().slice(0, 10)}] ${narrative}`,
-              keywords: ['yearly_review', `year_${new Date().toISOString().slice(0, 4)}`],
-              confidence: 1.0,
-              sourceInteractionId: 'yearly_review_scheduler',
-            } as any, { tier: 'growth', perspective: 'lumi_self', importance: 1.0, domain: 'personal', orgId: '', source: 'system', privacyClass: 'private' });
-            console.log(`[YearlyReview] Generated for ${redactSchedulerDiagnostic(userId)}: ${redactSchedulerDiagnostic(narrative).slice(0, 100)}`);
-            messages.push(`[${userId}] ${narrative.slice(0, 200)}`);
-          }
-        } catch (err: any) {
-          console.error(`[YearlyReview] Failed for ${redactSchedulerDiagnostic(userId)}:`, redactSchedulerDiagnostic(err));
-        }
-      }
-      return messages.length > 0 ? messages.join('\n') : null;
-    },
-  });
+        return messages.length > 0 ? messages.join('\n') : null;
+      },
+    });
+  }
 
   // Auto workflow generation (every hour) — detects repeated tool patterns and creates named workflows
   scheduler.register({

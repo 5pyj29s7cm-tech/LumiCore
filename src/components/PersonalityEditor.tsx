@@ -1,53 +1,31 @@
-import React, { useState, useEffect } from 'react';
-import { User, ChevronDown, ChevronRight, Activity, Users } from 'lucide-react';
-import { toast } from 'sonner';
+import React, { useState } from 'react';
+import { User, ChevronRight, Activity, Users } from 'lucide-react';
+import { useApp } from '../contexts/AppContext';
+import { useApiCollection } from '../hooks/useApiCollection';
 import { PersonalityEvolution } from './PersonalityEvolution';
 import { ContactsPanel } from './ContactsPanel';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 
 import type { PersonalityConfig } from '../../server/personality/types';
 
+const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
+const isConfig = (value: any): value is PersonalityConfig => Boolean(value && ['id', 'name', 'version', 'coreMotivation'].every(key => typeof value[key] === 'string')
+  && strings(value.behavioralBoundaries) && strings(value.expressionStyle?.languages) && strings(value.memoryPolicy?.includeTypes) && value.toolPolicy
+  && ['persona', 'tone', 'verbosity'].every(key => typeof value.expressionStyle[key] === 'string')
+  && [value.expressionStyle.vocabularyHints, value.toolPolicy.allowedTools, value.toolPolicy.requireConfirmation, value.toolPolicy.forbiddenTools,
+    value.growthState?.ownerInterests, value.growthState?.ownerExpressions, value.growthState?.communicationPatterns].every(list => list == null || strings(list))
+  && (!value.personalityVector || ['cognitiveStyle', 'socialStyle'].every(key => value.personalityVector[key] && typeof value.personalityVector[key] === 'object'
+    && Object.values(value.personalityVector[key]).every(item => typeof item === 'number' && Number.isFinite(item)))));
+
 export function PersonalityEditor({ t }: { t?: any }) {
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <PersonalityView key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId])} t={t} /> : null;
+}
+
+function PersonalityView({ t }: { t?: any }) {
   const [tab, setTab] = useState<'personality' | 'contacts'>('personality');
-  const [config, setConfig] = useState<PersonalityConfig | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    identity: true,
-    growth: true,
-    boundaries: false,
-    expression: false,
-    evolution: true,
-    tools: false,
-    memory: false,
-  });
-
-  const toggleSection = (s: string) => setExpandedSections(prev => ({ ...prev, [s]: !prev[s] }));
-
-  useEffect(() => {
-    fetch('/api/personalities')
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setConfig(data[0]);
-        }
-      })
-      .catch(() => toast.error(t?.failedToLoadPersonalities || uiMessage('personality-editor.failed-to-load-lumi-config.715c426961')))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading || !config) {
-    return (
-      <div className="animate-in fade-in space-y-8 duration-500">
-        <div className="lumi-panel flex items-center gap-3 p-5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-celestial-saturn/20 bg-celestial-saturn/10 text-celestial-saturn">
-            <User size={20} />
-          </span>
-          <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
-        </div>
-        <p className="lumi-panel p-5 text-sm text-white/40">{loading ? (t?.loadingPersonalities || uiMessage('personality-editor.loading.586f5af819')) : (t?.noPersonalitiesDefined || uiMessage('personality-editor.no-configuration-found.7f74a3d38a'))}</p>
-      </div>
-    );
-  }
+  const { items, busy, error, sync } = useApiCollection('/api/personalities', isConfig);
+  const config = items?.[0];
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 space-y-6 duration-500">
@@ -79,16 +57,20 @@ export function PersonalityEditor({ t }: { t?: any }) {
           <User size={20} />
         </span>
         <h3 className="text-xl font-black uppercase tracking-[0.08em] text-white/90">{t?.lumiCore || uiMessage('personality-editor.lumi-core-config.8a4e9b757c')}</h3>
-        <span className="text-xs font-mono text-white/45 bg-white/5 px-2 py-0.5 rounded-full">v{config.version}</span>
+        {config && <span className="text-xs font-mono text-white/45 bg-white/5 px-2 py-0.5 rounded-full">v{config.version}</span>}
       </div>
 
+      {!config ? <div className="lumi-panel p-5 text-sm text-white/40" role={error ? 'alert' : 'status'}>
+        {error || (busy ? (t?.loadingPersonalities || uiMessage('personality-editor.loading.586f5af819')) : (t?.noPersonalitiesDefined || uiMessage('personality-editor.no-configuration-found.7f74a3d38a')))}
+        {!busy && <button onClick={() => sync()} className="ml-3 underline">{uiMessage('knowledge-base.retry.9db2a8180b')}</button>}
+      </div> : <>
       <p className="text-sm text-white/40 max-w-xl">
         {t?.lumiCoreDesc || uiMessage('personality-editor.lumi-s-core-personality-evolves.acdafbbf05')}
       </p>
 
       <div className="space-y-4">
         {/* Identity */}
-        <Section title={t?.identitySection || uiMessage('personality-editor.identity.1cadaacdf5')} section="identity" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.identitySection || uiMessage('personality-editor.identity.1cadaacdf5')} open>
           <ReadonlyField label={t?.idLabel || 'ID'} value={config.id} mono />
           <ReadonlyField label={t?.nameLabel || uiMessage('personality-editor.name.dd4dc4c5a9')} value={config.name} />
           <ReadonlyField label={t?.versionLabel || uiMessage('personality-editor.version.7e42933b4f')} value={config.version} />
@@ -100,7 +82,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Growth State */}
-        <Section title={uiMessage('personality-editor.local-growth-state.f74855c1e2')} section="growth" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={uiMessage('personality-editor.local-growth-state.f74855c1e2')} open>
           {config.growthState ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-4">
@@ -123,31 +105,18 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Evolution Vector */}
-        <Section title={t?.evolutionVector || uiMessage('personality-editor.evolution-vector.f374c2f5a8')} section="evolution" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.evolutionVector || uiMessage('personality-editor.evolution-vector.f374c2f5a8')} open>
           {config.personalityVector ? (
             <div className="space-y-4">
-              <div>
-                <label className="text-xs font-black uppercase text-white/55 block mb-2">{uiMessage('personality-editor.cognitive-style.8540467dab')}</label>
+              {(['cognitiveStyle', 'socialStyle'] as const).map(style => <div key={style}>
+                <label className="text-xs font-black uppercase text-white/55 block mb-2">{uiMessage(style === 'cognitiveStyle' ? 'personality-editor.cognitive-style.8540467dab' : 'personality-editor.social-style.b41db90dc0')}</label>
                 <div className="grid grid-cols-4 gap-2">
-                  {Object.entries(config.personalityVector.cognitiveStyle).map(([k, v]) => (
-                    <div key={k} className="text-center p-3 bg-white/5 rounded-xl">
-                      <div className="text-lg font-black text-celestial-saturn">{(v * 100).toFixed(0)}%</div>
-                      <div className="text-[12px] text-white/55 uppercase">{k}</div>
-                    </div>
-                  ))}
+                  {Object.entries(config.personalityVector![style]).map(([key, value]) => <div key={key} className="text-center p-3 bg-white/5 rounded-xl">
+                    <div className={`text-lg font-black ${style === 'cognitiveStyle' ? 'text-celestial-saturn' : 'text-violet-400'}`}>{(value * 100).toFixed(0)}%</div>
+                    <div className="text-[12px] text-white/55 uppercase">{key}</div>
+                  </div>)}
                 </div>
-              </div>
-              <div>
-                <label className="text-xs font-black uppercase text-white/55 block mb-2">{uiMessage('personality-editor.social-style.b41db90dc0')}</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {Object.entries(config.personalityVector.socialStyle).map(([k, v]) => (
-                    <div key={k} className="text-center p-3 bg-white/5 rounded-xl">
-                      <div className="text-lg font-black text-violet-400">{(v * 100).toFixed(0)}%</div>
-                      <div className="text-[12px] text-white/55 uppercase">{k}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              </div>)}
               {config.evolutionConfig && (
                 <div className="text-xs text-white/45 space-y-1">
                   <div>{uiMessage('personality-editor.plasticity.e3133824c0')}: {config.evolutionConfig.plasticity} | {uiMessage('personality-editor.cooldown.6fa612d542')}: {Math.round(config.evolutionConfig.cooldownMs / 86400000)}d | {uiMessage('personality-editor.max-mutations-step.96c2aa4764')}: {config.evolutionConfig.maxMutationsPerStep}</div>
@@ -161,7 +130,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Expression */}
-        <Section title={t?.expressionStyleSection || uiMessage('personality-editor.expression-style.ceeea2ddc5')} section="expression" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.expressionStyleSection || uiMessage('personality-editor.expression-style.ceeea2ddc5')}>
           <ReadonlyField label={t?.personaField || uiMessage('personality-editor.persona.963e5b3100')} value={config.expressionStyle.persona} />
           <div className="grid grid-cols-2 gap-4">
             <ReadonlyField label={t?.toneField || uiMessage('personality-editor.tone.7ee6d53e70')} value={config.expressionStyle.tone} />
@@ -175,7 +144,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Boundaries */}
-        <Section title={t?.behavioralBoundariesSection || uiMessage('personality-editor.behavioral-boundaries.d2dd23c7c5')} section="boundaries" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.behavioralBoundariesSection || uiMessage('personality-editor.behavioral-boundaries.d2dd23c7c5')}>
           {config.behavioralBoundaries.map((b, i) => (
             <div key={i} className="flex items-center gap-2 p-3 bg-white/5 rounded-xl">
               <Activity size={12} className="text-celestial-saturn/50 shrink-0" />
@@ -188,7 +157,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Tool Policy */}
-        <Section title={t?.toolPolicySection || uiMessage('personality-editor.tool-policy.73aa8685b2')} section="tools" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.toolPolicySection || uiMessage('personality-editor.tool-policy.73aa8685b2')}>
           <ReadonlyField label={t?.allowedToolsField || uiMessage('personality-editor.allowed-tools.6cf7d8b7ae')} value={(config.toolPolicy.allowedTools || ['*']).join(', ')} />
           <ReadonlyField label={t?.requireConfirmationField || uiMessage('personality-editor.require-confirmation.035cf9d53a')} value={(config.toolPolicy.requireConfirmation || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
           <ReadonlyField label={t?.forbiddenToolsField || uiMessage('personality-editor.forbidden-tools.f256e255a7')} value={(config.toolPolicy.forbiddenTools || []).join(', ') || uiMessage('personality-editor.none.a8d7c6c030')} />
@@ -196,7 +165,7 @@ export function PersonalityEditor({ t }: { t?: any }) {
         </Section>
 
         {/* Memory Policy */}
-        <Section title={t?.memoryPolicySection || uiMessage('personality-editor.memory-policy.576953859c')} section="memory" expanded={expandedSections} onToggle={toggleSection}>
+        <Section title={t?.memoryPolicySection || uiMessage('personality-editor.memory-policy.576953859c')}>
           <div className="grid grid-cols-2 gap-4">
             <ReadonlyField label={t?.retrieveLimitField || uiMessage('personality-editor.retrieve-limit.a2051724cb')} value={String(config.memoryPolicy.retrieveLimit)} />
             <ReadonlyField label={t?.minConfidenceField || uiMessage('personality-editor.min-confidence.260018369d')} value={String(config.memoryPolicy.minConfidence)} />
@@ -209,8 +178,9 @@ export function PersonalityEditor({ t }: { t?: any }) {
 
       {/* Evolution History + Radar */}
       <div className="rounded-2xl overflow-hidden">
-        <PersonalityEvolution />
+        <PersonalityEvolution personalityId={config.id} />
       </div>
+      </> }
         </>
       )}
     </div>
@@ -219,22 +189,14 @@ export function PersonalityEditor({ t }: { t?: any }) {
 
 // Sub-components
 
-function Section({ title, section, expanded, onToggle, children }: {
-  title: string;
-  section: string;
-  expanded: Record<string, boolean>;
-  onToggle: (s: string) => void;
-  children: React.ReactNode;
-}) {
-  const open = expanded[section] !== false;
+function Section({ title, open = false, children }: { title: string; open?: boolean; children: React.ReactNode }) {
   return (
-    <div className="lumi-panel space-y-3 p-4">
-      <button onClick={() => onToggle(section)} className="flex w-full items-center gap-2 text-left text-xs font-black uppercase tracking-widest text-white/55 hover:text-white/85">
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {title}
-      </button>
-      {open && <div className="space-y-3">{children}</div>}
-    </div>
+    <details open={open} className="lumi-panel group/section space-y-3 p-4">
+      <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-left text-xs font-black uppercase tracking-widest text-white/55 hover:text-white/85 [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={14} className="group-open/section:rotate-90" /> {title}
+      </summary>
+      <div className="space-y-3">{children}</div>
+    </details>
   );
 }
 

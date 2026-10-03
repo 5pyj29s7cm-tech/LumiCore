@@ -65,3 +65,31 @@ export class ChatAttachmentUploads {
 
   finish(attempt: ChatUploadAttempt): void { if (this.active === attempt.token) this.active = null; }
 }
+
+/** One native listener per chat view, including asynchronous registration cleanup. */
+export function listenForNativeChatFileDrop(
+  setDragging: (active: boolean) => void,
+  lastDrop: { current: number },
+  importPaths: (paths: string[]) => Promise<void>,
+): (() => void) | undefined {
+  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
+  let cancelled = false;
+  let unlisten: (() => void) | undefined;
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      if (cancelled) return;
+      unlisten = await getCurrentWindow().onDragDropEvent(event => {
+        if (cancelled) return;
+        const payload = event?.payload;
+        if (payload?.type === 'drop') lastDrop.current = Date.now();
+        setDragging(payload?.type === 'enter' || payload?.type === 'over');
+        if (payload?.type === 'drop') {
+          void importPaths(Array.isArray(payload.paths) ? payload.paths : []);
+        }
+      });
+      if (cancelled) unlisten();
+    } catch {}
+  })();
+  return () => { cancelled = true; unlisten?.(); };
+}

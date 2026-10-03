@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Satellite, Plus, Trash2, Save, Globe, ExternalLink } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { apiJson } from '../services/apiClient';
+import { useApp } from '@/contexts/AppContext';
 
 interface RemoteDevice {
   name: string;
@@ -11,49 +12,52 @@ interface RemoteDevice {
 }
 
 export function RemoteMCPSettings({ t = {} }: { t?: any }) {
+  const { user } = useApp();
+  return user ? <RemoteDeviceEditor key={`${user.uid}:${user.role}`} t={t} /> : null;
+}
+
+function RemoteDeviceEditor({ t }: { t: any }) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const request = useRef<AbortController | null>(null);
 
-  const fetchDevices = async () => {
+  const syncDevices = async (list?: RemoteDevice[]) => {
+    const signal = request.current?.signal;
+    if (!signal || signal.aborted || saving) return;
+    setSaving(Boolean(list));
+    if (!list) { setLoading(true); setLoadError(''); }
     try {
-      const data = await apiJson('/api/remote-devices');
-      const map = data.devices || {};
-      setDevices(Object.entries(map).map(([name, url]) => ({ name, url: url as string })));
-    } catch (error: any) {
-      toast.error(error?.message || 'Remote devices could not be loaded');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchDevices(); }, []);
-
-  const saveDevices = async (list: RemoteDevice[]) => {
-    if (saving) return;
-    setSaving(true);
-    const map: Record<string, string> = {};
-    for (const d of list) {
-      if (d.name.trim() && d.url.trim()) {
-        map[d.name.trim()] = d.url.trim();
-      }
-    }
-    try {
-      await apiJson('/api/remote-devices', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ devices: map }),
+      const data = await apiJson('/api/remote-devices', {
+        signal,
+        ...(list ? {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ devices: Object.fromEntries(list.filter(d => d.name.trim() && d.url.trim()).map(d => [d.name.trim(), d.url.trim()])) }),
+        } : {}),
       });
-      setDevices(list.filter(d => d.name.trim() && d.url.trim()));
+      if (signal.aborted) return;
+      if (!data?.devices || typeof data.devices !== 'object' || Array.isArray(data.devices)
+        || Object.values(data.devices).some(url => typeof url !== 'string')) throw new Error('Invalid remote device configuration');
+      setDevices(Object.entries(data.devices).map(([name, url]) => ({ name, url: url as string })));
       setEditing(false);
-      toast.success(t.remoteDeviceEndpointsSaved || 'Remote device endpoints saved');
+      if (list) toast.success(t.remoteDeviceEndpointsSaved || 'Remote device endpoints saved');
     } catch (err: any) {
-      toast.error(`${t.failedToSaveEndpoints || 'Failed to save'}: ${err.message}`);
+      if (signal.aborted) return;
+      if (list) toast.error(`${t.failedToSaveEndpoints || 'Failed to save'}: ${err.message}`);
+      else setLoadError(err?.message || 'Remote devices could not be loaded');
     } finally {
-      setSaving(false);
+      if (!signal.aborted) { setLoading(false); setSaving(false); }
     }
   };
+
+  useEffect(() => {
+    const owner = new AbortController();
+    request.current = owner;
+    void syncDevices();
+    return () => owner.abort();
+  }, []);
 
   const addRow = () => {
     setEditing(true);
@@ -82,6 +86,8 @@ export function RemoteMCPSettings({ t = {} }: { t?: any }) {
     );
   }
 
+  if (loadError) return <div role="alert" className="space-y-3 text-sm text-red-300">{loadError}<Button onClick={() => syncDevices()}>{t.refresh || 'Refresh'}</Button></div>;
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center gap-3">
@@ -93,7 +99,7 @@ export function RemoteMCPSettings({ t = {} }: { t?: any }) {
         {t.remoteMCPDesc || 'Configure remote devices (e.g. XiaoZhi, smart speakers) that connect to Lumi via MCP over WebSocket. Changes take effect on server restart.'}
       </p>
 
-      {devices.length === 0 || (!editing && devices.length === 0) ? (
+      {devices.length === 0 ? (
         <div className="p-10 bg-white/5 rounded-[2rem] border border-white/5 text-center">
           <Satellite size={32} className="text-white/45 mx-auto mb-4" />
           <p className="text-white/40 font-bold uppercase tracking-widest text-sm">{t.noRemoteDevices || 'No remote devices configured'}</p>
@@ -174,7 +180,7 @@ export function RemoteMCPSettings({ t = {} }: { t?: any }) {
       )}
 
       {editing && (
-        <Button disabled={saving} onClick={() => saveDevices(devices)} className="bg-celestial-saturn text-black font-bold text-xs px-6 h-9 rounded-xl">
+        <Button disabled={saving} onClick={() => syncDevices(devices)} className="bg-celestial-saturn text-black font-bold text-xs px-6 h-9 rounded-xl">
           <Save size={14} className="mr-1" /> {t.saveChanges || 'Save Changes'}
         </Button>
       )}

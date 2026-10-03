@@ -3,39 +3,25 @@ import { MessagesSquare, Save, Key, ExternalLink, CheckCircle, AlertCircle, Copy
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
-import { appConfirm } from '../lib/appConfirm';
+import { useAppConfirm } from '../lib/appConfirm';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { formatMessagingBindingCommand } from '../i18n/locales/messaging';
+import type { MessagingBinding } from '../../server/messaging/bindings';
+import type { MessagingConfig } from '../../server/messaging/config';
+import type { MessagingConnectionStatus } from '../../server/messaging/connections';
 
-interface FeishuBinding {
-  id: string;
-  platformUserId: string;
-  chatId?: string;
-  chatType?: 'private' | 'group';
-  orgId: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-type FeishuTransport = 'long_connection' | 'webhook';
-
-interface ConnectionStatus {
-  state?: 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error';
-  lastConnectedAt?: string;
-  lastMessageAt?: string;
-  lastError?: string;
-  reconnectAttempts?: number;
-}
+type FeishuBinding = Pick<MessagingBinding, 'id' | 'platformUserId' | 'chatId' | 'chatType' | 'orgId' | 'createdAt' | 'updatedAt'>;
 
 export function FeishuSettings({ t }: { t?: any }) {
+  const appConfirm = useAppConfirm();
   const isZh = t?.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
   const [appId, setAppId] = useState('');
   const [appSecret, setAppSecret] = useState('');
   const [verificationToken, setVerificationToken] = useState('');
   const [hasVerificationToken, setHasVerificationToken] = useState(false);
-  const [transport, setTransport] = useState<FeishuTransport>('long_connection');
-  const [connection, setConnection] = useState<ConnectionStatus | null>(null);
+  const [transport, setTransport] = useState<MessagingConfig['feishu']['transport']>('long_connection');
+  const [connection, setConnection] = useState<Partial<MessagingConnectionStatus> | null>(null);
   const [configured, setConfigured] = useState(false);
   const [appIdMasked, setAppIdMasked] = useState('');
   const [loading, setLoading] = useState(true);

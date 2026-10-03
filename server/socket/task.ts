@@ -34,11 +34,10 @@ import {
   setConversationActionExecutionStatus,
   startConversationActionExecutionHeartbeat,
   updateConversationActionFocus,
-  convergeConversationActionRequestLease,
-  convergeConversationActionRequestLeaseDurably,
-  finalizeForegroundRequestDurably,
-  type ConvergeConversationActionRequestLeaseResult,
-  type FinalizeForegroundRequestResult,
+  convergeForegroundRequestBeforeRelease,
+  type ForegroundRequestIdentity as TaskForegroundRequestIdentity,
+  type ForegroundRequestReleaseInput,
+  type ForegroundRequestReleaseResult as TaskForegroundRequestReleaseResult,
   type ForegroundRequestDurabilityDependencies,
 } from "../conversation/manager";
 import { extractSentiment } from "../cognition/sentiment";
@@ -136,48 +135,19 @@ import {
 
 const taskExecutionQueue = new SerialExecutionQueue();
 
-export interface TaskForegroundRequestIdentity {
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  readonly expectedTaskId?: string;
-}
+export type {
+  ForegroundRequestIdentity as TaskForegroundRequestIdentity,
+  ForegroundRequestReleaseResult as TaskForegroundRequestReleaseResult,
+} from '../conversation/manager';
 
-export interface TaskForegroundRequestReleaseResult {
-  convergence: ConvergeConversationActionRequestLeaseResult;
-  finalization: FinalizeForegroundRequestResult | null;
-  converged: boolean;
-}
-
-/** Converge durable Task ownership before desktop/queue resources leave. */
-export async function convergeTaskForegroundRequestBeforeRelease(input: {
-  readonly identity: TaskForegroundRequestIdentity;
-  readonly aborted: boolean;
-  readonly reason?: string;
-  readonly assistantState?: string;
-}, dependencies: ForegroundRequestDurabilityDependencies = {}): Promise<TaskForegroundRequestReleaseResult> {
-  let convergence = convergeConversationActionRequestLease({
-    ...input.identity,
-    deferLocalOwnerClear: true,
-  });
-  if (convergence.converged) {
-    convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
-    return { convergence, finalization: null, converged: true };
-  }
-  const finalization = await finalizeForegroundRequestDurably({
-    ...input.identity,
-    outcome: input.aborted ? 'cancelled' : 'blocked',
-    assistantMessageId: convergence.assistantMessageId || undefined,
-    reason: input.reason || (input.aborted
-      ? 'Task foreground request was aborted before release.'
-      : 'Task foreground executor exited without a fully converged terminal.'),
-    assistantState: input.assistantState,
+export async function convergeTaskForegroundRequestBeforeRelease(
+  input: ForegroundRequestReleaseInput,
+  dependencies: ForegroundRequestDurabilityDependencies = {},
+): Promise<TaskForegroundRequestReleaseResult> {
+  return convergeForegroundRequestBeforeRelease({
+    ...input,
+    channel: 'Task',
   }, dependencies);
-  return {
-    convergence,
-    finalization,
-    converged: finalization.converged,
-  };
 }
 
 function taskExecutionRoom(scope: ChatExecutionScope): string {

@@ -1,0 +1,192 @@
+{
+  "batch": "prune54",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune53, not HEAD; earlier uncommitted changes preserved.",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2025,
+      "after": 2011,
+      "delta": -14,
+      "beforeSha256": "04648ef6bae5af44b6ba4b57c62c032afc7f33d6f5a6cf63bb8d2f2c2dd523a9",
+      "afterSha256": "2694a6b58bd73c7fc0b2864f909ab729c5c4a546d17a905de9650456a0aff313"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 308,
+      "after": 333,
+      "delta": 25,
+      "beforeSha256": "eb3a1cb483f488e181ce233a8fd8097f58a2d8a52be8695c38136abcf67759db",
+      "afterSha256": "3a26590b97fbc8899d745dfb1a85c0d17316edea9d896b800e078edaa5614aff"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1088,
+        "lines": 365816
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160777
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526593
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1088,
+        "lines": 365802
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526604
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -14
+      },
+      "tests": {
+        "files": 0,
+        "lines": 25
+      },
+      "total": {
+        "files": 0,
+        "lines": 11
+      }
+    },
+    "combinedPrune44Through54": {
+      "source": {
+        "files": 1,
+        "lines": -760
+      },
+      "tests": {
+        "files": 1,
+        "lines": 585
+      },
+      "total": {
+        "files": 2,
+        "lines": -175
+      }
+    }
+  },
+  "baselineRegression": {
+    "passed": 0,
+    "failed": 7,
+    "skipped": 79,
+    "failures": [
+      {
+        "name": "orders rapid edits, protects newer input and rolls back only failed writes (first fails: false)",
+        "firstFailure": "AssertionError: expected { party: 'L' } to deeply equal { party: 'Latest party ', …(1) }"
+      },
+      {
+        "name": "orders rapid edits, protects newer input and rolls back only failed writes (first fails: true)",
+        "firstFailure": "AssertionError: expected { party: 'L' } to deeply equal { party: 'Latest party ', …(1) }"
+      },
+      {
+        "name": "orders create after edits without losing another case selection or saved fields",
+        "firstFailure": "AssertionError: expected [ …(2) ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "orders delete after edits without losing another case selection or saved fields",
+        "firstFailure": "AssertionError: expected [ [ …(2) ], [ …(2) ] ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "reports a failed merged edit once, keeps confirmed fields, and accepts a retry",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "preserves case boundaries and edit order when returning to an earlier case",
+        "firstFailure": "AssertionError: expected [ [ 'Case A', { party: 'A1' } ], …(6) ] to deeply equal [ [ 'Case A', { party: 'A1' } ], …(3) ]"
+      },
+      {
+        "name": "releases a timed-out write so the latest queued edit can still save",
+        "firstFailure": "AssertionError: expected \"timeout\" to be called with arguments: [ 15000 ]"
+      }
+    ],
+    "method": "Seven selected final tests against an isolated turn-start LegalHub copy. All seven fail; 79 other cases excluded. Failures can stop at their first assertion and are not seven independent defects."
+  },
+  "focused": {
+    "testFiles": 10,
+    "passed": 163,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/organization_resource_acl_routes.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T14:51:36.217Z",
+      "finishedAt": "2026-10-02T14:51:43.370Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T14:51:43.372Z",
+      "finishedAt": "2026-10-02T14:52:11.747Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T14:52:11.748Z",
+      "finishedAt": "2026-10-02T14:52:19.835Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T14:52:19.835Z",
+      "finishedAt": "2026-10-02T14:52:27.776Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T14:52:27.777Z",
+      "finishedAt": "2026-10-02T14:52:28.113Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through53LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "Consecutive unsent field patches for the same organization case share one queue item and confirmation promise. Latest values win per field; edits already sent are never mutated. Other-case edits, material writes, creates and deletes form ordering barriers.",
+    "Merged failures notify once and restore confirmed state only after the queue drains. Canonical server fields are used directly instead of overwritten with the original unnormalized patch.",
+    "New and deleted cases reuse the existing legal operation mutex, error and success handling. Removed duplicate busy state and try/catch/finally flows; synchronous repeated clicks submit once.",
+    "Case writes, reminders and plans share JSON request construction and a 15-second abort deadline starting when the request is sent. A rejected timed-out save releases later queued work without retrying the unknown earlier result.",
+    "Removed the redundant selected-case ID prop from the workspace, deriving selection from the same active case used for its content.",
+    "Strengthened existing rapid-edit, scope-change and create/delete tests, and added merged-failure recovery, interleaved-case ordering and timeout queue-release cases."
+  ],
+  "preserved": [
+    "First edits send immediately; create, delete and material operations retain queue order and server confirmation requirements.",
+    "Switching the selected case does not cancel its pending saves; closing the hub or switching account/organization invalidates unsent old-scope work.",
+    "Personal case storage, reminders, plan payloads, material archive behavior and existing document tools are retained.",
+    "All previous prune40 through prune53 changes match their latest recorded fingerprints."
+  ],
+  "limitations": [
+    "Mounted production components use mocked network responses; this is not a real server/model/native-client acceptance or a latency benchmark.",
+    "Only consecutive unsent patches merge. There is no debounce timer, and a fast server may still receive one request per edit. Personal local storage writes are unchanged.",
+    "An abort or missing response cannot undo an already accepted server operation. Timed-out writes are not retried automatically; multiple windows/clients still have no transaction boundary.",
+    "No full-suite rerun, backend rebuild, live model calls, visual acceptance, real user data modification, commit, push or client restart.",
+    "Personal-case cache ownership, AppContext model read-error/retry presentation and other application partitions remain open."
+  ]
+}

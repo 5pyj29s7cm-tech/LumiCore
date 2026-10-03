@@ -1,0 +1,242 @@
+{
+  "batch": "prune42",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree including uncommitted prune35–41; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/SetupWizard.tsx",
+      "before": 359,
+      "after": 291,
+      "delta": -68,
+      "beforeSha256": "624099152e4e57627362d1b0538fdcbdded7995d0454450d9b317c5f1cb64316",
+      "afterSha256": "54f2217acd9a5dfd7fc1517990389d2d6a79ba557553fb5ec468fec2bd68cc96"
+    },
+    {
+      "file": "src/i18n/locales/ui.generated.json",
+      "before": 8887,
+      "after": 8875,
+      "delta": -12,
+      "beforeSha256": "3b04667cd3b4ed66178dead6bf32734a7822d1ce107c317a70936a45b2f44051",
+      "afterSha256": "d8aab339892e7deaa6ff5956a5941ca236b74988645f0d277a44ddd82630f611"
+    },
+    {
+      "file": "test/setup_wizard.test.tsx",
+      "before": 0,
+      "after": 81,
+      "delta": 81,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "d1c5f2d177f5373393bbb8dddb719128dc49f99d8c5e855a3ef19d04fafed713"
+    },
+    {
+      "file": "server/routes/system_routes.ts",
+      "before": 1386,
+      "after": 1368,
+      "delta": -18,
+      "beforeSha256": "6318cddeaebc366bbfc57bf89e94a3cdcf07c99f4cb450ab5a7386a0a1c075a2",
+      "afterSha256": "47e36efc845ae9b1e681e7d22ccd1c64900e026fd026d32f815bc2a9df6f55a7"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1086,
+        "lines": 366674
+      },
+      "tests": {
+        "files": 743,
+        "lines": 160067
+      },
+      "total": {
+        "files": 1829,
+        "lines": 526741
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1086,
+        "lines": 366588
+      },
+      "tests": {
+        "files": 744,
+        "lines": 160148
+      },
+      "total": {
+        "files": 1830,
+        "lines": 526736
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -86
+      },
+      "tests": {
+        "files": 1,
+        "lines": 81
+      },
+      "total": {
+        "files": 1,
+        "lines": -5
+      }
+    },
+    "jsonTranslationLinesOutsideCodeCount": -12
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 0,
+    "failed": 10,
+    "failures": [
+      {
+        "name": "selects a usable ollama model, counts it consistently, and waits for persistence",
+        "firstFailure": "TestingLibraryElementError: Unable to find an element with the text: (1 models). This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "selects a usable lmstudio model, counts it consistently, and waits for persistence",
+        "firstFailure": "TestingLibraryElementError: Unable to find an element with the text: (1 models). This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "saves deepseek keys before preferences and stays on setup after a rejected preference",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { DEEPSEEK_API_KEY: 'test-key' } ]"
+      },
+      {
+        "name": "saves qwen keys before preferences and stays on setup after a rejected preference",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { DASHSCOPE_API_KEY: 'test-key' } ]"
+      },
+      {
+        "name": "saves openai keys before preferences and stays on setup after a rejected preference",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called once with arguments: [ { OPENAI_API_KEY: 'test-key' } ]"
+      },
+      {
+        "name": "ignores late StrictMode results and aborts requests on unmount",
+        "firstFailure": "AssertionError: expected <h2 …(1)></h2> to be null"
+      },
+      {
+        "name": "prefers Ollama when both are ready and permits retry after a failed local save",
+        "firstFailure": "Error: Unable to find role=\"button\" and name \"start-using-lumi\""
+      },
+      {
+        "name": "keeps provider addresses independent and persists only a server-accepted URL",
+        "firstFailure": "AssertionError: expected 'http://localhost:9999' to be 'http://localhost:11435' // Object.is equality"
+      },
+      {
+        "name": "does not continue a closed key save, and completes only while mounted (close=false)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "does not continue a closed key save, and completes only while mounted (close=true)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      }
+    ],
+    "method": "Identical final tests against an isolated copy of the turn-start component; live source never reverted"
+  },
+  "focused": {
+    "testFiles": 7,
+    "passed": 80,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/setup_wizard.test.tsx",
+      "test/local_model_runtime.test.ts",
+      "test/local_model_probe_isolation.test.ts",
+      "test/settings.test.ts",
+      "test/model_service_settings.test.ts",
+      "test/model_switching_stability.test.ts",
+      "src/services/apiClient.test.ts"
+    ]
+  },
+  "routeParity": {
+    "cases": 40,
+    "passed": true,
+    "routes": [
+      {
+        "method": "get",
+        "path": "/ollama/config",
+        "guards": [
+          "auth",
+          "admin",
+          "local"
+        ]
+      },
+      {
+        "method": "put",
+        "path": "/ollama/config",
+        "guards": [
+          "auth",
+          "admin",
+          "local"
+        ]
+      },
+      {
+        "method": "get",
+        "path": "/lmstudio/config",
+        "guards": [
+          "auth",
+          "admin",
+          "local"
+        ]
+      },
+      {
+        "method": "put",
+        "path": "/lmstudio/config",
+        "guards": [
+          "auth",
+          "admin",
+          "local"
+        ]
+      }
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T09:33:47.379Z",
+      "finishedAt": "2026-10-02T09:33:51.741Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T09:33:51.743Z",
+      "finishedAt": "2026-10-02T09:34:23.500Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T09:34:23.501Z",
+      "finishedAt": "2026-10-02T09:34:33.770Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T09:34:33.771Z",
+      "finishedAt": "2026-10-02T09:34:42.390Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T09:34:42.390Z",
+      "finishedAt": "2026-10-02T09:34:42.737Z",
+      "status": 0
+    },
+    {
+      "step": "build:server",
+      "startedAt": "2026-10-02T09:34:42.737Z",
+      "finishedAt": "2026-10-02T09:34:46.497Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40And41FingerprintsUnchanged": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "initialValidationNote": "One initial test reused a detached input after the checking view unmounted it. The test now re-queries the rendered input; production behavior was not changed to satisfy that failure.",
+  "limitations": [
+    "No real model API or native client acceptance; component dependencies mocked and route comparison uses isolated dependencies. Existing local-model and settings tests use isolated HTTP servers and databases.",
+    "No full test-suite rerun in this batch; prune41 full suite was 733 files / 6640 tests before these changes.",
+    "Aborting or ignoring a frontend request is not a rollback of an already accepted server write. Concurrent endpoint changes from multiple settings surfaces still need a separate persistence audit.",
+    "No client restart, commit, push, or real user data migration."
+  ],
+  "nextCandidates": [
+    "Concurrent local-model endpoint persistence across settings surfaces; preserve independent same-endpoint model probes.",
+    "Duplicate file-import code in LegalBidWorkbench and LegalContractReview, with case-switch and late-result ownership reviewed before sharing it."
+  ]
+}

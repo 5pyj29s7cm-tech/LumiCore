@@ -71,17 +71,16 @@ import {
   cancelConversationActionExecution,
   completeConversationActionFromUserObservation,
   createDurableForegroundReleaseGate,
-  convergeConversationActionRequestLease,
-  convergeConversationActionRequestLeaseDurably,
-  finalizeForegroundRequestDurably,
+  convergeForegroundRequestBeforeRelease,
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
   startConversationActionExecutionHeartbeat,
   supersedeConversationActionExecutionRequest,
   updateAssistantMessageTerminalPresentation,
   updateConversationActionFocus,
-  type ConvergeConversationActionRequestLeaseResult,
-  type FinalizeForegroundRequestResult,
+  type ForegroundRequestIdentity as VoiceForegroundRequestIdentity,
+  type ForegroundRequestReleaseInput,
+  type ForegroundRequestReleaseResult as VoiceForegroundRequestReleaseResult,
   type ForegroundRequestDurabilityDependencies,
 } from "../conversation/manager";
 import {
@@ -382,71 +381,31 @@ interface AudioSession {
   suppressedSpeechRequestIds: Set<string>;
 }
 
-export interface VoiceForegroundRequestIdentity {
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  readonly expectedTaskId?: string;
-}
+export type {
+  ForegroundRequestIdentity as VoiceForegroundRequestIdentity,
+  ForegroundRequestReleaseResult as VoiceForegroundRequestReleaseResult,
+} from '../conversation/manager';
 
-export interface VoiceForegroundRequestReleaseResult {
-  convergence: ConvergeConversationActionRequestLeaseResult;
-  finalization: FinalizeForegroundRequestResult | null;
-  converged: boolean;
-}
-
-/** Converge durable voice ownership before heartbeat, desktop, or work-lane release. */
-export async function convergeVoiceForegroundRequestBeforeRelease(input: {
-  readonly identity: VoiceForegroundRequestIdentity;
-  readonly aborted: boolean;
-  readonly reason?: string;
-  readonly assistantState?: string;
-}, dependencies: ForegroundRequestDurabilityDependencies = {}): Promise<VoiceForegroundRequestReleaseResult> {
-  let convergence = convergeConversationActionRequestLease({
-    ...input.identity,
-    deferLocalOwnerClear: true,
-  });
-  if (convergence.converged) {
-    convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
-    return { convergence, finalization: null, converged: true };
-  }
-  // A terminal assistant can race slightly ahead of task receipt settlement.
-  // While the Voice executor still owns its heartbeat/desktop resources, let
-  // the exact request settle verified receipts first; otherwise the generic
-  // fail-closed finalizer would incorrectly turn a proven success into blocked.
-  if (convergence.assistantMessageId && input.identity.expectedTaskId) {
-    try {
-      settleConversationActionExecutionRequest(
-        input.identity.conversationId,
-        input.identity.userId,
-        input.identity.requestId,
-      );
-    } catch (error: any) {
-      logger.warn(`[Audio] Exact voice task settlement failed before finalization: ${error?.message || String(error)}`);
-    }
-    convergence = convergeConversationActionRequestLease({
-      ...input.identity,
-      deferLocalOwnerClear: true,
-    });
-    if (convergence.converged) {
-      convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
-      return { convergence, finalization: null, converged: true };
-    }
-  }
-  const finalization = await finalizeForegroundRequestDurably({
-    ...input.identity,
-    outcome: input.aborted ? 'cancelled' : 'blocked',
-    assistantMessageId: convergence.assistantMessageId || undefined,
-    reason: input.reason || (input.aborted
-      ? 'Voice foreground request was aborted before release.'
-      : 'Voice foreground executor exited without a fully converged terminal.'),
-    assistantState: input.assistantState,
+export async function convergeVoiceForegroundRequestBeforeRelease(
+  input: ForegroundRequestReleaseInput,
+  dependencies: ForegroundRequestDurabilityDependencies = {},
+): Promise<VoiceForegroundRequestReleaseResult> {
+  return convergeForegroundRequestBeforeRelease({
+    ...input,
+    channel: 'Voice',
+    // Preserve voice's exact-receipt settlement before fail-closed finalization.
+    settlePendingTask: () => {
+      try {
+        settleConversationActionExecutionRequest(
+          input.identity.conversationId,
+          input.identity.userId,
+          input.identity.requestId,
+        );
+      } catch (error: any) {
+        logger.warn(`[Audio] Exact voice task settlement failed before finalization: ${error?.message || String(error)}`);
+      }
+    },
   }, dependencies);
-  return {
-    convergence,
-    finalization,
-    converged: finalization.converged,
-  };
 }
 
 async function enforceVoiceForegroundConvergenceBeforeRelease(input: {

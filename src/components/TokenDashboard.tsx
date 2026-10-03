@@ -1,21 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useReducer } from 'react';
 import { motion } from 'motion/react';
 import { Zap, TrendingUp, Clock, Layers, RefreshCw } from 'lucide-react';
 import { GlassCard } from './SharedUI';
-import { useT } from '../lib/useT';
+import { useLocale } from '../lib/useT';
 import { uiMessage } from '../i18n/uiMessages';
 
+import { useApp } from '../contexts/AppContext';
+import { apiJson } from '../services/apiClient';
+
 interface ProviderStats {
-  promptTokens: number;
-  completionTokens: number;
   totalTokens: number;
   calls: number;
 }
 
 interface DailyStats {
   date: string;
-  promptTokens: number;
-  completionTokens: number;
   totalTokens: number;
 }
 
@@ -23,26 +22,16 @@ interface UsageData {
   byProvider: Record<string, ProviderStats>;
   daily: DailyStats[];
   grandTotal: number;
-  days: number;
   recordCount: number;
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  deepseek: 'DeepSeek',
-  qwen: 'Qwen',
-  ark: 'Doubao',
-  openai: 'OpenAI',
-  gemini: 'Gemini',
-  anthropic: 'Anthropic',
-};
-
-const PROVIDER_COLORS: Record<string, string> = {
-  deepseek: '#6366f1',
-  qwen: '#06b6d4',
-  ark: '#00d4ff',
-  openai: '#10b981',
-  gemini: '#8b5cf6',
-  anthropic: '#f59e0b',
+const PROVIDERS: Record<string, { label: string; color: string }> = {
+  deepseek: { label: 'DeepSeek', color: '#6366f1' },
+  qwen: { label: 'Qwen', color: '#06b6d4' },
+  ark: { label: 'Doubao', color: '#00d4ff' },
+  openai: { label: 'OpenAI', color: '#10b981' },
+  gemini: { label: 'Gemini', color: '#8b5cf6' },
+  anthropic: { label: 'Anthropic', color: '#f59e0b' },
 };
 
 function formatTokens(n: number): string {
@@ -51,38 +40,41 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function formatNumber(n: number): string {
-  return n.toLocaleString();
+export function TokenDashboard() {
+  const { user } = useApp();
+  return user ? <UsageDashboard key={JSON.stringify([user.uid, user.role])} /> : null;
 }
 
-export const TokenDashboard: React.FC = () => {
-  const t = useT();
-  const [data, setData] = useState<UsageData | null>(null);
-  const [loading, setLoading] = useState(true);
+function UsageDashboard() {
+  useLocale();
   const [days, setDays] = useState(30);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchUsage = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const usageResp = await fetch(`/api/llm/usage?days=${days}`, { credentials: 'include' });
-      if (!usageResp.ok) throw new Error(usageResp.status === 401 ? uiMessage('token-dashboard.login-required.5fda35cfff') : `HTTP ${usageResp.status}`);
-      const res = await usageResp.json();
-      setData(res);
-    } catch (err: any) {
-      setError(err.message || uiMessage('token-dashboard.failed-to-load.1131733383'));
-    } finally {
-      setLoading(false);
-    }
-  }, [days]);
-
-  useEffect(() => { fetchUsage(); }, [fetchUsage]);
-
+  const [revision, refresh] = useReducer(value => value + 1, 0);
+  const [state, setState] = useState({ days, data: null as UsageData | null, loading: true, error: '' });
   useEffect(() => {
-    const id = setInterval(() => fetchUsage(), 10000);
-    return () => clearInterval(id);
-  }, [fetchUsage]);
+    const owner = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+    setState({ days, data: null, loading: true, error: '' });
+    const read = async () => {
+      setState(current => ({ ...current, loading: true }));
+      const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
+      try {
+        const data = await apiJson<UsageData>('/api/llm/usage?days=' + days, { signal });
+        signal.throwIfAborted();
+        if (!data?.byProvider || typeof data.byProvider !== 'object' || Array.isArray(data.byProvider)
+          || !Object.values(data.byProvider).every(item => item && Number.isFinite(item.totalTokens) && Number.isFinite(item.calls))
+          || !Array.isArray(data.daily) || !data.daily.every(item => item && typeof item.date === 'string' && Number.isFinite(item.totalTokens))
+          || !Number.isFinite(data.grandTotal) || !Number.isFinite(data.recordCount)) throw new Error('Invalid usage response');
+        setState({ days, data, loading: false, error: '' });
+      } catch (error) {
+        if (!owner.signal.aborted) setState({ days, data: null, loading: false, error: error instanceof Error ? error.message : uiMessage('token-dashboard.failed-to-load.1131733383') });
+      } finally {
+        if (!owner.signal.aborted) timer = setTimeout(read, 10_000);
+      }
+    };
+    void read();
+    return () => { owner.abort(); clearTimeout(timer); };
+  }, [days, revision]);
+  const data = state.days === days ? state.data : null;
+  const loading = state.days !== days || state.loading, error = state.days === days ? state.error : '';
 
   const providers = data?.byProvider ? Object.entries(data.byProvider) : [];
   const maxDaily = data?.daily?.length ? Math.max(...data.daily.map(d => d.totalTokens), 1) : 1;
@@ -93,7 +85,7 @@ export const TokenDashboard: React.FC = () => {
     const start = cumulative;
     const frac = total > 0 ? s.totalTokens / total : 0;
     cumulative += frac;
-    return { provider: p, stats: s, start, frac, color: PROVIDER_COLORS[p] || '#666' };
+    return { provider: p, stats: s, start, frac, ...(PROVIDERS[p] || { label: p, color: '#666' }) };
   });
   const circumference = 2 * Math.PI * 52;
 
@@ -122,7 +114,7 @@ export const TokenDashboard: React.FC = () => {
               {d}{uiMessage('token-dashboard.d.a2698d0e7d')}
             </button>
           ))}
-          <button onClick={fetchUsage} className="p-1.5 rounded-lg hover:bg-white/5 text-white/55 hover:text-white/60 transition-all">
+          <button onClick={refresh} aria-label={uiMessage('settings.refresh.cba212b169')} className="p-1.5 rounded-lg hover:bg-white/5 text-white/55 hover:text-white/60 transition-all">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -134,7 +126,7 @@ export const TokenDashboard: React.FC = () => {
         </div>
       ) : error && !data ? (
         <div className="flex-1 flex items-center justify-center">
-          <p className="text-red-400 text-xs">{error}</p>
+          <p role="alert" className="text-red-400 text-xs">{error}</p>
         </div>
       ) : (
         <div className="flex-1 flex flex-col gap-3 overflow-auto custom-scrollbar pr-0.5">
@@ -147,7 +139,7 @@ export const TokenDashboard: React.FC = () => {
                 <span className="text-[12px] font-bold text-white/50 uppercase tracking-wider">{uiMessage('token-dashboard.total-tokens.45e4cbe764')}</span>
               </div>
               <div className="text-2xl font-black tracking-tight">{formatTokens(data?.grandTotal || 0)}</div>
-              <div className="text-xs text-white/45 mt-0.5">{formatNumber(data?.recordCount || 0)} {uiMessage('token-dashboard.api-calls.adf9b52346')}</div>
+              <div className="text-xs text-white/45 mt-0.5">{(data?.recordCount || 0).toLocaleString()} {uiMessage('token-dashboard.api-calls.adf9b52346')}</div>
             </GlassCard>
           </div>
 
@@ -188,14 +180,14 @@ export const TokenDashboard: React.FC = () => {
 
                 {/* Provider list */}
                 <div className="flex-1 space-y-2">
-                  {providers.map(([provider, stats]) => {
-                    const pct = total > 0 ? Math.round((stats.totalTokens / total) * 100) : 0;
+                  {segments.map(({ provider, stats, frac, color, label }) => {
+                    const pct = Math.round(frac * 100);
                     return (
                       <div key={provider} className="space-y-0.5">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
-                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: PROVIDER_COLORS[provider] || '#666' }} />
-                            <span className="text-xs font-bold text-white/60">{PROVIDER_LABELS[provider] || provider}</span>
+                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                            <span className="text-xs font-bold text-white/60">{label}</span>
                           </div>
                           <span className="text-xs font-mono text-white/40">
                             {formatTokens(stats.totalTokens)} <span className="text-white/40">· {stats.calls} {uiMessage('token-dashboard.calls.4ba0c892ed')}</span>
@@ -204,7 +196,7 @@ export const TokenDashboard: React.FC = () => {
                         <div className="h-1 rounded-full bg-white/5 overflow-hidden">
                           <div
                             className="h-full rounded-full transition-all duration-500"
-                            style={{ width: `${pct}%`, backgroundColor: PROVIDER_COLORS[provider] || '#666' }}
+                            style={{ width: `${pct}%`, backgroundColor: color }}
                           />
                         </div>
                       </div>
@@ -258,4 +250,4 @@ export const TokenDashboard: React.FC = () => {
       )}
     </div>
   );
-};
+}

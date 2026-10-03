@@ -133,6 +133,38 @@ export function createChatAttachmentReference(input: ChatFileReferenceInput): Ch
   };
 }
 
+/** Normalize upload/import replies before adding them to either chat surface. */
+export function mapImportedChatAttachments(
+  files: Array<ChatFileReferenceInput & { extractionStatus?: string; extractionError?: string; syncError?: string; extractionProvider?: string; extractionModel?: string }>,
+  scopedFileUrl: (url: string) => string,
+): ChatAttachmentReference[] {
+  return files.map(file => {
+    const fileName = file.name || file.displayName || file.id || 'attachment';
+    const mimeType = file.mimeType || '';
+    const kind = inferChatAttachmentKind(fileName, mimeType, file.kind);
+    const transcript = kind === 'audio' ? extractAudioTranscript(file.transcript || file.content || file.preview || null) : null;
+    return createChatAttachmentReference({
+      fileId: file.id || fileName, fileName, path: file.path,
+      content: file.content || null, preview: file.preview || null, mimeType,
+      rawSize: file.rawSize || file.size || 0, kind,
+      downloadUrl: file.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.id)}?inline=1`) : undefined,
+      transcript, transcriptionStatus: file.extractionStatus || (transcript ? 'indexed' : ''),
+      transcriptionError: file.extractionError || file.syncError || null,
+      transcriptionProvider: file.extractionProvider || undefined,
+      transcriptionModel: file.extractionModel || undefined,
+    });
+  });
+}
+
+/** Conversation context occupies slots but is not copied into the pending message. */
+export function mergePendingChatAttachments(
+  context: ChatAttachmentReference[], pending: ChatAttachmentReference[], incoming: ChatAttachmentReference[],
+): MergeChatAttachmentsResult {
+  const occupied = mergeChatAttachmentReferences(context, pending).attachments;
+  const available = mergeChatAttachmentReferences(occupied, incoming);
+  return { ...mergeChatAttachmentReferences(pending, available.added), duplicateCount: available.duplicateCount, overflowCount: available.overflowCount };
+}
+
 export function chatAttachmentRequestMatchesScope(
   request: Pick<ChatAttachmentRequest, 'domain' | 'orgId'>,
   activeDomain: 'personal' | 'work',

@@ -1,0 +1,250 @@
+{
+  "batch": "prune50",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune49, not HEAD. Earlier uncommitted work preserved.",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "server/llm/local_models.ts",
+      "before": 593,
+      "after": 610,
+      "delta": 17,
+      "beforeSha256": "d662251ac6154a97245e6de987c26c7711700d82e1fdb17685261990465c048c",
+      "afterSha256": "23d4fe142d38ee9bb903aa07e8e19db79fe2afd6ddcd93193f462db7e8fe2799"
+    },
+    {
+      "file": "server/routes/system_routes.ts",
+      "before": 1368,
+      "after": 1362,
+      "delta": -6,
+      "beforeSha256": "47e36efc845ae9b1e681e7d22ccd1c64900e026fd026d32f815bc2a9df6f55a7",
+      "afterSha256": "d3ba6cb3ead446737ecf5b2c4f31a3dd821c6dd1474144a6f2e55a91f39d094c"
+    },
+    {
+      "file": "server/runtime/llm.ts",
+      "before": 187,
+      "after": 188,
+      "delta": 1,
+      "beforeSha256": "c30f211a78a15e031464135880f69380217f899a79212a1cb4733718fa5cb8c1",
+      "afterSha256": "33688c2a4c2a1dd9992895ddb5c1cfaa922c2de66bbaaebcf66bf49ec2069bc0"
+    },
+    {
+      "file": "src/components/SetupWizard.tsx",
+      "before": 291,
+      "after": 259,
+      "delta": -32,
+      "beforeSha256": "54f2217acd9a5dfd7fc1517990389d2d6a79ba557553fb5ec468fec2bd68cc96",
+      "afterSha256": "0924f20b46b1c478b2c581c99f8d07959a5d1d898ce0dbc337207f2cc0987ec5"
+    },
+    {
+      "file": "src/components/Settings.tsx",
+      "before": 3571,
+      "after": 3482,
+      "delta": -89,
+      "beforeSha256": "d8dae37a4a0068fffc26a9f52064d2c0b84b6be5290ee4d29749b42c0ee08b2e",
+      "afterSha256": "085d42359aeeb1bfdc6bab0b527f7fb9618f919787f5393d4494a8ceb90fd10a"
+    },
+    {
+      "file": "src/hooks/useLocalModelConfig.ts",
+      "before": 0,
+      "after": 38,
+      "delta": 38,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "b49e9f048b5ab11d4b21faf7f728320339b27906d601d237bd5aa1c5dd548092"
+    },
+    {
+      "file": "test/setup_wizard.test.tsx",
+      "before": 81,
+      "after": 104,
+      "delta": 23,
+      "beforeSha256": "d1c5f2d177f5373393bbb8dddb719128dc49f99d8c5e855a3ef19d04fafed713",
+      "afterSha256": "a3633f121f74c541b3c6c5de9ae9fa9875aa576faa3bfdf7af46720c620975e2"
+    },
+    {
+      "file": "test/local_model_probe_isolation.test.ts",
+      "before": 93,
+      "after": 135,
+      "delta": 42,
+      "beforeSha256": "bedddb728484903838dc547daddb832a4db2a50fe322f25bd55b2616516c779b",
+      "afterSha256": "5293c04dbc7bacd4e7a63ee78a3731d09b9753a5e4238b3cfa59f9652db01072"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366193
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160454
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526647
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1088,
+        "lines": 366122
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160519
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526641
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 1,
+        "lines": -71
+      },
+      "tests": {
+        "files": 0,
+        "lines": 65
+      },
+      "total": {
+        "files": 1,
+        "lines": -6
+      }
+    },
+    "combinedPrune44Through50": {
+      "source": {
+        "files": 1,
+        "lines": -440
+      },
+      "tests": {
+        "files": 0,
+        "lines": 302
+      },
+      "total": {
+        "files": 1,
+        "lines": -138
+      }
+    }
+  },
+  "baselineRegression": {
+    "passed": 2,
+    "failed": 8,
+    "skipped": 13,
+    "failures": [
+      {
+        "name": "per-model local readiness rejects obsolete probes after an endpoint switch (return to original=false)",
+        "firstFailure": "Error: promise resolved \"{ provider: 'lmstudio', …(2) }\" instead of rejecting"
+      },
+      {
+        "name": "per-model local readiness rejects obsolete probes after an endpoint switch (return to original=true)",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 4 times, but got 2 times"
+      },
+      {
+        "name": "per-model local readiness rejects forbidden addresses before changing durable configuration: https://example.test",
+        "firstFailure": "Error: promise resolved \"{ …(11) }\" instead of rejecting"
+      },
+      {
+        "name": "per-model local readiness does not inherit a previous endpoint catalogue when the new endpoint is offline",
+        "firstFailure": "AssertionError: expected { …(13) } to match object { …(3) }"
+      },
+      {
+        "name": "per-model local readiness does not run queued calls or record late health after switching away and back",
+        "firstFailure": "Error: promise resolved \"'stale'\" instead of rejecting"
+      },
+      {
+        "name": "keeps server addresses authoritative despite stale browser caches",
+        "firstFailure": "AssertionError: expected [ Array(2) ] to deeply equal [ Array(2) ]"
+      },
+      {
+        "name": "settings ollama rejects late address loads and obsolete detection results",
+        "firstFailure": "AssertionError: expected <input …(4)></input> to have property \"value\" with value 'http://localhost:2'"
+      },
+      {
+        "name": "settings lmstudio rejects late address loads and obsolete detection results",
+        "firstFailure": "AssertionError: expected <input …(4)></input> to have property \"value\" with value 'http://localhost:2'"
+      }
+    ],
+    "method": "Ten targeted cases from final tests against isolated turn-start SetupWizard, Settings and local_models copies. Eight failed; two invalid URL rejection cases already passed. Parameterized failures are not eight independent defects."
+  },
+  "connectionTestEquivalence": {
+    "passed": 96,
+    "description": "Actual old three functions versus the final shared function: identical requests, normalized results, strict ok:true validation and errors across 3 test kinds x 4 HTTP statuses x 8 payload/transport outcomes."
+  },
+  "focused": {
+    "testFiles": 11,
+    "passed": 102,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/setup_wizard.test.tsx",
+      "test/local_model_runtime.test.ts",
+      "test/local_model_probe_isolation.test.ts",
+      "test/settings.test.ts",
+      "test/model_service_settings.test.ts",
+      "test/model_switching_stability.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/privacy_mode.test.ts",
+      "test/privacy_routes.test.ts",
+      "test/model_failover_probe.test.ts",
+      "test/official_api_role_settings_contract.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "build:server",
+      "startedAt": "2026-10-02T12:29:41.687Z",
+      "finishedAt": "2026-10-02T12:29:45.646Z",
+      "status": 0
+    },
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T12:35:33.777Z",
+      "finishedAt": "2026-10-02T12:35:40.564Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T12:35:40.565Z",
+      "finishedAt": "2026-10-02T12:36:10.546Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T12:36:10.546Z",
+      "finishedAt": "2026-10-02T12:36:18.655Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T12:36:18.655Z",
+      "finishedAt": "2026-10-02T12:36:26.988Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T12:36:26.989Z",
+      "finishedAt": "2026-10-02T12:36:27.365Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through49LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "SetupWizard and LocalLLMProviderRow share one local configuration hook for load/probe/filtering and request ownership. URL drafts, unmounts and superseding requests invalidate old responses. Initial wizard probes omit an explicit URL and follow durable server configuration.",
+    "Removed browser endpoint URL reads/writes, duplicate address/detection states, stale selection-error effect, saved-state timer, endpoint/storageKey props and two pass-through local provider wrappers. Persisted browser model choices remain unchanged.",
+    "Backend records endpoint revisions, discards superseded probe health writes including A-to-B-to-A switches, and scopes matching readiness deduplication to endpoint revision and requested model. Different models at the same endpoint still probe independently.",
+    "Explicit endpoint changes reset the old catalogue before probing. Invalid or strict-privacy-forbidden addresses are rejected before mutation. Same-address offline probes retain their prior catalogue.",
+    "Queued inference for a superseded endpoint does not run. Already-running old inference may finish but cannot update the new endpoint health, including switching back to the original address.",
+    "Local health and runtime refresh tolerate superseded probes and read current durable provider state after waiting, without passing captured URLs back as configuration changes.",
+    "LLM, configured-route and vision test request helpers consolidated into runModelConnectionTest. All existing test entry points, payloads, credentials, strict ok:true success rule, returned model/latency normalization and error text preserved."
+  ],
+  "limitations": [
+    "No real local/cloud model calls, native UI/visual acceptance, latency benchmark or full-suite rerun. HTTP fixtures, component tests and isolated backend databases only.",
+    "Address selection is ordered by acceptance in this backend process. No multi-client transaction/versioned API or rollback of an already accepted configuration write is claimed. Aborting a client request does not undo backend writes.",
+    "An already-running inference may still finish against the original address; only queued stale execution and obsolete health writes are blocked.",
+    "Only local endpoint configuration was unified. Concurrent model preference saves, preference-row draft rollback and late connection-test labels remain separate open areas, along with personal-case cache account isolation and case keystroke write coalescing.",
+    "Backend build was reused after unchanged backend fingerprints were checked; frontend lint/builds reran after the final Settings helper consolidation. No commit, push or client restart."
+  ]
+}

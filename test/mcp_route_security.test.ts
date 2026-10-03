@@ -105,6 +105,19 @@ describe('MCP management route security', () => {
     }
   });
 
+  it('keeps valid entries readable when a legacy display name is not a runtime identifier', async () => {
+    const config = vi.spyOn(mcpManager, 'getConfig').mockReturnValue({
+      'PDF Analyzer': { enabled: true, source: 'external', command: 'node' },
+      valid_entry: { enabled: false, source: 'external', command: 'node' },
+    });
+    try {
+      const response = await fetch(`${url}/api/mcp`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      expect(response.status).toBe(200); const { servers } = await response.json();
+      expect(servers.find((item: any) => item.name === 'PDF Analyzer')).toMatchObject({ enabled: false, usable: false, registeredToolNames: [], runtimeStatus: 'invalid_configuration' });
+      expect(servers.find((item: any) => item.name === 'valid_entry')).toBeTruthy();
+    } finally { config.mockRestore(); }
+  });
+
   it('projects MCP configuration through an explicit non-attesting allowlist', async () => {
     const getConfig = vi.spyOn(mcpManager, 'getConfig').mockReturnValue({
       public_projection_probe: {
@@ -363,6 +376,30 @@ describe('MCP management route security', () => {
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'Invalid devices config' });
+  });
+
+  it('preserves stored credentials across projected reads and rejects partially edited placeholders', async () => {
+    let devices = { speaker: 'wss://synthetic-user:synthetic-password@device.invalid/mcp?token=synthetic-token&session=one#synthetic-fragment', removed: 'wss://removed.invalid/mcp' };
+    const read = vi.spyOn(mcpManager, 'getRemoteDevices').mockImplementation(() => ({ ...devices }));
+    const save = vi.spyOn(mcpManager, 'saveRemoteDevices').mockImplementation(value => { devices = { ...value } as typeof devices; });
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}`, [DESKTOP_SESSION_HEADER]: adminDesktopSessionProof };
+    const write = (value: unknown) => fetch(`${url}/api/remote-devices`, { method: 'PUT', headers, body: JSON.stringify({ devices: value }), signal: AbortSignal.timeout(5000) });
+    try {
+      const projected = await (await fetch(`${url}/api/remote-devices`, { headers })).json();
+      const secret = devices.speaker;
+      const response = await write({ speaker: projected.devices.speaker, added: 'wss://added.invalid/mcp?token=new-synthetic-token' });
+      expect(response.status).toBe(200); expect(devices.speaker).toBe(secret);
+      const accepted = await response.json();
+      expect(devices).not.toHaveProperty('removed'); expect(accepted.devices.added).not.toContain('new-synthetic-token');
+      for (const value of [
+        { speaker: projected.devices.speaker.replace('device.invalid', 'changed.invalid') },
+        { renamed: projected.devices.speaker }, { speaker: 'wss://device.invalid/mcp?token=[configured]' },
+      ]) { expect((await write(value)).status).toBe(400); }
+      expect(save).toHaveBeenCalledTimes(1); expect(devices.speaker).toBe(secret);
+      expect((await write({ speaker: 'wss://device.invalid/mcp?token=replacement' })).status).toBe(200);
+      expect(devices.speaker).toBe('wss://device.invalid/mcp?token=replacement');
+      expect((await write({})).status).toBe(200); expect(devices).toEqual({});
+    } finally { read.mockRestore(); save.mockRestore(); }
   });
 
   it('rejects a non-loopback request at the shared local boundary', () => {

@@ -1,0 +1,152 @@
+{
+  "batch": "prune68",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/services/voiceService.ts",
+      "before": 133,
+      "after": 109,
+      "delta": -24,
+      "beforeSha256": "6208455bfaf15f3f1eec82b545e2715acd4b685523b874555361648e439ea2bd",
+      "afterSha256": "2d5e9ea93c41dfd459d67ea8eb4822bda47d43e4eb27606da34c4de50da3448d"
+    },
+    {
+      "file": "src/components/VoiceDeviceSelector.tsx",
+      "before": 105,
+      "after": 80,
+      "delta": -25,
+      "beforeSha256": "9ed377eb3efba13f2f85bb4783e80d34581e78e0db4eec2ba094276812d60b73",
+      "afterSha256": "ffd51991910b3f8a6c246d4d385b2c37d05b44a6da64e78d58d95a555df7f78e"
+    },
+    {
+      "file": "src/lib/voiceDevicePreferences.ts",
+      "before": 87,
+      "after": 89,
+      "delta": 2,
+      "beforeSha256": "e52f7a3fa371d090798fdf4c599b4885e445cb091417938737d8708080f44a25",
+      "afterSha256": "6766ba497d02ea2ac7ccc07113d32d0a742acbc081920ed516c70f28f0b9f82a"
+    },
+    {
+      "file": "src/services/frontendWriteContracts.test.ts",
+      "before": 61,
+      "after": 96,
+      "delta": 35,
+      "beforeSha256": "a61a01a278176631f87ebd7926209ae60ffc4c64115261ac0acb7952739d87c3",
+      "afterSha256": "d761e4f19b16c35f8fc472aa4101f289897623a7c7417923ea05ca09ce6d75b4"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 671,
+      "after": 701,
+      "delta": 30,
+      "beforeSha256": "0860a01086f5e9007b7404138bc83f081d60a75a34d89390338c72f03e7922e9",
+      "afterSha256": "d1a1c29ebee7bc5de9647c1ce72e3ad4b1ebc4993e24df69dc6c93b8a871e77f"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1089,
+        "lines": 364996
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161628
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526624
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1089,
+        "lines": 364949
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161693
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526642
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -47
+      },
+      "tests": {
+        "files": 0,
+        "lines": 65
+      },
+      "total": {
+        "files": 0,
+        "lines": 18
+      }
+    }
+  },
+  "focused": {
+    "files": 15,
+    "passed": 236,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T09:02:08.602Z",
+      "finishedAt": "2026-10-03T09:02:18.937Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T09:02:18.939Z",
+      "finishedAt": "2026-10-03T09:02:53.797Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T09:02:53.797Z",
+      "finishedAt": "2026-10-03T09:03:02.874Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T09:03:02.874Z",
+      "finishedAt": "2026-10-03T09:03:12.042Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T09:03:12.043Z",
+      "finishedAt": "2026-10-03T09:03:12.426Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "Removed the voice-only token/header builder and module-time backend base URL. Voice uploads, clone/design/status/list/delete/synthesis use the existing apiFetch transport, including desktop-session proof and dynamic backend origin.",
+    "Voice HTTP failure parsing is performed once, replacing seven endpoint-local branches. JSON and binary parsing remain distinct; invalid JSON still rejects, server error text is retained, and non-JSON errors carry HTTP status.",
+    "Voice identifiers are encoded for deletion as they already are for status reads. FormData is sent without manually setting Content-Type. Write failures are never automatically replayed; synthesis retains its abort signal.",
+    "Microphone and speaker selectors share one role-driven renderer and preference snapshot. Unavailable saved devices remain visible and can be reset to the system default even with no enumerated speakers.",
+    "Device enumeration results belong to an effect revision. A later refresh or unmount invalidates the old result; failed reads clear stale lists and allow retry. The media event target is captured for exact cleanup.",
+    "Device preference changes publish only after storage succeeds. Missing storage or storage exceptions return false, show a save error, and preserve the last saved selection instead of switching audio with an unsaved intent.",
+    "Mounted device selectors follow the existing preference-change event and storage events, preventing independent selector copies from retaining different displayed selections."
+  ],
+  "validationNotes": [
+    "Four new behavior cases exercise the real voice transport and mounted device selector. Coverage includes credentials and routing resolved after service import, multipart boundaries, provider payloads, encoded IDs, binary audio, already-aborted synthesis, HTTP/non-JSON errors, malformed JSON, and no duplicate writes after network failure.",
+    "Device tests use synthetic MediaDevices/Storage, exercise out-of-order refreshes, refresh failure/retry, close cleanup, missing-device reset, cross-view/storage updates, and failed saves without preference publication.",
+    "Two initial device tests failed because jsdom has no native mediaDevices property. The fixtures now install synthetic navigator objects and restore them after each case; this was a test environment correction.",
+    "All focused test files, lint/type checks, all-frontend and desktop builds, and compact-layout checks passed. Verified fingerprints preserve the latest prune40-67 baselines."
+  ],
+  "limitations": [
+    "Business source decreased by 47 lines; regression tests increased by 65 lines. Combined source/test count increased by 18 lines; this is not a claimed total line reduction.",
+    "Device preferences remain browser/machine settings, not account-scoped server settings. No microphone permission request or live hardware switching was performed.",
+    "enumerateDevices has no AbortSignal support: obsolete results are ignored, not canceled at the browser device layer. Cross-window storage events synchronize selector display; this does not add cross-window active-call device switching.",
+    "Voice GET requests now inherit existing safe local-backend startup retries. No new shared cache, provider change, schema guarantee for all successful response bodies, automatic write retry, or backend durability change was introduced.",
+    "No full-suite run, real provider/credential or user-data operation, hardware audio/native GUI acceptance, backend rebuild, commit, push or client restart.",
+    "Read-only inspection also found separate candidates: PersonalityEditor duplicates loading headers/vector display and has an authenticated fetch outside apiClient; notificationService duplicates requests and AppContext optimistically clears/marks notifications before server confirmation. These were not changed or validated in this batch."
+  ]
+}

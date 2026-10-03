@@ -1,59 +1,69 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Search, Github, Star, ExternalLink, Loader2, Package, Globe, Wrench } from 'lucide-react';
+import { Search, Github, Star, ExternalLink, Loader2, Package, Wrench } from 'lucide-react';
+
+import { useApp } from '../contexts/AppContext';
+import { apiJson } from '../services/apiClient';
 
 interface MCPSearchResult {
   id: number | string;
   name: string;
-  description: string;
+  description: string | null;
   stars: number;
   url: string;
   topics: string[];
-  language: string;
-  updatedAt: string;
+  language: string | null;
 }
 
 type SearchSource = 'github' | 'npm';
 
 const LANGUAGES = ['TypeScript', 'Python', 'JavaScript', 'Go', 'Rust', 'Java'];
 
-export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: boolean }) {
+type Props = { t?: any; embedded?: boolean };
+const emptySearch = { results: null as MCPSearchResult[] | null, loading: false, error: '' };
+
+export function GitHubMCPBrowser(props: Props) {
+  const { user } = useApp();
+  return user ? <MCPBrowser key={JSON.stringify([user.uid, user.role])} {...props} /> : null;
+}
+
+function MCPBrowser({ t, embedded = false }: Props) {
   const [source, setSource] = useState<SearchSource>('github');
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<MCPSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [{ results, loading, error }, setSearch] = useState(emptySearch);
   const [langFilter, setLangFilter] = useState('');
   const [sortBy, setSortBy] = useState<'stars' | 'relevance'>('stars');
-
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => () => request.current?.abort(), []);
+  const sources = {
+    github: { Icon: Github, label: t?.mcpSourceGitHub || 'GitHub', placeholder: t?.mcpSearchGitHub || 'Search GitHub for MCP servers...' },
+    npm: { Icon: Package, label: t?.mcpSourceNpm || 'npm', placeholder: t?.mcpSearchNpm || 'Search npm for MCP packages...' },
+  };
+  const SourceIcon = sources[source].Icon;
   const handleSearch = async () => {
     if (!query.trim()) return;
-    setLoading(true);
-    setSearched(true);
+    request.current?.abort();
+    const owner = new AbortController(); request.current = owner;
+    const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
+    setSearch({ ...emptySearch, loading: true });
     try {
-      const endpoint = source === 'github'
-        ? `/api/mcp/github/search?q=${encodeURIComponent(query.trim())}`
-        : `/api/mcp/npm/search?q=${encodeURIComponent(query.trim())}`;
-      const res = await fetch(endpoint);
-      const data = await res.json();
-      setResults(data.results || []);
-    } catch {
-      setResults([]);
-    } finally {
-      setLoading(false);
+      const data = await apiJson('/api/mcp/' + source + '/search?q=' + encodeURIComponent(query.trim()), { signal });
+      signal.throwIfAborted();
+      if (!Array.isArray(data?.results) || !data.results.every((item: any) => item
+        && (typeof item.id === 'string' || Number.isFinite(item.id)) && typeof item.name === 'string'
+        && typeof item.url === 'string' && /^https?:\/\//i.test(item.url) && Number.isFinite(item.stars)
+        && ['description', 'language'].every(field => item[field] == null || typeof item[field] === 'string')
+        && Array.isArray(item.topics) && item.topics.every((topic: unknown) => typeof topic === 'string'))) throw new Error('Invalid search response');
+      setSearch({ results: data.results, loading: false, error: '' });
+    } catch (error) {
+      if (!owner.signal.aborted) setSearch({ ...emptySearch, error: error instanceof Error ? error.message : String(error) });
     }
   };
-
-  const changeSource = (s: SearchSource) => {
-    setSource(s);
-    setResults([]);
-    setSearched(false);
-    setLangFilter('');
+  const changeSource = (source: SearchSource) => {
+    request.current?.abort();
+    setSource(source); setSearch(emptySearch); setLangFilter('');
   };
-
-  const filtered = langFilter
-    ? results.filter(r => r.language && r.language.toLowerCase() === langFilter.toLowerCase())
-    : results;
+  const filtered = (results ?? []).filter(result => !langFilter || result.language?.toLowerCase() === langFilter.toLowerCase());
 
   const sorted = sortBy === 'stars'
     ? [...filtered].sort((a, b) => b.stars - a.stars)
@@ -64,11 +74,7 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-white/5">
         <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-          {source === 'github' ? (
-            <Github size={20} className="text-purple-400" />
-          ) : (
-            <Globe size={20} className="text-purple-400" />
-          )}
+          <SourceIcon size={20} className="text-purple-400" />
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-bold text-white/90">{t?.mcpBrowserTitle || 'MCP Browser'}</h2>
@@ -91,28 +97,13 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
         </div>
         {/* Source tabs */}
         <div className="flex gap-1 p-1 rounded-xl bg-white/5 border border-white/5">
-          <button
-            onClick={() => changeSource('github')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${
-              source === 'github'
-                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                : 'text-white/55 hover:text-white/50'
-            }`}
-          >
-            <Github size={12} />
-            {t?.mcpSourceGitHub || 'GitHub'}
-          </button>
-          <button
-            onClick={() => changeSource('npm')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${
-              source === 'npm'
-                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                : 'text-white/55 hover:text-white/50'
-            }`}
-          >
-            <Package size={12} />
-            {t?.mcpSourceNpm || 'npm'}
-          </button>
+          {(Object.keys(sources) as SearchSource[]).map(id => {
+            const { Icon, label } = sources[id];
+            return <button key={id} onClick={() => changeSource(id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${source === id ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-white/55 hover:text-white/50'}`}>
+              <Icon size={12} />{label}
+            </button>;
+          })}
         </div>
 
         {/* Search bar */}
@@ -123,17 +114,13 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSearch()}
-              placeholder={
-                source === 'github'
-                  ? (t?.mcpSearchGitHub || 'Search GitHub for MCP servers...')
-                  : (t?.mcpSearchNpm || 'Search npm for MCP packages...')
-              }
+              placeholder={sources[source].placeholder}
               className="flex-1 bg-transparent text-white/80 text-sm outline-none placeholder:text-white/55"
             />
           </div>
           <button
             onClick={handleSearch}
-            disabled={loading}
+            disabled={loading || !query.trim()}
             className="px-4 py-2.5 rounded-xl bg-purple-500/20 border border-purple-500/30 text-purple-300 text-xs font-bold uppercase tracking-wider hover:bg-purple-500/30 transition-all disabled:opacity-40"
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : (t?.mcpSearchBtn || 'Search')}
@@ -141,7 +128,7 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
         </div>
 
         {/* Filters — only show when results exist */}
-        {searched && results.length > 0 && (
+        {!!results?.length && (
           <div className="flex items-center gap-3">
             {/* Sort toggle */}
             <div className="flex items-center gap-2">
@@ -179,7 +166,7 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
             <div className="flex items-center justify-center py-12 text-white/55">
               <Loader2 size={24} className="animate-spin mr-2" /> {t?.mcpSearching || 'Searching...'}
             </div>
-          ) : searched && results.length === 0 ? (
+          ) : error ? <p role="alert" className="text-red-300 text-sm">{error}</p> : results?.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-white/45">
               <Package size={40} className="mb-3 opacity-30" />
               <span className="text-xs font-bold uppercase tracking-widest">{t?.mcpNoServersFound || 'No MCP servers found'}</span>
@@ -193,11 +180,7 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
                 className="flex items-start gap-3 p-4 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-all"
               >
                 <div className="flex-shrink-0 mt-0.5">
-                  {source === 'github' ? (
-                    <Github size={18} className="text-white/40" />
-                  ) : (
-                    <Package size={18} className="text-white/40" />
-                  )}
+                  <SourceIcon size={18} className="text-white/40" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -230,7 +213,7 @@ export function GitHubMCPBrowser({ t, embedded = false }: { t?: any; embedded?: 
                     href={repo.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={t?.mcpViewOn ? `${t.mcpViewOn} ${source === 'github' ? 'GitHub' : 'npm'}` : `View on ${source}`}
+                    title={t?.mcpViewOn ? `${t.mcpViewOn} ${sources[source].label}` : `View on ${source}`}
                     className="p-2 rounded-lg text-white/55 hover:text-white/60 hover:bg-white/10 transition-all"
                   >
                     <ExternalLink size={14} />

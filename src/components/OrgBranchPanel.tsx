@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, GitBranch, Link, RefreshCw, Server, Shield, Unlink, XCircle } from 'lucide-react';
 import { useT } from '../lib/useT';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
-import { apiFetch } from '../services/apiClient';
+import { useApp } from '../contexts/AppContext';
+import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import { apiJson } from '../services/apiClient';
 
 type BranchStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
@@ -17,30 +19,13 @@ interface BranchState {
   tokenConfigured?: boolean;
 }
 
-const emptyState: BranchState = {
-  orgId: null,
-  companyUrl: null,
-  status: 'disconnected',
-  currentDomain: 'personal',
-  lastSyncAt: null,
-  lastHeartbeatAt: null,
-  connected: false,
-  tokenConfigured: false,
-};
-
 function normalizeState(payload: any): BranchState {
-  const raw = payload?.state || payload || {};
-  const status = (raw.status || (raw.connected ? 'connected' : 'disconnected')) as BranchStatus;
-  return {
-    orgId: raw.orgId || null,
-    companyUrl: raw.companyUrl || null,
-    status,
-    currentDomain: raw.currentDomain || 'personal',
-    lastSyncAt: raw.lastSyncAt || raw.lastSync || null,
-    lastHeartbeatAt: raw.lastHeartbeatAt || null,
-    connected: raw.connected ?? status === 'connected',
-    tokenConfigured: raw.tokenConfigured ?? false,
-  };
+  const raw = payload?.state || payload;
+  if (!raw || !['disconnected', 'connecting', 'connected', 'reconnecting', 'error'].includes(raw.status)
+    || !['personal', 'work'].includes(raw.currentDomain)
+    || ['orgId', 'companyUrl', 'lastSyncAt', 'lastHeartbeatAt'].some(field => raw[field] != null && typeof raw[field] !== 'string')
+    || typeof raw.connected !== 'boolean' || typeof raw.tokenConfigured !== 'boolean') throw new Error('Invalid branch connection receipt');
+  return raw;
 }
 
 function statusLabel(status: BranchStatus, isZh: boolean) {
@@ -58,115 +43,52 @@ function formatTime(value: string | null, isZh: boolean) {
 }
 
 export function OrgBranchPanel() {
-  const t = useT();
-  const isZh = t.langCode !== 'en';
-  const [state, setState] = useState<BranchState>(emptyState);
-  const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState(() => ({
-    orgId: '',
-    companyUrl: '',
-    token: (() => {
-      try { return localStorage.getItem('lumi_auth_token') || ''; } catch { return ''; }
-    })(),
-  }));
-  const [connecting, setConnecting] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <BranchConnection key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole])} /> : null;
+}
 
-  const connected = state.connected || state.status === 'connected';
-
-  const loadState = async () => {
-    try {
-      const res = await apiFetch('/api/branch/state');
-      if (!res.ok) throw new Error(`${uiMessage('org-branch-panel.failed-to-read-status.23ccb2e167')} (${res.status})`);
-      const next = normalizeState(await res.json());
-      setState(next);
-      setForm(prev => ({
-        ...prev,
-        orgId: prev.orgId || next.orgId || '',
-        companyUrl: prev.companyUrl || next.companyUrl || '',
-      }));
-    } catch (err: any) {
-      setError(err.message || uiMessage('org-branch-panel.failed-to-read-status.23ccb2e167'));
-    } finally {
-      setLoading(false);
+function BranchConnection() {
+  const t = useT(), isZh = t.langCode !== 'en';
+  const [state, setState] = useState<BranchState | null>(null);
+  const [form, setForm] = useState({ orgId: '', companyUrl: '', token: '' });
+  const [feedback, setFeedback] = useState({ message: '', error: '' });
+  const { busy, error: requestError, run } = useAsyncOperation();
+  const error = requestError || feedback.error, message = feedback.message;
+  const connected = state?.connected === true, connecting = busy === 'connect', syncing = busy === 'sync';
+  const loadState = useCallback(() => run('load', async signal => {
+    const data = normalizeState(await apiJson('/api/branch/state', { signal }));
+    return () => { setState(data); setForm(previous => ({ ...previous, orgId: previous.orgId || data.orgId || '', companyUrl: previous.companyUrl || data.companyUrl || '' })); };
+  }), [run]);
+  useEffect(() => { void loadState(); }, [loadState]);
+  const act = (action: 'connect' | 'disconnect' | 'sync') => {
+    setFeedback({ message: '', error: '' });
+    if (action === 'connect' && (!form.orgId.trim() || !form.companyUrl.trim() || !form.token.trim())) {
+      setFeedback({ message: '', error: uiMessage('org-branch-panel.enter-organization-id-company-server.e7d51f4eef') }); return;
     }
+    return run(action, async signal => {
+      const data = await apiJson('/api/branch/' + action, { method: 'POST', signal, ...(action === 'connect' ? {
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orgId: form.orgId.trim(), companyUrl: form.companyUrl.trim(), token: form.token.trim() }),
+      } : {}) });
+      const next = normalizeState(data);
+      if (action !== 'sync' && data.success !== true) throw new Error('Branch operation was not confirmed');
+      if (action === 'connect' && (!next.connected || next.orgId !== form.orgId.trim() || next.companyUrl?.replace(/\/+$/, '') !== form.companyUrl.trim().replace(/\/+$/, ''))) throw new Error('Branch connection identity changed');
+      if (action === 'disconnect' && (next.connected || next.orgId !== null || next.status !== 'disconnected')) throw new Error('Branch disconnection was not confirmed');
+      if (action === 'sync' && (!Array.isArray(data.errors) || data.errors.some((item: unknown) => typeof item !== 'string') || !Number.isFinite(data.synced) || next.orgId !== state?.orgId)) throw new Error('Branch synchronization was not confirmed');
+      return () => {
+        setState(next);
+        if (action === 'connect') setForm(previous => ({ ...previous, token: '' }));
+        setFeedback({ error: action === 'sync' ? data.errors.join('; ') : '', message: action === 'sync'
+          ? (data.errors.length ? '' : formatUiMessage('org-branch-panel.sync-complete-value0-work-domain.ed45bed8ac', { value0: data.synced }, isZh ? 'zh' : 'en'))
+          : uiMessage(action === 'connect' ? 'org-branch-panel.branch-terminal-connected-to-the.32318a415e' : 'org-branch-panel.organization-branch-disconnected.eef77df121') });
+      };
+    }, 60_000);
   };
 
-  useEffect(() => { loadState(); }, []);
-
-  const connect = async () => {
-    setError('');
-    setMessage('');
-    if (!form.orgId.trim() || !form.companyUrl.trim() || !form.token.trim()) {
-      setError(uiMessage('org-branch-panel.enter-organization-id-company-server.e7d51f4eef'));
-      return;
-    }
-
-    setConnecting(true);
-    try {
-      const res = await apiFetch('/api/branch/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orgId: form.orgId.trim(),
-          companyUrl: form.companyUrl.trim(),
-          token: form.token.trim(),
-        }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) throw new Error(data.error || `${uiMessage('org-branch-panel.connection-failed.96c47f8e92')} (${res.status})`);
-      setState(normalizeState(data));
-      setForm(prev => ({ ...prev, token: '' }));
-      setMessage(uiMessage('org-branch-panel.branch-terminal-connected-to-the.32318a415e'));
-    } catch (err: any) {
-      setError(err.message || uiMessage('org-branch-panel.connection-failed.96c47f8e92'));
-    } finally {
-      setConnecting(false);
-    }
-  };
-
-  const disconnect = async () => {
-    setError('');
-    setMessage('');
-    try {
-      const res = await apiFetch('/api/branch/disconnect', { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `${uiMessage('org-branch-panel.disconnect-failed.17c673b887')} (${res.status})`);
-      setState(normalizeState(data));
-      setMessage(uiMessage('org-branch-panel.organization-branch-disconnected.eef77df121'));
-    } catch (err: any) {
-      setError(err.message || uiMessage('org-branch-panel.disconnect-failed.17c673b887'));
-    }
-  };
-
-  const sync = async () => {
-    setError('');
-    setMessage('');
-    setSyncing(true);
-    try {
-      const res = await apiFetch('/api/branch/sync', { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `${uiMessage('org-branch-panel.sync-failed.58879d004c')} (${res.status})`);
-      if (data.state) setState(normalizeState(data));
-      if (Array.isArray(data.errors) && data.errors.length > 0) {
-        setError(data.errors.join('；'));
-      } else {
-        setMessage(formatUiMessage('org-branch-panel.sync-complete-value0-work-domain.ed45bed8ac', { value0: data.synced || 0 }, (isZh) ? 'zh' : 'en'));
-      }
-    } catch (err: any) {
-      setError(err.message || uiMessage('org-branch-panel.sync-failed.58879d004c'));
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  if (loading) return <div className="p-6 text-white/40">Loading...</div>;
+  if (busy === 'load' || (!state && !error)) return <div className="p-6 text-white/40">Loading...</div>;
+  if (!state) return <div className="p-6"><p role="alert">{error}</p><button onClick={() => void loadState()}>{uiMessage('knowledge-base.retry.9db2a8180b')}</button></div>;
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-6">
+    <fieldset disabled={Boolean(busy)} className="p-6 max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <GitBranch size={20} className="text-purple-400" />
@@ -224,10 +146,10 @@ export function OrgBranchPanel() {
 
         {connected ? (
           <div className="flex gap-2 pt-1">
-            <button onClick={sync} disabled={syncing} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1">
+            <button onClick={() => void act('sync')} disabled={syncing} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1">
               <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? uiMessage('org-branch-panel.syncing.379d137ae4') : uiMessage('org-branch-panel.sync-work-data.a3fed024c8')}
             </button>
-            <button onClick={disconnect} className="px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg text-sm flex items-center gap-1">
+            <button onClick={() => void act('disconnect')} className="px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg text-sm flex items-center gap-1">
               <Unlink size={14} /> {uiMessage('org-branch-panel.disconnect.4fdb1669e6')}
             </button>
           </div>
@@ -258,13 +180,13 @@ export function OrgBranchPanel() {
               <p className="text-xs text-white/35">
                 {uiMessage('org-branch-panel.branch-connection-syncs-only-work.9bd97339a4')}
               </p>
-              <button onClick={connect} disabled={connecting} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1 whitespace-nowrap">
+              <button onClick={() => void act('connect')} disabled={connecting} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1 whitespace-nowrap">
                 <Link size={14} /> {connecting ? uiMessage('org-branch-panel.connecting.3fb50c43cd') : uiMessage('org-branch-panel.connect.b3b35de2b3')}
               </button>
             </div>
           </div>
         )}
       </div>
-    </div>
+    </fieldset>
   );
 }

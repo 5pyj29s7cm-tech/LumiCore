@@ -67,6 +67,7 @@ describe('Notifications API', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.marked).toBeGreaterThanOrEqual(2);
+    expect(body.ids.length).toBeGreaterThanOrEqual(2);
 
     const list = await fetch(`${url}/api/notifications`, { headers: headers(), signal: AbortSignal.timeout(5000) });
     const listBody = await list.json();
@@ -74,7 +75,13 @@ describe('Notifications API', () => {
   });
 
   it('clear all', async () => {
-    await fetch(`${url}/api/notifications`, { method: 'DELETE', headers: headers(), signal: AbortSignal.timeout(5000) });
+    pushNotification('another-user', { type: 'info', title: 'Private other', message: 'other' });
+    const before = await (await fetch(`${url}/api/notifications`, { headers: headers() })).json();
+    const cleared = await (await fetch(`${url}/api/notifications`, { method: 'DELETE', headers: headers(), signal: AbortSignal.timeout(5000) })).json();
+    expect(cleared.ids.sort()).toEqual(before.notifications.map((item: any) => item.id).sort());
+    const otherToken = jwt.sign({ uid: 'another-user', role: 'user' }, JWT_SECRET);
+    const other = await (await fetch(`${url}/api/notifications`, { headers: { Authorization: `Bearer ${otherToken}` } })).json();
+    expect(other.notifications.map((item: any) => item.title)).toEqual(['Private other']);
     const list = await fetch(`${url}/api/notifications`, { headers: headers(), signal: AbortSignal.timeout(5000) });
     const listBody = await list.json();
     expect(listBody.notifications.length).toBe(0);

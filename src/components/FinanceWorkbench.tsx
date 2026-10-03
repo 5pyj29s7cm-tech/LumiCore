@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowRight,
   BarChart3,
@@ -28,12 +28,8 @@ import {
   type FinanceModuleCopy,
   type FinanceModuleId,
 } from '../i18n/locales/financeModules';
-import {
-  buildIndustryWorkflowIdempotencyKey,
-  executeFinanceDeliveryWorkflow,
-  executeIndustryWorkflow,
-  startIndustryWorkflow,
-} from '../lib/industryWorkflowClient';
+import { useIndustryWorkflow } from '../hooks/useIndustryWorkflow';
+import { apiJson } from '../services/apiClient';
 
 export interface FinanceWorkbenchProps {
   lang: string;
@@ -44,21 +40,6 @@ export interface FinanceWorkbenchProps {
 }
 
 const WORKFLOW_ICONS = [LineChart, ReceiptText, FileSpreadsheet, Landmark, WalletCards, ShieldCheck];
-
-function structuredFinanceInput(value: string): Record<string, unknown> {
-  const source = value.trim();
-  if (!source) return {};
-  try {
-    const parsed = JSON.parse(source);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : { sourceBrief: source };
-  } catch {
-    // The server returns the exact required structured fields without inventing
-    // figures when the brief is not a JSON object.
-    return { sourceBrief: source };
-  }
-}
 
 function financeDeliveryInput(entryId: string, values: Record<string, string>): Record<string, unknown> {
   const supplied = (name: string) => values[name]?.trim() || '';
@@ -92,7 +73,7 @@ function financeDeliveryInput(entryId: string, values: Record<string, string>): 
       statement,
     };
   }
-  return structuredFinanceInput(values.sourceBrief || '');
+  return {};
 }
 
 const FINANCE_PRESENTATION: Record<FinanceModuleId, {
@@ -169,21 +150,10 @@ const FINANCE_PRESENTATION: Record<FinanceModuleId, {
 
 const DEFAULT_PRESENTATION = FINANCE_PRESENTATION['business-dashboard'];
 
-interface FinanceSkillRuntime {
-  name: string;
-  enabled?: boolean;
-  connected?: boolean;
-  broken?: boolean;
-  toolCount?: number;
-  healthStatus?: string;
-  startupError?: string;
-}
-
 interface FinanceRuntimeState {
   status: 'checking' | 'ready' | 'attention';
   version?: string;
   variantId?: string;
-  skills: Record<string, FinanceSkillRuntime>;
 }
 
 function ModuleHeading({ icon, title }: { icon: React.ReactNode; title: string }) {
@@ -321,7 +291,11 @@ function ModuleVisualization({ module }: { module: FinanceModuleCopy }) {
   );
 }
 
-export function FinanceWorkbench({
+export function FinanceWorkbench(props: FinanceWorkbenchProps) {
+  return <FinanceWorkbenchContent key={`${props.domain}:${props.initialWorkflowId || ''}`} {...props} />;
+}
+
+function FinanceWorkbenchContent({
   lang,
   domain,
   initialWorkflowId,
@@ -336,134 +310,57 @@ export function FinanceWorkbench({
   const selectedModule = selectedWorkflow ? financeModuleCopy(lang, selectedWorkflow.id) : null;
   const presentation = selectedModule ? FINANCE_PRESENTATION[selectedModule.id] : DEFAULT_PRESENTATION;
   const PresentationIcon = presentation.icon;
-  const [runtime, setRuntime] = useState<FinanceRuntimeState>({ status: 'checking', skills: {} });
-  const [startingId, setStartingId] = useState('');
-  const [lastTaskId, setLastTaskId] = useState('');
-  const [executionResult, setExecutionResult] = useState('');
-  const [workflowStatus, setWorkflowStatus] = useState('');
-  const [startError, setStartError] = useState('');
+  const [runtime, setRuntime] = useState<FinanceRuntimeState>({ status: 'checking' });
+  const { busy: starting, taskId: lastTaskId, text: executionResult, status: workflowStatus, error: startError, run, stop, reset } = useIndustryWorkflow();
   const [taskBrief, setTaskBrief] = useState('');
   const [deliveryFields, setDeliveryFields] = useState<Record<string, string>>({});
   const [missingDeliveryFields, setMissingDeliveryFields] = useState<string[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  useEffect(() => {
-    setTaskBrief('');
-    setDeliveryFields({});
-    setMissingDeliveryFields([]);
-    setLastTaskId('');
-    setExecutionResult('');
-    setWorkflowStatus('');
-    setStartError('');
-  }, [initialWorkflowId]);
 
   const startWorkflow = async (workflow: { id: string; prompt: string; title: string; evidence: string }) => {
-    if (startingId) return;
+    if (starting) return;
     const deliveryForm = financeDeliveryFormCopy(lang, workflow.id);
     const missingFields = deliveryForm?.fields
       .filter(field => field.required && !deliveryFields[field.name]?.trim())
       .map(field => field.name) || [];
     if (deliveryForm && missingFields.length) {
       setMissingDeliveryFields(missingFields);
-      setStartError(deliveryForm.requiredHint);
-      setWorkflowStatus('needs_input');
+      reset(deliveryForm.requiredHint);
       return;
     }
-    setStartingId(workflow.id);
-    setExecutionResult('');
-    setWorkflowStatus('creating');
-    setStartError('');
-    try {
-      const deterministicInput = deliveryForm
-        ? financeDeliveryInput(workflow.id, deliveryFields)
-        : null;
-      const sourceInput = [
-        `${workflow.title}; evidence required: ${workflow.evidence}`,
-        taskBrief.trim(),
-        deterministicInput ? JSON.stringify(deterministicInput) : '',
-      ].filter(Boolean).join('\n');
-      const started = await startIndustryWorkflow({
-        entryId: workflow.id,
-        sourceInput,
-        source: 'finance_workbench',
-        idempotencyKey: await buildIndustryWorkflowIdempotencyKey({
-          entryId: workflow.id,
-          sourceInput,
-          source: 'finance_workbench',
-        }),
-      });
-      setLastTaskId(started.task.id);
-      setWorkflowStatus('in_progress');
-      const controller = new AbortController();
-      abortRef.current = controller;
-      if (workflow.id === 'tax-filing' || workflow.id === 'report-delivery') {
-        const execution = await executeFinanceDeliveryWorkflow({
-          taskId: started.task.id,
-          financeInput: deterministicInput || {},
-          signal: controller.signal,
-        });
-        setExecutionResult([
-          execution.task.result || '',
-          ...execution.artifacts.map(artifact => `${artifact.path}\nSHA-256 ${artifact.sha256}`),
-        ].filter(Boolean).join('\n\n'));
-        setWorkflowStatus(execution.status);
-        return;
-      }
-      const execution = await executeIndustryWorkflow({
-        taskId: started.task.id,
-        prompt: `${started.handoffPrompt}\n\n${workflow.prompt}${taskBrief.trim() ? `\n\nUser brief:\n${taskBrief.trim()}` : ''}`,
-        sourceInput,
-        signal: controller.signal,
-        onProgress: progress => {
-          setExecutionResult(progress.text);
-          setWorkflowStatus(progress.status);
-        },
-      });
-      setExecutionResult(execution.text);
-      setWorkflowStatus(execution.status);
-    } catch (reason) {
-      if ((reason as any)?.name !== 'AbortError') {
-        setStartError(reason instanceof Error ? reason.message : String(reason));
-        setWorkflowStatus('blocked');
-      }
-    } finally {
-      abortRef.current = null;
-      setStartingId('');
-    }
+    const deterministicInput = deliveryForm ? financeDeliveryInput(workflow.id, deliveryFields) : undefined;
+    const sourceInput = [
+      `${workflow.title}; evidence required: ${workflow.evidence}`,
+      taskBrief.trim(),
+      deterministicInput ? JSON.stringify(deterministicInput) : '',
+    ].filter(Boolean).join('\n');
+    await run({
+      entryId: workflow.id, sourceInput, source: 'finance_workbench', idempotent: true,
+      prompt: `${workflow.prompt}${taskBrief.trim() ? `\n\nUser brief:\n${taskBrief.trim()}` : ''}`,
+      financeInput: deterministicInput,
+    });
   };
 
   useEffect(() => {
     const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
     const load = async () => {
-      const [versionResult, skillsResult] = await Promise.allSettled([
-        fetch('/api/version', { credentials: 'include', signal: controller.signal }).then(async response => {
-          if (!response.ok) throw new Error(`version:${response.status}`);
-          return response.json();
-        }),
-        fetch('/api/industry/workflows/contracts', { credentials: 'include', signal: controller.signal }).then(async response => {
-          if (!response.ok) throw new Error(`skills:${response.status}`);
-          return response.json();
-        }),
+      const [versionResult, contractsResult] = await Promise.allSettled([
+        apiJson('/api/version', { signal }),
+        apiJson('/api/industry/workflows/contracts', { signal }),
       ]);
       if (controller.signal.aborted) return;
 
       const version = versionResult.status === 'fulfilled' ? versionResult.value : null;
-      const skillList: FinanceSkillRuntime[] = skillsResult.status === 'fulfilled' && Array.isArray(skillsResult.value?.skills)
-        ? skillsResult.value.skills
-        : [];
-      const skills = Object.fromEntries(skillList.map(skill => [skill.name, skill]));
-      const hasAttention = skillsResult.status !== 'fulfilled' || !skillsResult.value?.contracts?.some((item: any) => item.productLine === 'finance');
+      const contracts = contractsResult.status === 'fulfilled' ? contractsResult.value?.contracts : null;
+      const hasAttention = !Array.isArray(contracts) || !contracts.some(item => item?.productLine === 'finance');
       setRuntime({
-        status: version && !hasAttention ? 'ready' : 'attention',
-        version: version?.version,
-        variantId: version?.variant?.variantId,
-        skills,
+        status: typeof version?.version === 'string' && !hasAttention ? 'ready' : 'attention',
+        version: typeof version?.version === 'string' ? version.version : undefined,
+        variantId: typeof version?.variant?.variantId === 'string' ? version.variant.variantId : undefined,
       });
     };
     void load().catch(() => {
-      if (!controller.signal.aborted) setRuntime({ status: 'attention', skills: {} });
+      if (!controller.signal.aborted) setRuntime({ status: 'attention' });
     });
     return () => controller.abort();
   }, []);
@@ -566,12 +463,9 @@ export function FinanceWorkbench({
                         onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
                           setDeliveryFields(current => ({ ...current, [field.name]: event.target.value }));
                           setMissingDeliveryFields(current => current.filter(name => name !== field.name));
-                          setStartError('');
-                          setLastTaskId('');
-                          setExecutionResult('');
-                          setWorkflowStatus('');
+                          reset();
                         },
-                        disabled: Boolean(startingId),
+                        disabled: starting,
                         className: `mt-1.5 w-full rounded-lg border bg-black/20 px-3 py-2 text-xs leading-5 text-white/78 outline-none placeholder:text-white/22 disabled:cursor-not-allowed disabled:opacity-55 ${missing ? 'border-rose-300/55' : 'border-white/10 focus:border-emerald-300/30'}`,
                       };
                       return (
@@ -592,8 +486,8 @@ export function FinanceWorkbench({
               {!deliveryForm && (
                 <textarea
                   value={taskBrief}
-                  onChange={event => { setTaskBrief(event.target.value); setLastTaskId(''); setExecutionResult(''); setWorkflowStatus(''); }}
-                  disabled={Boolean(startingId)}
+                  onChange={event => { setTaskBrief(event.target.value); reset(); }}
+                  disabled={starting}
                   placeholder={selectedModule.taskPlaceholder}
                   rows={4}
                   className="mt-4 w-full resize-y rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white/78 outline-none transition-colors placeholder:text-white/25 focus:border-emerald-300/30 disabled:cursor-not-allowed disabled:opacity-55"
@@ -605,32 +499,32 @@ export function FinanceWorkbench({
                   {startError && <p className="text-xs font-semibold text-rose-200/75">{startError}</p>}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {startingId === selectedWorkflow.id && (
-                    <button type="button" onClick={() => abortRef.current?.abort()} className="inline-flex items-center justify-center rounded-xl border border-rose-300/15 bg-rose-300/[0.06] px-4 py-3 text-xs font-semibold text-rose-100/65 transition-colors hover:bg-rose-300/10">
+                  {starting && (
+                    <button type="button" onClick={stop} className="inline-flex items-center justify-center rounded-xl border border-rose-300/15 bg-rose-300/[0.06] px-4 py-3 text-xs font-semibold text-rose-100/65 transition-colors hover:bg-rose-300/10">
                       {selectedModule.stopLabel}
                     </button>
                   )}
                   <button
                     type="button"
-                    disabled={Boolean(startingId)}
+                    disabled={starting}
                     onClick={() => void startWorkflow(selectedWorkflow)}
                     className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${presentation.primary}`}
                   >
-                    {startingId === selectedWorkflow.id ? copy.checking : selectedModule.startLabel}
+                    {starting ? copy.checking : selectedModule.startLabel}
                     <ArrowRight size={14} />
                   </button>
                 </div>
               </div>
             </section>
 
-            {(startingId || executionResult || lastTaskId) && (
+            {(workflowStatus || executionResult || lastTaskId) && (
               <section className={`rounded-2xl border p-5 ${presentation.result}`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <ModuleHeading icon={<CheckCircle2 size={17} />} title={selectedModule.executionTitle} />
                   <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1 text-[10px] font-mono text-white/42">{workflowStatus || 'in_progress'}</span>
                 </div>
                 <div className="mt-4 min-h-20 whitespace-pre-wrap rounded-xl border border-white/7 bg-black/20 p-4 text-sm leading-6 text-white/65">
-                  {executionResult || (startingId ? selectedModule.executionRunning : selectedModule.executionWaiting)}
+                  {executionResult || (starting ? selectedModule.executionRunning : selectedModule.executionWaiting)}
                 </div>
               </section>
             )}

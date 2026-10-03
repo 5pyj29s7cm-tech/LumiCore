@@ -134,7 +134,24 @@ export function computeSkillContentDigest(rootDirectory: string): string {
   return `sha256:${hash.digest('hex')}`;
 }
 
+let discoveryDigests: Map<string, string> | undefined;
+
+/** Synchronous read-only discovery only. Never retain hashes for a later install or execution. */
+export function readRuntimeIdentitySnapshot<T>(read: () => T): T {
+  const previous = discoveryDigests;
+  discoveryDigests = new Map();
+  try { return read(); } finally { discoveryDigests = previous; }
+}
+
 export function computeRuntimePathDigest(targetPath: string): string {
+  const resolved = path.resolve(targetPath), cached = discoveryDigests?.get(resolved);
+  if (cached !== undefined) return cached;
+  const digest = hashRuntimePath(resolved);
+  discoveryDigests?.set(resolved, digest);
+  return digest;
+}
+
+function hashRuntimePath(targetPath: string): string {
   const resolved = path.resolve(targetPath);
   if (!fs.existsSync(resolved)) throw new Error(`Managed runtime path is unavailable: ${resolved}`);
   const stat = fs.statSync(resolved);

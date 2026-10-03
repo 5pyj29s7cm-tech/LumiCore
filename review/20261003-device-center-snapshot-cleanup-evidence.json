@@ -1,0 +1,127 @@
+{
+  "batch": "prune62",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/DeviceSyncCenter.tsx",
+      "before": 359,
+      "after": 348,
+      "delta": -11,
+      "beforeSha256": "8cb86718c2c117c588832e142a5f4b0f69e5a4e6a176e989583157df24b7b508",
+      "afterSha256": "68dc7e29a4f16fb8b8aa1fc6946bbc412e3c1817fbf70a1cdcace6b66fdd2d80"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 226,
+      "after": 321,
+      "delta": 95,
+      "beforeSha256": "27027e842008be8bda260000604f2605147b6d66243325df6b3f09d1eb3ce101",
+      "afterSha256": "22c8980f1ad6fcdeb2f7bab3f43c260c98bd43920d41b545c150e21b19f7c94d"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365647
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161112
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526759
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365636
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161207
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526843
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -11
+      },
+      "tests": {
+        "files": 0,
+        "lines": 95
+      },
+      "total": {
+        "files": 0,
+        "lines": 84
+      }
+    }
+  },
+  "focused": {
+    "files": 12,
+    "passed": 140,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T06:18:44.511Z",
+      "finishedAt": "2026-10-03T06:18:51.228Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T06:18:51.229Z",
+      "finishedAt": "2026-10-03T06:19:23.803Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T06:19:23.804Z",
+      "finishedAt": "2026-10-03T06:19:32.856Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T06:19:32.856Z",
+      "finishedAt": "2026-10-03T06:19:42.560Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T06:19:42.560Z",
+      "finishedAt": "2026-10-03T06:19:42.895Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "Device list, paired ids and sensory summary are stored as one server snapshot. Device change, removal and reconnect notifications coalesce into a scoped authenticated read instead of maintaining another partial list from push payloads.",
+    "Four lifecycle effects are consolidated into one request/subscription/timer owner. The socket hook must initialize before loading, so its initial null-to-socket transition does not duplicate the initial read; translation-object changes do not reload devices.",
+    "Account and active organization changes remount the view, and domain reconciliation blocks reads with an old authenticated organization. Logout aborts outstanding reads and writes and removes subscriptions and sensor listeners.",
+    "Pair and unpair share one button. Only one mutation is admitted at a time, explicit or incomplete rejection never becomes a locally invented pairing, and subsequent reads reconcile server state after each settled operation.",
+    "Device icon and translated label metadata share one table. Each device computes its paired flag once instead of repeated list lookups.",
+    "The newest memory-sync notification replaces the previous timer; unmount clears both sync and coalesced-refresh timers. Read failures show an inline error rather than an empty-list success."
+  ],
+  "validationNotes": [
+    "Thirteen cases were added in the existing frontend behavior test file, covering authenticated read errors/retry, initial socket readiness, translation-only rerenders, three unconfirmed pairing responses, serialized pairing/unpairing, coalesced complete snapshots and timer cleanup, account/domain/logout transitions, and two late write outcomes after logout.",
+    "The first wider run had one test failure: AnimatePresence temporarily retains the old row during its exit animation. The assertion now waits for the real DOM removal; no animation or production behavior was changed to satisfy the test.",
+    "The event-burst fixture confirms that three notifications trigger one follow-up read and update device list, pairing and sensory summary together. This is a request-count check, not a real-device latency measurement.",
+    "Existing backend suites exercise device owner/domain authorization, real loopback HTTP/Socket.IO and test SQLite durability; UI fetches, account transitions and sensors remain synthetic."
+  ],
+  "limitations": [
+    "Authoritative refresh replaces local event patching and adds a scoped GET after a device event burst or pairing attempt. Events are coalesced over 160 ms; there is no new polling loop or production performance benchmark.",
+    "The whole snapshot remains a full device list; this is not a database storage or whole-repository optimization completion claim.",
+    "Cancellation suppresses client continuations and cannot undo a server-accepted write. Concurrent pairing across multiple clients is still governed by the existing backend serialization.",
+    "The legacy system-access panel and backend broadcast recipient policy were not changed. In particular, Electron/native system-info capability and browser vault presentation still require separate review.",
+    "Business code decreases by 11 lines; tests increase by 95, making the total grow by 84. Earlier uncommitted work is preserved.",
+    "No full-suite run, actual device pairing, native-client acceptance, backend rebuild, user-data modification, commit, push or client restart."
+  ]
+}

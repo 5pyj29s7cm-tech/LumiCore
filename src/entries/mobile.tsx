@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { motion } from 'motion/react';
 import { Rocket } from 'lucide-react';
 import { Toaster } from 'sonner';
@@ -6,9 +7,10 @@ import '../index.css';
 import { ProactiveNotifications } from '../components/ProactiveNotifications';
 import { LoginModal, LoginRequired } from '../core/components/Auth';
 import { MobilePlatform } from '../platforms/mobile/MobilePlatform';
-import { SkillHall } from '../components/SkillHall';
 import { Profile } from '../components/Profile';
 import { useAppShell } from './useAppShell';
+
+const SkillCenter = lazy(() => import('../components/SkillCenter').then(m => ({ default: m.SkillCenter })));
 
 export function MobileApp() {
   const shell = useAppShell();
@@ -26,9 +28,9 @@ export function MobileApp() {
   const renderTabContent = (tab: string) => {
     switch (tab) {
       case 'generate':
-        return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <SkillHall t={shell.t} lang={shell.lang} initialTab="generate" />;
+        return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
       case 'skills':
-        return <SkillHall t={shell.t} lang={shell.lang} />;
+        return <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} /></Suspense>;
       case 'profile':
         return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Profile t={shell.t} />;
       default:

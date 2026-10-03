@@ -122,14 +122,13 @@ import {
   cancelConversationActionExecution,
   completeConversationActionFromUserObservation,
   createDurableForegroundReleaseGate,
-  convergeConversationActionRequestLease,
-  convergeConversationActionRequestLeaseDurably,
-  finalizeForegroundRequestDurably,
+  convergeForegroundRequestBeforeRelease,
   prepareConversationActionExecution,
   setConversationActionExecutionStatus,
   startConversationActionExecutionHeartbeat,
-  type ConvergeConversationActionRequestLeaseResult,
-  type FinalizeForegroundRequestResult,
+  type ForegroundRequestIdentity as ChatForegroundRequestIdentity,
+  type ForegroundRequestReleaseInput,
+  type ForegroundRequestReleaseResult as ChatForegroundRequestReleaseResult,
   type ForegroundRequestDurabilityDependencies,
 } from "../conversation/manager";
 import {
@@ -239,48 +238,19 @@ import {
 // execution instead of creating an orphan tied to the old socket instance.
 const chatExecutionQueue = new SerialExecutionQueue();
 
-export interface ChatForegroundRequestIdentity {
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  readonly expectedTaskId?: string;
-}
+export type {
+  ForegroundRequestIdentity as ChatForegroundRequestIdentity,
+  ForegroundRequestReleaseResult as ChatForegroundRequestReleaseResult,
+} from '../conversation/manager';
 
-export interface ChatForegroundRequestReleaseResult {
-  convergence: ConvergeConversationActionRequestLeaseResult;
-  finalization: FinalizeForegroundRequestResult | null;
-  converged: boolean;
-}
-
-/** Converge durable foreground ownership before desktop/queue resources leave. */
-export async function convergeChatForegroundRequestBeforeRelease(input: {
-  readonly identity: ChatForegroundRequestIdentity;
-  readonly aborted: boolean;
-  readonly reason?: string;
-  readonly assistantState?: string;
-}, dependencies: ForegroundRequestDurabilityDependencies = {}): Promise<ChatForegroundRequestReleaseResult> {
-  let convergence = convergeConversationActionRequestLease({
-    ...input.identity,
-    deferLocalOwnerClear: true,
-  });
-  if (convergence.converged) {
-    convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
-    return { convergence, finalization: null, converged: true };
-  }
-  const finalization = await finalizeForegroundRequestDurably({
-    ...input.identity,
-    outcome: input.aborted ? 'cancelled' : 'blocked',
-    assistantMessageId: convergence.assistantMessageId || undefined,
-    reason: input.reason || (input.aborted
-      ? 'Chat foreground request was aborted before release.'
-      : 'Chat foreground executor exited without a fully converged terminal.'),
-    assistantState: input.assistantState,
+export async function convergeChatForegroundRequestBeforeRelease(
+  input: ForegroundRequestReleaseInput,
+  dependencies: ForegroundRequestDurabilityDependencies = {},
+): Promise<ChatForegroundRequestReleaseResult> {
+  return convergeForegroundRequestBeforeRelease({
+    ...input,
+    channel: 'Chat',
   }, dependencies);
-  return {
-    convergence,
-    finalization,
-    converged: finalization.converged,
-  };
 }
 
 function chatExecutionRoom(scope: ChatExecutionScope): string {

@@ -1,0 +1,148 @@
+{
+  "batch": "prune72",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/BusinessWorkbench.tsx",
+      "before": 114,
+      "after": 138,
+      "delta": 24,
+      "beforeSha256": "e677519a29bc8331d3bb2eafe6cf7ba9457577a3e4267fe3a94f849e1a4938fd",
+      "afterSha256": "b80fb063c0cc6485cc6eadf28c48ab901b29c661c40b62a2f53abdfd308c541a"
+    },
+    {
+      "file": "src/components/BusinessWorkbench.test.tsx",
+      "before": 32,
+      "after": 79,
+      "delta": 47,
+      "beforeSha256": "0b80a96ea6a16eee27cce2c8966cdcb3180f9d53cc865f469447bb1298a834ca",
+      "afterSha256": "492c35f2f874a2c4a3129d11b9c29d495adfc3823a1e1c1be9ca7ec36e48a0a5"
+    },
+    {
+      "file": "src/lib/industryWorkflowClient.ts",
+      "before": 199,
+      "after": 173,
+      "delta": -26,
+      "beforeSha256": "0b5298f6a6334e317592d05a315b140796ee134f456aaa940011f94f9f00d80a",
+      "afterSha256": "0c5819e539fda50eb49cbaaee841b5e100757ca6b63d9945bd4f0fc3df0eba82"
+    },
+    {
+      "file": "src/services/frontendWriteContracts.test.ts",
+      "before": 96,
+      "after": 124,
+      "delta": 28,
+      "beforeSha256": "d761e4f19b16c35f8fc472aa4101f289897623a7c7417923ea05ca09ce6d75b4",
+      "afterSha256": "c0b97e57b891a67ff8365d0066f198126d12d07b7c97fbd3d1c7c01048200fba"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1089,
+        "lines": 364747
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161867
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526614
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1089,
+        "lines": 364745
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161942
+      },
+      "total": {
+        "files": 1835,
+        "lines": 526687
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -2
+      },
+      "tests": {
+        "files": 0,
+        "lines": 75
+      },
+      "total": {
+        "files": 0,
+        "lines": 73
+      }
+    }
+  },
+  "focused": {
+    "files": 13,
+    "passed": 164,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T10:55:51.715Z",
+      "finishedAt": "2026-10-03T10:56:01.814Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T10:56:01.816Z",
+      "finishedAt": "2026-10-03T10:56:37.095Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T10:56:37.096Z",
+      "finishedAt": "2026-10-03T10:56:46.266Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T10:56:46.267Z",
+      "finishedAt": "2026-10-03T10:56:55.283Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T10:56:55.283Z",
+      "finishedAt": "2026-10-03T10:56:55.685Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "BusinessWorkbench replaces its three independent fetch/error lifecycles with one bounded, serialized operation and existing apiJson authentication. It owns state by account, role, personal/work scope and organization role; tab changes cancel the previous tab operation, while account/scope changes remount all private state.",
+    "Workspace lists, active selections, current tasks and legacy summaries are committed as one validated read result. Initial read failure leaves the workspace unavailable with explicit retry instead of treating invalid data as empty. Failed refresh retains previously confirmed data within the same owner.",
+    "Workspace binding validates the returned subject scope, product line and selected ID, then reconciles that receipt locally. Import requires a matching line and persisted=true before updating its summary. Both paths delete the unconditional three-request reload that followed every mutation; write failure retains the draft.",
+    "Legacy tasks and artifact previews share one per-line detail state. Detailed archives validate owner, line, task shape and artifact path/hash fields, and reuse makeChatArtifact formatting. Successful refresh clears archive detail caches and the open preview; account/domain changes clear them immediately.",
+    "Commerce snapshots are associated with store identity and callbacks are guarded by the current operation generation. A stable callback prevents the existing child snapshot effect from causing repeated parent updates. Busy workbench content is disabled without unmounting its current child form solely because a request is pending.",
+    "Industry workflow start, verification and deterministic finance delivery share one JSON POST helper and apiJson. Streamed workflow execution uses apiFetch. All four use the existing backend-origin, cookie, bearer-token and desktop-proof handling; the local duplicated proof lookup, header constant and response-error boilerplate were removed.",
+    "JSON workflow operations reject incomplete/mismatched receipts; a blocked verification receipt remains a valid reported verification result rather than being relabeled delivered. Existing stream progress, final-receipt requirement, cancellation signal, request bodies and no-write-retry semantics are retained."
+  ],
+  "validationNotes": [
+    "BusinessWorkbench retains its original archive-preview test and adds three behavior cases: denied/duplicate binding, scope and receipt checks, stable snapshot effects, obsolete callbacks, account/domain read/write cancellation, StrictMode, malformed-load retry, legacy persistence and owner confirmation, duplicate import and stale preview cleanup.",
+    "Two service behavior cases exercise actual apiJson/apiFetch calls with synthetic replies and a real ReadableStream: current desktop origin and both credentials, JSON bodies, encoded task IDs, streamed progress/final result, aborted requests, blocked verification, denied/incomplete receipts, no automatic POST retry and missing stream completion.",
+    "UI tests mount the real parent workbench and artifact cards, while child finance/commerce workspaces and file preview are replaced; the commerce replacement includes the real-style effect dependency on onSnapshotChange to catch callback feedback loops.",
+    "Focused regression includes existing business consolidation, legacy archive, REST workflow receipts, ecommerce archive and deterministic finance-delivery integration tests using isolated databases/files and local test servers. It is not native desktop or live model acceptance.",
+    "Lint including TypeScript/hooks/i18n, all-frontend and desktop builds, and compact-layout checks passed. Earlier prune40-71 latest baselines and final source fingerprints matched."
+  ],
+  "limitations": [
+    "This batch prioritizes request ownership and confirmation while removing duplicate transport handling. BusinessWorkbench grows to add those safeguards; workflow transport shrinks enough that combined business source decreases slightly. Added tests increase total source-plus-test lines, so this is not recorded as a large net code deletion.",
+    "Cancellation cannot undo a mutation already accepted by the backend. Server authorization, persistence, legacy-copy side effects and child task execution lifecycles were not redesigned. Workbench metadata/binding waits are bounded at 15 seconds and legacy reads/imports at 60 seconds; timeout is not proof the server failed to commit.",
+    "Tab/manual metadata refresh still reads three distinct endpoints together; this is not an incremental backend query or a performance benchmark. Concurrent changes made outside this workbench still require refresh. Receipt checks cover relevant ownership/render fields, not complete schemas.",
+    "Snapshot association does not restore the ecommerce child full report editor after it is unmounted by navigation. That existing child-state persistence and its independent long-running task lifecycle remain separate follow-up work. The existing streaming parser and reader cleanup are unchanged.",
+    "No production user records, memberships, models or legacy edition files were changed. No real model/API provider calls, native client acceptance, full-suite run, backend rebuild, commit, push, deployment or client restart were performed; whole-project simplification remains incomplete."
+  ],
+  "remainingCandidates": [
+    "Commerce/finance child workspaces retain independent task preparation, cancellation and draft lifecycles requiring further scope-aware review; full uploaded-report editor restoration across navigation remains unverified.",
+    "Other organization settings and the shared confirmation dialog cancellation lifecycle still need their final project-wide pass."
+  ]
+}

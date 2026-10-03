@@ -134,7 +134,7 @@ function compact(value: unknown, limit = 500): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
-function parseNestedJson(value: unknown): unknown {
+export function parseTaskTargetJson(value: unknown): unknown {
   let parsed = value;
   for (let depth = 0; depth < 3 && typeof parsed === 'string'; depth += 1) {
     try {
@@ -147,7 +147,7 @@ function parseNestedJson(value: unknown): unknown {
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
-  const parsed = parseNestedJson(value);
+  const parsed = parseTaskTargetJson(value);
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
@@ -442,7 +442,7 @@ export function resolveAcceptedTaskTarget(input: {
   const rejected = excludedFileReferences(current);
   for (const record of [...(input.persistedHistory || [])].reverse()) {
     if (record.role === 'assistant' && !explicitlyOriginal) {
-      const calls = parseNestedJson(record.toolCalls);
+      const calls = parseTaskTargetJson(record.toolCalls);
       if (selectedFormat && record.requestId && Array.isArray(calls)) {
         const observed = unique(calls.filter((call): call is TaskTargetEvidenceRecord => Boolean(
           call && typeof call === 'object' && call.requestId === record.requestId
@@ -754,7 +754,7 @@ function runningAuthoringWindowCandidates(
     || !recordSucceeded(record)
     || record.terminalVerification?.status !== 'verified'
   ) return [];
-  const parsed = parseNestedJson(record.receipt ?? record.result);
+  const parsed = parseTaskTargetJson(record.receipt ?? record.result);
   const items = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === 'object'
@@ -838,7 +838,7 @@ function documentCandidate(record: TaskTargetEvidenceRecord): EvidenceCandidate 
 }
 
 function resultItems(value: unknown): Record<string, unknown>[] {
-  const parsed = parseNestedJson(value);
+  const parsed = parseTaskTargetJson(value);
   const raw = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === 'object'

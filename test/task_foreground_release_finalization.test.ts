@@ -1,4 +1,5 @@
 import './helpers';
+import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -122,7 +123,6 @@ import { getConversationActionTurn } from '../server/conversation/action_turn_le
 import {
   convergeTaskForegroundRequestBeforeRelease,
   registerTaskHandler,
-  type TaskForegroundRequestIdentity,
 } from '../server/socket/task';
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from '../server/regions/packs/cn/voice_fast_path_messages';
 import { registerAllTools } from '../server/tools/definitions';
@@ -135,49 +135,7 @@ const TOOL_POLICY = {
   maxIterations: 4,
 };
 
-function prepareTaskRequest(label: string): TaskForegroundRequestIdentity {
-  const nonce = `${Date.now()}-${Math.random()}`;
-  const userId = `task-release-${label}-${nonce}`;
-  const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
-  const requestId = `request-${label}-${nonce}`;
-  const userText = `Run the ${label} task.`;
-  const userMessageId = addMessageIdempotent({
-    userId,
-    agentId: 'lumi',
-    conversationId: conversation.id,
-    role: 'user',
-    content: userText,
-    requestId,
-    deferActionPreparation: true,
-    domain: 'personal',
-    source: 'test',
-    channel: 'task',
-  });
-  const prepared = prepareConversationActionExecution({
-    conversationId: conversation.id,
-    userId,
-    userText,
-    requestId,
-    userMessageId,
-    toolPolicy: TOOL_POLICY,
-    forceTask: true,
-  });
-  expect(prepared.state?.taskId).toBeTruthy();
-  return Object.freeze({
-    conversationId: conversation.id,
-    userId,
-    requestId,
-    expectedTaskId: prepared.state!.taskId!,
-  });
-}
-
-function taskFor(identity: TaskForegroundRequestIdentity): any {
-  return readDB().conversationActionTasks.find((row: any) => (
-    row.id === identity.expectedTaskId
-    && row.conversationId === identity.conversationId
-    && row.userId === identity.userId
-  ));
-}
+const prepareTaskRequest = (label: string) => prepareForegroundRequest('task', label, TOOL_POLICY);
 
 function waitForRequestEvent<T extends Record<string, any>>(
   socket: ClientSocket,

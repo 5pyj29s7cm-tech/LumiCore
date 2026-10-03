@@ -25,6 +25,9 @@ export function addContact(userId: string, input: ContactInput): Contact {
     id: Math.random().toString(36).substring(2, 15),
     userId,
     name: input.name,
+    phone: input.phone,
+    email: input.email,
+    company: input.company,
     relationship: input.relationship || 'other',
     tags: input.tags || [],
     notes: input.notes || '',
@@ -39,14 +42,18 @@ export function addContact(userId: string, input: ContactInput): Contact {
   return contact;
 }
 
-export function updateContact(id: string, userId: string, input: Partial<ContactInput>): Contact | null {
+export function updateContact(id: string, userId: string, input: Partial<ContactInput> | ((contact: Contact) => Partial<ContactInput>)): Contact | null {
   const db = readDB();
   const idx = (db.contacts || []).findIndex((c: Contact) => c.id === id && c.userId === userId);
   if (idx === -1) return null;
   const existing = db.contacts[idx];
+  if (typeof input === 'function') input = input(existing);
   const updated: Contact = {
     ...existing,
     name: input.name ?? existing.name,
+    phone: input.phone ?? existing.phone,
+    email: input.email ?? existing.email,
+    company: input.company ?? existing.company,
     relationship: input.relationship ?? existing.relationship,
     tags: input.tags ?? existing.tags,
     notes: input.notes ?? existing.notes,
@@ -70,19 +77,11 @@ export function deleteContact(id: string, userId: string): boolean {
 }
 
 export function recordInteraction(id: string, userId: string, note?: string): Contact | null {
-  const db = readDB();
-  const idx = (db.contacts || []).findIndex((c: Contact) => c.id === id && c.userId === userId);
-  if (idx === -1) return null;
   const now = new Date().toISOString();
-  const updated: Contact = {
-    ...db.contacts[idx],
+  return updateContact(id, userId, contact => ({
     lastContacted: now,
-    notes: note ? `${db.contacts[idx].notes}\n[${now.slice(0, 10)}] ${note}` : db.contacts[idx].notes,
-    updatedAt: now,
-  };
-  db.contacts[idx] = updated;
-  writeDB(db);
-  return updated;
+    notes: note ? `${contact.notes}\n[${now.slice(0, 10)}] ${note}` : contact.notes,
+  }));
 }
 
 export function matchContactsFromText(userId: string, text: string): Contact[] {

@@ -1,0 +1,215 @@
+{
+  "date": "2026-10-02",
+  "batch": "prune35",
+  "baselineCommit": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "branch": "feature/chat-song-workbench-20260916",
+  "checkpoint": {
+    "commit": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+    "files": 495,
+    "pushed": false,
+    "priorValidation": {
+      "passed": 6606,
+      "files": 731,
+      "failed": 0,
+      "skipped": 0
+    },
+    "notes": [
+      "Removed a verified stale zero-byte Git lock from 2026-09-24; no Git processes were running.",
+      "Removed one extra EOF blank line in server/cognition/sentiment.ts before checkpoint; no semantic changes.",
+      "Two post-commit stat-only dirty paths matched HEAD content; index refresh cleared them without changing source."
+    ],
+    "indexRefreshPathsStillMatchHead": [
+      "server/cognition/desktop_observation.ts",
+      "test/scheduler_capability_execution.test.ts"
+    ]
+  },
+  "files": [
+    {
+      "file": "server/org/branch_protocol.ts",
+      "beforeLines": 0,
+      "afterLines": 50,
+      "delta": 50,
+      "beforeSha256": null,
+      "afterSha256": "87a21d779812a27257c8e60d61c3cc3fb895f86ccbcaf509f64955f6bc25593c"
+    },
+    {
+      "file": "server/org/branch_sync.ts",
+      "beforeLines": 573,
+      "afterLines": 527,
+      "delta": -46,
+      "beforeSha256": "bbc20144da6175bc08717176ea2d95e13cbd8351a252e959810a67dfcaffb11c",
+      "afterSha256": "15ef8fdf543144d2cca9f77c2f41a2b03eff70c5a735b4ad6322fd54b2af5afa"
+    },
+    {
+      "file": "server/org/branch.ts",
+      "beforeLines": 681,
+      "afterLines": 645,
+      "delta": -36,
+      "beforeSha256": "57ee837153c2947e4e9d839d86c693fc8f45f4c1a099079c849838346c43a4bd",
+      "afterSha256": "85cc8ec96c2a4480aa51b54f8b354d13f69b82339f8007f3e2630194094688b0"
+    },
+    {
+      "file": "server/conversation/task_target_anchor.ts",
+      "beforeLines": 1541,
+      "afterLines": 1541,
+      "delta": 0,
+      "beforeSha256": "fb971ed7a24f6a81d0df2a6da93fb34f5d883eb59ae1d820256c9bc403f57eb9",
+      "afterSha256": "b58b7e6a86b0b76aab5337833b8d93024afbb577ff83501f1e3833481fc25a1c"
+    },
+    {
+      "file": "server/cognition/current_app_execution.ts",
+      "beforeLines": 388,
+      "afterLines": 377,
+      "delta": -11,
+      "beforeSha256": "9181e4cbada87b34ce45d63cd8c8db7ea8243aefe8927b828231089097ced975",
+      "afterSha256": "99f3dc9d2b02ec08da3beb5d353e3a240c39061fcbe270de8c26b2449449c1b0"
+    },
+    {
+      "file": "server/client/self_model.ts",
+      "beforeLines": 2297,
+      "afterLines": 2295,
+      "delta": -2,
+      "beforeSha256": "4593521352e30ed9b45e3c0a90c9df1aa9a166db8213e6a44a202b86ec2d3b03",
+      "afterSha256": "09e78e2ba6bc20befb142d58405561ab9ad45e5b5295b5740a6e095fd6697c32"
+    },
+    {
+      "file": "src/hooks/useVoiceprint.ts",
+      "beforeLines": 683,
+      "afterLines": 681,
+      "delta": -2,
+      "beforeSha256": "865931647c483fc44a7408b5c9252f682d8fda165628b0691ba9e014248f618f",
+      "afterSha256": "6683c545bcbeca73aaaccbbcd219669cc0628b9744de2f86b3f915d26764842b"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1085,
+        "lines": 367101
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159757
+      },
+      "total": {
+        "files": 1825,
+        "lines": 526858
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1086,
+        "lines": 367054
+      },
+      "tests": {
+        "files": 740,
+        "lines": 159757
+      },
+      "total": {
+        "files": 1826,
+        "lines": 526811
+      }
+    }
+  },
+  "parity": {
+    "passed": true,
+    "hashComparisons": 542,
+    "parserComparisons": 108,
+    "branchComparisons": 41
+  },
+  "tests": {
+    "files": 10,
+    "passed": 126,
+    "failed": 0,
+    "skipped": 0,
+    "todo": 0,
+    "comparisonBaseline": "prune34 full suite, matching test files",
+    "added": 0,
+    "removed": 0,
+    "testSourceChanged": false,
+    "testFiles": [
+      "D:/lumiOS/test/client_self_model.test.ts",
+      "D:/lumiOS/test/organization_branch_client.test.ts",
+      "D:/lumiOS/test/organization_branch_commit_concurrency.test.ts",
+      "D:/lumiOS/test/organization_branch_recovery.test.ts",
+      "D:/lumiOS/test/organization_branch_sync.test.ts",
+      "D:/lumiOS/test/task_target_anchor_e2e.test.ts",
+      "D:/lumiOS/test/task_target_reference.test.ts",
+      "D:/lumiOS/test/voiceprint_sidecar_supervision.test.ts",
+      "D:/lumiOS/test/voice_reconnect_and_presence.test.ts",
+      "D:/lumiOS/test/wps_current_app_e2e_regression.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "parity",
+      "startedAt": "2026-10-01T16:33:42.491Z",
+      "finishedAt": "2026-10-01T16:33:43.002Z",
+      "status": 0
+    },
+    {
+      "step": "focused",
+      "startedAt": "2026-10-01T16:33:43.004Z",
+      "finishedAt": "2026-10-01T16:33:50.604Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-01T16:33:50.605Z",
+      "finishedAt": "2026-10-01T16:34:27.193Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-01T16:34:27.193Z",
+      "finishedAt": "2026-10-01T16:34:36.628Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-01T16:34:36.628Z",
+      "finishedAt": "2026-10-01T16:34:46.038Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-01T16:34:46.039Z",
+      "finishedAt": "2026-10-01T16:34:46.427Z",
+      "status": 0
+    },
+    {
+      "step": "build:server",
+      "startedAt": "2026-10-01T16:34:46.427Z",
+      "finishedAt": "2026-10-01T16:34:50.426Z",
+      "status": 0
+    }
+  ],
+  "finalSourceFingerprintsMatch": true,
+  "diffCheckPassed": true,
+  "preserved": [
+    "Stable item and payload hashes, recursive _synced field exclusion and array ordering",
+    "Organization, user and batch identity checks; immutable payload, durable commit and retry guards",
+    "Three raw JSON decoding attempts with unchanged malformed/blank/BOM handling",
+    "Client receipt validation remains limited to the fields it already checks",
+    "Existing imports of branch_sync protocol types remain valid through re-exports"
+  ],
+  "scope": {
+    "followupCommitted": false,
+    "pushed": false,
+    "clientRestarted": false,
+    "liveDataChanged": false,
+    "liveModelAcceptance": false,
+    "fullSuiteRerunForFollowup": false,
+    "performanceMeasured": false,
+    "overallCleanupComplete": false
+  },
+  "logs": [
+    ".codex-run/prune35-parity.log",
+    ".codex-run/prune35-focused.log",
+    ".codex-run/prune35-lint.log",
+    ".codex-run/prune35-build-frontends.log",
+    ".codex-run/prune35-build-desktop-ui.log",
+    ".codex-run/prune35-check-compact-layout-build.log",
+    ".codex-run/prune35-build-server.log"
+  ]
+}

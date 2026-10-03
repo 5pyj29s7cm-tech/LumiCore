@@ -1,4 +1,5 @@
 import './helpers';
+import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
@@ -20,49 +21,7 @@ const TOOL_POLICY = {
   maxIterations: 4,
 };
 
-function prepareChatRequest(label: string): ChatForegroundRequestIdentity {
-  const nonce = `${Date.now()}-${Math.random()}`;
-  const userId = `chat-release-${label}-${nonce}`;
-  const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
-  const requestId = `request-${label}-${nonce}`;
-  const userText = `Run the ${label} task.`;
-  const userMessageId = addMessageIdempotent({
-    userId,
-    agentId: 'lumi',
-    conversationId: conversation.id,
-    role: 'user',
-    content: userText,
-    requestId,
-    deferActionPreparation: true,
-    domain: 'personal',
-    source: 'test',
-    channel: 'chat',
-  });
-  const prepared = prepareConversationActionExecution({
-    conversationId: conversation.id,
-    userId,
-    userText,
-    requestId,
-    userMessageId,
-    toolPolicy: TOOL_POLICY,
-    forceTask: true,
-  });
-  expect(prepared.state?.taskId).toBeTruthy();
-  return Object.freeze({
-    conversationId: conversation.id,
-    userId,
-    requestId,
-    expectedTaskId: prepared.state!.taskId!,
-  });
-}
-
-function taskFor(identity: ChatForegroundRequestIdentity): any {
-  return readDB().conversationActionTasks.find((row: any) => (
-    row.id === identity.expectedTaskId
-    && row.conversationId === identity.conversationId
-    && row.userId === identity.userId
-  ));
-}
+const prepareChatRequest = (label: string) => prepareForegroundRequest('chat', label, TOOL_POLICY);
 
 describe('chat foreground release convergence', () => {
   beforeAll(async () => {

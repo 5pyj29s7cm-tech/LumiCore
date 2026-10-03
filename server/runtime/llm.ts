@@ -7,36 +7,51 @@ import { getLocalModelConfig, isTextGenerationModel, refreshLocalModelConfig } f
 import { relayApiKey, relayConfigured, relayOpenAIBaseUrl } from "../relay/config";
 import { normalizeOfficialOpenAIErrorResponse } from '../llm/official_api';
 
-let openai: OpenAI | null = null;
-let openaiSignature = '';
 let anthropic: Anthropic | null = null;
 let anthropicSignature = '';
 let gemini: GoogleGenerativeAI | null = null;
 let geminiSignature = '';
-let deepseek: OpenAI | null = null;
-let deepseekSignature = '';
-let qwen: OpenAI | null = null;
-let qwenSignature = '';
-let ark: OpenAI | null = null;
-let arkSignature = '';
 let ollama: OpenAI | null = null;
 let ollamaSignature = '';
 let ollamaDetected = false;
 let lmstudio: OpenAI | null = null;
 let lmstudioSignature = '';
 let lmstudioDetected = false;
-let xiaomi: OpenAI | null = null;
-let xiaomiSignature = '';
-let kimi: OpenAI | null = null;
-let kimiSignature = '';
-let glm: OpenAI | null = null;
-let glmSignature = '';
 let relay: OpenAI | null = null;
 let relaySignature = '';
 
 function clientSignature(...values: Array<string | undefined>): string {
   return values.map(value => value || '').join('\u0000');
 }
+
+// Standard OpenAI-compatible providers share cache invalidation, not routing.
+function cloudClient(provider: string, defaultBaseURL?: string, alternateKey?: string): () => OpenAI | null {
+  let client: OpenAI | null = null;
+  let signature = '';
+  return () => {
+    const keyName = provider + '_API_KEY', baseName = provider + '_BASE_URL';
+    const key = process.env[keyName] || (alternateKey ? process.env[alternateKey] : undefined)
+      || getKey(keyName) || (alternateKey ? getKey(alternateKey) : undefined);
+    const baseURL = process.env[baseName] || getKey(baseName) || defaultBaseURL;
+    const nextSignature = key ? clientSignature(key, baseURL) : '';
+    if (!nextSignature) {
+      client = null;
+      signature = '';
+    } else if (!client || signature !== nextSignature) {
+      client = new OpenAI({ apiKey: key!, ...(baseURL ? { baseURL } : {}) });
+      signature = nextSignature;
+    }
+    return client;
+  };
+}
+
+const getOpenAI = cloudClient('OPENAI');
+const getDeepSeek = cloudClient('DEEPSEEK', 'https://api.deepseek.com/v1');
+const getQwen = cloudClient('QWEN', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'DASHSCOPE_API_KEY');
+const getArk = cloudClient('ARK', 'https://ark.cn-beijing.volces.com/api/v3');
+const getXiaomi = cloudClient('XIAOMI', 'https://api.xiaomimimo.com/v1');
+const getKimi = cloudClient('KIMI', 'https://api.moonshot.cn/v1');
+const getGlm = cloudClient('GLM', 'https://open.bigmodel.cn/api/paas/v4');
 
 export interface LLMClients {
   getOpenAI: () => OpenAI | null;
@@ -54,20 +69,6 @@ export interface LLMClients {
   getGlm: () => OpenAI | null;
   getRelay: () => OpenAI | null;
   refreshLocalModels: () => Promise<{ ollama: boolean; lmstudio: boolean }>;
-}
-
-function getOpenAI() {
-  const key = process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY');
-  const baseURL = process.env.OPENAI_BASE_URL || getKey('OPENAI_BASE_URL');
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    openai = null;
-    openaiSignature = '';
-  } else if (!openai || openaiSignature !== signature) {
-    openai = new OpenAI({ apiKey: key!, ...(baseURL ? { baseURL } : {}) });
-    openaiSignature = signature;
-  }
-  return openai;
 }
 
 function getAnthropic() {
@@ -95,55 +96,6 @@ function getGemini() {
     geminiSignature = signature;
   }
   return gemini;
-}
-
-function getDeepSeek() {
-  const key = process.env.DEEPSEEK_API_KEY || getKey('DEEPSEEK_API_KEY');
-  const baseURL = process.env.DEEPSEEK_BASE_URL || getKey('DEEPSEEK_BASE_URL') || 'https://api.deepseek.com/v1';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    deepseek = null;
-    deepseekSignature = '';
-  } else if (!deepseek || deepseekSignature !== signature) {
-    deepseek = new OpenAI({
-      apiKey: key!,
-      baseURL,
-    });
-    deepseekSignature = signature;
-  }
-  return deepseek;
-}
-
-function getQwen() {
-  const key = process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY
-    || getKey('QWEN_API_KEY') || getKey('DASHSCOPE_API_KEY');
-  const baseURL = process.env.QWEN_BASE_URL || getKey('QWEN_BASE_URL') || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    qwen = null;
-    qwenSignature = '';
-  } else if (!qwen || qwenSignature !== signature) {
-    qwen = new OpenAI({ apiKey: key!, baseURL });
-    qwenSignature = signature;
-  }
-  return qwen;
-}
-
-function getArk() {
-  const key = process.env.ARK_API_KEY || getKey('ARK_API_KEY');
-  const baseURL = process.env.ARK_BASE_URL || getKey('ARK_BASE_URL') || 'https://ark.cn-beijing.volces.com/api/v3';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    ark = null;
-    arkSignature = '';
-  } else if (!ark || arkSignature !== signature) {
-    ark = new OpenAI({
-      apiKey: key!,
-      baseURL,
-    });
-    arkSignature = signature;
-  }
-  return ark;
 }
 
 function getOllama() {
@@ -188,57 +140,6 @@ function isLmStudioAvailable() {
   return lmstudioDetected;
 }
 
-function getXiaomi() {
-  const key = process.env.XIAOMI_API_KEY || getKey('XIAOMI_API_KEY');
-  const baseURL = process.env.XIAOMI_BASE_URL || getKey('XIAOMI_BASE_URL') || 'https://api.xiaomimimo.com/v1';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    xiaomi = null;
-    xiaomiSignature = '';
-  } else if (!xiaomi || xiaomiSignature !== signature) {
-    xiaomi = new OpenAI({
-      apiKey: key!,
-      baseURL,
-    });
-    xiaomiSignature = signature;
-  }
-  return xiaomi;
-}
-
-function getKimi() {
-  const key = process.env.KIMI_API_KEY || getKey('KIMI_API_KEY');
-  const baseURL = process.env.KIMI_BASE_URL || getKey('KIMI_BASE_URL') || 'https://api.moonshot.cn/v1';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    kimi = null;
-    kimiSignature = '';
-  } else if (!kimi || kimiSignature !== signature) {
-    kimi = new OpenAI({
-      apiKey: key!,
-      baseURL,
-    });
-    kimiSignature = signature;
-  }
-  return kimi;
-}
-
-function getGlm() {
-  const key = process.env.GLM_API_KEY || getKey('GLM_API_KEY');
-  const baseURL = process.env.GLM_BASE_URL || getKey('GLM_BASE_URL') || 'https://open.bigmodel.cn/api/paas/v4';
-  const signature = key ? clientSignature(key, baseURL) : '';
-  if (!signature) {
-    glm = null;
-    glmSignature = '';
-  } else if (!glm || glmSignature !== signature) {
-    glm = new OpenAI({
-      apiKey: key!,
-      baseURL,
-    });
-    glmSignature = signature;
-  }
-  return glm;
-}
-
 function getRelay() {
   const key = relayApiKey();
   // A relay is not usable with a key alone.  Do not construct a client for
@@ -266,7 +167,7 @@ function getRelay() {
 }
 
 async function refreshLocalModels(): Promise<{ ollama: boolean; lmstudio: boolean }> {
-  const [ollamaResult, lmstudioResult] = await Promise.all([
+  await Promise.allSettled([
     refreshLocalModelConfig('ollama', undefined, { timeoutMs: 3000 }),
     refreshLocalModelConfig('lmstudio', undefined, { timeoutMs: 3000 }),
   ]);
@@ -276,6 +177,7 @@ async function refreshLocalModels(): Promise<{ ollama: boolean; lmstudio: boolea
   lmstudioSignature = '';
   getOllama();
   getLmStudio();
+  const ollamaResult = getLocalModelConfig('ollama'), lmstudioResult = getLocalModelConfig('lmstudio');
   if (ollamaResult.detected) console.log(`[LLM] Ollama detected — ${ollamaResult.models.length} models`);
   if (lmstudioResult.detected) console.log(`[LLM] LM Studio detected — ${lmstudioResult.models.length} models`);
   return { ollama: ollamaResult.detected, lmstudio: lmstudioResult.detected };

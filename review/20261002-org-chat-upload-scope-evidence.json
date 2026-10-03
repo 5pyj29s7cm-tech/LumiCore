@@ -1,0 +1,196 @@
+{
+  "date": "2026-10-02",
+  "batch": "prune39",
+  "baseline": "turn-start worktree including uncommitted prune35-prune38",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/CentralLumiChat.tsx",
+      "beforeLines": 828,
+      "afterLines": 822,
+      "delta": -6,
+      "beforeSha256": "1c3f860ae4e3f4a514c0e7cf5168da58acc2811bd99e23fe6dcd332053137461",
+      "afterSha256": "d61bd108aa605960720798379a74273b641a57c9ee697419e9b2c196b8caa3ce"
+    },
+    {
+      "file": "test/central_chat_upload_scope.test.tsx",
+      "beforeLines": 0,
+      "afterLines": 120,
+      "delta": 120,
+      "beforeSha256": null,
+      "afterSha256": "f81d1806b41d9ffdf513b8b447c25c7d0fc6980ff61f89c07d77909c8ec08534"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1086,
+        "lines": 366913
+      },
+      "tests": {
+        "files": 742,
+        "lines": 159830
+      },
+      "total": {
+        "files": 1828,
+        "lines": 526743
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1086,
+        "lines": 366907
+      },
+      "tests": {
+        "files": 743,
+        "lines": 159950
+      },
+      "total": {
+        "files": 1829,
+        "lines": 526857
+      }
+    }
+  },
+  "fixes": [
+    "Key organization chat view by account, role, work domain, organization and organization role; old view state is not carried into a new scope",
+    "Reuse ChatViewWorkRegistry to abort uploads on view disposal or conversation changes; stale success, failure, notification and cleanup are ignored",
+    "Merge file upload and native path import under one synchronous active-work lock, shared quota checks and completion handling",
+    "Block sending with the same synchronous upload lock before React busy state renders",
+    "Guard the initial conversation lookup before binding so a late initial result cannot replace a newer accepted conversation"
+  ],
+  "tests": {
+    "files": 9,
+    "passed": 97,
+    "failed": 0,
+    "skipped": 0,
+    "added": [
+      "cancels files on conversation rollover and closure without carrying pending files",
+      "cancels paths on conversation rollover and closure without carrying pending files",
+      "does not let a late initial conversation lookup rebind or cancel a newer upload",
+      "isolates late files results across account and organization changes",
+      "isolates late paths results across account and organization changes",
+      "keeps files valid across language changes, handles failure and cancels on unmount",
+      "keeps paths valid across language changes, handles failure and cancels on unmount",
+      "serializes files with the other upload entry and blocks sending until receipt",
+      "serializes paths with the other upload entry and blocks sending until receipt"
+    ],
+    "removed": 0,
+    "comparisonBaseline": "prune38 matching files",
+    "names": [
+      "D:/lumiOS/test/central_chat_upload_scope.test.tsx",
+      "D:/lumiOS/test/chat_attachment_references.test.ts",
+      "D:/lumiOS/test/chat_attachment_upload_delivery.test.ts",
+      "D:/lumiOS/test/chat_conversation_transition.test.ts",
+      "D:/lumiOS/test/chat_view_async_boundaries.test.ts",
+      "D:/lumiOS/test/customer_output_projection_surfaces.test.ts",
+      "D:/lumiOS/test/frontend_response_finalization.test.ts",
+      "D:/lumiOS/test/large_ui_state.test.tsx",
+      "D:/lumiOS/src/hooks/useGeneratedLibrary.test.tsx"
+    ]
+  },
+  "beforeFix": {
+    "passed": 1,
+    "failed": 8,
+    "unchangedTurnStartComponent": true,
+    "method": "Copied turn-start component into ignored temporary directory with relocated imports; executed identical final tests without rolling back the live workspace.",
+    "failures": [
+      {
+        "name": "isolates late files results across account and organization changes",
+        "firstFailure": "AssertionError: expected 'Old account draft' to be '' // Object.is equality"
+      },
+      {
+        "name": "isolates late paths results across account and organization changes",
+        "firstFailure": "AssertionError: expected 'Old account draft' to be '' // Object.is equality"
+      },
+      {
+        "name": "serializes paths with the other upload entry and blocks sending until receipt",
+        "firstFailure": "AssertionError: expected [ { promise: Promise{…}, …(4) }, …(1) ] to have a length of 1 but got 2"
+      },
+      {
+        "name": "cancels files on conversation rollover and closure without carrying pending files",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "cancels paths on conversation rollover and closure without carrying pending files",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "keeps files valid across language changes, handles failure and cancels on unmount",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "keeps paths valid across language changes, handles failure and cancels on unmount",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "does not let a late initial conversation lookup rebind or cancel a newer upload",
+        "firstFailure": "AssertionError: expected true to be false // Object.is equality"
+      }
+    ],
+    "additionalInitialEvidence": "prune39-before-tests.json recorded late attachments appearing after account switch before the draft-clearing assertion was added."
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-01T18:10:09.807Z",
+      "finishedAt": "2026-10-01T18:10:14.692Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-01T18:10:14.693Z",
+      "finishedAt": "2026-10-01T18:10:43.334Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-01T18:10:43.334Z",
+      "finishedAt": "2026-10-01T18:10:50.898Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-01T18:10:50.899Z",
+      "finishedAt": "2026-10-01T18:10:58.589Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-01T18:10:58.590Z",
+      "finishedAt": "2026-10-01T18:10:58.940Z",
+      "status": 0
+    }
+  ],
+  "finalFingerprintsMatch": true,
+  "priorAttachmentHelperFingerprintRestored": true,
+  "diffCheckPassed": true,
+  "validationNotes": [
+    "StrictMode exposed nondeterministic Vitest dynamic-import mocking, which invoked the real Tauri module. The UI test now evaluates the unchanged production native listener through existing source_expression with an explicit native dependency; no production workaround was added.",
+    "Initial lint caught direct access to a typed toast mock; changed the test to vi.mocked and reran focused tests, lint and frontend builds.",
+    "Temporary native error diagnostic was removed; the helper including its original line endings matches the prune38 SHA-256 exactly."
+  ],
+  "limitations": [
+    "Tests mount the React view with synthetic transport and socket/native dependencies; no real desktop upload, real account or model API was exercised.",
+    "Client abort cannot undo files already accepted and archived by the server; this change prevents carrying their result into another view.",
+    "The initial history lookup is guarded; this batch does not claim all same-conversation socket history refresh ordering is solved.",
+    "Business code decreased by 6 lines, new regression tests add 120 lines: total increased by 114."
+  ],
+  "scope": {
+    "committed": false,
+    "pushed": false,
+    "restarted": false,
+    "realUserDataModified": false,
+    "newBusinessModules": 0,
+    "fullSuiteRerun": false,
+    "backendRebuild": false,
+    "overallOptimizationComplete": false
+  },
+  "rawArtifacts": [
+    ".codex-run/prune39-before.json",
+    ".codex-run/prune39-before-tests.json",
+    ".codex-run/prune39-baseline.json",
+    ".codex-run/prune39-focused-final.json",
+    ".codex-run/prune39-initial-verification.json",
+    ".codex-run/prune39-verification.json"
+  ]
+}

@@ -29,7 +29,7 @@ async function handler(args: any) {
   }
 }
 
-const server = new McpServer({ name: 'weather', version: '1.0.0' }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: 'weather', version: '1.0.1' }, { capabilities: { tools: {} } });
 server.registerTool('get_weather', {
   description: 'Get real-time weather for any city. Returns temperature, humidity, wind, and forecast.',
   inputSchema: { city: z.string().describe('City name in English, e.g. "Tokyo" or "London"') },

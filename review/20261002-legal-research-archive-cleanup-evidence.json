@@ -1,0 +1,264 @@
+{
+  "batch": "prune49",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune48; preceding uncommitted changes preserved; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2041,
+      "after": 2025,
+      "delta": -16,
+      "beforeSha256": "db7df83cfd2411ffaf5fd714356dd7850262f2d2fc15ee78587f0bbf493312c7",
+      "afterSha256": "04648ef6bae5af44b6ba4b57c62c032afc7f33d6f5a6cf63bb8d2f2c2dd523a9"
+    },
+    {
+      "file": "src/components/org/LegalCaseSearch.tsx",
+      "before": 220,
+      "after": 206,
+      "delta": -14,
+      "beforeSha256": "b603ff85eccc38269b486bd04f4d9fef98186834cd1fec05b5597f55959997cd",
+      "afterSha256": "f65c37b065f3434c90242642884b97f130c057a0b507a9aff45c324b64e61af2"
+    },
+    {
+      "file": "src/components/org/LegalAssetTrace.tsx",
+      "before": 317,
+      "after": 294,
+      "delta": -23,
+      "beforeSha256": "0cb8c4b282d753e982f35ab4d045b38ba82a7a71ecfcc99d952befc6212dd00a",
+      "afterSha256": "09f9ea4f73766991dce0843a73091f3f27ca4fcac49b9af2b67d9cb0bac29855"
+    },
+    {
+      "file": "src/hooks/useLegalDocument.ts",
+      "before": 63,
+      "after": 70,
+      "delta": 7,
+      "beforeSha256": "32b746dc4cbf3e88670b35202249d5cdde9b8bc1d160330105c99102408c61c6",
+      "afterSha256": "1b38d8fb1374e8b837d6cf7088151c12469c56b082fdc546c7c871e3dff944b6"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 268,
+      "after": 308,
+      "delta": 40,
+      "beforeSha256": "207ce9d4caa1e4e35c10596c4bc0d3f1523f4afdfbb1b2d0b63e7222d1a40469",
+      "afterSha256": "eb3a1cb483f488e181ce233a8fd8097f58a2d8a52be8695c38136abcf67759db"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366239
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160414
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526653
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366193
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160454
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526647
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -46
+      },
+      "tests": {
+        "files": 0,
+        "lines": 40
+      },
+      "total": {
+        "files": 0,
+        "lines": -6
+      }
+    },
+    "combinedPrune44Through49": {
+      "source": {
+        "files": 0,
+        "lines": -369
+      },
+      "tests": {
+        "files": 0,
+        "lines": 237
+      },
+      "total": {
+        "files": 0,
+        "lines": -132
+      }
+    }
+  },
+  "baselineRegression": {
+    "passed": 0,
+    "failed": 19,
+    "skipped": 64,
+    "failures": [
+      {
+        "name": "import-judgment remaining legal tool retains the separate organization case-material write and does not claim that a failed archive succeeded",
+        "firstFailure": "Error: Unable to find an element with the text: /Error: failed-to-archive-material/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "judgment import waits for archive confirmation and drops completion after case changes (false)",
+        "firstFailure": "AssertionError: expected <span …(1)>…(1)</span> to be null"
+      },
+      {
+        "name": "judgment import waits for archive confirmation and drops completion after case changes (true)",
+        "firstFailure": "AssertionError: expected <span …(1)>…(1)</span> to be null"
+      },
+      {
+        "name": "search research ownership and archive locks duplicate searches, rejects failed reports and retries with the original request scope",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "search research ownership and archive drops old reports and stops remaining tools on case changes",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "search research ownership and archive drops old reports and stops remaining tools on organization changes",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "search research ownership and archive drops old reports and stops remaining tools on account changes",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "search research ownership and archive drops old reports and stops remaining tools on close changes",
+        "firstFailure": "AssertionError: expected undefined to be true // Object.is equality"
+      },
+      {
+        "name": "search research ownership and archive confirms one archive, retains output after failure and suppresses notifications after close",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "trace research ownership and archive locks duplicate searches, rejects failed reports and retries with the original request scope",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "trace research ownership and archive drops old reports and stops remaining tools on case changes",
+        "firstFailure": "AssertionError: expected 'Changed party' to be 'Private draft' // Object.is equality"
+      },
+      {
+        "name": "trace research ownership and archive drops old reports and stops remaining tools on organization changes",
+        "firstFailure": "AssertionError: expected 'Changed party' to be 'Private draft' // Object.is equality"
+      },
+      {
+        "name": "trace research ownership and archive drops old reports and stops remaining tools on account changes",
+        "firstFailure": "AssertionError: expected 'Changed party' to be 'Private draft' // Object.is equality"
+      },
+      {
+        "name": "trace research ownership and archive drops old reports and stops remaining tools on close changes",
+        "firstFailure": "AssertionError: expected 'Changed party' to be 'Private draft' // Object.is equality"
+      },
+      {
+        "name": "trace research ownership and archive confirms one archive, retains output after failure and suppresses notifications after close",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "packet manual archive retains output and stops duplicate writes when local storage fails",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called with arguments: [ 'disk full' ]"
+      },
+      {
+        "name": "research manual archive retains output and stops duplicate writes when local storage fails",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called with arguments: [ 'disk full' ]"
+      },
+      {
+        "name": "strategy manual archive retains output and stops duplicate writes when local storage fails",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called with arguments: [ 'disk full' ]"
+      },
+      {
+        "name": "citations manual archive retains output and stops duplicate writes when local storage fails",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called with arguments: [ 'disk full' ]"
+      }
+    ],
+    "method": "Nineteen targeted final component tests against isolated turn-start copies of LegalHub, LegalCaseSearch, LegalAssetTrace and useLegalDocument. Other 64 cases excluded from this baseline-only run. These are parameterized failures, not nineteen independent defects."
+  },
+  "focused": {
+    "testFiles": 10,
+    "passed": 160,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/organization_resource_acl_routes.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T12:02:11.365Z",
+      "finishedAt": "2026-10-02T12:02:19.024Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T12:02:19.025Z",
+      "finishedAt": "2026-10-02T12:02:50.842Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T12:02:50.843Z",
+      "finishedAt": "2026-10-02T12:02:59.519Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T12:02:59.520Z",
+      "finishedAt": "2026-10-02T12:03:08.270Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T12:03:08.270Z",
+      "finishedAt": "2026-10-02T12:03:08.653Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through48LatestFingerprintsMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "changes": [
+    "LegalCaseSearch and LegalAssetTrace reuse the existing keyed request hook: one lock, abort ownership, result/error lifecycle, and preservation of drafts on metadata/language changes. Removed their separate loading/result/reset-effect flows.",
+    "Search selection is an index into current derived results instead of another stored result object. Removed unreachable empty-result state, unused trace UI translation props and unused risks field.",
+    "Asset and equity requests remain sequential, share one argument object and stop the remaining chain after cancellation or failure.",
+    "Existing hook now owns manual archive locking and confirmation. Six manual archive entries await boolean persistence; false/throw preserves generated output for retry, and stale success notifications are suppressed. Four redundant archive wrapper functions were removed.",
+    "Asset errors are no longer marked ready or offered for archive. Judgment import awaits case material persistence before showing an overall successful result.",
+    "Existing failed-import component assertion now requires an error/nonready state after a failed archive; added ownership, rapid-action, failure/retry and import confirmation cases."
+  ],
+  "preserved": [
+    "Original tool names, search/trace argument fields, case/organization scoping, ordered asset-then-equity execution and organization automatic-archive behavior.",
+    "Citation and selected-search-result manual material writes remain separate because those tools do not automatically archive selected case material.",
+    "Original case-search and asset response parsers, structured views, titles, archive content and manual archive availability.",
+    "No new business module or test file, user data untouched."
+  ],
+  "limitations": [
+    "Frontend cancellation does not undo backend writes. A case archive started before navigation can still finish against the original case; its late UI completion is suppressed.",
+    "Knowledge import and case material persistence are separate operations: an archive failure may follow an already-successful knowledge import. No atomic transaction or rollback is claimed.",
+    "Mocked component HTTP and isolated backend regressions only; no real model call, native-client/visual acceptance or full-suite rerun.",
+    "Earlier write queue is still per mounted hub without keystroke coalescing. Legacy personal storage account isolation, multi-entry local model persistence and remaining program zones remain open.",
+    "No commit, push, backend rebuild or client restart."
+  ]
+}

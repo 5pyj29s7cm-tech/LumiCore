@@ -1,4 +1,16 @@
 {
+  "legal-hub.legacy-cases-unassigned": {
+    "en": "Unassigned legacy cases remain on this device. Confirm ownership before importing; originals are retained.",
+    "zh": "本机有未绑定账号的旧案件，未自动载入。请确认归属后导入；原始数据会保留。"
+  },
+  "legal-hub.confirm-legacy-case-ownership": {
+    "en": "Confirm these legacy cases belong to the current account and import them?",
+    "zh": "确认这些旧案件属于当前账号，并导入到当前账号？"
+  },
+  "legal-hub.import-legacy-cases": {
+    "en": "Confirm and import legacy cases",
+    "zh": "确认归属并导入旧案件"
+  },
   "settings.lumi-website.29f47c3d10": {
     "en": "Lumi website",
     "zh": "Lumi 官网"
@@ -6099,22 +6111,10 @@
     "en": "Done",
     "zh": "已完成"
   },
-  "reminder-panel.failed-to-create-reminder.880d5a66e2": {
-    "en": "Failed to create reminder",
-    "zh": "提醒创建失败"
-  },
-  "reminder-panel.failed-to-delete-reminder.0167264b7f": {
-    "en": "Failed to delete reminder",
-    "zh": "提醒删除失败"
-  },
-  "reminder-panel.failed-to-load-reminders.0092eaf0c9": {
-    "en": "Failed to load reminders",
-    "zh": "提醒加载失败"
-  },
-  "reminder-panel.failed-to-update-reminder.73f8821573": {
-    "en": "Failed to update reminder",
-    "zh": "提醒更新失败"
-  },
+
+
+
+
   "reminder-panel.mark-complete.0115f22552": {
     "en": "Mark complete",
     "zh": "标记完成"
@@ -6779,10 +6779,6 @@
     "en": "Lumi is Ready",
     "zh": "Lumi 已准备好"
   },
-  "setup-wizard.lumi-will-use-your-local.41a9c8a5bd": {
-    "en": "Lumi will use your local model for everyday conversations. For complex tasks, it will automatically fall back to the cloud.",
-    "zh": "Lumi 会用你的本地模型处理日常对话。复杂任务可自动切换到云端模型。"
-  },
   "setup-wizard.models.88ac61293d": {
     "en": "models",
     "zh": "个模型"
@@ -6823,10 +6819,6 @@
     "en": "Start Using Lumi",
     "zh": "开始使用 Lumi"
   },
-  "setup-wizard.test-voice.4ff1c4863a": {
-    "en": "Test Voice",
-    "zh": "测试语音"
-  },
   "setup-wizard.voice-check.b7976f3351": {
     "en": "Voice Check",
     "zh": "语音检查"
@@ -6838,10 +6830,6 @@
   "setup-wizard.voice-needs-configuration-you-can.8df8a50b27": {
     "en": "Voice needs configuration. You can set it up later in Settings.",
     "zh": "语音还需要配置，你可以稍后在设置中处理。"
-  },
-  "setup-wizard.you-re-all-set.9a7beff5d2": {
-    "en": "You're All Set",
-    "zh": "已经准备好了"
   },
   "setup-wizard.your-personal-ai-is-live.93671d768f": {
     "en": "Your personal AI is live. Start talking and it will learn and grow with you.",

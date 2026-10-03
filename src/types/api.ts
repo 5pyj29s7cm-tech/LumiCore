@@ -2,6 +2,7 @@
 // Used by both frontend services and server route handlers via `import type`
 
 import type { User, UserProfile, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference } from './models';
+import type { MarketplaceSkill as RegistrySkill } from '../../server/marketplace/registry';
 export type { User, UserProfile, Conversation, NotificationItem, Memory, Reminder, VoicePreference, LLMPreference };
 
 // ── Auth ──
@@ -166,24 +167,9 @@ export interface SkillListResponse {
 
 // ── Marketplace ──
 
-export interface MarketplaceSkill {
-  id: string;
-  name: string;
-  description: string;
-  author: string;
-  downloads: number;
-  rating: number;
-  category: string;
-  icon: string;
-  installed: boolean;
-  version?: string;
-  toolCount?: number;
-  requiresApiKey?: boolean;
-  apiKeyEnv?: string;
-  apiKeyUrl?: string;
-  requiresSetup?: boolean;
-  setupNote?: string;
-}
+export type MarketplaceSkill = Pick<RegistrySkill,
+  'id' | 'name' | 'description' | 'author' | 'downloads' | 'rating' | 'category' | 'icon' | 'installed'
+  | 'version' | 'toolCount' | 'requiresApiKey' | 'apiKeyEnv' | 'apiKeyUrl' | 'requiresSetup' | 'setupNote'>;
 
 // ── Memory ──
 

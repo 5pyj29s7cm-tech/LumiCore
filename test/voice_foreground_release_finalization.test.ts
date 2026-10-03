@@ -1,4 +1,5 @@
 import './helpers';
+import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
@@ -30,49 +31,7 @@ const TOOL_POLICY = {
   maxIterations: 4,
 };
 
-function prepareVoiceRequest(label: string): VoiceForegroundRequestIdentity {
-  const nonce = `${Date.now()}-${Math.random()}`;
-  const userId = `voice-release-${label}-${nonce}`;
-  const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
-  const requestId = `request-${label}-${nonce}`;
-  const userText = `Run the ${label} voice task.`;
-  const userMessageId = addMessageIdempotent({
-    userId,
-    agentId: 'lumi',
-    conversationId: conversation.id,
-    role: 'user',
-    content: userText,
-    requestId,
-    deferActionPreparation: true,
-    domain: 'personal',
-    source: 'test',
-    channel: 'voice',
-  });
-  const prepared = prepareConversationActionExecution({
-    conversationId: conversation.id,
-    userId,
-    userText,
-    requestId,
-    userMessageId,
-    toolPolicy: TOOL_POLICY,
-    forceTask: true,
-  });
-  expect(prepared.state?.taskId).toBeTruthy();
-  return Object.freeze({
-    conversationId: conversation.id,
-    userId,
-    requestId,
-    expectedTaskId: prepared.state!.taskId!,
-  });
-}
-
-function taskFor(identity: VoiceForegroundRequestIdentity): any {
-  return readDB().conversationActionTasks.find((row: any) => (
-    row.id === identity.expectedTaskId
-    && row.conversationId === identity.conversationId
-    && row.userId === identity.userId
-  ));
-}
+const prepareVoiceRequest = (label: string) => prepareForegroundRequest('voice', label, TOOL_POLICY);
 
 function buildPriorityHandoffSession(identity: VoiceForegroundRequestIdentity): any {
   return {
@@ -661,10 +620,13 @@ describe('voice foreground release convergence', () => {
 
     const publicHelperStart = source.indexOf('export async function convergeVoiceForegroundRequestBeforeRelease');
     const settleBeforeFinalizeAt = source.indexOf('settleConversationActionExecutionRequest(', publicHelperStart);
-    const fallbackFinalizeAt = source.indexOf('const finalization = await finalizeForegroundRequestDurably({', publicHelperStart);
+    const manager = readFileSync('server/conversation/manager.ts', 'utf8');
+    const settleCallbackAt = manager.indexOf('input.settlePendingTask();');
+    const fallbackFinalizeAt = manager.indexOf('const finalization = await finalizeForegroundRequestDurably({', settleCallbackAt);
     expect(settleBeforeFinalizeAt).toBeGreaterThan(publicHelperStart);
-    expect(fallbackFinalizeAt).toBeGreaterThan(settleBeforeFinalizeAt);
-    expect(source.slice(fallbackFinalizeAt, fallbackFinalizeAt + 360))
+    expect(settleCallbackAt).toBeGreaterThan(-1);
+    expect(fallbackFinalizeAt).toBeGreaterThan(settleCallbackAt);
+    expect(manager.slice(fallbackFinalizeAt, fallbackFinalizeAt + 360))
       .toContain('assistantMessageId: convergence.assistantMessageId || undefined');
 
     const releaseStart = source.indexOf('const voiceReleaseGate = createDurableForegroundReleaseGate({');

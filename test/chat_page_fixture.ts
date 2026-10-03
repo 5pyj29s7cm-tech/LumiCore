@@ -6,7 +6,7 @@ import { ChatAttachmentUploads } from '../src/lib/chatAttachmentUploads';
 import { chatAttachmentCopy } from '../src/i18n/locales/chatAttachments';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
 import { ChatRequestLedger } from '../src/lib/chatEventReceipts';
-import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_ATTACHMENTS, isImageFileName, isAudioFileName, extractAudioTranscript, serializeChatAttachment } from '../src/lib/chatAttachmentReferences';
+import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_ATTACHMENTS, mergePendingChatAttachments, mapImportedChatAttachments, serializeChatAttachment } from '../src/lib/chatAttachmentReferences';
 
 export const pagePath = 'src/components/AgentChatPage.tsx';
 
@@ -93,8 +93,8 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
   deps.setConversationAttachments = (value: any) => { deps.conversationAttachmentsRef.current = value; };
   deps.attachmentContextStorageKey = '';
   deps.rememberConversationAttachments = extract('src/hooks/useConversationAttachments.ts', 'rememberConversationAttachments', deps);
-  Object.assign(deps, { isImageFileName, isAudioFileName, extractAudioTranscript, serializeChatAttachment });
-  for (const name of ['appendPendingAttachments', 'mapImportedFilesToAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
+  Object.assign(deps, { mergePendingChatAttachments, mapImportedChatAttachments, serializeChatAttachment });
+  for (const name of ['appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
     'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
     deps[name] = extract(pagePath, name, deps);
   }

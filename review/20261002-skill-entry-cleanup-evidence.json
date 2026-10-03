@@ -1,0 +1,136 @@
+{
+  "batch": "prune55",
+  "date": "2026-10-02",
+  "baseline": "Working tree after prune54, not HEAD; all earlier changes preserved.",
+  "files": [
+    {
+      "file": "src/components/SkillHall.tsx",
+      "before": 13,
+      "after": 0,
+      "delta": -13,
+      "beforeSha256": "7ccfaa72bc60f0f5d4e0d7ac31270da786aeaa3f49c69c03012801bc829f07c0",
+      "afterSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "src/entries/desktop.tsx",
+      "before": 87,
+      "after": 87,
+      "delta": 0,
+      "beforeSha256": "6cc6dfc7cacea118e6bc4349f448441fcdbfce18832657c92cf0cfc3f4b553a4",
+      "afterSha256": "07a033bf906566ba320f97064a4c700f4d195a6cb414fe0a4a0bbe7d1c1ea474"
+    },
+    {
+      "file": "src/entries/mobile.tsx",
+      "before": 54,
+      "after": 56,
+      "delta": 2,
+      "beforeSha256": "1e053ee5e436a6633632600acb0a5abe9fb8824f9c5176a7ca73dea3333cd645",
+      "afterSha256": "fbef3917c95ebedcc9ef0c0d456860c9ff2f15077dca8a3aea0b243da0d67e69"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1088,
+        "lines": 365802
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526604
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365791
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160802
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526593
+      }
+    },
+    "delta": {
+      "source": {
+        "files": -1,
+        "lines": -11
+      },
+      "tests": {
+        "files": 0,
+        "lines": 0
+      },
+      "total": {
+        "files": -1,
+        "lines": -11
+      }
+    }
+  },
+  "focused": {
+    "testFiles": 8,
+    "passed": 63,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/large_ui_state.test.tsx",
+      "test/startup_shell.test.ts",
+      "test/unified_org_workspace.test.ts",
+      "test/chat_recovery_auth_integration.test.ts",
+      "test/model_service_settings.test.ts",
+      "test/generated_skill_history.test.ts",
+      "test/skill_generation_transport.test.ts",
+      "test/skill_runtime_state_truth.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T15:05:28.944Z",
+      "finishedAt": "2026-10-02T15:05:32.738Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T15:05:32.740Z",
+      "finishedAt": "2026-10-02T15:05:59.697Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T15:05:59.698Z",
+      "finishedAt": "2026-10-02T15:06:07.211Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T15:06:07.212Z",
+      "finishedAt": "2026-10-02T15:06:14.696Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T15:06:14.697Z",
+      "finishedAt": "2026-10-02T15:06:15.012Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through54LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "Deleted the forwarding SkillHall component and its extra lazy/Suspense layer from the desktop route. Desktop and mobile entries now load the existing SkillCenter directly.",
+    "Kept lazy loading and a null Suspense fallback in each entry, and retained the generate-tab login gate, initialTab, language and translation props.",
+    "No product capability removed, no business module or new tests introduced."
+  ],
+  "limitations": [
+    "Existing component/route-contract tests and builds passed; no native-client clicks, full-suite rerun, real skill/model calls, commit, push or restart.",
+    "KnowledgeBaseEntry retained: it owns the first-loading surface, title and close controls, so it is not an empty forwarding component.",
+    "This is an entry-layer simplification, not proof of runtime latency improvement or completion of all application partitions."
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "lumi-skill-weather",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Real-time weather lookup for any city worldwide",
   "type": "module",
   "main": "index.ts",

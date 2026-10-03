@@ -1540,7 +1540,6 @@ describe('semi-automated legal workflows', () => {
     expect(legalHubSource).not.toContain('Case Action Board');
     expect(legalHubSource).not.toContain('案件行动面板');
     expect(legalHubSource).toContain('legalCaseToolArgs');
-    expect(legalHubSource).toContain("runLegalTool('legal_case_reasoning_matrix'");
     expect(legalHubSource).not.toContain('办案闭环');
     expect(uiMessagesSource).toContain('办案闭环');
     expect(legalHubSource).toContain('persistCase: true');

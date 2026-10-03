@@ -1,102 +1,40 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Bell, Clock, CheckCircle2, Trash2, Plus, Calendar, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { uiMessage } from '../i18n/uiMessages';
+import { useApp } from '../contexts/AppContext';
+import { useApiCollection } from '../hooks/useApiCollection';
+import type { Reminder } from '../../server/memory/store';
 
-interface Reminder {
-  id: string;
-  userId: string;
-  content: string;
-  dueAt: string | null;
-  status: 'pending' | 'fired';
-  sourceInteractionId: string;
-  createdAt: string;
-  firedAt?: string | null;
-}
+const isReminder = (value: any): value is Reminder => Boolean(value && typeof value.id === 'string' && value.id && typeof value.content === 'string' && ['pending', 'fired'].includes(value.status));
 
 export function ReminderPanel({ t }: { t?: any }) {
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <ReminderEditor key={`${user.uid}:${user.role}:${workDomain}:${orgConnection?.orgId ?? ''}`} t={t} /> : null;
+}
+
+function ReminderEditor({ t }: { t?: any }) {
   const isZh = t?.langCode !== 'en';
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { items, busy, error, sync } = useApiCollection('/api/reminders', isReminder);
+  const reminders = items ?? [];
   const [newContent, setNewContent] = useState('');
   const [newDueAt, setNewDueAt] = useState('');
-  const [adding, setAdding] = useState(false);
-  const [error, setError] = useState('');
-
-  const fetchReminders = useCallback(async () => {
-    try {
-      setError('');
-      const res = await fetch('/api/reminders', { credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-load-reminders.0092eaf0c9'));
-      setReminders(Array.isArray(data) ? data : []);
-    } catch (err: any) {
-      const message = err?.message || uiMessage('reminder-panel.failed-to-load-reminders.0092eaf0c9');
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchReminders(); }, [fetchReminders]);
-
   const handleAdd = async () => {
-    if (!newContent.trim()) return;
-    setAdding(true);
-    try {
-      const res = await fetch('/api/reminders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newContent.trim(), dueAt: newDueAt || null }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-create-reminder.880d5a66e2'));
-      setNewContent('');
-      setNewDueAt('');
+    if (newContent.trim() && await sync('POST', '', { content: newContent.trim(), dueAt: newDueAt || null })) {
+      setNewContent(''); setNewDueAt('');
       toast.success(uiMessage('reminder-panel.reminder-created.784ae064fc'));
-      fetchReminders();
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('reminder-panel.failed-to-create-reminder.880d5a66e2'));
-    } finally {
-      setAdding(false);
     }
   };
-
   const handleDelete = async (id: string) => {
-    try {
-      const res = await fetch(`/api/reminders/${id}`, { method: 'DELETE', credentials: 'include' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-delete-reminder.0167264b7f'));
-      setReminders(prev => prev.filter(r => r.id !== id));
-      toast.success(uiMessage('reminder-panel.deleted.e8250ae78f'));
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('reminder-panel.failed-to-delete-reminder.0167264b7f'));
-    }
+    if (await sync('DELETE', id)) toast.success(uiMessage('reminder-panel.deleted.e8250ae78f'));
   };
-
-  const handleMarkFired = async (id: string) => {
-    try {
-      const res = await fetch(`/api/reminders/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'fired' }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || uiMessage('reminder-panel.failed-to-update-reminder.73f8821573'));
-      fetchReminders();
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('reminder-panel.failed-to-update-reminder.73f8821573'));
-    }
-  };
+  const handleMarkFired = (id: string) => { void sync('PUT', id, { status: 'fired' }); };
 
   const pending = reminders.filter(r => r.status === 'pending');
   const fired = reminders.filter(r => r.status === 'fired');
 
-  if (loading) {
+  if (!items && busy) {
     return (
       <div className="flex items-center justify-center h-32">
         <Loader2 size={20} className="animate-spin text-white/45" />
@@ -108,11 +46,11 @@ export function ReminderPanel({ t }: { t?: any }) {
     <div className="space-y-6">
       {/* Add new reminder */}
       {error && (
-        <div className="rounded-xl border border-red-400/20 bg-red-500/8 px-3 py-2 text-xs text-red-200/80">
-          {error}
+        <div role="alert" className="rounded-xl border border-red-400/20 bg-red-500/8 px-3 py-2 text-xs text-red-200/80">
+          {error}<button disabled={busy} onClick={() => sync()} className="ml-3 underline">{uiMessage('knowledge-base.retry.9db2a8180b')}</button>
         </div>
       )}
-      <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
+      <fieldset disabled={busy || !items} className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
         <div className="flex items-center gap-2">
           <Bell size={14} className="text-amber-400" />
           <span className="text-xs font-black uppercase tracking-wider text-white/50">{uiMessage('reminder-panel.new-reminder.a3acd643ad')}</span>
@@ -134,46 +72,32 @@ export function ReminderPanel({ t }: { t?: any }) {
           />
           <button
             onClick={handleAdd}
-            disabled={!newContent.trim() || adding}
+            disabled={!newContent.trim() || busy}
             className="flex items-center gap-1.5 px-4 py-2 bg-amber-500/15 border border-amber-500/25 rounded-xl text-xs font-bold text-amber-400 hover:bg-amber-500/25 disabled:opacity-30 transition-all"
           >
-            {adding ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
             {uiMessage('reminder-panel.add.cd6f2f52ff')}
           </button>
         </div>
-      </div>
+      </fieldset>
 
-      {/* Pending reminders */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Clock size={14} className="text-celestial-saturn" />
-          <span className="text-xs font-black uppercase tracking-wider text-white/55">
-            {uiMessage('reminder-panel.pending.ff1f5b13d3')} ({pending.length})
-          </span>
-        </div>
-        {pending.length === 0 ? (
-          <p className="text-xs text-white/40 py-4 text-center">{uiMessage('reminder-panel.no-pending-reminders.b06a20dfd7')}</p>
-        ) : (
-          pending.map(r => (
-            <ReminderCard key={r.id} reminder={r} onDelete={handleDelete} onMarkFired={handleMarkFired} isZh={isZh} />
-          ))
-        )}
-      </div>
-
-      {/* Recently fired */}
-      {fired.length > 0 && (
-        <div className="space-y-2">
+      {[
+        { id: 'pending', list: pending, icon: Clock, label: uiMessage('reminder-panel.pending.ff1f5b13d3'), color: 'text-celestial-saturn' },
+        { id: 'fired', list: fired, icon: CheckCircle2, label: uiMessage('reminder-panel.done.c5272e0498'), color: 'text-emerald-400' },
+      ].filter(group => group.id === 'pending' || group.list.length).map(group => (
+        <div key={group.id} className="space-y-2">
           <div className="flex items-center gap-2">
-            <CheckCircle2 size={14} className="text-emerald-400" />
-            <span className="text-xs font-black uppercase tracking-wider text-white/45">
-              {uiMessage('reminder-panel.done.c5272e0498')} ({fired.length})
+            <group.icon size={14} className={group.color} />
+            <span className="text-xs font-black uppercase tracking-wider text-white/55">
+              {group.label} ({group.list.length})
             </span>
           </div>
-          {fired.slice(0, 10).map(r => (
-            <ReminderCard key={r.id} reminder={r} onDelete={handleDelete} isZh={isZh} />
+          {items && !group.list.length && <p className="text-xs text-white/40 py-4 text-center">{uiMessage('reminder-panel.no-pending-reminders.b06a20dfd7')}</p>}
+          {group.list.slice(0, group.id === 'fired' ? 10 : undefined).map(r => (
+            <ReminderCard key={r.id} reminder={r} busy={busy} onDelete={handleDelete} onMarkFired={handleMarkFired} isZh={isZh} />
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -183,11 +107,13 @@ function ReminderCard({
   onDelete,
   onMarkFired,
   isZh,
+  busy,
 }: {
   reminder: Reminder;
   onDelete: (id: string) => void;
   onMarkFired?: (id: string) => void;
   isZh: boolean;
+  busy: boolean;
 }) {
   const isFired = reminder.status === 'fired';
   const hasDue = !!reminder.dueAt;
@@ -226,6 +152,7 @@ function ReminderCard({
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         {!isFired && onMarkFired && (
           <button
+            disabled={busy}
             onClick={() => onMarkFired(reminder.id)}
             className="p-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/10 transition-colors"
             title={uiMessage('reminder-panel.mark-complete.0115f22552', (isZh) ? 'zh' : 'en')}
@@ -234,6 +161,7 @@ function ReminderCard({
           </button>
         )}
         <button
+          disabled={busy}
           onClick={() => onDelete(reminder.id)}
           className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/10 transition-colors"
           title={uiMessage('reminder-panel.delete.5b875326d1', (isZh) ? 'zh' : 'en')}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle,
@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { getSavedKeyStatus, saveServerKeys, type KeyStatus } from '../../services/settingsKeys';
 import { useT } from '../../lib/useT';
 import { uiMessage } from '../../i18n/uiMessages';
+import { useApp } from '@/contexts/AppContext';
 import {
   CHINA_LEGAL_BROWSER_SOURCE_IDS,
   CHINA_LEGAL_DATA_SOURCES,
@@ -23,13 +24,22 @@ import {
   type ChinaLegalDataSourceField,
 } from '../../i18n/regions/cn/legal';
 
-type DataSourceField = ChinaLegalDataSourceField;
-type DataSourceConfig = ChinaLegalDataSourceDefinition;
-
-const LEGAL_DATA_SOURCES = CHINA_LEGAL_DATA_SOURCES;
-const BROWSER_COLLABORATION_SOURCES = CHINA_LEGAL_BROWSER_SOURCE_IDS;
+function dataSourceFieldLabel(field: ChinaLegalDataSourceField): string {
+  if (field.keyName.endsWith('_APP_KEY')) return uiMessage('settings.app-key.48d8312e26');
+  if (field.keyName.endsWith('_SECRET_KEY')) return uiMessage('settings.secret-key.e44bdd0d82');
+  if (field.keyName.endsWith('_API_KEY')) return uiMessage('settings.api-key.8f242c55e5');
+  if (field.keyName.endsWith('_TOKEN')) return uiMessage('settings.access-token.9e3cac6ad8');
+  if (field.keyName.endsWith('_MCP_URL')) return uiMessage('settings.mcp-url.6ddedb1520');
+  if (field.label === 'API Base URL') return uiMessage('settings.api-base-url.f17b3d297b');
+  return uiMessage('settings.base-url.f44ed563c9');
+}
 
 export function LegalDataSourcesSettings() {
+  const { user } = useApp();
+  return user ? <DataSourceEditor key={`${user.uid}:${user.role}`} /> : null;
+}
+
+function DataSourceEditor() {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const regionalCopy = chinaLegalCopy(isZh ? 'zh' : 'en');
@@ -38,30 +48,33 @@ export function LegalDataSourcesSettings() {
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState('');
   const [error, setError] = useState('');
+  const request = useRef({ owner: null as AbortController | null, busy: false, revision: 0 });
 
   const loadStatus = useCallback(async () => {
+    const signal = request.current.owner?.signal, revision = ++request.current.revision;
+    if (!signal || signal.aborted || request.current.busy) return;
     setLoading(true);
     setError('');
     try {
-      const next = await getSavedKeyStatus();
-      setStatus(next);
+      const next = await getSavedKeyStatus(signal);
+      if (!signal.aborted && revision === request.current.revision) setStatus(next);
     } catch (err: any) {
-      setError(err?.message || String(err));
+      if (!signal.aborted && revision === request.current.revision) setError(err?.message || String(err));
     } finally {
-      setLoading(false);
+      if (!signal.aborted && revision === request.current.revision) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    const owner = new AbortController();
+    request.current.owner = owner;
     void loadStatus();
+    return () => owner.abort();
   }, [loadStatus]);
 
-  const configuredCount = useMemo(() => {
-    const keys = LEGAL_DATA_SOURCES.flatMap(source => source.fields.map(field => field.keyName));
-    return keys.filter(key => status[key]).length;
-  }, [status]);
+  const configuredCount = CHINA_LEGAL_DATA_SOURCES.flatMap(source => source.fields).filter(field => status[field.keyName]).length;
 
-  const sourceConfigured = (source: DataSourceConfig) => {
+  const sourceConfigured = (source: ChinaLegalDataSourceDefinition) => {
     if (source.id === 'qichacha') return Boolean(status.QICHACHA_APP_KEY && status.QICHACHA_SECRET_KEY);
     if (source.id === 'tianyancha') return Boolean(status.TIANYANCHA_API_KEY);
     if (source.id === 'pkulaw') return Boolean((status.PKULAW_API_KEY || status.PKULAW_TOKEN) && (status.PKULAW_BASE_URL || status.PKULAW_MCP_URL));
@@ -69,35 +82,27 @@ export function LegalDataSourcesSettings() {
     return source.fields.some(field => status[field.keyName]);
   };
 
-  const saveField = async (field: DataSourceField) => {
-    const value = (drafts[field.keyName] || '').trim();
-    if (!value) return;
-    setBusyKey(field.keyName);
+  const changeKeys = async (fields: ChinaLegalDataSourceField[], remove = false) => {
+    const signal = request.current.owner?.signal;
+    if (!signal || signal.aborted || request.current.busy || loading || error) return;
+    const keys = Object.fromEntries(fields.map(field => [field.keyName, remove ? '' : (drafts[field.keyName] || '').trim()]).filter(([, value]) => remove || value));
+    if (!Object.keys(keys).length) return;
+    request.current.busy = true; request.current.revision++;
+    setBusyKey(fields[0].keyName);
     try {
-      await saveServerKeys({ [field.keyName]: value });
-      setDrafts(prev => ({ ...prev, [field.keyName]: '' }));
-      await loadStatus();
-      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-saved.aa9bdea122'));
+      const result = await saveServerKeys(keys, signal);
+      if (signal.aborted) return;
+      setStatus(result.status);
+      setDrafts(previous => Object.fromEntries(Object.entries(previous).filter(([name]) => !Object.hasOwn(keys, name))));
+      toast.success(uiMessage(remove ? 'legal-data-sources-settings.legal-data-source-key-removed.a6062630fb' : 'legal-data-sources-settings.legal-data-source-key-saved.aa9bdea122'));
     } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-data-sources-settings.save-failed.5b5ea27d01'));
+      if (!signal.aborted) toast.error(err?.message || uiMessage(remove ? 'legal-data-sources-settings.remove-failed.415d663686' : 'legal-data-sources-settings.save-failed.5b5ea27d01'));
     } finally {
-      setBusyKey('');
+      if (!signal.aborted) { request.current.busy = false; setBusyKey(''); }
     }
   };
 
-  const removeField = async (field: DataSourceField) => {
-    setBusyKey(field.keyName);
-    try {
-      await saveServerKeys({ [field.keyName]: '' });
-      setDrafts(prev => ({ ...prev, [field.keyName]: '' }));
-      await loadStatus();
-      toast.success(uiMessage('legal-data-sources-settings.legal-data-source-key-removed.a6062630fb'));
-    } catch (err: any) {
-      toast.error(err?.message || uiMessage('legal-data-sources-settings.remove-failed.415d663686'));
-    } finally {
-      setBusyKey('');
-    }
-  };
+  const locked = loading || Boolean(error) || Boolean(busyKey);
 
   return (
     <section id="legal-data-sources" className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
@@ -116,7 +121,7 @@ export function LegalDataSourcesSettings() {
         <button
           type="button"
           onClick={loadStatus}
-          disabled={loading}
+          disabled={loading || Boolean(busyKey)}
           className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-medium text-white/70 transition hover:bg-white/10 disabled:opacity-50"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -125,7 +130,7 @@ export function LegalDataSourcesSettings() {
       </div>
 
       {error && (
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+        <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>
@@ -140,21 +145,21 @@ export function LegalDataSourcesSettings() {
         <StatusPill
           icon={<ShieldCheck size={15} />}
           label={uiMessage('legal-data-sources-settings.api-sources.5021c6a7a9')}
-          value={String(LEGAL_DATA_SOURCES.filter(sourceConfigured).length)}
+          value={String(CHINA_LEGAL_DATA_SOURCES.filter(sourceConfigured).length)}
         />
         <StatusPill
           icon={<ExternalLink size={15} />}
           label={uiMessage('legal-data-sources-settings.browser-collaboration.57929883b6')}
-          value={String(BROWSER_COLLABORATION_SOURCES.length)}
+          value={String(CHINA_LEGAL_BROWSER_SOURCE_IDS.length)}
         />
       </div>
 
       <div className="divide-y divide-white/10 border-y border-white/10">
-        {LEGAL_DATA_SOURCES.map(source => {
+        {CHINA_LEGAL_DATA_SOURCES.map(source => {
           const ready = sourceConfigured(source);
           const sourceCopy = regionalCopy.dataSources[source.id];
           return (
-            <div key={source.id} className="py-4">
+            <div key={source.id} className="py-4" role="group" aria-label={sourceCopy.label}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -186,7 +191,7 @@ export function LegalDataSourcesSettings() {
                     <div key={field.keyName} className="grid gap-2 rounded-lg border border-white/10 bg-black/15 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label htmlFor={`legal-source-${field.keyName}`} className="text-xs font-medium text-white/65">
-                          {field.label}
+                          {dataSourceFieldLabel(field)}
                           {field.required && <span className="ml-1 text-cyan-200">*</span>}
                         </label>
                         {configured && (
@@ -198,17 +203,18 @@ export function LegalDataSourcesSettings() {
                           id={`legal-source-${field.keyName}`}
                           value={value}
                           type={field.kind === 'secret' ? 'password' : 'text'}
+                          disabled={locked}
                           onChange={event => setDrafts(prev => ({ ...prev, [field.keyName]: event.target.value }))}
                           onKeyDown={event => {
-                            if (event.key === 'Enter') void saveField(field);
+                            if (event.key === 'Enter') void changeKeys([field]);
                           }}
                           placeholder={configured && !value ? uiMessage('legal-data-sources-settings.saved-type-to-replace.bbdf5a8d1e') : field.placeholder}
                           className="h-9 min-w-0 rounded-lg border border-white/10 bg-black/25 px-3 text-sm text-white outline-none transition focus:border-cyan-300/35"
                         />
                         <button
                           type="button"
-                          onClick={() => saveField(field)}
-                          disabled={busy || !value.trim()}
+                          onClick={() => changeKeys([field])}
+                          disabled={locked || !value.trim()}
                           title={uiMessage('legal-data-sources-settings.save.ec8e6d5819')}
                           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cyan-300/20 bg-cyan-500/10 text-cyan-100 transition hover:bg-cyan-500/20 disabled:opacity-35"
                         >
@@ -216,8 +222,8 @@ export function LegalDataSourcesSettings() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => removeField(field)}
-                          disabled={busy || (!configured && !value)}
+                          onClick={() => changeKeys([field], true)}
+                          disabled={locked || (!configured && !value)}
                           title={uiMessage('legal-data-sources-settings.remove.78190c6054')}
                           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-300/20 bg-red-500/10 text-red-100 transition hover:bg-red-500/20 disabled:opacity-30"
                         >
@@ -228,6 +234,14 @@ export function LegalDataSourcesSettings() {
                     </div>
                   );
                 })}
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => changeKeys(source.fields, true)} disabled={locked || !source.fields.some(field => status[field.keyName] || drafts[field.keyName])} className="rounded-lg border border-red-400/20 px-3 py-2 text-xs text-red-200 disabled:opacity-30">
+                  {uiMessage('settings.remove-provider.47319e8331')}
+                </button>
+                <button type="button" onClick={() => changeKeys(source.fields)} disabled={locked || !source.fields.some(field => drafts[field.keyName]?.trim())} className="rounded-lg bg-celestial-saturn px-3 py-2 text-xs font-semibold text-black disabled:opacity-30">
+                  {uiMessage('settings.save-provider.2882e9668b')}
+                </button>
               </div>
             </div>
           );
@@ -240,7 +254,7 @@ export function LegalDataSourcesSettings() {
           {uiMessage('legal-data-sources-settings.browser-collaboration.57929883b6')}
         </div>
         <div className="flex flex-wrap gap-2">
-          {BROWSER_COLLABORATION_SOURCES.map(source => (
+          {CHINA_LEGAL_BROWSER_SOURCE_IDS.map(source => (
             <span key={source} className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white/55">
               {regionalCopy.browserSources[source]}
             </span>

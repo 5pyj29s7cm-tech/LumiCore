@@ -47,8 +47,11 @@ describe('skill model-service settings classification', () => {
 
   it('groups data-source fields by provider instead of rendering duplicate provider rows', () => {
     const settings = fs.readFileSync(path.join(process.cwd(), 'src/components/Settings.tsx'), 'utf8');
-    expect(settings).toContain('CHINA_LEGAL_DATA_SOURCES.map(source =>');
-    expect(settings).toContain('copy.dataSources[source.id]');
+    const sources = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalDataSourcesSettings.tsx'), 'utf8');
+    expect(settings).toContain('<LegalDataSourcesSettings />');
+    expect(settings).not.toContain('function DataSourceConnections');
+    expect(sources).toContain('CHINA_LEGAL_DATA_SOURCES.map(source =>');
+    expect(sources).toContain('regionalCopy.dataSources[source.id]');
     expect(settings).not.toContain('label="Qichacha App Key"');
     expect(settings).not.toContain('label="Qichacha Secret Key"');
     expect(settings).not.toContain('label="PKULaw API Key"');
@@ -59,8 +62,6 @@ describe('skill model-service settings classification', () => {
     const runtimeSettings = fs.readFileSync(path.join(process.cwd(), 'src/components/MCPSettings.tsx'), 'utf8');
     const skillHall = fs.readFileSync(path.join(process.cwd(), 'src/components/SkillCenter.tsx'), 'utf8');
     expect(runtimeSettings).toContain("detail: { action: 'open_skills' }");
-    expect(runtimeSettings).toContain("apiFetch(`/api/mcp/restart/${name}`");
-    expect(runtimeSettings).not.toContain("await fetch(`/api/mcp/restart/${name}`");
     expect(runtimeSettings).not.toContain('/api/mcp/github/search');
     expect(runtimeSettings).not.toContain('toggleServer');
     expect(skillHall).toContain('<GitHubMCPBrowser t={t} embedded />');

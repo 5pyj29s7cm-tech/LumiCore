@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -12,8 +12,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '../../lib/useT';
-import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
+import { uiMessage } from '../../i18n/uiMessages';
 import { knowledgeCategoryLabels } from '../../i18n/locales/knowledgeCategories';
+
+import { useApp } from '../../contexts/AppContext';
+import { apiJson } from '../../services/apiClient';
+import { FeedbackBanner, type Feedback } from './FeedbackBanner';
 
 interface Props {
   articleId?: string;
@@ -26,77 +30,63 @@ type EditorMode = 'write' | 'preview';
 const CATEGORY_OPTIONS = ['general', 'policy', 'sop', 'product', 'culture', 'hr', 'tech', 'legal_statute', 'legal_judgment', 'legal_contract'] as const;
 
 function parseTags(tags: unknown): string {
-  if (Array.isArray(tags)) return tags.map(tag => String(tag).trim()).filter(Boolean).join(', ');
-  if (typeof tags !== 'string') return '';
-  try {
-    const parsed = JSON.parse(tags);
-    return Array.isArray(parsed) ? parsed.map(tag => String(tag).trim()).filter(Boolean).join(', ') : '';
-  } catch {
-    return tags;
+  if (typeof tags === 'string') {
+    const raw = tags;
+    try { tags = JSON.parse(raw); } catch { return raw; }
   }
+  return Array.isArray(tags) ? tags.map(tag => String(tag).trim()).filter(Boolean).join(', ') : '';
 }
 
 function normalizeTags(tags: string): string[] {
   return [...new Set(tags.split(',').map(tag => tag.trim()).filter(Boolean))].slice(0, 20);
 }
 
-export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
+const emptyDraft = { title: '', content: '', category: 'general', tags: '', status: 'draft' as ArticleStatus };
+
+export function KnowledgeBaseEditor(props: Props) {
+  const { user, workDomain, orgConnection } = useApp();
+  return user ? <ArticleEditor key={JSON.stringify([user.uid, user.role, workDomain, orgConnection?.orgId, props.articleId])} {...props} /> : null;
+}
+
+function ArticleEditor({ articleId, onSaved }: Props) {
   const t = useT();
   const isZh = t.langCode !== 'en';
   const categoryLabels = knowledgeCategoryLabels(isZh ? 'zh' : 'en');
 
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [category, setCategory] = useState('general');
-  const [tags, setTags] = useState('');
-  const [status, setStatus] = useState<ArticleStatus>('draft');
+  const [draft, setDraft] = useState<typeof emptyDraft | null>(articleId ? null : emptyDraft);
+  const { title, content, category, tags, status } = draft || emptyDraft;
+  const edit = (patch: Partial<typeof emptyDraft>) => setDraft(current => current && { ...current, ...patch });
   const [mode, setMode] = useState<EditorMode>('write');
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    setError('');
-    setSuccess('');
-    setMode('write');
-
-    if (!articleId) {
-      setTitle('');
-      setContent('');
-      setCategory('general');
-      setTags('');
-      setStatus('draft');
-      return;
-    }
-
-    setLoading(true);
-    fetch(`/api/org/kb/articles/${articleId}`, { credentials: 'include' })
-      .then(async response => {
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || formatUiMessage('knowledge-base-editor.failed-to-load-article-value0.3e0ca7ca0a', { value0: response.status }));
-        return data;
-      })
-      .then(article => {
-        if (cancelled) return;
-        setTitle(article.title || '');
-        setContent(article.content || '');
-        setCategory(article.category || 'general');
-        setStatus(article.status || 'draft');
-        setTags(parseTags(article.tags));
-      })
-      .catch((err: any) => {
-        if (!cancelled) setError(err.message || String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+  const [busy, setBusy] = useState('');
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const lifetime = useRef<AbortController | null>(null), pending = useRef<AbortSignal | null>(null);
+  const sync = useCallback(async (method: 'GET' | 'PUT' | 'POST', body?: unknown) => {
+    const owner = lifetime.current;
+    if (!owner || owner.signal.aborted || (pending.current && !pending.current.aborted)) return null;
+    const signal = AbortSignal.any([owner.signal, AbortSignal.timeout(15_000)]);
+    pending.current = signal; setBusy(method); setFeedback(null);
+    try {
+      const data = await apiJson('/api/org/kb/articles' + (articleId ? '/' + encodeURIComponent(articleId) : ''), {
+        method, signal, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
       });
-
-    return () => {
-      cancelled = true;
-    };
+      signal.throwIfAborted();
+      if (!data?.id || typeof data.id !== 'string' || (articleId && data.id !== articleId)
+        || ['title', 'content', 'category'].some(key => typeof data[key] !== 'string') || !['draft', 'published', 'archived'].includes(data.status)) throw new Error('Article response was not confirmed');
+      setDraft({ title: data.title, content: data.content, category: data.category, tags: parseTags(data.tags), status: data.status });
+      return data;
+    } catch (error) {
+      if (!owner.signal.aborted) setFeedback({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      return null;
+    } finally {
+      if (pending.current === signal) pending.current = null;
+      if (!owner.signal.aborted) setBusy('');
+    }
   }, [articleId]);
+  useEffect(() => {
+    const owner = new AbortController(); lifetime.current = owner;
+    if (articleId) void sync('GET');
+    return () => owner.abort();
+  }, [articleId, sync]);
 
   const tagArr = useMemo(() => normalizeTags(tags), [tags]);
   const contentStats = useMemo(() => {
@@ -108,67 +98,27 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
     };
   }, [content, tagArr.length]);
 
-  const canSave = title.trim().length > 0 && content.trim().length > 0 && !saving;
-
+  const saving = busy === 'POST' || busy === 'PUT';
+  const canSave = draft !== null && title.trim().length > 0 && content.trim().length > 0 && !busy;
   const handleSave = async () => {
-    if (!title.trim() || !content.trim()) {
-      setError(t.articleRequiredFields || uiMessage('knowledge-base-editor.title-and-content-are-required.1d77215b5b'));
-      return;
-    }
-
-    setSaving(true);
-    setError('');
-    setSuccess('');
-    try {
-      const url = articleId
-        ? `/api/org/kb/articles/${articleId}`
-        : '/api/org/kb/articles';
-      const method = articleId ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: title.trim(),
-          content: content.trim(),
-          category,
-          tags: tagArr,
-          status,
-        }),
-        credentials: 'include',
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || formatUiMessage('knowledge-base-editor.save-failed-value0.5559bb34d3', { value0: res.status }));
-
-      const message = articleId ? uiMessage('knowledge-base-editor.article-updated.5819b5763c') : uiMessage('knowledge-base-editor.article-created.2296ddaedd');
-      setSuccess(message);
-      toast.success(message);
-      window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', {
-        detail: { domain: 'work', source: 'organization-knowledge-editor', articleId: data?.id || articleId || '' },
-      }));
-      if (!articleId) {
-        setTitle('');
-        setContent('');
-        setTags('');
-        setStatus('draft');
-      }
-      window.setTimeout(() => onSaved?.(), 350);
-    } catch (err: any) {
-      setError(err.message || String(err));
-    } finally {
-      setSaving(false);
-    }
+    if (!canSave) return;
+    const data = await sync(articleId ? 'PUT' : 'POST', { title: title.trim(), content: content.trim(), category, tags: tagArr, status });
+    if (!data || lifetime.current?.signal.aborted) return;
+    const message = articleId ? uiMessage('knowledge-base-editor.article-updated.5819b5763c') : uiMessage('knowledge-base-editor.article-created.2296ddaedd');
+    if (!articleId) setDraft({ ...emptyDraft, category });
+    setFeedback({ type: 'success', text: message }); toast.success(message);
+    window.dispatchEvent(new CustomEvent('lumi:knowledge-updated', { detail: { domain: 'work', source: 'organization-knowledge-editor', articleId: data.id } }));
+    onSaved?.();
   };
 
   const goBack = () => window.dispatchEvent(new CustomEvent('lumi:navigate', { detail: { tab: 'org', sub: 'kb' } }));
 
-  if (loading) {
+  if (!draft) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-white/55">
         <div className="flex items-center gap-2">
-          <Loader2 size={22} className="animate-spin" />
-          <span className="text-sm">{uiMessage('knowledge-base-editor.loading-article.8737ceeadf')}</span>
+          {feedback ? <><FeedbackBanner feedback={feedback} /><button disabled={!!busy} onClick={() => sync('GET')}>{uiMessage('knowledge-base.retry.9db2a8180b')}</button><button onClick={goBack}>{t.backToKB}</button></> : <Loader2 size={22} className="animate-spin" />}
+          {!feedback && <span className="text-sm">{uiMessage('knowledge-base-editor.loading-article.8737ceeadf')}</span>}
         </div>
       </div>
     );
@@ -202,31 +152,20 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
         </div>
       </div>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-          <AlertCircle size={16} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-      {success && (
-        <div className="flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-          <CheckCircle size={16} className="mt-0.5 shrink-0" />
-          <span>{success}</span>
-        </div>
-      )}
+      {feedback && <FeedbackBanner feedback={feedback} />}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <fieldset disabled={saving} className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
         <section className="lumi-panel overflow-hidden rounded-lg">
           <div className="grid gap-3 border-b border-white/[0.08] p-4 lg:grid-cols-[minmax(0,1fr)_180px_160px]">
             <input
               value={title}
-              onChange={event => setTitle(event.target.value)}
+              onChange={event => edit({ title: event.target.value })}
               placeholder={t.articleTitle || uiMessage('knowledge-base-editor.article-title.1ea50f4916')}
               className="lumi-field min-w-0 rounded-lg focus:border-blue-500/40"
             />
             <select
               value={category}
-              onChange={event => setCategory(event.target.value)}
+              onChange={event => edit({ category: event.target.value })}
               className="lumi-field rounded-lg text-sm text-white/70"
             >
               {CATEGORY_OPTIONS.map(option => (
@@ -235,7 +174,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             </select>
             <select
               value={status}
-              onChange={event => setStatus(event.target.value as ArticleStatus)}
+              onChange={event => edit({ status: event.target.value as ArticleStatus })}
               className="lumi-field rounded-lg text-sm text-white/70"
             >
               <option value="draft">{t.draftStatus || uiMessage('knowledge-base-editor.draft.ce895273c0')}</option>
@@ -248,7 +187,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             <Tag size={14} className="text-white/55" />
             <input
               value={tags}
-              onChange={event => setTags(event.target.value)}
+              onChange={event => edit({ tags: event.target.value })}
               placeholder={t.tagsCommaSeparated || uiMessage('knowledge-base-editor.tags-comma-separated.e09c0eadb6')}
               className="lumi-field min-w-[220px] flex-1 rounded-lg text-sm focus:border-blue-500/40"
             />
@@ -274,7 +213,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             {mode === 'write' ? (
               <textarea
                 value={content}
-                onChange={event => setContent(event.target.value)}
+                onChange={event => edit({ content: event.target.value })}
                 placeholder={t.writeArticleContent || uiMessage('knowledge-base-editor.write-your-article-content-here.d0a41d63d6')}
                 className="lumi-field h-[460px] w-full resize-y rounded-lg font-mono text-sm leading-6 focus:border-blue-500/40"
               />
@@ -312,7 +251,7 @@ export function KnowledgeBaseEditor({ articleId, onSaved }: Props) {
             </div>
           </section>
         </aside>
-      </div>
+      </fieldset>
     </div>
   );
 }

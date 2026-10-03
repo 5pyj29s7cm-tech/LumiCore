@@ -14,6 +14,7 @@ import { getTranslation, translateCategory } from '../skills/translations';
 import { mcpManager } from '../mcp/client';
 import {
   projectOfficialBundledIdentity,
+  readRuntimeIdentitySnapshot,
   type OfficialSkillIdentityStatus,
 } from './official_identity';
 import { getJwtSecret } from '../config/local_identity';
@@ -171,7 +172,7 @@ function applyTranslations(skills: MarketplaceSkill[], lang?: string): Marketpla
 
 /** Get all marketplace skills: bundled + community, with download counts & ratings from DB */
 export function getMarketplaceSkills(lang?: string, scope?: MarketplaceAgentScope): MarketplaceSkill[] {
-  const bundled = discoverBundledSkills(scope);
+  const bundled = readRuntimeIdentitySnapshot(() => discoverBundledSkills(scope));
   const community = getCommunityRegistry(scope);
   const db = readDB();
 

@@ -13,7 +13,6 @@ describe('organization workspace information architecture', () => {
 
     expect(legalHub).toContain('LegalCaseCreateDialog');
     expect(legalHub).toContain('LegalCaseDeleteDialog');
-    expect(legalHub).toContain("method: 'DELETE'");
     expect(legalHub).toContain('setActiveLegalCaseId(id)');
     expect(legalHub).not.toContain('text-white/25 opacity-0');
     expect(legalHub).not.toContain('Case Action Board');

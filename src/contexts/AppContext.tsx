@@ -1,3 +1,4 @@
+import { cancelAppConfirm } from '../lib/appConfirm';
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { toast } from 'sonner';
 import * as authService from '../services/authService';
@@ -6,9 +7,11 @@ import { socketService } from '../services/socketService';
 import { saveServerKeys } from '../services/settingsKeys';
 import { apiFetch, apiJson } from '../services/apiClient';
 import { getDomainReconciliation } from '../lib/domainSession';
+import { setLegalCaseAccount } from '../lib/legalCaseStore';
 import { mergeNotificationState, notificationClearStorageKey } from '../lib/notificationState';
 import { translate } from '../i18n/runtime';
-import { LUMI_OFFICIAL_DEFAULT_MODELS, normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
+import { normalizeLumiOfficialModel } from '../../shared/model_provider_capabilities';
+import type { NotificationItem as StoredNotificationItem } from '../types/models';
 import {
   normalizeLumiClientMode,
   type LumiClientMode,
@@ -26,10 +29,7 @@ interface UserProfile {
   provider: 'custom' | 'google';
 }
 
-interface AIConfig {
-  provider: string;
-  model: string;
-  apiKey: string;
+interface AIConfig extends VisionConfig {
   selectionMode: 'pinned' | 'ordered_fallback' | 'auto';
   fallbackCandidates: Array<{ provider: string; model: string }>;
   allowCloudFallback: boolean;
@@ -40,21 +40,15 @@ interface AIConfig {
 }
 
 interface VisionConfig {
+  ready: boolean;
+  loadError: string;
+  models: Record<string, string>;
   provider: string;
   model: string;
   apiKey: string;
 }
 
-interface NotificationItem {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  action?: string;
-  proactiveContext?: Record<string, any>;
-  timestamp: number;
-  read: boolean;
-}
+type NotificationItem = Omit<StoredNotificationItem, 'userId'>;
 
 interface ToolOverride {
   enabled: boolean;
@@ -142,17 +136,19 @@ interface AppContextType {
   toggleFavoriteVoice: (id: string) => void;
   // Notifications
   notifications: NotificationItem[];
+  notificationsBusy: boolean;
   unreadCount: number;
   addNotification: (item: Omit<NotificationItem, 'id' | 'timestamp' | 'read'>) => void;
-  markAllNotificationsRead: () => void;
-  clearNotifications: () => void;
+  markAllNotificationsRead: () => Promise<boolean>;
+  clearNotifications: () => Promise<boolean>;
   // Tools
   toolOverrides: Record<string, ToolOverride>;
   setToolOverride: (name: string, override: ToolOverride) => void;
+  workbenchDrafts: Map<string, unknown>;
   // Org
   orgConnection: OrgConnection | null;
   workDomain: 'personal' | 'work';
-  switchDomain: (domain: 'personal' | 'work') => Promise<DomainSwitchResult>;
+  switchDomain: (domain: 'personal' | 'work', options?: { orgId?: string; orgName?: string; signal?: AbortSignal }) => Promise<DomainSwitchResult>;
   // Operation mode
   operationMode: OperationMode;
   setOperationMode: (mode: OperationMode) => void;
@@ -167,8 +163,11 @@ interface AppContextType {
   refreshUser: () => Promise<void>;
   updateAIConfig: (config: Partial<AIConfig>, models?: Record<string, string>) => Promise<boolean>;
   updateVisionConfig: (config: Partial<VisionConfig>, models?: Record<string, string>) => Promise<boolean>;
+  reloadModelPreferences: (role?: 'llm' | 'vision') => Promise<void>;
 }
 
+const DEFAULT_AI_CONFIG: AIConfig = { ready: false, loadError: '', provider: 'deepseek', model: 'deepseek-v4-flash', models: {}, apiKey: '', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: true };
+const DEFAULT_VISION_CONFIG: VisionConfig = { ready: false, loadError: '', provider: 'openai', model: 'gpt-4o', models: {}, apiKey: '' };
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 try {
@@ -182,6 +181,7 @@ try {
     localStorage.removeItem(`lumi_vision_${provider}_key`);
   }
   for (const key of [
+    'lumi_ai_config', 'lumi_vision_config', 'lumi_llm_models', 'lumi_vision_models',
     'lumi_dashscope_key',
     'lumi_github_token',
     'lumi_notion_api_key',
@@ -195,125 +195,93 @@ try {
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [aiConfig, setAiConfig] = useState<AIConfig>(() => {
-    const saved = localStorage.getItem('lumi_ai_config');
-    const fallback: AIConfig = {
-      provider: 'deepseek',
-      model: 'deepseek-v4-flash',
-      apiKey: '',
-      selectionMode: 'pinned',
-      fallbackCandidates: [],
-      allowCloudFallback: true,
-    };
-    if (!saved) return fallback;
-    try {
-      const parsed = JSON.parse(saved);
-      const sanitized = {
-        ...parsed,
-        apiKey: '',
-        selectionMode: parsed.provider === 'auto'
-          ? 'auto'
-          : parsed.selectionMode === 'ordered_fallback' ? 'ordered_fallback' : 'pinned',
-        fallbackCandidates: Array.isArray(parsed.fallbackCandidates) ? parsed.fallbackCandidates : [],
-        allowCloudFallback: parsed.allowCloudFallback !== false,
-      };
-      // Rewrite legacy persisted state immediately; otherwise a failed or
-      // unauthenticated preference request could leave the old secret on disk.
-      localStorage.setItem('lumi_ai_config', JSON.stringify(sanitized));
-      return sanitized;
-    } catch {
-      localStorage.removeItem('lumi_ai_config');
-      return fallback;
-    }
-  });
+  const [aiConfig, setAiConfig] = useState<AIConfig>(DEFAULT_AI_CONFIG);
   const modelPreferenceRequestRef = React.useRef(0);
   const authGenerationRef = React.useRef(0);
+  const domainSwitchRequest = React.useRef<AbortController | null>(null);
   const aiConfigRef = React.useRef(aiConfig);
-  useEffect(() => {
-    aiConfigRef.current = aiConfig;
-  }, [aiConfig]);
-  const [visionConfig, setVisionConfig] = useState<VisionConfig>(() => {
-    const saved = localStorage.getItem('lumi_vision_config');
-    const fallback: VisionConfig = { provider: 'openai', model: 'gpt-4o', apiKey: '' };
-    if (!saved) return fallback;
-    try {
-      const parsed = JSON.parse(saved);
-      const sanitized = {
-        ...fallback,
-        ...(parsed && typeof parsed === 'object' ? parsed : {}),
-        apiKey: '',
-      } as VisionConfig;
-      // Remove credentials left by older builds as soon as the app starts.
-      localStorage.setItem('lumi_vision_config', JSON.stringify(sanitized));
-      return sanitized;
-    } catch {
-      localStorage.removeItem('lumi_vision_config');
-      return fallback;
-    }
-  });
+  useEffect(() => () => { authGenerationRef.current += 1; domainSwitchRequest.current?.abort(); notificationWriteRef.current?.abort(); setLegalCaseAccount(); }, []);
+  const [visionConfig, setVisionConfig] = useState<VisionConfig>(DEFAULT_VISION_CONFIG);
   const visionConfigRef = React.useRef(visionConfig);
   const visionPreferenceRequestRef = React.useRef(0);
-  const visionWriteTailRef = React.useRef<Promise<unknown>>(Promise.resolve());
-  const modelPreferenceReadRef = React.useRef(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadModelPreferences = async () => {
-      const readGeneration = ++modelPreferenceReadRef.current;
-      const owner = authGenerationRef.current;
-      const reasoningRevision = modelPreferenceRequestRef.current;
-      const visionRevision = visionPreferenceRequestRef.current;
-      const [reasoningResponse, visionResponse] = await Promise.all([
-        apiFetch('/api/preferences/llm').catch(() => null),
-        apiFetch('/api/preferences/vision').catch(() => null),
-      ]);
-      const [reasoning, vision] = await Promise.all([
-        reasoningResponse?.ok ? reasoningResponse.json().catch(() => null) : null,
-        visionResponse?.ok ? visionResponse.json().catch(() => null) : null,
-      ]);
-      if (cancelled || readGeneration !== modelPreferenceReadRef.current || owner !== authGenerationRef.current) return;
-
-      if (reasoning?.provider && reasoningRevision === modelPreferenceRequestRef.current) {
-        setAiConfig(previous => {
-          const next = {
-            ...previous,
-            provider: reasoning.provider,
-            model: reasoning.model || reasoning.models?.[reasoning.provider] || previous.model,
-            selectionMode: reasoning.selectionMode || (reasoning.provider === 'auto' ? 'auto' : 'pinned'),
-            fallbackCandidates: Array.isArray(reasoning.fallbackCandidates) ? reasoning.fallbackCandidates : [],
-            allowCloudFallback: reasoning.allowCloudFallback !== false,
-            ...(reasoning.legacyMigration ? { legacyMigration: reasoning.legacyMigration } : {}),
-            apiKey: '',
-          };
-          localStorage.setItem('lumi_ai_config', JSON.stringify(next));
-          if (reasoning.models) localStorage.setItem('lumi_llm_models', JSON.stringify(reasoning.models));
-          return next;
-        });
-      }
-
-      if (vision?.provider && visionRevision === visionPreferenceRequestRef.current) {
-        setVisionConfig(previous => {
-          const next = {
-            ...previous,
-            provider: vision.provider,
-            model: vision.model || vision.models?.[vision.provider] || previous.model,
-            apiKey: '',
-          };
-          localStorage.setItem('lumi_vision_config', JSON.stringify(next));
-          visionConfigRef.current = next;
-          if (vision.models) localStorage.setItem('lumi_vision_models', JSON.stringify(vision.models));
-          return next;
-        });
-      }
-    };
-    void loadModelPreferences();
-    const handleModelConfigurationChanged = () => { void loadModelPreferences(); };
-    window.addEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('lumi:model-configuration-changed', handleModelConfigurationChanged);
-    };
+  const modelWriteTailsRef = React.useRef<Record<'llm' | 'vision', Promise<unknown>>>({ llm: Promise.resolve(), vision: Promise.resolve() });
+  const modelReads = React.useRef<Partial<Record<'llm' | 'vision', AbortController>>>({});
+  const modelAccountRef = React.useRef<string | undefined>(undefined);
+  const setSessionUser = (next: UserProfile | null) => {
+    setLegalCaseAccount(next?.uid);
+    if (modelAccountRef.current !== next?.uid) {
+      Object.values(modelReads.current).forEach(read => read.abort());
+      authGenerationRef.current++;
+      domainSwitchRequest.current?.abort(); domainSwitchRequest.current = null;
+      modelAccountRef.current = next?.uid;
+      aiConfigRef.current = DEFAULT_AI_CONFIG; setAiConfig(DEFAULT_AI_CONFIG);
+      visionConfigRef.current = DEFAULT_VISION_CONFIG; setVisionConfig(DEFAULT_VISION_CONFIG);
+      modelWriteTailsRef.current = { llm: Promise.resolve(), vision: Promise.resolve() };
+      notificationWriteRef.current?.abort(); notificationWriteRef.current = null;
+      notificationRevisionRef.current++; setNotifications([]); setNotificationsBusy(false);
+    }
+    setUser(next);
+  };
+  const setModelState = useCallback((role: 'llm' | 'vision', patch: Partial<AIConfig>) => {
+    if (role === 'llm') { aiConfigRef.current = { ...aiConfigRef.current, ...patch }; setAiConfig(aiConfigRef.current); }
+    else { visionConfigRef.current = { ...visionConfigRef.current, ...patch }; setVisionConfig(visionConfigRef.current); }
   }, []);
+  const applyModelPreference = useCallback((role: 'llm' | 'vision', confirmed: Record<string, any>) => {
+    if (typeof confirmed?.provider !== 'string' || !confirmed.provider.trim() || typeof confirmed.model !== 'string'
+      || !confirmed.models || typeof confirmed.models !== 'object' || Array.isArray(confirmed.models)
+      || Object.values(confirmed.models).some(model => typeof model !== 'string')
+      || (role === 'llm' && ((confirmed.selectionMode !== undefined && !['auto', 'pinned', 'ordered_fallback'].includes(confirmed.selectionMode))
+        || (confirmed.allowCloudFallback !== undefined && typeof confirmed.allowCloudFallback !== 'boolean')
+        || (confirmed.legacyMigration !== undefined && (typeof confirmed.legacyMigration?.migratedAt !== 'string' || !Array.isArray(confirmed.legacyMigration.entries)
+          || confirmed.legacyMigration.entries.some((entry: any) => ['provider', 'from', 'to'].some(key => typeof entry?.[key] !== 'string'))))
+        || (confirmed.fallbackCandidates !== undefined && (!Array.isArray(confirmed.fallbackCandidates) || confirmed.fallbackCandidates.some((item: any) => typeof item?.provider !== 'string' || typeof item.model !== 'string')))))) throw new Error('Model preference confirmation missing or invalid');
+    const current = role === 'llm' ? DEFAULT_AI_CONFIG : DEFAULT_VISION_CONFIG;
+    const next = {
+      ...current,
+      ready: true, loadError: '',
+      provider: confirmed.provider,
+      model: confirmed.model || confirmed.models[confirmed.provider] || '',
+      apiKey: '', models: confirmed.models || {},
+      ...(role === 'llm' ? {
+        selectionMode: confirmed.selectionMode || (confirmed.provider === 'auto' ? 'auto' : 'pinned'),
+        fallbackCandidates: Array.isArray(confirmed.fallbackCandidates) ? confirmed.fallbackCandidates : [],
+        allowCloudFallback: confirmed.allowCloudFallback !== false,
+        ...(confirmed.legacyMigration ? { legacyMigration: confirmed.legacyMigration } : {}),
+      } : {}),
+    };
+    setModelState(role, next);
+  }, [setModelState]);
+
+  const reloadModelPreferences = useCallback(async (selectedRole?: 'llm' | 'vision') => {
+    if (!modelAccountRef.current) return;
+    const owner = authGenerationRef.current;
+    await Promise.all((selectedRole ? [selectedRole] : ['llm', 'vision'] as const).map(async role => {
+      modelReads.current[role]?.abort();
+      const request = new AbortController(); modelReads.current[role] = request;
+      const revision = role === 'llm' ? modelPreferenceRequestRef : visionPreferenceRequestRef, started = revision.current;
+      const isCurrent = () => !request.signal.aborted && owner === authGenerationRef.current && started === revision.current;
+      setModelState(role, { ready: false, loadError: '' });
+      try {
+        await modelWriteTailsRef.current[role];
+        if (!isCurrent()) return;
+        const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
+        const confirmed = await apiJson(`/api/preferences/${role}`, { signal });
+        signal.throwIfAborted();
+        if (isCurrent()) applyModelPreference(role, confirmed);
+      } catch (error: any) {
+        if (isCurrent()) setModelState(role, { ready: false, loadError: error?.message || 'Model preferences could not be loaded' });
+      } finally { if (modelReads.current[role] === request) delete modelReads.current[role]; }
+    }));
+  }, [applyModelPreference, setModelState]);
+  useEffect(() => {
+    void reloadModelPreferences();
+    const reload = (event: Event) => { if ((event as CustomEvent).detail?.source !== 'app-context') void reloadModelPreferences(); };
+    window.addEventListener('lumi:model-configuration-changed', reload);
+    return () => {
+      Object.values(modelReads.current).forEach(read => read.abort());
+      window.removeEventListener('lumi:model-configuration-changed', reload);
+    };
+  }, [reloadModelPreferences, user?.uid]);
   // Voice state
   const [selectedVoiceId, setSelectedVoiceIdState] = useState<string | undefined>(() => {
     return readStoredVoiceId(getVoiceStorageKeys());
@@ -324,6 +292,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Notifications state
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const notificationRevisionRef = React.useRef(0), notificationWriteRef = React.useRef<AbortController | null>(null);
   const unreadCount = notifications.filter(n => !n.read).length;
 
   // Tool overrides state
@@ -348,64 +318,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFavoriteVoices(readStoredFavoriteVoices(voiceStorageKeys));
   }, [voiceStorageKeys.scope]);
 
-  const switchDomain = async (domain: 'personal' | 'work'): Promise<DomainSwitchResult> => {
-    const isWork = domain === 'work';
+  const switchDomain = async (domain: 'personal' | 'work', options: { orgId?: string; orgName?: string; signal?: AbortSignal } = {}): Promise<DomainSwitchResult> => {
+    const isWork = domain === 'work', owner = authGenerationRef.current;
     const failureMessage = translate(isWork ? 'domainWorkSwitchFailed' : 'domainPersonalSwitchFailed');
-    // Switch to work: use known org or auto-discover
-    let orgId = isWork ? orgConnection?.orgId || null : null;
-    let orgRole = orgConnection?.orgRole || 'member';
-    let orgName = orgConnection?.orgName || '';
-    if (isWork && !orgId) {
-      try {
-        const orgsRes = await apiFetch('/api/auth/orgs');
-        if (orgsRes.ok) {
-          const { orgs } = await orgsRes.json();
-          if (orgs && orgs.length > 0) {
-            orgId = orgs[0].id;
-            orgRole = orgs[0].role || 'member';
-            orgName = orgs[0].name || orgs[0].orgName || '';
-          }
-        }
-      } catch (err: any) {
-        return { success: false, domain: 'work', message: err.message || translate('organizationListLoadFailed'), connection: orgConnection };
-      }
-    }
-    if (isWork && !orgId) {
-      return { success: false, domain: 'work', message: translate('organizationSwitchUnavailable'), connection: orgConnection };
-    }
+    const failure = (message = failureMessage): DomainSwitchResult => ({ success: false, domain, message, connection: orgConnection });
+    if (domainSwitchRequest.current || options.signal?.aborted) return failure();
+    const request = new AbortController(); domainSwitchRequest.current = request;
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]);
+    const current = () => !signal.aborted && owner === authGenerationRef.current && domainSwitchRequest.current === request;
     try {
-      const res = await apiFetch('/api/auth/switch-org', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isWork ? { orgId, orgRole } : { orgId: null }),
-        credentials: 'include',
+      let orgId = isWork ? options.orgId || orgConnection?.orgId || null : null;
+      let orgName = options.orgName ?? orgConnection?.orgName ?? '';
+      if (isWork && !orgId) {
+        const data = await apiJson('/api/auth/orgs', { signal });
+        if (!Array.isArray(data?.orgs)) throw new Error(translate('organizationListLoadFailed'));
+        orgId = typeof data.orgs[0]?.id === 'string' ? data.orgs[0].id : null;
+        orgName = data.orgs[0]?.name || data.orgs[0]?.orgName || '';
+      }
+      if (isWork && !orgId) return failure(translate('organizationSwitchUnavailable'));
+      if (!current()) return failure();
+      const data = await apiJson('/api/auth/switch-org', {
+        method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgId }), credentials: 'include',
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || (isWork && !data.orgId)) {
-        return { success: false, domain, message: data.error || failureMessage, connection: orgConnection };
-      }
-      const connection = isWork
-        ? { orgId: data.orgId, orgRole: data.orgRole, orgName, connected: true }
-        : orgConnection;
-      if (data.token) {
-        localStorage.setItem('lumi_auth_token', data.token);
-        socketService.refreshAuth();
-      }
+      if (!current()) return failure();
+      if (data?.success !== true || data.orgId !== orgId || typeof data.token !== 'string' || !data.token
+        || (isWork && !['owner', 'admin', 'member', 'viewer'].includes(data.orgRole))
+        || (!isWork && data.orgRole !== null)) throw new Error(failureMessage);
+      const connection = isWork ? { orgId: data.orgId, orgRole: data.orgRole, orgName, connected: true } : orgConnection;
+      localStorage.setItem('lumi_auth_token', data.token);
+      socketService.refreshAuth();
       if (isWork) {
-        setOrgConnection(connection);
-        localStorage.setItem('lumi_org_connection', JSON.stringify(connection));
+        setOrgConnection(connection); localStorage.setItem('lumi_org_connection', JSON.stringify(connection));
       }
-      setWorkDomain(domain);
-      localStorage.setItem('lumi_work_domain', domain);
+      setWorkDomain(domain); localStorage.setItem('lumi_work_domain', domain);
       window.dispatchEvent(new CustomEvent('lumi:domain-changed', {
-        detail: isWork
-          ? { domain, orgId: connection!.orgId, orgRole: connection!.orgRole, orgName: connection!.orgName }
-          : { domain, orgId: null, orgRole: null },
+        detail: isWork ? { domain, orgId: connection!.orgId, orgRole: connection!.orgRole, orgName: connection!.orgName } : { domain, orgId: null, orgRole: null },
       }));
       return { success: true, domain, message: translate(isWork ? 'domainWorkSwitched' : 'domainPersonalSwitched'), connection };
-    } catch (err: any) {
-      return { success: false, domain, message: err.message || failureMessage, connection: orgConnection };
-    }
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : failureMessage);
+    } finally { if (domainSwitchRequest.current === request) domainSwitchRequest.current = null; }
   };
 
   const [operationMode, setOperationModeState] = useState<OperationMode>(() => {
@@ -495,164 +448,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.style.colorScheme = resolvedAppearanceMode;
   }, [resolvedAppearanceMode]);
 
-  const updateAIConfig = (newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
-    const requestRevision = ++modelPreferenceRequestRef.current;
-    const previous = aiConfigRef.current;
-    const resolved = { ...newConfig };
-    if (newConfig.provider && !newConfig.model) {
-      const savedModels = (() => {
-        try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
-      })();
-      const defaults: Record<string, string> = {
-        qwen: 'qwen-plus', deepseek: 'deepseek-v4-flash', openai: 'gpt-4o',
-        gemini: 'gemini-2.0-flash', anthropic: 'claude-sonnet-4-6',
-        ark: 'doubao-seed-2-0-lite-260215', xiaomi: 'mimo-v2.5-pro',
-        kimi: 'moonshot-v1-8k', glm: 'glm-5.1', relay: LUMI_OFFICIAL_DEFAULT_MODELS.reasoning,
-        ollama: 'qwen2.5:7b', lmstudio: 'local-model', auto: 'qwen2.5:7b',
-      };
-      resolved.model = newConfig.provider === 'relay'
-        ? normalizeLumiOfficialModel('reasoning', savedModels[newConfig.provider] || defaults[newConfig.provider])
-        : savedModels[newConfig.provider] || defaults[newConfig.provider] || '';
+  const updateModelConfig = (role: 'llm' | 'vision', newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
+    const current = (role === 'llm' ? aiConfigRef : visionConfigRef).current;
+    if (!modelAccountRef.current || modelAccountRef.current !== user?.uid || !current.ready) {
+      toast.error(current.loadError || 'Model preferences have not loaded. Retry in model settings.');
+      return Promise.resolve(false);
     }
-    const updated = { ...previous, ...resolved };
-    // API keys are write-only server credentials. Never mirror a typed key in
-    // localStorage (or keep it in the long-lived context state) even for the
-    // short window before the save request resolves.
-    const persisted = { ...updated, apiKey: '' };
-    aiConfigRef.current = persisted;
-    setAiConfig(persisted);
-    localStorage.setItem('lumi_ai_config', JSON.stringify(persisted));
-
-    if (updated.apiKey && updated.provider) {
-      const KEY_MAP: Record<string, string> = {
+    const revision = role === 'llm' ? modelPreferenceRequestRef : visionPreferenceRequestRef;
+    ++revision.current;
+    const owner = authGenerationRef.current;
+    const operation = modelWriteTailsRef.current[role].then(async () => {
+      if (owner !== authGenerationRef.current) return false;
+      const signal = AbortSignal.timeout(15_000);
+      const allModels = { ...(role === 'llm' ? aiConfigRef.current : visionConfigRef.current).models, ...models };
+      const updated = { ...(role === 'llm' ? aiConfigRef.current : visionConfigRef.current), ...newConfig };
+      if (newConfig.provider && !newConfig.model) updated.model = allModels[newConfig.provider] || '';
+      else if (!newConfig.model && models[updated.provider]) updated.model = models[updated.provider];
+      if (role === 'llm' && updated.provider === 'relay' && updated.model) updated.model = normalizeLumiOfficialModel('reasoning', updated.model);
+      const keys: Record<string, string> = {
         qwen: 'DASHSCOPE_API_KEY', deepseek: 'DEEPSEEK_API_KEY', openai: 'OPENAI_API_KEY',
         gemini: 'GEMINI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', ark: 'ARK_API_KEY',
         xiaomi: 'XIAOMI_API_KEY', kimi: 'KIMI_API_KEY', glm: 'GLM_API_KEY', relay: 'RELAY_API_KEY',
       };
-      const serverKey = KEY_MAP[updated.provider];
-      if (serverKey) {
-        saveServerKeys({ [serverKey]: updated.apiKey })
-          .catch(err => toast.error(err.message || 'API key save failed'));
-      }
-    }
-
-    if (!updated.provider && !updated.model) return Promise.resolve(false);
-    const allModels = (() => {
-      try { return JSON.parse(localStorage.getItem('lumi_llm_models') || '{}'); } catch { return {}; }
-    })();
-    Object.assign(allModels, models);
-    if (updated.model && updated.provider) allModels[updated.provider] = updated.model;
-    return apiFetch('/api/preferences/llm', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: updated.provider || previous.provider,
-        model: updated.model,
-        models: allModels,
-        selectionMode: updated.selectionMode,
-        fallbackCandidates: updated.fallbackCandidates,
-        allowCloudFallback: updated.allowCloudFallback,
-      }),
-      credentials: 'include',
-    }).then(async response => {
-      const confirmed = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(confirmed.error || 'Model preference update failed');
-      if (modelPreferenceRequestRef.current !== requestRevision) return false;
-      const synchronized = {
-        ...updated,
-        provider: confirmed.provider || updated.provider,
-        model: confirmed.model || updated.model,
-        selectionMode: confirmed.selectionMode || updated.selectionMode,
-        fallbackCandidates: Array.isArray(confirmed.fallbackCandidates)
-          ? confirmed.fallbackCandidates
-          : updated.fallbackCandidates,
-        allowCloudFallback: confirmed.allowCloudFallback !== false,
-        ...(confirmed.legacyMigration ? { legacyMigration: confirmed.legacyMigration } : {}),
-        apiKey: '',
-      };
-      aiConfigRef.current = synchronized;
-      setAiConfig(synchronized);
-      localStorage.setItem('lumi_ai_config', JSON.stringify(synchronized));
-      if (confirmed.models) localStorage.setItem('lumi_llm_models', JSON.stringify(confirmed.models));
-      window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
-      toast.success('Neural core configuration synchronized');
-      return true;
-    }).catch(error => {
-      if (modelPreferenceRequestRef.current !== requestRevision) return false;
-      const safePrevious = { ...previous, apiKey: '' };
-      aiConfigRef.current = safePrevious;
-      setAiConfig(safePrevious);
-      localStorage.setItem('lumi_ai_config', JSON.stringify(safePrevious));
-      toast.error(error?.message || 'Model preference update failed');
-      return false;
-    });
-  };
-
-  const updateVisionConfig = (newConfig: Partial<VisionConfig>, models: Record<string, string> = {}): Promise<boolean> => {
-    ++visionPreferenceRequestRef.current;
-    const owner = authGenerationRef.current;
-    // Serialize writes to this preference. A slow earlier save cannot replace
-    // a newer selection at the server while the UI reports the newer value.
-    const operation = visionWriteTailRef.current.then(async () => {
-      if (owner !== authGenerationRef.current) return false;
-      const previous = visionConfigRef.current;
-      const allModels = (() => {
-        try { return JSON.parse(localStorage.getItem('lumi_vision_models') || '{}'); } catch { return {}; }
-      })();
-      Object.assign(allModels, models);
-      const resolved = { ...newConfig };
-      if (newConfig.provider && !newConfig.model) {
-        const defaults: Record<string, string> = {
-          openai: 'gpt-4o', gemini: 'gemini-2.0-flash', ark: 'doubao-1-5-vision-pro-32k',
-          qwen: 'qwen-vl-max', ollama: 'qwen2.5vl:7b', lmstudio: 'local-vision-model',
-          relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
-        };
-        resolved.model = allModels[newConfig.provider] || defaults[newConfig.provider] || '';
-      }
-      const updated = { ...previous, ...resolved };
-      if (updated.apiKey && updated.provider) {
-        const keys: Record<string, string> = {
-          openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', ark: 'ARK_API_KEY',
-          qwen: 'DASHSCOPE_API_KEY', relay: 'RELAY_API_KEY',
-        };
-        if (keys[updated.provider]) await saveServerKeys({ [keys[updated.provider]]: updated.apiKey });
-      }
+      if (updated.apiKey && keys[updated.provider] && (role === 'llm' || ['openai', 'gemini', 'ark', 'qwen', 'relay'].includes(updated.provider))) await saveServerKeys({ [keys[updated.provider]]: updated.apiKey }, signal);
       if (owner !== authGenerationRef.current) return false;
       if (updated.provider && updated.model) allModels[updated.provider] = updated.model;
-      const confirmed = await apiJson('/api/preferences/vision', {
+      const confirmed = await apiJson(`/api/preferences/${role}`, {
+        signal,
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: updated.provider, model: updated.model, models: allModels }),
+        body: JSON.stringify({
+          provider: updated.provider, model: updated.model, models: allModels,
+          ...(role === 'llm' ? { selectionMode: updated.selectionMode, fallbackCandidates: updated.fallbackCandidates, allowCloudFallback: updated.allowCloudFallback } : {}),
+        }),
       });
       if (owner !== authGenerationRef.current) return false;
-      visionPreferenceRequestRef.current += 1;
-      const persisted = {
-        provider: confirmed.provider || updated.provider,
-        model: confirmed.model || updated.model,
-        apiKey: '',
-      };
-      visionConfigRef.current = persisted;
-      setVisionConfig(persisted);
-      localStorage.setItem('lumi_vision_config', JSON.stringify(persisted));
-      localStorage.setItem('lumi_vision_models', JSON.stringify(confirmed.models || allModels));
-      window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed'));
-      toast.success('Vision model configuration synchronized');
+      applyModelPreference(role, confirmed);
+      ++revision.current;
+      window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed', { detail: { source: 'app-context' } }));
+      toast.success(role === 'llm' ? 'Neural core configuration synchronized' : 'Vision model configuration synchronized');
       return true;
     }).catch(error => {
-      if (owner === authGenerationRef.current) toast.error(error?.message || 'Vision model preference update failed');
+      if (owner === authGenerationRef.current) toast.error(error?.message || 'Model preference update failed');
       return false;
     });
-    visionWriteTailRef.current = operation;
+    modelWriteTailsRef.current[role] = operation;
     return operation;
   };
+  const updateAIConfig = (config: Partial<AIConfig>, models?: Record<string, string>) => updateModelConfig('llm', config, models);
+  const updateVisionConfig = (config: Partial<VisionConfig>, models?: Record<string, string>) => updateModelConfig('vision', config, models);
 
   const refreshUser = async () => {
-    const owner = authGenerationRef.current;
+    let owner = authGenerationRef.current;
     const toolRevision = toolRequestRef.current;
     try {
       const customAuth = await authService.getMe();
       if (owner !== authGenerationRef.current) return;
       if (customAuth) {
-        setUser({ ...customAuth.user, provider: 'custom' } as any);
+        setSessionUser({ ...customAuth.user, provider: 'custom' } as any);
+        owner = authGenerationRef.current;
         // Sync org connection from user data
         const u = customAuth.user as any;
         if (u?.orgId) {
@@ -662,16 +515,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         // Load persisted notifications from server
         try {
+          const revision = ++notificationRevisionRef.current;
           const notifData = await notificationService.fetchNotifications();
           if (owner !== authGenerationRef.current) return;
-          const clearKey = notificationClearStorageKey(String(customAuth.user.uid || ''));
-          const clearedAt = Number(localStorage.getItem(clearKey) || 0);
-          const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
-          setNotifications(prev => mergeNotificationState(
-            prev,
-            Array.isArray(notifData.notifications) ? notifData.notifications as NotificationItem[] : [],
-            { clearedAt, allowGreeting: proactiveGreetingEnabled, limit: 50 },
-          ));
+          if (revision === notificationRevisionRef.current && !notificationWriteRef.current) {
+            const clearKey = notificationClearStorageKey(String(customAuth.user.uid || ''));
+            const clearedAt = Number(localStorage.getItem(clearKey) || 0);
+            const proactiveGreetingEnabled = localStorage.getItem('lumi_allow_proactive_voice') === 'true';
+            setNotifications(prev => mergeNotificationState(
+              prev,
+              notifData.notifications as NotificationItem[],
+              { clearedAt, allowGreeting: proactiveGreetingEnabled, limit: 50 },
+            ));
+          }
         } catch {}
         // Load tool overrides from server
         try {
@@ -687,7 +543,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         } catch {}
       } else {
-        setUser(null);
+        setSessionUser(null);
       }
     } catch (error) {
       console.error('Error refreshing user:', error);
@@ -763,13 +619,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.dispatchEvent(new CustomEvent('lumi:open-login'));
   };
 
+  const workbenchDrafts = React.useMemo(() => new Map<string, unknown>(), [user?.uid, user?.role, workDomain, orgConnection?.orgId, orgConnection?.orgRole]);
+
+  useEffect(() => { cancelAppConfirm(); }, [workbenchDrafts]);
+
   const logout = async () => {
     authGenerationRef.current += 1;
     modelPreferenceRequestRef.current += 1;
     visionPreferenceRequestRef.current += 1;
     const revocation = authService.logout();
-    setUser(null);
-    setNotifications([]);
+    setSessionUser(null);
     toolOverridesRef.current = {};
     setToolOverrides({});
     socketService.disconnect();
@@ -814,24 +673,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications(prev => [notification, ...prev].slice(0, 50));
   }, []);
 
-  const markAllNotificationsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    void notificationService.markAllNotificationsRead().catch(err => {
-      console.warn('Failed to persist notification read state:', err);
-    });
-  };
-
-  const clearNotifications = () => {
-    const clearedAt = Date.now();
-    if (user?.uid) {
-      localStorage.setItem(notificationClearStorageKey(user.uid), String(clearedAt));
+  const updateNotifications = async (clear: boolean) => {
+    if (!user || notificationWriteRef.current) return false;
+    const owner = authGenerationRef.current, controller = new AbortController();
+    const targets = new Set(notifications.map(item => item.id));
+    notificationWriteRef.current = controller; notificationRevisionRef.current++; setNotificationsBusy(true);
+    try {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
+      const ids = await notificationService.updateNotifications(clear, signal);
+      signal.throwIfAborted();
+      if (owner !== authGenerationRef.current) return false;
+      ids.forEach(id => targets.add(id));
+      setNotifications(items => clear ? items.filter(item => !targets.has(item.id)) : items.map(item => targets.has(item.id) ? { ...item, read: true } : item));
+      return true;
+    } catch (error) {
+      if (owner === authGenerationRef.current) toast.error(error instanceof Error ? error.message : 'Notification update failed');
+      return false;
+    } finally {
+      if (notificationWriteRef.current === controller) { notificationWriteRef.current = null; notificationRevisionRef.current++; setNotificationsBusy(false); }
     }
-    setNotifications([]);
-    void notificationService.clearAllNotifications().catch(err => {
-      console.warn('Failed to clear persisted notifications:', err);
-      toast.error('Notifications were hidden locally, but server cleanup will retry later.');
-    });
   };
+  const markAllNotificationsRead = () => updateNotifications(false);
+  const clearNotifications = () => updateNotifications(true);
 
   const setToolOverride = (name: string, override: ToolOverride) => {
     ++toolRequestRef.current;
@@ -859,18 +722,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loading,
       aiConfig,
       visionConfig,
+      reloadModelPreferences,
       selectedVoiceId,
       setSelectedVoiceId,
       getSelectedVoiceIdForProvider,
       favoriteVoices,
       toggleFavoriteVoice,
       notifications,
+      notificationsBusy,
       unreadCount,
       addNotification,
       markAllNotificationsRead,
       clearNotifications,
       toolOverrides,
       setToolOverride,
+      workbenchDrafts,
       orgConnection,
       workDomain,
       switchDomain,

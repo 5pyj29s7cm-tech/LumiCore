@@ -39,12 +39,12 @@ export function publicMcpToolFailure(): string {
   return 'Lumi could not complete this MCP operation. Check the local runtime logs and retry.';
 }
 
-export function normalizeRemoteDeviceConfig(value: unknown): RemoteDeviceConfig | null {
+export function normalizeRemoteDeviceConfig(value: unknown, current: RemoteDeviceConfig = {}): RemoteDeviceConfig | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const entries = Object.entries(value as Record<string, unknown>);
   if (entries.length > MAX_REMOTE_DEVICES) return null;
 
-  const normalized: RemoteDeviceConfig = {};
+  const normalized: RemoteDeviceConfig = Object.create(null);
   for (const [rawName, rawUrl] of entries) {
     const name = String(rawName || '').trim();
     const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
@@ -62,14 +62,20 @@ export function normalizeRemoteDeviceConfig(value: unknown): RemoteDeviceConfig 
     } catch {
       return null;
     }
-    normalized[name] = url;
+    const stored = Object.hasOwn(current, name) ? current[name] : undefined;
+    if (stored && url === sanitizeMcpEndpoint(stored)) normalized[name] = stored;
+    else {
+      // A display placeholder is never a replacement credential, including after a rename.
+      if (/\[configured\]|%5bconfigured%5d/i.test(url)) return null;
+      normalized[name] = url;
+    }
   }
   return normalized;
 }
 
 export function projectRemoteDeviceConfig(value: unknown): RemoteDeviceConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const projected: RemoteDeviceConfig = {};
+  const projected: RemoteDeviceConfig = Object.create(null);
   for (const [name, endpoint] of Object.entries(value as Record<string, unknown>).slice(0, MAX_REMOTE_DEVICES)) {
     const safeName = String(name || '')
       .replace(/[\u0000-\u001f\u007f]/g, '')

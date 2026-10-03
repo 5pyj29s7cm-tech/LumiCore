@@ -1,50 +1,45 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { Mic, RefreshCw, Volume2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { uiMessage } from '@/i18n/uiMessages';
 import {
   getPreferredVoiceInputDeviceId,
   getPreferredVoiceOutputDeviceId,
   setVoiceDevicePreference,
+  VOICE_DEVICE_PREFERENCE_CHANGED,
 } from '@/lib/voiceDevicePreferences';
 
-export function VoiceDeviceSelector() {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [inputId, setInputId] = useState(() => getPreferredVoiceInputDeviceId());
-  const [outputId, setOutputId] = useState(() => getPreferredVoiceOutputDeviceId());
-  const [loading, setLoading] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+const readSelection = () => ({ input: getPreferredVoiceInputDeviceId(), output: getPreferredVoiceOutputDeviceId() });
 
-  const refresh = useCallback(async () => {
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      setUnavailable(true);
-      return;
-    }
-    setLoading(true);
-    try {
-      setDevices(await navigator.mediaDevices.enumerateDevices());
-      setUnavailable(false);
-    } catch {
-      setUnavailable(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+export function VoiceDeviceSelector() {
+  const [selection, setSelection] = useState(readSelection);
+  const [revision, refresh] = useReducer(value => value + 1, 0);
+  const [{ devices, loading, unavailable }, setDevices] = useState({ devices: [] as MediaDeviceInfo[], loading: true, unavailable: false });
 
   useEffect(() => {
-    void refresh();
-    navigator.mediaDevices?.addEventListener?.('devicechange', refresh);
-    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh);
-  }, [refresh]);
-
-  const inputs = useMemo(() => devices.filter(device => device.kind === 'audioinput'), [devices]);
-  const outputs = useMemo(() => devices.filter(device => device.kind === 'audiooutput'), [devices]);
-  const selectClass = 'w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75 outline-none focus:border-celestial-saturn/50';
-
-  const deviceLabel = (device: MediaDeviceInfo, index: number, type: 'input' | 'output') => (
-    device.label || `${type === 'input'
-      ? uiMessage('settings.microphone-input.6f0b4220dd')
-      : uiMessage('settings.speaker-output.3ce99de026')} ${index + 1}`
-  );
+    const media = navigator.mediaDevices, sync = () => setSelection(readSelection());
+    media?.addEventListener?.('devicechange', refresh);
+    window.addEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      media?.removeEventListener?.('devicechange', refresh);
+      window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+  useEffect(() => {
+    let current = true;
+    setDevices({ devices: [], loading: true, unavailable: false });
+    void (async () => {
+      try {
+        const next = await navigator.mediaDevices.enumerateDevices();
+        if (current) setDevices({ devices: next, loading: false, unavailable: false });
+      } catch {
+        if (current) setDevices({ devices: [], loading: false, unavailable: true });
+      }
+    })();
+    return () => { current = false; };
+  }, [revision]);
 
   return (
     <div className="rounded-2xl border border-white/5 bg-white/5 p-4">
@@ -55,7 +50,7 @@ export function VoiceDeviceSelector() {
         </div>
         <button
           type="button"
-          onClick={() => void refresh()}
+          onClick={refresh}
           className="rounded-lg border border-white/10 p-2 text-white/50 transition-colors hover:bg-white/5 hover:text-white"
           aria-label={uiMessage('settings.refresh.cba212b169')}
         >
@@ -63,41 +58,21 @@ export function VoiceDeviceSelector() {
         </button>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-white/55">
-            <Mic size={13} /> {uiMessage('settings.microphone-input.6f0b4220dd')}
-          </span>
-          <select
-            value={inputId}
-            onChange={event => {
-              const next = event.target.value;
-              setInputId(next);
-              setVoiceDevicePreference('input', next);
-            }}
-            className={selectClass}
-          >
-            <option value="">{uiMessage('settings.system-default-device.0e427a5690')}</option>
-            {inputs.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{deviceLabel(device, index, 'input')}</option>)}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-white/55">
-            <Volume2 size={13} /> {uiMessage('settings.speaker-output.3ce99de026')}
-          </span>
-          <select
-            value={outputId}
-            onChange={event => {
-              const next = event.target.value;
-              setOutputId(next);
-              setVoiceDevicePreference('output', next);
-            }}
-            className={selectClass}
-            disabled={outputs.length === 0}
-          >
-            <option value="">{uiMessage('settings.system-default-device.0e427a5690')}</option>
-            {outputs.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{deviceLabel(device, index, 'output')}</option>)}
-          </select>
-        </label>
+        {(['input', 'output'] as const).map(kind => {
+          const available = devices.filter(device => device.kind === `audio${kind}`);
+          const label = uiMessage(kind === 'input' ? 'settings.microphone-input.6f0b4220dd' : 'settings.speaker-output.3ce99de026');
+          const Icon = kind === 'input' ? Mic : Volume2, value = selection[kind];
+          return <label key={kind} className="space-y-1.5">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-white/55"><Icon size={13} /> {label}</span>
+            <select value={value} onChange={event => {
+              if (!setVoiceDevicePreference(kind, event.target.value)) toast.error(uiMessage('settings.failed-to-save.465b88f9c0'));
+            }} className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75 outline-none focus:border-celestial-saturn/50">
+              <option value="">{uiMessage('settings.system-default-device.0e427a5690')}</option>
+              {value && !available.some(device => device.deviceId === value) && <option value={value}>{value} · {uiMessage('settings.unavailable.a19c84a34b')}</option>}
+              {available.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${label} ${index + 1}`}</option>)}
+            </select>
+          </label>;
+        })}
       </div>
       {unavailable && <p className="mt-3 text-xs text-amber-300/75">{uiMessage('settings.audio-device-list-unavailable.a063f48e43')}</p>}
     </div>

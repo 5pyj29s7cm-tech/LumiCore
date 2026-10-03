@@ -1,0 +1,225 @@
+{
+  "batch": "prune43",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree including uncommitted prune35–42; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalBidWorkbench.tsx",
+      "before": 198,
+      "after": 158,
+      "delta": -40,
+      "beforeSha256": "a245529cec2a51dfd8fff07b6afa5b1c98892f3c6f922734445c45dd9acce08e",
+      "afterSha256": "fe231b69f5dd2c7508d2a8c37cb34c4083fdd23c0fcb1ff76b4b6cb053466cb3"
+    },
+    {
+      "file": "src/components/org/LegalContractReview.tsx",
+      "before": 279,
+      "after": 224,
+      "delta": -55,
+      "beforeSha256": "661ad96d62fb18dd8526fbb5ef912643c8151f42016ad270f3a70fdb8804c6e7",
+      "afterSha256": "e110ffdfc66fddc0921e64f3ec5ff28252a60cb252fa372651a75c6dc5acbe2d"
+    },
+    {
+      "file": "src/lib/legalToolClient.ts",
+      "before": 17,
+      "after": 23,
+      "delta": 6,
+      "beforeSha256": "bd2ced8359eeb5a8a809298118063deeb009e219e1950b6a27bebebf974ea693",
+      "afterSha256": "25de6f872516e2dc99681e830d6626351636f3e065737402169943a26cfe8d7a"
+    },
+    {
+      "file": "src/hooks/useLegalDocument.ts",
+      "before": 0,
+      "after": 63,
+      "delta": 63,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "a3edb0a48d3f9f59a35ae5e970c192dd2286c06ff25772738483f3139e4b5dd1"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 0,
+      "after": 69,
+      "delta": 69,
+      "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "afterSha256": "23590e4bc807079860e895f460b4a00d70589c3a152033ae050ccf3791f649a7"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1086,
+        "lines": 366588
+      },
+      "tests": {
+        "files": 744,
+        "lines": 160148
+      },
+      "total": {
+        "files": 1830,
+        "lines": 526736
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366562
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160217
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526779
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 1,
+        "lines": -26
+      },
+      "tests": {
+        "files": 1,
+        "lines": 69
+      },
+      "total": {
+        "files": 2,
+        "lines": 43
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 1,
+    "failed": 14,
+    "failures": [
+      {
+        "name": "bid document workbench imports in order, serializes upload and generation, and keeps drafts during metadata refresh",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "bid document workbench drops late upload and generated results after case changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "bid document workbench drops late upload and generated results after account changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "bid document workbench drops late upload and generated results after organization changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "bid document workbench drops late upload and generated results after domain changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "bid document workbench drops late upload and generated results after close changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "bid document workbench shows failed/empty imports and failed generation without marking or exporting a completed result",
+        "firstFailure": "AssertionError: expected <span …(1)>…(1)</span> to be null"
+      },
+      {
+        "name": "contract document workbench imports in order, serializes upload and generation, and keeps drafts during metadata refresh",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 3 times"
+      },
+      {
+        "name": "contract document workbench drops late upload and generated results after case changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "contract document workbench drops late upload and generated results after account changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "contract document workbench drops late upload and generated results after organization changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "contract document workbench drops late upload and generated results after domain changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "contract document workbench drops late upload and generated results after close changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "contract document workbench shows failed/empty imports and failed generation without marking or exporting a completed result",
+        "firstFailure": "AssertionError: expected <span …(1)>…(1)</span> to be null"
+      }
+    ],
+    "method": "Identical final tests against isolated turn-start copies of both components and their original legalToolClient; live source never reverted"
+  },
+  "focused": {
+    "testFiles": 8,
+    "passed": 95,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/chat_attachment_upload_delivery.test.ts",
+      "src/services/apiClient.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T09:50:30.248Z",
+      "finishedAt": "2026-10-02T09:50:35.546Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T09:47:29.492Z",
+      "finishedAt": "2026-10-02T09:48:01.063Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T09:48:01.064Z",
+      "finishedAt": "2026-10-02T09:48:09.862Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T09:48:09.863Z",
+      "finishedAt": "2026-10-02T09:48:18.431Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T09:48:18.431Z",
+      "finishedAt": "2026-10-02T09:48:18.790Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through42FingerprintsUnchanged": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "preserved": [
+    "Contract review retains its dedicated endpoint and 10000-character submission limit; bid generation retains its legal tool route and case-persistence arguments.",
+    "Existing backend authentication, organization role rules, execution and persistence logic unchanged.",
+    "Risk parsing uses the existing production parser, derives only from successful output and discards an old selected risk when results change.",
+    "Case metadata and language refreshes no longer reset draft ownership; account/domain/organization/case changes remount the document state."
+  ],
+  "limitations": [
+    "Component tests use mocked API transport and synthetic documents; backend regression tests use isolated HTTP/database fixtures. No live model or native-client acceptance.",
+    "No complete-suite rerun or backend rebuild in this frontend-only batch.",
+    "Frontend abort and suppression of late notifications do not roll back already completed server writes; direct bid execution may continue in its original request scope.",
+    "The parent LegalHub case-list refresh and cache ownership were read but not refactored or fully verified. Tests here pass cases directly to the two actual workbench components.",
+    "Total code lines increased by 43 after adding regression tests; business-source reduction is 26, not 95 (the new shared hook and client changes are counted).",
+    "No client restart, commit, push, or real user data migration."
+  ],
+  "nextCandidates": [
+    "LegalHub repeats personal-case list/active-case synchronization and has scope-sensitive organization refreshes; review response ownership and the parent-provided case before consolidating.",
+    "Cross-entry local-model endpoint persistence remains a separate open audit item from prune42."
+  ]
+}

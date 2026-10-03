@@ -1,0 +1,207 @@
+{
+  "batch": "prune46",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune45, including uncommitted prune35–45; not HEAD",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/org/LegalHub.tsx",
+      "before": 2238,
+      "after": 2150,
+      "delta": -88,
+      "beforeSha256": "c501b9b7d801a56fc3a04e9b40c081936ef7d32f8c74214b2d5c4f3225c817fe",
+      "afterSha256": "90e04fea06bc69e9d17ca6d24f914374eb4cf48b9855a381ba2a2c8572177a52"
+    },
+    {
+      "file": "test/legal_document_workbench.test.tsx",
+      "before": 136,
+      "after": 179,
+      "delta": 43,
+      "beforeSha256": "85abd6e8a542d6adc2202c4ad8878e00e2376d54866f614e5ac5385536af0e6e",
+      "afterSha256": "ad8f6d1fbd2b076cd49ef3ce74f1836a469dc126008a41dca4bb8ee56fd14f31"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 366436
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160284
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526720
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 366348
+      },
+      "tests": {
+        "files": 745,
+        "lines": 160327
+      },
+      "total": {
+        "files": 1832,
+        "lines": 526675
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -88
+      },
+      "tests": {
+        "files": 0,
+        "lines": 43
+      },
+      "total": {
+        "files": 0,
+        "lines": -45
+      }
+    }
+  },
+  "baselineRegression": {
+    "testFiles": 1,
+    "passed": 31,
+    "failed": 11,
+    "failures": [
+      {
+        "name": "citations remaining legal tool prevents duplicate execution and never archives an error or marks it complete",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "citations remaining legal tool keeps drafts on metadata refresh and never applies a late reply or archive to another case",
+        "firstFailure": "AssertionError: expected [ <div …(1)></div> ] to have a length of +0 but got 1"
+      },
+      {
+        "name": "citations remaining legal tool retains the separate organization case-material write and does not claim that a failed archive succeeded",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "import-judgment remaining legal tool prevents duplicate execution and never archives an error or marks it complete",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+      },
+      {
+        "name": "import-judgment remaining legal tool keeps drafts on metadata refresh and never applies a late reply or archive to another case",
+        "firstFailure": "AssertionError: expected 'Private A draft' to be '' // Object.is equality"
+      },
+      {
+        "name": "import-judgment remaining legal tool retains the separate organization case-material write and does not claim that a failed archive succeeded",
+        "firstFailure": "AssertionError: expected <pre …(1)></pre> to be null"
+      },
+      {
+        "name": "knowledge sync requires a confirmed article, keeps payloads and emits exactly one successful update",
+        "firstFailure": "AssertionError: expected <span …(1)>…(1)</span> to be null"
+      },
+      {
+        "name": "drops late knowledge-sync notifications after case changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "drops late knowledge-sync notifications after organization changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "drops late knowledge-sync notifications after account changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      },
+      {
+        "name": "drops late knowledge-sync notifications after close changes",
+        "firstFailure": "AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+      }
+    ],
+    "method": "Identical final tests against an isolated turn-start LegalHub copy; dependencies from current working tree. Eleven parameterized failures are not eleven independent defects."
+  },
+  "focused": {
+    "testFiles": 10,
+    "passed": 119,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "test/legal_document_workbench.test.tsx",
+      "test/legal_case_client_scope.test.ts",
+      "test/legal_tool_route_security.test.ts",
+      "test/legal_semiauto_workflows.test.ts",
+      "test/legal_case_folder_workflow.test.ts",
+      "test/org_legal_case_deletion.test.ts",
+      "test/org_workspace_information_architecture.test.ts",
+      "test/wallpaper_surface_projection.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/organization_resource_acl_routes.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T10:45:40.103Z",
+      "finishedAt": "2026-10-02T10:45:46.700Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T10:45:46.702Z",
+      "finishedAt": "2026-10-02T10:46:19.812Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T10:46:19.812Z",
+      "finishedAt": "2026-10-02T10:46:28.702Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T10:46:28.703Z",
+      "finishedAt": "2026-10-02T10:46:37.606Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T10:46:37.606Z",
+      "finishedAt": "2026-10-02T10:46:37.969Z",
+      "status": 0
+    }
+  ],
+  "assertionFollowUp": {
+    "reason": "Two text selectors broadened to match both old and new formatting; substantive baseline failures now reach behavior assertions.",
+    "startedAt": "2026-10-02T10:46:52.645Z",
+    "finishedAt": "2026-10-02T10:46:58.803Z",
+    "passed": 119,
+    "failed": 0,
+    "skipped": 0,
+    "onlyTwoSelectorChangesConfirmed": true
+  },
+  "fingerprintsMatched": true,
+  "previousBatch40Through45LatestFingerprintsMatched": true,
+  "diffCheck": "passed with repository CRLF whitespace settings",
+  "changes": [
+    "Citation verification and judgment import use the existing document lifecycle and two-pane layout; removed independent state/reset/request/formatting paths.",
+    "Knowledge sync uses the existing lifecycle and apiJson; confirms a nonempty article ID before success events, rejects business failure and empty responses.",
+    "Late results cannot archive into another case or notify a closed account/organization view. Draft metadata/language refresh remains separate from case identity changes.",
+    "Failed results are not marked ready or offered for manual archive. Removed unconditional case-archive success claims from verification/import while retaining the actual material writes.",
+    "Error color is derived from successful result state rather than matching error-message words."
+  ],
+  "preserved": [
+    "Knowledge article title/content/category/tags/status and successful knowledge/client-state events.",
+    "Citation verification still offers manual archive in both personal and organization scope: the server tool does not automatically persist a case material.",
+    "Judgment import retains its separate case-material write; the server tool creates a knowledge article and index, not that case material.",
+    "Existing backend legal permissions, organization ACLs, endpoint payloads, personal storage format and real user data unchanged."
+  ],
+  "limitations": [
+    "Component network is mocked; backend regression tests use isolated HTTP/database fixtures. No native-client, visual screenshot or real-model acceptance.",
+    "No complete-suite rerun or backend rebuild for this frontend-only batch. Business source exactly matches the build input; only two test text selectors changed afterward and all 119 related tests were rerun.",
+    "Frontend cancellation cannot roll back server-side article/index creation or completed writes.",
+    "Case material callbacks still use parent optimistic persistence; removing a premature success message does not solve concurrent edit ordering, rollback or backend transaction atomicity.",
+    "Citation/import layouts now share packet/research widths and breakpoints; no pixel-identical claim.",
+    "No commit, push or client restart."
+  ],
+  "nextCandidates": [
+    "LegalCaseWorkspace notice, engagement, reasoning and delivery actions retain repeated request lifecycle and optimistic archive confirmation.",
+    "Same-case write ordering/rollback, legacy personal storage account isolation and cross-entry model endpoint persistence remain open."
+  ]
+}

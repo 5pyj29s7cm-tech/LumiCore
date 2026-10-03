@@ -1,0 +1,188 @@
+{
+  "batch": "prune59",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/lib/legalCaseStore.ts",
+      "before": 342,
+      "after": 328,
+      "delta": -14,
+      "beforeSha256": "2b3c7a8f5bb5f2c36365bc6368cc9cba64cbbdb4f9edf8cfb98cf0b34f171d9f",
+      "afterSha256": "2c259f30542772c73e4655b7caaf50856504f86e0c2202ee98da590519bbb411"
+    },
+    {
+      "file": "test/legal_case_client_scope.test.ts",
+      "before": 136,
+      "after": 166,
+      "delta": 30,
+      "beforeSha256": "965668ba3f7d62196cc917d9b8fe1704807725c163a6734d65121e47562e2f57",
+      "afterSha256": "63e932cc9b844773919a4e70fdc1091623960935d28c4fef7da1a90083bf5a68"
+    },
+    {
+      "file": "src/components/WeChatSettings.tsx",
+      "before": 559,
+      "after": 527,
+      "delta": -32,
+      "beforeSha256": "0f6f0bcadb88f456f1db939d9662bb0234b029692d5cdc612b539cad18484fb7",
+      "afterSha256": "abc7b3b1d4210594c088550e71345d059eb5dcb7d6c702912497392c566ba1e5"
+    },
+    {
+      "file": "src/components/WeComSettings.tsx",
+      "before": 376,
+      "after": 358,
+      "delta": -18,
+      "beforeSha256": "07236158c27e9e6ca9bc3526018ce4021785b66a521ba9c8ba5b33b96871ca8c",
+      "afterSha256": "2fc5cf052759cecad6321687a2b6d56ddb60437cee70b8b5770ff1d6d846d9e3"
+    },
+    {
+      "file": "src/components/FeishuSettings.tsx",
+      "before": 416,
+      "after": 401,
+      "delta": -15,
+      "beforeSha256": "5653bec389fb496f9e63053c43410cde345eaf00a5ebf9a09734046924be61b6",
+      "afterSha256": "bce1791bd954f1e9f2b35bae1bad83f318db178a027dc838324834743b4daf73"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365864
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160894
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526758
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365785
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160924
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526709
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -79
+      },
+      "tests": {
+        "files": 0,
+        "lines": 30
+      },
+      "total": {
+        "files": 0,
+        "lines": -49
+      }
+    }
+  },
+  "focused": {
+    "files": 12,
+    "passed": 206,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T04:51:10.540Z",
+      "finishedAt": "2026-10-03T04:51:18.408Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T04:51:18.410Z",
+      "finishedAt": "2026-10-03T04:51:45.381Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T04:51:45.382Z",
+      "finishedAt": "2026-10-03T04:51:53.054Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T04:51:53.055Z",
+      "finishedAt": "2026-10-03T04:52:00.579Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T04:52:00.580Z",
+      "finishedAt": "2026-10-03T04:52:00.875Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "typeParity": [
+    {
+      "file": "src/components/WeChatSettings.tsx",
+      "identicalJavascript": true,
+      "noServerRuntimeImport": true
+    },
+    {
+      "file": "src/components/WeComSettings.tsx",
+      "identicalJavascript": true,
+      "noServerRuntimeImport": true
+    },
+    {
+      "file": "src/components/FeishuSettings.tsx",
+      "identicalJavascript": true,
+      "noServerRuntimeImport": true
+    }
+  ],
+  "operations": [
+    {
+      "version": "before",
+      "operation": "material",
+      "reads": 3,
+      "writes": 1,
+      "notifications": 1
+    },
+    {
+      "version": "before",
+      "operation": "meeting",
+      "reads": 8,
+      "writes": 2,
+      "notifications": 2
+    },
+    {
+      "version": "after",
+      "operation": "material",
+      "reads": 2,
+      "writes": 1,
+      "notifications": 1
+    },
+    {
+      "version": "after",
+      "operation": "meeting",
+      "reads": 2,
+      "writes": 1,
+      "notifications": 1
+    }
+  ],
+  "changes": [
+    "Personal-case edits and material additions share the existing update path; a functional patch computes dependent fields from the current loaded case. Meeting material and notes are persisted in one case-list write with one complete notification.",
+    "Active-case and consultation selections share scoped storage helpers. Account and organization namespaces, authentication checks and explicit legacy ownership import remain intact.",
+    "Feishu and WeCom settings reuse messaging binding/configuration/connection types through type-only imports; WeChat watch settings reuse the service status and event types. All three emitted JavaScript outputs are identical to the turn-start source.",
+    "The existing case-scope test now uses the shared jsdom environment instead of a handwritten Storage/Window/CustomEvent emulator. Eight added cases cover complete archives, transcript fallback, rejected persistence and retry, and unavailable scope boundaries."
+  ],
+  "limitations": [
+    "The measured storage counts are isolated production-function calls against synthetic jsdom storage, excluding additional reads by application event listeners; these are operation counts, not measured user latency.",
+    "Case data still uses a whole-list JSON record. The case-list write is combined, but active-case and consultation keys are separate localStorage operations, not a multi-key or cross-window transaction.",
+    "Only the new source reduction in this turn is counted. Previous uncommitted work is preserved; full-project simplification is not declared complete.",
+    "No full-suite run, live messaging service, native-client acceptance, actual user data migration, backend rebuild, commit, push or client restart."
+  ]
+}

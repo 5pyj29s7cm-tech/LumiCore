@@ -5,7 +5,7 @@ const ChatSongWorkbench = React.lazy(() => import('./ChatSongWorkbench'));
 import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
 import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
 import { archivedMediaArtifacts } from '@/lib/generatedLibrary';
-import { ChatAttachmentUploads, type ChatUploadFailure, type ChatUploadKind, type ChatUploadSource } from '@/lib/chatAttachmentUploads';
+import { listenForNativeChatFileDrop, ChatAttachmentUploads, type ChatUploadFailure, type ChatUploadKind, type ChatUploadSource } from '@/lib/chatAttachmentUploads';
 import { ChatAttachmentUploadStatus } from './ChatAttachmentUploadStatus';
 import { chatAttachmentCopy } from '../i18n/locales/chatAttachments';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
@@ -22,7 +22,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { GlassCard } from './SharedUI';
 import { toast } from 'sonner';
-import { appConfirm } from '@/lib/appConfirm';
+import { useAppConfirm } from '@/lib/appConfirm';
 import { FoundersSanctuary } from './FoundersSanctuary';
 import { usePlatform } from '@/hooks/usePlatform';
 import { useApp } from '@/contexts/AppContext';
@@ -53,11 +53,11 @@ import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { CN_FOUNDER_ALIASES } from '../i18n/regions/cn/recognition';
 import {
   MAX_CHAT_ATTACHMENTS,
-  isImageFileName, isAudioFileName, extractAudioTranscript, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
+  isImageFileName, isAudioFileName, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
   chatAttachmentIdentity,
   chatAttachmentRequestMatchesScope,
   createChatAttachmentReference,
-  mergeChatAttachmentReferences,
+  mergeChatAttachmentReferences, mergePendingChatAttachments, mapImportedChatAttachments,
   type ChatAttachmentReference,
   type ChatAttachmentRequest,
 } from '@/lib/chatAttachmentReferences';
@@ -450,6 +450,7 @@ export function AgentChatPage({
   } = useApp();
   const isWorkChat = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId);
   const activeDomain = isWorkChat ? 'work' : 'personal';
+  const appConfirm = useAppConfirm(JSON.stringify([isOpen, user?.uid, activeDomain, agent?.id]));
   const activeOrgId = isWorkChat ? orgConnection?.orgId : undefined;
   const activeDomainLabel = isWorkChat ? uiMessage('agent-chat-page.lumi-work-workspace.87c39acadf') : uiMessage('agent-chat-page.lumi-personal-workspace.25d2bcfab7');
   const activeDomainDetail = isWorkChat
@@ -2635,7 +2636,7 @@ export function AgentChatPage({
     } finally {
       setDeletingConversationId('');
     }
-  }, [attachmentConversationIdRef, conversationHistory, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, startNewTextConversation, t]);
+  }, [appConfirm, attachmentConversationIdRef, conversationHistory, deletingConversationId, isZh, restoringConversationId, scopedConversationUrl, startNewTextConversation, t]);
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -3268,22 +3269,10 @@ export function AgentChatPage({
     incoming: ChatAttachment[],
     options: { announce?: boolean } = {},
   ) => {
-    const occupied = mergeChatAttachmentReferences(
-      conversationAttachmentsRef.current,
-      pendingAttachmentsRef.current,
-    ).attachments;
-    const availability = mergeChatAttachmentReferences(occupied, incoming);
-    const pendingMerge = mergeChatAttachmentReferences(pendingAttachmentsRef.current, availability.added);
-    const result = {
-      ...pendingMerge,
-      duplicateCount: availability.duplicateCount,
-      overflowCount: availability.overflowCount,
-    };
+    const result = mergePendingChatAttachments(conversationAttachmentsRef.current, pendingAttachmentsRef.current, incoming);
     if (result.added.length > 0) {
       pendingAttachmentsRef.current = result.attachments;
       setPendingAttachments(result.attachments);
-    }
-    if (result.added.length > 0) {
       if (options.announce !== false) {
         toast.success(uiMessage('agent-chat-page.attached-to-this-message.d0b87d258c'));
       }
@@ -3309,39 +3298,9 @@ export function AgentChatPage({
     onAttachmentRequestConsumed?.(attachmentRequest.requestId);
   }, [activeDomain, activeOrgId, appendPendingAttachments, attachmentRequest, isOpen, onAttachmentRequestConsumed]);
 
-  const mapImportedFilesToAttachments = useCallback((files: any[]): ChatAttachment[] => (
-    files.map((f: any) => {
-      const fileName = f.name || f.displayName || f.id || 'attachment';
-      const mimeType = f.mimeType || '';
-      const kind: ChatAttachment['kind'] =
-        f.kind === 'image' || isImageFileName(fileName, mimeType) ? 'image' :
-        f.kind === 'audio' || isAudioFileName(fileName, mimeType) ? 'audio' :
-        'file';
-      const transcript = kind === 'audio'
-        ? extractAudioTranscript(f.transcript || f.content || f.preview || null)
-        : null;
-      return createChatAttachmentReference({
-        fileId: f.id || fileName,
-        fileName,
-        path: f.path,
-        content: f.content || null,
-        preview: f.preview || null,
-        mimeType,
-        rawSize: f.rawSize || f.size || 0,
-        kind,
-        downloadUrl: f.id ? scopedFileUrl(`/api/files/download/${encodeURIComponent(f.id)}?inline=1`) : undefined,
-        transcript,
-        transcriptionStatus: f.extractionStatus || (transcript ? 'indexed' : ''),
-        transcriptionError: f.extractionError || f.syncError || null,
-        transcriptionProvider: f.extractionProvider || undefined,
-        transcriptionModel: f.extractionModel || undefined,
-      });
-    })
-  ), [scopedFileUrl]);
-
   const acceptImportedChatFiles = useCallback((files: any[], skippedCount: number, work: ReturnType<ChatViewWorkRegistry['begin']>) => {
     if (!work.isCurrent()) return;
-    const attachments = mapImportedFilesToAttachments(files);
+    const attachments = mapImportedChatAttachments(files, scopedFileUrl);
     const mergeResult = appendPendingAttachments(attachments, { announce: false });
     const addedAttachments = mergeResult.added;
     setOptimizationProgress(100);
@@ -3362,7 +3321,7 @@ export function AgentChatPage({
       toast.info(formatUiMessage('agent-chat-page.some-dropped-files-skipped.d3df0abf37', { value0: skippedCount }));
     }
     notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
-  }, [appendPendingAttachments, mapImportedFilesToAttachments, notifyKnowledgeUpdated, setDraftText]);
+  }, [appendPendingAttachments, scopedFileUrl, notifyKnowledgeUpdated, setDraftText]);
 
   const runChatAttachmentUpload = useCallback(async (
     kind: ChatUploadKind, sources: ChatUploadSource[], retry = false,
@@ -3491,35 +3450,8 @@ export function AgentChatPage({
   }, [runChatAttachmentUpload]);
 
   useEffect(() => {
-    if (!isOpen || typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return;
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    const setupDropListener = async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        if (cancelled) return;
-        unlisten = await getCurrentWindow().onDragDropEvent((event: any) => {
-          const payload = event?.payload;
-          if (payload?.type === 'enter' || payload?.type === 'over') {
-            setIsDraggingFiles(true);
-            return;
-          }
-          if (payload?.type === 'drop') {
-            nativeDropHandledAtRef.current = Date.now();
-            setIsDraggingFiles(false);
-            void importChatAttachmentPaths(Array.isArray(payload.paths) ? payload.paths : []);
-            return;
-          }
-          setIsDraggingFiles(false);
-        });
-        if (cancelled) unlisten?.();
-      } catch {}
-    };
-    void setupDropListener();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    if (!isOpen) return;
+    return listenForNativeChatFileDrop(setIsDraggingFiles, nativeDropHandledAtRef, importChatAttachmentPaths);
   }, [importChatAttachmentPaths, isOpen]);
 
   const handleChatDragOver = (event: React.DragEvent<HTMLDivElement>) => {

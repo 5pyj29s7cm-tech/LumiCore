@@ -1,0 +1,158 @@
+{
+  "batch": "prune63",
+  "date": "2026-10-03",
+  "files": [
+    {
+      "file": "src/components/Settings.tsx",
+      "before": 3345,
+      "after": 3178,
+      "delta": -167,
+      "beforeSha256": "21cad8f085db86f58e2377bbaa7871ea7f0ae7f3db0d09ddf556f024fa5073e7",
+      "afterSha256": "76a6dccffb8b5b85574a8a251c7092d1274251f00f3792af65577bb058a53130"
+    },
+    {
+      "file": "src/components/org/LegalDataSourcesSettings.tsx",
+      "before": 269,
+      "after": 283,
+      "delta": 14,
+      "beforeSha256": "5b5d0554556d626e321d513630800352d00527e41b87178770591b2d9695a2c7",
+      "afterSha256": "e958d2f1308e749828f960fdd82ae48513c2adf0ca29391fdaed4ef760064eee"
+    },
+    {
+      "file": "src/services/settingsKeys.ts",
+      "before": 72,
+      "after": 77,
+      "delta": 5,
+      "beforeSha256": "3075e072ec8ed176217a0b8bc83b9e7fc6de451a17aac881cd368a43692feeba",
+      "afterSha256": "1d6008d6592d7673557ae341035535eac65d3397bd46f8e44ad6d19b00597d89"
+    },
+    {
+      "file": "src/components/frontendBusinessContracts.test.tsx",
+      "before": 321,
+      "after": 389,
+      "delta": 68,
+      "beforeSha256": "22c8980f1ad6fcdeb2f7bab3f43c260c98bd43920d41b545c150e21b19f7c94d",
+      "afterSha256": "31b167977323a1b9e44e17959188809ee928d8bb08be087de07a3fb14e04e010"
+    },
+    {
+      "file": "test/model_service_settings.test.ts",
+      "before": 66,
+      "after": 69,
+      "delta": 3,
+      "beforeSha256": "cc5a1d2b00c1ea4596e4ee6494bbe92efbae4c6a473194a42b44baa87c0fc26c",
+      "afterSha256": "16f34113aa4911e2d41a25bc116c1f4cc9097d3bb34b27fdc8c61ee05566cf9b"
+    },
+    {
+      "file": "test/model_preference_writes.test.ts",
+      "before": 96,
+      "after": 97,
+      "delta": 1,
+      "beforeSha256": "83bd43e5cbb8792e20243721633af5e6190e60325b0de2e0b8da8f7195004f7d",
+      "afterSha256": "0c2782a908106e20c52016946a1ba20abe6684fc73c5bf077926cff47372895a"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1087,
+        "lines": 365636
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161207
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526843
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1087,
+        "lines": 365488
+      },
+      "tests": {
+        "files": 746,
+        "lines": 161279
+      },
+      "total": {
+        "files": 1833,
+        "lines": 526767
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -148
+      },
+      "tests": {
+        "files": 0,
+        "lines": 72
+      },
+      "total": {
+        "files": 0,
+        "lines": -76
+      }
+    }
+  },
+  "focused": {
+    "files": 11,
+    "passed": 185,
+    "failed": 0,
+    "skipped": 0
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-03T06:44:10.017Z",
+      "finishedAt": "2026-10-03T06:44:17.153Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-03T06:44:17.154Z",
+      "finishedAt": "2026-10-03T06:44:50.363Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-03T06:44:50.364Z",
+      "finishedAt": "2026-10-03T06:44:59.166Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-03T06:44:59.166Z",
+      "finishedAt": "2026-10-03T06:45:07.906Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-03T06:45:07.906Z",
+      "finishedAt": "2026-10-03T06:45:08.254Z",
+      "status": 0
+    }
+  ],
+  "previousFingerprintsMatched": true,
+  "changes": [
+    "Main settings and the legal workbench now render the existing LegalDataSourcesSettings panel. The duplicate DataSourceConnections component, provider readiness rules and separate request handlers are removed.",
+    "Single-field save, removal and Enter-to-save remain available. Provider-wide save and removal share the same mutation handler. Blank save drafts preserve stored values and unrelated provider drafts remain intact.",
+    "The existing localized field-label helper moves into the shared panel. Provider definitions, readiness rules, browser collaboration information and status counters remain available.",
+    "saveServerKeys returns its verified status read-back, eliminating the panels additional GET after every successful write. A single mutation now uses one POST and one GET.",
+    "Account and role changes remount the editor, and logout removes it. The request owner aborts on cleanup; late writes cannot update the next account or publish a key-change event after cancellation.",
+    "Initial read failures or invalid boolean maps prevent editing until refresh succeeds. Failed writes and failed read-back verification retain drafts; one mutation is allowed at a time."
+  ],
+  "validationNotes": [
+    "Seven new cases in the existing component test file cover both entry points, group and field saves and removals, Enter-to-save, preservation of blank stored fields and unrelated drafts, two read failures with retry, two write verification failures with retry, and account/logout cancellation.",
+    "The settings-entry test executes the extracted production ExternalConnectionsPage function with the real shared panel. It does not mount the entire Settings shell. Both entry tests use real settingsKeys and apiClient functions over synthetic fetch.",
+    "Each entry test confirms nine requests for initial status and four mutations: one initial GET plus four POST/GET pairs. It validates request count, not production latency.",
+    "The existing deadline-propagation test also confirms that saveServerKeys returns the verified status snapshot. Final validation fingerprints match the counted source and preserve all earlier prune40-62 baselines."
+  ],
+  "limitations": [
+    "Credential storage remains the existing machine-wide local-admin API, not a new per-user credential store. UI cancellation cannot undo a server-accepted write, and no multi-client transaction or live cross-window synchronization was added.",
+    "An empty status object remains valid; this change rejects non-object and non-boolean maps but does not change readJsonSafely empty-body handling.",
+    "No new business module or file was introduced. Source decreases by 148 lines, tests increase by 72, and the combined count decreases by 76.",
+    "The legacy system-access panel, native system-info capability and browser vault presentation remain outside this batch.",
+    "No real provider credentials or external services were exercised. No full-suite run, native-client acceptance, backend rebuild, user-data modification, commit, push or client restart."
+  ]
+}

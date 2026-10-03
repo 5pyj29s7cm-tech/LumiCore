@@ -4,7 +4,7 @@ import { X, Loader2, Search, Upload, ArrowRight, File, FileText, Trash2, Chevron
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { useGeneratedLibrary } from '@/hooks/useGeneratedLibrary';
-import { appConfirm } from '@/lib/appConfirm';
+import { useAppConfirm } from '@/lib/appConfirm';
 import { NodeDetailPanel } from './NodeDetailPanel';
 import { MemoryTreeScene, layoutTree3D } from './MemoryTree';
 import type { MemoryNode as MemNode, FileEntry } from './MemoryTree';
@@ -45,6 +45,7 @@ export function KnowledgeBase(props: KnowledgeBaseProps) {
 }
 
 function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal', scopeKey }: KnowledgeBaseProps) {
+  const appConfirm = useAppConfirm(JSON.stringify([isOpen, domain, scopeKey]));
   const socket = useSocket();
   const isZh = t?.langCode !== 'en';
 

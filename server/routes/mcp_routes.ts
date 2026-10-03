@@ -35,12 +35,14 @@ function redactMcpArgumentList(value: unknown): string[] {
 }
 
 function publicMcpConfig(name: string, cfg: any, connected: boolean) {
-  const registeredToolNames = getRegisteredMCPToolNames(name);
+  let validName = true;
+  try { requireSafeMCPServerName(name); } catch { validName = false; }
+  const registeredToolNames = validName ? getRegisteredMCPToolNames(name) : [];
   const registered = registeredToolNames.length > 0;
   const usable = cfg?.enabled === true && registered;
   return {
     name,
-    enabled: cfg?.enabled === true,
+    enabled: validName && cfg?.enabled === true,
     ...(cfg?.source === 'local' || cfg?.source === 'external' ? { source: cfg.source } : {}),
     ...(['stdio', 'http', 'ws'].includes(cfg?.transport) ? { transport: cfg.transport } : {}),
     ...(typeof cfg?.command === 'string' ? { command: cfg.command } : {}),
@@ -61,7 +63,7 @@ function publicMcpConfig(name: string, cfg: any, connected: boolean) {
     usable,
     toolCount: registeredToolNames.length,
     registeredToolNames,
-    runtimeStatus: usable
+    runtimeStatus: !validName ? 'invalid_configuration' : usable
       ? 'callable'
       : cfg?.enabled !== true
         ? 'disabled'
@@ -194,8 +196,7 @@ export function mountMcpRoutes(router: Router) {
 
   router.put("/remote-devices", requireAuth, requireAdmin, requireLocalRequest, requireNativeDesktopSession, (req, res) => {
     try {
-      const { devices } = req.body;
-      const normalized = normalizeRemoteDeviceConfig(devices);
+      const normalized = normalizeRemoteDeviceConfig(req.body?.devices, mcpManager.getRemoteDevices());
       if (!normalized) {
         return res.status(400).json({ error: 'Invalid devices config' });
       }

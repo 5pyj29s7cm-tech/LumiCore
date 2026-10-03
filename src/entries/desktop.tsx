@@ -25,7 +25,7 @@ const OrgPortal = lazy(() => import('../components/OrgPortal').then(m => ({ defa
 const Profile = lazy(() => import('../components/Profile').then(m => ({ default: m.Profile })));
 const Settings = lazy(() => import('../components/Settings').then(m => ({ default: m.Settings })));
 const SetupWizard = lazy(() => import('../components/SetupWizard').then(m => ({ default: m.SetupWizard })));
-const SkillHall = lazy(() => import('../components/SkillHall').then(m => ({ default: m.SkillHall })));
+const SkillCenter = lazy(() => import('../components/SkillCenter').then(m => ({ default: m.SkillCenter })));
 
 export function DesktopApp() {
   const shell = useAppShell();
@@ -48,8 +48,8 @@ export function DesktopApp() {
   const renderTabContent = (tab: string) => {
     switch (tab) {
       case 'home': return null;
-      case 'ecosystem': return <Suspense fallback={null}><SkillHall t={shell.t} lang={shell.lang} /></Suspense>;
-      case 'generate': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillHall t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
+      case 'ecosystem': return <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} /></Suspense>;
+      case 'generate': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
       case 'docs': return <Suspense fallback={null}><Docs t={shell.t} /></Suspense>;
       case 'founders': return <Suspense fallback={null}><FoundersSanctuary t={shell.t} user={shell.user} onBack={() => setActiveTab('home')} /></Suspense>;
       case 'profile': return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><Profile t={shell.t} /></Suspense>;

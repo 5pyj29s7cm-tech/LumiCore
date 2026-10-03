@@ -16,42 +16,24 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
-import { appConfirm } from '../lib/appConfirm';
+import { useAppConfirm } from '../lib/appConfirm';
 import { uiMessage } from '../i18n/uiMessages';
 import { formatMessagingBindingCommand } from '../i18n/locales/messaging';
+import type { MessagingBinding } from '../../server/messaging/bindings';
+import type { MessagingConfig } from '../../server/messaging/config';
+import type { MessagingConnectionStatus } from '../../server/messaging/connections';
 
-type WeComMode = 'aibot_long_connection' | 'app_webhook';
+type WeComMode = MessagingConfig['wecom']['mode'];
+type WeComBinding = Pick<MessagingBinding, 'id' | 'platformUserId' | 'chatId' | 'chatType' | 'orgId' | 'createdAt'>;
 
-interface WeComBinding {
-  id: string;
-  platformUserId: string;
-  chatId?: string;
-  chatType?: 'private' | 'group';
-  orgId: string;
-  createdAt: string;
-}
-
-interface ConnectionStatus {
-  state?: 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error';
-  lastConnectedAt?: string;
-  lastMessageAt?: string;
-  lastError?: string;
-  reconnectAttempts?: number;
-}
-
-interface WeComConfigResponse {
-  mode?: WeComMode;
-  botId?: string;
+interface WeComConfigResponse extends Partial<Pick<MessagingConfig['wecom'], 'mode' | 'botId' | 'corpId' | 'agentId' | 'enabled'>> {
   botIdMasked?: string;
   hasBotSecret?: boolean;
-  corpId?: string;
   corpIdMasked?: string;
-  agentId?: string;
   hasSecret?: boolean;
   hasToken?: boolean;
   hasAesKey?: boolean;
-  enabled?: boolean;
-  connection?: ConnectionStatus | null;
+  connection?: Partial<MessagingConnectionStatus> | null;
 }
 
 const EMPTY_FORM = {
@@ -65,12 +47,13 @@ const EMPTY_FORM = {
 };
 
 export function WeComSettings({ t }: { t?: any }) {
+  const appConfirm = useAppConfirm();
   const isZh = t?.langCode !== 'en';
   const locale = isZh ? 'zh' : 'en';
   const [config, setConfig] = useState<WeComConfigResponse | null>(null);
   const [mode, setMode] = useState<WeComMode>('aibot_long_connection');
   const [form, setForm] = useState(EMPTY_FORM);
-  const [connection, setConnection] = useState<ConnectionStatus | null>(null);
+  const [connection, setConnection] = useState<Partial<MessagingConnectionStatus> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [bindingCode, setBindingCode] = useState('');

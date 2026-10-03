@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { toast } from 'sonner';
 import { uiMessage } from '../i18n/uiMessages';
 import { formatMessagingBindingCommand } from '../i18n/locales/messaging';
+import type { DesktopWechatWatchEvent, DesktopWechatWatchService } from '../../server/messaging/desktop_wechat_watch';
 
 interface WeChatStatus {
   configured: boolean;
@@ -24,40 +25,7 @@ interface WeChatStatus {
     code: string;
     expiresAt: string;
   } | null;
-  desktopWatch?: DesktopWechatWatchStatus;
-}
-
-interface DesktopWechatWatchEvent {
-  id: string;
-  contact: string;
-  unreadCount: number | null;
-  status: 'detected' | 'processing' | 'draft_ready' | 'review_required' | 'attention_required' | 'sending' | 'sent' | 'dismissed' | 'failed';
-  detectedAt: string;
-  messageSummary: string;
-  draft: string;
-  risk: 'unknown' | 'low' | 'high';
-  riskReason: string;
-  error: string;
-}
-
-interface DesktopWechatWatchStatus {
-  config: {
-    enabled: boolean;
-    pollIntervalSeconds: number;
-    autoInspectWhenIdle: boolean;
-    idleBeforeInspectSeconds: number;
-    contactAllowlist: string[];
-  };
-  runtime: {
-    state: 'disabled' | 'starting' | 'monitoring' | 'waiting_desktop' | 'attention_required' | 'error';
-    lastScanAt: string | null;
-    lastCandidateAt: string | null;
-    lastReadAt: string | null;
-    lastError: string | null;
-  };
-  events: DesktopWechatWatchEvent[];
-  pendingCount: number;
-  sendPolicy: 'confirmation_required';
+  desktopWatch?: ReturnType<DesktopWechatWatchService['status']>;
 }
 
 type SetupStep = 'idle' | 'scanning' | 'awaiting_binding' | 'connected';

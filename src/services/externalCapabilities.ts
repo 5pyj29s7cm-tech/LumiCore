@@ -1,24 +1,16 @@
 import { apiFetch } from './apiClient';
+import type { ExternalCapabilityProjection as ServerProjection } from '../../server/external_capabilities/registry';
+import type { ExternalCapabilityRuntimeRef as ServerRuntimeRef } from '../../server/external_capabilities/schema';
 
-export type ExternalCapabilityStage = 'configured' | 'connected' | 'verified' | 'automatic' | string;
-export type ExternalCapabilityAvailability = 'ready' | 'unavailable' | string;
+export type ExternalCapabilityStage = ServerProjection['stage'] | string;
+export type ExternalCapabilityAvailability = ServerProjection['availability'] | string;
 
-export interface ExternalCapabilityRuntimeRef {
-  id: string;
-  kind: 'builtin' | 'skill' | 'mcp' | 'signed_extension' | string;
-  provider?: string;
-  manifestDigest?: string;
+export interface ExternalCapabilityRuntimeRef extends Omit<ServerRuntimeRef, 'kind'> {
+  kind: ServerRuntimeRef['kind'] | string;
 }
 
-export interface ExternalCapabilityAction {
-  id: string;
-  label: string;
-  description: string;
-  icon?: string;
-  capabilityId: string;
-  toolName: string;
-  executionMode: 'manual' | 'assisted' | 'automatic_candidate' | string;
-  requiresConfirmation: boolean;
+export interface ExternalCapabilityAction extends Omit<ServerProjection['actions'][number], 'underlyingToolName' | 'executionMode' | 'availability' | 'verification'> {
+  executionMode: ServerProjection['actions'][number]['executionMode'] | string;
   availability: ExternalCapabilityAvailability;
   verification: {
     status: 'never' | 'verified' | 'unverified' | 'failed' | string;
@@ -27,14 +19,9 @@ export interface ExternalCapabilityAction {
   };
 }
 
-export interface ExternalCapabilityProjection {
-  id: string;
-  version: string;
-  name: string;
-  description: string;
+export interface ExternalCapabilityProjection extends Pick<ServerProjection, 'id' | 'version' | 'name' | 'description' | 'unavailableReason' | 'guidance'> {
   stage: ExternalCapabilityStage;
   availability: ExternalCapabilityAvailability;
-  unavailableReason?: string;
   presentation: {
     icon?: string;
     label?: string;
@@ -42,13 +29,6 @@ export interface ExternalCapabilityProjection {
     launchActionId?: string;
   };
   runtimeRefs: ExternalCapabilityRuntimeRef[];
-  guidance: {
-    whenToUse: string[];
-    whenNotToUse: string[];
-    triggerHints: string[];
-    steps: string[];
-    completionRules: string[];
-  };
   actions: ExternalCapabilityAction[];
   activatedAt?: string;
   updatedAt?: string;

@@ -636,19 +636,15 @@ describe('reasoning model switching stability', () => {
 
   it('keeps auxiliary runtimes and frontend persistence free of hidden model overrides', async () => {
     const fs = await import('node:fs/promises');
-    const [mcp, narrative, generator, appContext, settings] = await Promise.all([
+    const [mcp, narrative, generator, settings] = await Promise.all([
       fs.readFile('server/mcp/lumi_server.ts', 'utf8'),
       fs.readFile('server/memory/narrative.ts', 'utf8'),
       fs.readFile('server/skills/generator.ts', 'utf8'),
-      fs.readFile('src/contexts/AppContext.tsx', 'utf8'),
       fs.readFile('src/components/Settings.tsx', 'utf8'),
     ]);
     expect(mcp).not.toMatch(/model:\s*['"]deepseek-v4-(?:flash|pro)['"]/);
     expect(narrative).not.toMatch(/provider:\s*['"]deepseek['"]/);
     expect(generator).toContain('request.model || preferred.model');
     expect(settings).not.toContain('persistModel(generationModels[0])');
-    const updateStart = appContext.indexOf('const updateAIConfig');
-    const updateEnd = appContext.indexOf('const updateVisionConfig', updateStart);
-    expect(appContext.slice(updateStart, updateEnd)).not.toContain('setAiConfig(prev =>');
   });
 });

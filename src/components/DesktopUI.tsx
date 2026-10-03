@@ -85,6 +85,7 @@ import {
 } from '@/services/sensorPermissionService';
 import {
   archiveLegalMeetingToConsultationCase,
+  isLegalCaseAccount,
   clearLegalConsultationCaseId,
   getLegalCaseLabel,
   getLegalConsultationCase,
@@ -94,6 +95,7 @@ import {
 import { PresenceIndicator } from './biometrics/PresenceIndicator';
 import {
   systemService,
+  type SystemStats,
   type WallpaperPresentation,
   type WallpaperWorkspace,
 } from '@/services/systemService';
@@ -967,87 +969,43 @@ function DesktopWidgetPanel({
   );
 }
 
-function KernelMonitorApp({ t, onAsk }: { t: any; onAsk?: (prompt: string) => void }) {
-  const [data, setData] = useState<number[]>([]);
-  const overviewRef = useRef<any>(null);
-  const [stats, setStats] = useState({
-    cpu: 0,
-    cpuModel: '',
-    logicalCpus: 0,
-    physicalCpus: null as number | null,
-    ram: { used: 0, total: 0, percent: 0 },
-    platform: '', release: '', arch: '', hostname: '', uptime: 0,
-    gpu: null as { name?: string; util?: number } | null,
-  });
+function KernelMonitorApp(props: Parameters<typeof KernelMonitorView>[0]) {
+  const { user } = useApp();
+  return user ? <KernelMonitorView key={JSON.stringify([user.uid, user.role])} {...props} /> : null;
+}
 
+function KernelMonitorView({ t, onAsk }: { t: any; onAsk?: (prompt: string) => void }) {
+  const [{ stats, data, error }, setSnapshot] = useState<{ stats: SystemStats | null; data: number[]; error: string }>({ stats: null, data: [], error: '' });
   useEffect(() => {
-    const fetchStats = async () => {
+    const owner = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
       try {
-        if (!overviewRef.current) {
-          const [response, nativeInfo] = await Promise.all([
-            fetch('/api/system/stats'),
-            systemService.getSystemStats(),
-          ]);
-          const serverInfo = response.ok ? await response.json() : {};
-          overviewRef.current = nativeInfo?.memory_unit === 'bytes'
-            ? {
-                ...serverInfo,
-                platform: nativeInfo.platform || serverInfo.platform,
-                release: nativeInfo.release || serverInfo.release,
-                arch: nativeInfo.arch || serverInfo.arch,
-                hostname: nativeInfo.hostname || serverInfo.hostname,
-                cpuModel: nativeInfo.cpu_model || serverInfo.cpuModel,
-                logicalCpus: nativeInfo.logical_cpus || serverInfo.logicalCpus,
-                physicalCpus: nativeInfo.cpus || serverInfo.physicalCpus,
-              }
-            : serverInfo;
-        }
-        const live = await systemService.getLiveStats();
-        const overview = overviewRef.current || {};
-        const sys = {
-          cpu: live.cpu_percent || 0,
-          cpuModel: overview.cpuModel || '',
-          logicalCpus: overview.logicalCpus || overview.cpus || 0,
-          physicalCpus: overview.physicalCpus ?? null,
-          ram: {
-            used: live.memory_used_gb || 0,
-            total: live.memory_total_gb || 0,
-            percent: live.memory_percent || 0,
-          },
-          platform: overview.platform || '',
-          release: overview.release || '',
-          arch: overview.arch || '',
-          hostname: live.hostname || overview.hostname || '',
-          uptime: live.uptime_seconds || overview.uptime || 0,
-          gpu: (live.gpu_vendor || overview.gpu?.name)
-            ? { name: live.gpu_vendor || overview.gpu?.name, util: live.gpu_utilization ?? overview.gpu?.util }
-            : null,
-        };
-        setStats(sys);
-        setData(prev => {
-          const next = [...prev, sys.cpu || 0];
-          return next.slice(-30);
-        });
-      } catch {}
+        const next = await systemService.getSystemStats(AbortSignal.any([owner.signal, AbortSignal.timeout(10_000)]));
+        if (!owner.signal.aborted) setSnapshot(current => ({ stats: next, data: [...(current.stats?.computerScope === next.computerScope && current.stats.hostname === next.hostname ? current.data : []), next.cpu].slice(-30), error: '' }));
+      } catch (error: any) {
+        if (!owner.signal.aborted) setSnapshot({ stats: null, data: [], error: error?.message || String(error) });
+      } finally { if (!owner.signal.aborted) timer = setTimeout(refresh, 2000); }
     };
-    fetchStats();
-    const interval = setInterval(fetchStats, 2000);
-    return () => clearInterval(interval);
+    void refresh();
+    return () => { owner.abort(); clearTimeout(timer); };
   }, []);
 
-  const chipLabel = stats.cpuModel || (stats.platform ? `${stats.platform.toUpperCase()}_${stats.arch.toUpperCase()}_NODE` : 'NEURAL_NODE');
-  const uptimeFmt = stats.uptime ? `${Math.floor(stats.uptime / 3600)}h ${Math.floor((stats.uptime % 3600) / 60)}m` : '';
-  const loadStatus = stats.cpu > 80 ? 'WARN' : stats.cpu > 50 ? 'LOAD' : 'IDLE';
+  const chipLabel = stats?.cpuModel || (stats ? `${stats.platform.toUpperCase()}_${stats.arch.toUpperCase()}_NODE` : '');
+  const uptimeFmt = stats ? `${Math.floor(stats.uptime / 3600)}h ${Math.floor((stats.uptime % 3600) / 60)}m` : '';
+  const loadStatus = stats ? stats.cpu > 80 ? 'WARN' : stats.cpu > 50 ? 'LOAD' : 'IDLE' : '';
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar p-8 space-y-6 font-sans">
+      {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+      {!stats && !error && <p role="status">{t.loading || 'Loading'}</p>}
+      {stats && <>
       <div className="flex justify-between items-center bg-black/40 p-5 rounded-[2rem] border border-white/5 backdrop-blur-xl">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-celestial-saturn/10 flex items-center justify-center text-celestial-saturn border border-celestial-saturn/20 shadow-[0_0_20px_rgba(255,200,80,0.1)]">
             <Cpu size={24} />
           </div>
           <div>
-            <div className="text-xs font-black text-white/40 uppercase tracking-widest leading-none mb-1">{stats.hostname || t.localIntelNode || 'Local Node'}</div>
+            <div className="text-xs font-black text-white/40 uppercase tracking-widest leading-none mb-1">{stats.hostname} · {stats.computerScope === 'lumi_server_host' ? uiMessage('system-explorer.lumi-server-host.88940fdc68') : (t.localIntelNode || 'Local Node')}</div>
             <div className="max-w-[min(50vw,38rem)] truncate text-lg font-black text-white tracking-tight" title={chipLabel}>{chipLabel}</div>
           </div>
         </div>
@@ -1090,6 +1048,7 @@ function KernelMonitorApp({ t, onAsk }: { t: any; onAsk?: (prompt: string) => vo
         </div>
       </div>
 
+      </>}
       <div className="rounded-[2rem] border border-white/5 bg-black/20 p-5">
         <div className="mb-4 flex items-center gap-2">
           <Monitor size={16} className="text-cyan-300" />
@@ -2791,6 +2750,7 @@ export function DesktopUI({
   }, [aiConfig?.model, aiConfig?.provider, buildFallbackMeetingReport, lang, legalMeetingCaseTitle, meetingNotes, meetingStartedAt, meetingStorageKeys.report, orgConnection?.connected, orgConnection?.orgId, workDomain]);
 
   const archiveLegalMeetingReport = useCallback(async (report: string, endedAt: number, notesOverride?: MeetingNote[]) => {
+    if (!isLegalCaseAccount(user?.uid)) return;
     const notesForArchive = notesOverride || meetingNotes;
     const consultationCaseId = getLegalConsultationCaseId();
     if (!consultationCaseId || notesForArchive.length === 0) return;
@@ -2833,6 +2793,7 @@ export function DesktopUI({
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'Failed to archive consultation');
+        if (!isLegalCaseAccount(user?.uid)) return;
         lastLegalMeetingArchiveRef.current = archiveKey;
         clearLegalConsultationCaseId();
         setLegalMeetingCaseTitle('');
@@ -2858,7 +2819,7 @@ export function DesktopUI({
     lastLegalMeetingArchiveRef.current = archiveKey;
     setLegalMeetingCaseTitle('');
     toast.success(formatUiMessage('desktop-ui.consultation-archived-to-case-value0.213430958c', { value0: getLegalCaseLabel(archived.caseFile) }, (lang === 'zh') ? 'zh' : 'en'));
-  }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain]);
+  }, [formatMeetingNoteForExport, formatMeetingTime, lang, meetingNotes, meetingStartedAt, orgConnection?.connected, workDomain, user?.uid]);
 
   const endMeetingAndReport = useCallback(async () => {
     const identity = { ...meetingIdentityRef.current, refinementId: crypto.randomUUID() };

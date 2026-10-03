@@ -210,25 +210,30 @@ describe('LLM client hot reconfiguration', () => {
     }
   });
 
-  it('rebuilds cloud clients after a key changes and disables them after removal', async () => {
-    const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = 'test-openai-key-one';
-    vi.resetModules();
-    const { createLLMRuntime } = await import('../server/runtime/llm');
-    const runtime = createLLMRuntime();
-    const first = runtime.getOpenAI();
-    process.env.OPENAI_API_KEY = 'test-openai-key-two';
-    const second = runtime.getOpenAI();
-    delete process.env.OPENAI_API_KEY;
-    const removed = runtime.getOpenAI();
-
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    expect(second).not.toBe(first);
-    expect(removed).toBeNull();
-
-    if (original === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = original;
+  it.each([
+    ['OPENAI', 'getOpenAI'], ['DEEPSEEK', 'getDeepSeek'], ['QWEN', 'getQwen'],
+    ['ARK', 'getArk'], ['XIAOMI', 'getXiaomi'], ['KIMI', 'getKimi'], ['GLM', 'getGlm'],
+  ] as const)('reuses and hot-reconfigures %s clients, then disables them after key removal', async (provider, getter) => {
+    const key = provider + '_API_KEY', base = provider + '_BASE_URL';
+    const original = Object.fromEntries([key, base, 'DASHSCOPE_API_KEY'].map(name => [name, process.env[name]]));
+    try {
+      delete process.env.DASHSCOPE_API_KEY;
+      process.env[key] = 'synthetic-key-one'; process.env[base] = 'http://127.0.0.1:18001/v1';
+      vi.resetModules();
+      const { createLLMRuntime } = await import('../server/runtime/llm');
+      const getClient = createLLMRuntime()[getter];
+      const first = getClient();
+      expect(first).toBeTruthy(); expect(createLLMRuntime()[getter]()).toBe(first);
+      process.env[key] = 'synthetic-key-two'; const second = getClient();
+      expect(second).not.toBe(first); expect(second?.apiKey).toBe('synthetic-key-two');
+      process.env[base] = 'http://127.0.0.1:18002/v1'; const moved = getClient();
+      expect(moved).not.toBe(second); expect(moved?.baseURL).toBe(process.env[base]);
+      expect(getClient()).toBe(moved); delete process.env[key]; expect(getClient()).toBeNull();
+    } finally {
+      for (const [name, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
   });
 
   it('rebuilds relay clients when the base URL changes', async () => {

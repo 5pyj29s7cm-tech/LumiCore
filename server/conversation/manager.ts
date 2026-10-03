@@ -2968,6 +2968,59 @@ export interface ForegroundRequestDurabilityDependencies {
   flush?: () => Promise<void>;
 }
 
+export interface ForegroundRequestIdentity {
+  readonly conversationId: string;
+  readonly userId: string;
+  readonly requestId: string;
+  readonly expectedTaskId?: string;
+}
+
+export interface ForegroundRequestReleaseInput {
+  readonly identity: ForegroundRequestIdentity;
+  readonly aborted: boolean;
+  readonly reason?: string;
+  readonly assistantState?: string;
+}
+
+export interface ForegroundRequestReleaseResult {
+  convergence: ConvergeConversationActionRequestLeaseResult;
+  finalization: FinalizeForegroundRequestResult | null;
+  converged: boolean;
+}
+
+/** Converge the exact durable request before any channel releases resources. */
+export async function convergeForegroundRequestBeforeRelease(input: ForegroundRequestReleaseInput & {
+  readonly channel: 'Chat' | 'Task' | 'Voice';
+  /** Voice can settle verified receipts that raced behind its terminal transcript. */
+  readonly settlePendingTask?: () => void;
+}, dependencies: ForegroundRequestDurabilityDependencies = {}): Promise<ForegroundRequestReleaseResult> {
+  let convergence = convergeConversationActionRequestLease({
+    ...input.identity,
+    deferLocalOwnerClear: true,
+  });
+  if (!convergence.converged && convergence.assistantMessageId && input.identity.expectedTaskId && input.settlePendingTask) {
+    input.settlePendingTask();
+    convergence = convergeConversationActionRequestLease({
+      ...input.identity,
+      deferLocalOwnerClear: true,
+    });
+  }
+  if (convergence.converged) {
+    convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
+    return { convergence, finalization: null, converged: true };
+  }
+  const finalization = await finalizeForegroundRequestDurably({
+    ...input.identity,
+    outcome: input.aborted ? 'cancelled' : 'blocked',
+    assistantMessageId: convergence.assistantMessageId || undefined,
+    reason: input.reason || (input.aborted
+      ? `${input.channel} foreground request was aborted before release.`
+      : `${input.channel} foreground executor exited without a fully converged terminal.`),
+    assistantState: input.assistantState,
+  }, dependencies);
+  return { convergence, finalization, converged: finalization.converged };
+}
+
 export interface DurableForegroundReleaseGateSnapshot {
   attempts: number;
   resourcesReleased: boolean;

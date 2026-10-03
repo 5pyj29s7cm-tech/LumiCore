@@ -7,7 +7,9 @@
  * durable receipt for the exact immutable payload.
  */
 
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
+import { branchSyncDigest as digest } from './branch_protocol';
+import type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt as ProtocolReceipt } from './branch_protocol';
 import { promises as dns } from 'node:dns';
 import { isIP } from 'node:net';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
@@ -40,32 +42,9 @@ export interface SyncPayload {
   interactions: any[];
 }
 
-interface BranchSyncRequest extends SyncPayload {
-  orgId: string;
-  branchId: string;
-  batchId: string;
-}
-
-interface BranchSyncItemReceipt {
-  kind: 'memory' | 'interaction';
-  sourceId: string;
-  targetId: string;
-  digest: string;
-  outcome: 'inserted' | 'updated' | 'unchanged';
-}
-
-interface BranchSyncReceipt {
-  version: 1;
-  receiptId: string;
-  orgId: string;
-  branchId: string;
-  batchId: string;
-  payloadDigest: string;
-  verified: true;
-  accepted: number;
-  items: BranchSyncItemReceipt[];
-  persistedAt: string;
-}
+type BranchSyncRequest = SyncPayload & Pick<BranchSyncPayload, 'orgId' | 'branchId' | 'batchId'>;
+type BranchSyncReceipt = Pick<ProtocolReceipt,
+  'version' | 'receiptId' | 'orgId' | 'branchId' | 'batchId' | 'payloadDigest' | 'verified' | 'accepted' | 'items' | 'persistedAt'>;
 
 interface OfflineAction {
   id: string;
@@ -166,21 +145,6 @@ function saveBranchState(): void {
   } catch {
     // The runtime may ask for public state before database initialization.
   }
-}
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!isObject(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .filter(key => !key.startsWith('_synced'))
-      .sort()
-      .map(key => [key, canonicalize(value[key])]),
-  );
-}
-
-function digest(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 }
 
 function itemKey(kind: BranchSyncItemReceipt['kind'], sourceId: string): string {

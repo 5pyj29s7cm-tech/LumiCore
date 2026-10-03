@@ -1,10 +1,10 @@
 import { extractSourceExpression } from './source_expression';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shouldReloadPersistedConversation } from '../src/lib/conversationSync';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
-import { ChatAttachmentUploads } from '../src/lib/chatAttachmentUploads';
+import { ChatAttachmentUploads, listenForNativeChatFileDrop } from '../src/lib/chatAttachmentUploads';
 import { chatAttachmentCopy } from '../src/i18n/locales/chatAttachments';
-import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_ATTACHMENTS } from '../src/lib/chatAttachmentReferences';
+import { createChatAttachmentReference, mergeChatAttachmentReferences, mergePendingChatAttachments, MAX_CHAT_ATTACHMENTS } from '../src/lib/chatAttachmentReferences';
 
 // Run the actual mounted page callbacks against delayed transport responses.
 // No backend, desktop application, or real user profile is involved.
@@ -16,6 +16,48 @@ function deferred<T>() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const noop = () => {};
+
+const nativeDrop = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onDragDropEvent: nativeDrop }) }));
+afterEach(() => { vi.unstubAllGlobals(); nativeDrop.mockReset(); });
+
+describe('native file drop listener ownership', () => {
+  it('skips browsers and a view closed before native registration', async () => {
+    vi.stubGlobal('window', {});
+    expect(listenForNativeChatFileDrop(noop, { current: 0 }, async () => {})).toBeUndefined();
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    listenForNativeChatFileDrop(noop, { current: 0 }, async () => {})?.();
+    await settle(); expect(nativeDrop).not.toHaveBeenCalled();
+  });
+
+  it('imports paths once, records the native drop, and ignores events after cleanup', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const unlisten = vi.fn(), dragging = vi.fn(), imports = vi.fn(async () => {}), lastDrop = { current: 0 };
+    nativeDrop.mockResolvedValue(unlisten);
+    const cleanup = listenForNativeChatFileDrop(dragging, lastDrop, imports)!;
+    await settle(); const receive = nativeDrop.mock.calls[0][0];
+    for (const type of ['enter', 'over', 'leave']) receive({ payload: { type } });
+    expect(dragging.mock.calls.map(args => args[0])).toEqual([true, true, false]);
+    receive({ payload: { type: 'drop', paths: ['D:/synthetic/report.txt'] } });
+    expect(imports.mock.calls).toEqual([[['D:/synthetic/report.txt']]]);
+    expect(lastDrop.current).toBeGreaterThan(0); expect(dragging).toHaveBeenLastCalledWith(false);
+    receive({ payload: { type: 'drop', paths: null } }); expect(imports).toHaveBeenLastCalledWith([]);
+    cleanup(); receive({ payload: { type: 'drop', paths: ['D:/synthetic/stale.txt'] } });
+    expect(unlisten).toHaveBeenCalledTimes(1); expect(imports).toHaveBeenCalledTimes(2);
+  });
+
+  it('disposes a late registration and safely handles native registration failure', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const registration = deferred<() => void>(), unlisten = vi.fn(), imports = vi.fn(async () => {});
+    nativeDrop.mockReturnValueOnce(registration.promise).mockRejectedValueOnce(new Error('Unavailable'));
+    const cleanup = listenForNativeChatFileDrop(noop, { current: 0 }, imports)!;
+    await settle(); cleanup(); nativeDrop.mock.calls[0][0]({ payload: { type: 'drop', paths: ['stale'] } });
+    registration.resolve(unlisten); await settle();
+    expect(unlisten).toHaveBeenCalledTimes(1); expect(imports).not.toHaveBeenCalled();
+    const failedCleanup = listenForNativeChatFileDrop(noop, { current: 0 }, imports)!;
+    await settle(); expect(failedCleanup).not.toThrow(); expect(nativeDrop).toHaveBeenCalledTimes(2);
+  });
+});
 
 function historyHarness() {
   const requests: Array<ReturnType<typeof deferred<any>>> = [];
@@ -99,12 +141,12 @@ function uploadHarness() {
   let signal: AbortSignal | undefined;
   const toast = { error: noop, success: noop, info: noop };
   const appendPendingAttachments = callback('appendPendingAttachments', {
-    conversationAttachmentsRef, pendingAttachmentsRef, mergeChatAttachmentReferences,
+    conversationAttachmentsRef, pendingAttachmentsRef, mergePendingChatAttachments,
     setPendingAttachments: noop, toast, uiMessage: (key: string) => key,
     formatUiMessage: (key: string) => key, MAX_CHAT_ATTACHMENTS,
   });
   const acceptImportedChatFiles = callback('acceptImportedChatFiles', {
-    mapImportedFilesToAttachments: (files: any[]) => files.map(createChatAttachmentReference),
+    mapImportedChatAttachments: (files: any[]) => files.map(createChatAttachmentReference), scopedFileUrl: (url: string) => url,
     appendPendingAttachments, setOptimizationProgress: noop, setIsOptimizing: noop,
     window: { setTimeout: noop }, draftTextRef: { current: draft },
     setDraftText: (value: string) => { draft = value; }, toast,

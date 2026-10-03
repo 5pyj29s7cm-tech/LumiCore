@@ -36,9 +36,10 @@ async function authenticatedPageUser(role: string) {
   });
   let user: any;
   const refresh = extract('src/contexts/AppContext.tsx', 'refreshUser', {
-    authService: { getMe }, setUser: (value: any) => { user = value; },
+    authService: { getMe }, setSessionUser: (value: any) => { user = value; },
     notificationService: { fetchNotifications: async () => ({ notifications: [] }) },
     notificationClearStorageKey, mergeNotificationState,
+    notificationRevisionRef: { current: 0 }, notificationWriteRef: { current: null },
     localStorage: { getItem: () => null, setItem: noop },
     setNotifications: (update: any) => update([]),
     apiFetch: async () => ({ ok: true, json: async () => ({}) }),
@@ -132,9 +133,9 @@ it('passes the context user through the shell and desktop to AgentChatPage', () 
 });
 
 it.each([
-  ['personal', 'known', true, { token: 'personal-token' }, true],
-  ['work', 'known', true, { token: 'work-token', orgId: 'server-org', orgRole: 'admin' }, true],
-  ['work', 'discover', true, { orgId: 'discovered-org', orgRole: 'member' }, true],
+  ['personal', 'known', true, { success: true, token: 'personal-token', orgId: null, orgRole: null }, true],
+  ['work', 'known', true, { success: true, token: 'work-token', orgId: 'known-org', orgRole: 'admin' }, true],
+  ['work', 'discover', true, { success: true, token: 'work-token', orgId: 'discovered-org', orgRole: 'member' }, true],
   ['work', 'empty', true, {}, false],
   ['work', 'known', true, {}, false],
   ['work', 'known', false, { error: 'denied' }, false],
@@ -142,11 +143,12 @@ it.each([
 ] as const)('switches %s/%s only after the server accepts the scope (%s)', async (domain, initial, ok, response, success) => {
   const orgConnection = initial === 'known' ? { orgId: 'known-org', orgRole: 'member', orgName: 'Known', connected: true } : null;
   const stored = new Map<string, string>();
-  const apiFetch = vi.fn(async (route: string) => ({ ok, json: async () => route.endsWith('/orgs')
+  const apiFetch = vi.fn(async (route: string) => ({ ok, status: ok ? 200 : 403, json: async () => route.endsWith('/orgs')
     ? { orgs: initial === 'discover' ? [{ id: 'discovered-org', name: 'Discovered' }] : [] } : response }));
   const setWorkDomain = vi.fn(), setOrgConnection = vi.fn(), dispatchEvent = vi.fn(), refreshAuth = vi.fn();
   const switchDomain = extract('src/contexts/AppContext.tsx', 'switchDomain', {
-    orgConnection, apiFetch, setWorkDomain, setOrgConnection, CustomEvent,
+    orgConnection, apiJson: extract('src/services/apiClient.ts', 'apiJson', { apiFetch }), setWorkDomain, setOrgConnection, CustomEvent,
+    authGenerationRef: { current: 0 }, domainSwitchRequest: { current: null }, AbortController, AbortSignal,
     translate: (key: string) => key, localStorage: { setItem: (key: string, value: string) => stored.set(key, value) },
     socketService: { refreshAuth }, window: { dispatchEvent },
   });
@@ -162,6 +164,6 @@ it.each([
   expect(dispatchEvent.mock.calls[0][0].detail).toMatchObject({ domain, orgId: domain === 'work' ? (response as any).orgId : null });
   expect(refreshAuth).toHaveBeenCalledTimes('token' in response ? 1 : 0);
   const request = (apiFetch.mock.calls.at(-1) as unknown as [string, RequestInit])[1];
-  expect(JSON.parse(String(request.body))).toEqual(domain === 'personal' ? { orgId: null } : { orgId: initial === 'known' ? 'known-org' : 'discovered-org', orgRole: 'member' });
+  expect(JSON.parse(String(request.body))).toEqual({ orgId: domain === 'personal' ? null : initial === 'known' ? 'known-org' : 'discovered-org' });
   if (domain === 'personal') expect(setOrgConnection).not.toHaveBeenCalled();
 });

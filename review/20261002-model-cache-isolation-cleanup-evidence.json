@@ -1,0 +1,232 @@
+{
+  "batch": "prune53",
+  "date": "2026-10-02",
+  "baseline": "Turn-start working tree after prune52, not HEAD; earlier uncommitted changes preserved.",
+  "head": "ec8ed052811b25a100e66ad92774eeff8bfd7403",
+  "files": [
+    {
+      "file": "src/components/Settings.tsx",
+      "before": 3334,
+      "after": 3337,
+      "delta": 3,
+      "beforeSha256": "d28df859f6ea9fd2052c82adca50adecc4bfa65996b2d03ae1e01709b7496d3d",
+      "afterSha256": "f827353d53d18af114be499a3c21d3d5cf1d51eb9dcc8ae5114878219e17fa96"
+    },
+    {
+      "file": "src/contexts/AppContext.tsx",
+      "before": 800,
+      "after": 738,
+      "delta": -62,
+      "beforeSha256": "e704c2acef31cd027ddd707eeab891ae1ddb66fb0524b9c146470f8bffc579c0",
+      "afterSha256": "d7bc4c9a480e79e3c5a6e2b936afbf6c71b251e5a25a48213a1d192f3a4861e0"
+    },
+    {
+      "file": "test/setup_wizard.test.tsx",
+      "before": 220,
+      "after": 239,
+      "delta": 19,
+      "beforeSha256": "e234a000fd53f849a4ccc627f7c48178814032ab9edfdaccb62451676b24b245",
+      "afterSha256": "50cd0bd7c78e03da12f2c41c50ed636a28655ae703aaa23c22a2d35fbaec1ede"
+    },
+    {
+      "file": "test/model_preference_writes.test.ts",
+      "before": 88,
+      "after": 95,
+      "delta": 7,
+      "beforeSha256": "e317d38696af54088a7761dde515361857fc14e520d96184d0881d464bb20e17",
+      "afterSha256": "7f83677c41f5f815f4715f5988fa7a16d0264c2269247aa39e31da8c91951679"
+    },
+    {
+      "file": "src/contexts/frontendPreferenceContracts.test.tsx",
+      "before": 99,
+      "after": 131,
+      "delta": 32,
+      "beforeSha256": "390dbf2207f5e10f805a5963cd97b85f4f17ace8ab3bc912c0dae1d675e3d5a2",
+      "afterSha256": "dcfc8108417592497f483b250cba262a1b80f1190fa3c64e91c0f1a0efe4b1da"
+    },
+    {
+      "file": "test/chat_recovery_auth_integration.test.ts",
+      "before": 167,
+      "after": 167,
+      "delta": 0,
+      "beforeSha256": "35a9e1bd88cfd33295781b442250bc9e310dd29624743727dbda2ca6e800a84f",
+      "afterSha256": "b6617a8a4bed6f55eae9d92af220d6003449187bea5ff810f82f2d072a077cf1"
+    }
+  ],
+  "counts": {
+    "before": {
+      "source": {
+        "files": 1088,
+        "lines": 365875
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160719
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526594
+      }
+    },
+    "after": {
+      "source": {
+        "files": 1088,
+        "lines": 365816
+      },
+      "tests": {
+        "files": 746,
+        "lines": 160777
+      },
+      "total": {
+        "files": 1834,
+        "lines": 526593
+      }
+    },
+    "delta": {
+      "source": {
+        "files": 0,
+        "lines": -59
+      },
+      "tests": {
+        "files": 0,
+        "lines": 58
+      },
+      "total": {
+        "files": 0,
+        "lines": -1
+      }
+    },
+    "combinedPrune44Through53": {
+      "source": {
+        "files": 1,
+        "lines": -746
+      },
+      "tests": {
+        "files": 1,
+        "lines": 560
+      },
+      "total": {
+        "files": 2,
+        "lines": -186
+      }
+    }
+  },
+  "baselineRegression": {
+    "passed": 0,
+    "failed": 8,
+    "skipped": 49,
+    "failures": [
+      {
+        "name": "settings share confirmed context state ignores unowned browser models on startup and carries only server-confirmed inactive choices",
+        "firstFailure": "AssertionError: expected 'foreign-model' to be 'deepseek-v4-flash' // Object.is equality"
+      },
+      {
+        "name": "settings share confirmed context state resets account model state, drops old queued saves and allows new-account writes immediately",
+        "firstFailure": "AssertionError: expected undefined to deeply equal {}"
+      },
+      {
+        "name": "llm delegates unknown model defaults to the saved backend configuration",
+        "firstFailure": "AssertionError: expected { provider: 'qwen', …(5) } to match object { provider: 'qwen', model: '', …(1) }"
+      },
+      {
+        "name": "vision delegates unknown model defaults to the saved backend configuration",
+        "firstFailure": "AssertionError: expected { provider: 'qwen', …(2) } to match object { provider: 'qwen', model: '', …(1) }"
+      },
+      {
+        "name": "GenerativeModelsPage blocks unknown settings after a failed read and retries before saving",
+        "firstFailure": "Error: Unable to find role=\"alert\""
+      },
+      {
+        "name": "WorldActionModelPage blocks unknown settings after a failed read and retries before saving",
+        "firstFailure": "Error: Unable to find role=\"alert\""
+      },
+      {
+        "name": "RetrievalModelSettings blocks unknown settings after a failed read and retries before saving",
+        "firstFailure": "Error: Unable to find role=\"alert\""
+      },
+      {
+        "name": "provider rows follow confirmed account models without importing stale browser choices",
+        "firstFailure": "AssertionError: expected <input …(3)></input> to have property \"value\" with value 'a-model'"
+      }
+    ],
+    "method": "Eight selected final tests against isolated turn-start Settings and AppContext copies. All eight parameterized cases fail; forty-nine other cases excluded from this baseline-only run. Failures can stop at their first assertion, and do not represent eight independent defects."
+  },
+  "focused": {
+    "testFiles": 14,
+    "passed": 189,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "src/contexts/frontendPreferenceContracts.test.tsx",
+      "test/model_failover_probe.test.ts",
+      "test/model_preference_writes.test.ts",
+      "test/setup_wizard.test.tsx",
+      "test/model_switching_stability.test.ts",
+      "test/model_role_preferences.test.ts",
+      "test/model_service_settings.test.ts",
+      "test/settings.test.ts",
+      "src/services/apiClient.test.ts",
+      "test/official_api_role_settings_contract.test.ts",
+      "test/chat_recovery_auth_integration.test.ts",
+      "test/client_domain_ui_state.test.ts",
+      "test/proactive_voice_delivery.test.tsx",
+      "test/voice_hot_switch.test.ts"
+    ]
+  },
+  "verification": [
+    {
+      "step": "focused",
+      "startedAt": "2026-10-02T14:26:14.693Z",
+      "finishedAt": "2026-10-02T14:26:25.143Z",
+      "status": 0
+    },
+    {
+      "step": "lint",
+      "startedAt": "2026-10-02T14:26:25.144Z",
+      "finishedAt": "2026-10-02T14:26:54.781Z",
+      "status": 0
+    },
+    {
+      "step": "build:frontends",
+      "startedAt": "2026-10-02T14:26:54.782Z",
+      "finishedAt": "2026-10-02T14:27:03.847Z",
+      "status": 0
+    },
+    {
+      "step": "build:desktop-ui",
+      "startedAt": "2026-10-02T14:27:03.847Z",
+      "finishedAt": "2026-10-02T14:27:12.055Z",
+      "status": 0
+    },
+    {
+      "step": "check:compact-layout-build",
+      "startedAt": "2026-10-02T14:27:12.056Z",
+      "finishedAt": "2026-10-02T14:27:12.387Z",
+      "status": 0
+    }
+  ],
+  "fingerprintsMatched": true,
+  "previousBatch40Through52LatestFingerprintsMatched": true,
+  "diffCheck": "passed with CRLF whitespace settings",
+  "changes": [
+    "Removed browser model configuration/map reads and writes. Reasoning and vision configs now carry their confirmed provider-model maps in AppContext; server preferences remain the persistence source. Four legacy browser keys are removed on module startup, without migrating unowned values into a logged-in account.",
+    "Account identity transitions and logout clear both role states and invalidate old reads/writes. New-account queues are independent of pending old-account operations; failed old-account saves cannot revert new-account input. Preferences are loaded after authentication and again when the uid changes.",
+    "Removed duplicate reasoning/vision preference fetch/parsing branches and the frontend provider-default tables. An unknown model for a newly selected provider is resolved by existing backend persistence logic; explicit selections and confirmed inactive-provider choices remain preserved.",
+    "Generation, world and retrieval settings block their form after failed or malformed reads and offer retry. Required nested primitive fields and model-map value types are checked before applying confirmations. A rejected save leaves the current draft intact.",
+    "Provider rows and the reasoning role use confirmed context maps instead of browser caches. Removed the two duplicated embedding/rerank patch setters; retained role-specific provider selection and UI controls.",
+    "Removed obsolete cache-failure injection from writer tests; added real AppProvider account/cache scenarios, provider-row account transition checks, settings read/retry/schema cases and backend default delegation checks. Updated the authentication recovery fixture dependency for the session setter."
+  ],
+  "preserved": [
+    "Server-side per-user preferences and saved model maps, selected model IDs, fallback policy, and credential save/verification behavior.",
+    "Independent reasoning and vision write queues, update confirmation requirements, request ownership, and explicit model routing.",
+    "All previous prune40?52 changes as verified against their latest recorded fingerprints."
+  ],
+  "limitations": [
+    "Tests include six mounted real AppProvider cases, component/function extraction with mocked transports, and isolated backend fixtures. This is not a live server/model or native-client end-to-end acceptance.",
+    "No full-suite rerun, live model calls, visual acceptance, latency benchmark, backend rebuild, commit, push or client restart. Legacy browser-key removal will run on the next frontend module load; real user preferences were not changed during this work.",
+    "Canceling or changing accounts cannot undo server writes already accepted under the previous identity. Multiple windows/clients remain outside the local queue transaction boundary.",
+    "Specialized settings validation checks nested shape and finite numeric values; provider/model authorization and semantic validation remain backend responsibilities. AppContext reasoning/vision reads still have no dedicated user-facing load-error/retry state; their last/default state can remain visible on a read error.",
+    "Removing unowned caches intentionally drops browser-only choices never confirmed by the backend; saved backend preferences remain intact. It does not migrate or scope unrelated voice, tool, organization or personal-case browser caches.",
+    "Case-write coalescing, personal-case cache isolation and other application partitions remain open."
+  ]
+}
