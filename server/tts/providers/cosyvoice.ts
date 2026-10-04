@@ -3,7 +3,7 @@ import { requireNotStrict } from '../../config/privacy';
 import { TTSResult, VoiceListItem } from '../types';
 import { getKey } from '../../config/keys';
 import { withCloudResilience } from '../../cloud/resilience';
-import { readDB } from '../../../db_layer';
+import { findVoiceProfileModel } from '../profile_store';
 
 const BASE_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer';
 const CUSTOMIZATION_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization';
@@ -151,11 +151,7 @@ function resolveCloneAudioUrl(sampleSource: string): string {
 
 function resolveVoiceModel(voiceId: string): string | undefined {
   try {
-    const db = readDB();
-    for (const profiles of Object.values(db.voiceProfiles || {}) as any[]) {
-      const match = (profiles || []).find((voice: any) => voice?.voiceId === voiceId && voice?.model);
-      if (match?.model) return String(match.model);
-    }
+    return findVoiceProfileModel(voiceId);
   } catch {}
   return undefined;
 }

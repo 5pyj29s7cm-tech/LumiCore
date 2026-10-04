@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { ownedConversationExists } from './history_repository';
 
 export type ConversationOwner = { userId: string; domain: 'personal' | 'work'; orgId?: string; agentId?: string };
 export type RequestAuthorization = {
@@ -9,13 +9,7 @@ export type RequestAuthorization = {
 
 /** Closing/rolling over a transcript is allowed; deleting its identity is terminal. */
 export function conversationExists(conversationId: string, owner: ConversationOwner): boolean {
-  if (!conversationId) return false;
-  return (readDB().conversations || []).some(row => row.id === conversationId
-    && row.userId === owner.userId
-    && (!owner.agentId || row.agentId === owner.agentId)
-    && (owner.domain === 'work'
-      ? row.domain === 'work' && String(row.orgId || '') === String(owner.orgId || '')
-      : row.domain !== 'work' && !row.orgId));
+  return ownedConversationExists(conversationId, owner);
 }
 
 export function captureConversationAuthorization(

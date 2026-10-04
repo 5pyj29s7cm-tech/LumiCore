@@ -13,7 +13,7 @@ import { projectCustomerVisibleExecutionEvent } from './public_agent_event_proje
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
+import { flushDBOrThrow } from "../../db_layer";
 import { logger } from "../../logger";
 import { createVoiceCallAdmission } from './voice_call_admission';
 import { claimReminderVoiceDelivery } from './proactive_reminder_delivery';
@@ -4690,16 +4690,6 @@ async function processVoiceInput(
           // commitVoiceTerminal consumes the receipts and blocks the task in
           // the same assistant write. Releasing the lease here would classify
           // these current receipts as stale and lose cross-channel progress.
-          const terminalConversation = getOrCreateActiveConversation(
-            session.userId,
-            session.agentId,
-            voiceScope.domain,
-            voiceScope.orgId,
-          );
-          if (!terminalConversation.title) {
-            terminalConversation.title = userText.slice(0, 50);
-            writeDB(readDB());
-          }
           return persistVoiceTakeoverExecution(responseText, {
             toolRecords: toolResults,
             source: 'voice',

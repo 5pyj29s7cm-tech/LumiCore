@@ -5,7 +5,7 @@
 import { toolRegistry } from '../tools/registry';
 import { personalityRegistry } from '../personality/registry';
 import { loadKeys } from '../config/keys';
-import { readDB } from '../../db_layer';
+import { listMemoryRows } from '../memory/repository';
 import { getMarketplaceSkills } from '../marketplace/registry';
 import { getDurableTaskHealthSnapshot } from '../cognition/durable_task_diagnostics';
 
@@ -54,12 +54,7 @@ export function runHealthAudit(
 
   // 3. Memory check
   try {
-    const db = readDB();
-    const memCount = ((db as any).memories || []).filter((memory: any) =>
-      memory.userId === userId &&
-      (memory.domain || 'personal') === domain &&
-      (memory.orgId || '') === orgId
-    ).length;
+    const memCount = listMemoryRows({ userId, domain, orgId }).length;
     checks.push({
       name: 'Memory System',
       status: memCount > 0 ? 'ok' : 'warn',
@@ -82,7 +77,7 @@ export function runHealthAudit(
   const uninstalled = marketplace.filter(s => !s.installed);
   checks.push({
     name: 'Skills',
-    status: installed.length >= 3 ? 'ok' : installed.length >= 1 ? 'warn' : 'warn',
+    status: installed.length >= 3 ? 'ok' : 'warn',
     detail: `${installed.length} installed, ${uninstalled.length} available in marketplace`,
   });
   if (uninstalled.length > 0 && installed.length < 3) {

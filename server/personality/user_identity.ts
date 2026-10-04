@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSetting, writeSetting } from '../persistence/settings_repository';
+import { listUserInteractions } from '../conversation/history_repository';
 
 export interface UserIdentityPreference {
   preferredAddress: string;
@@ -66,11 +67,8 @@ function savePreference(
   preferredAddress: string,
   sourceInteractionId?: string,
 ): UserIdentityPreference {
-  const db = readDB();
-  if (!db.settings) db.settings = [];
   const key = preferenceKey(userId);
-  const existingIndex = db.settings.findIndex((item: any) => item.key === key);
-  const existing = existingIndex >= 0 ? parsePreference(db.settings[existingIndex].value) : null;
+  const existing = parsePreference(readSetting(key));
   if (existing?.preferredAddress === preferredAddress) return existing;
 
   const preference: UserIdentityPreference = {
@@ -79,17 +77,12 @@ function savePreference(
     confirmedAt: new Date().toISOString(),
     sourceInteractionId,
   };
-  const value = JSON.stringify(preference);
-  if (existingIndex >= 0) db.settings[existingIndex].value = value;
-  else db.settings.push({ key, value });
-  writeDB(db);
+  writeSetting(key, JSON.stringify(preference));
   return preference;
 }
 
 export function getUserIdentityPreference(userId: string): UserIdentityPreference | null {
-  const db = readDB();
-  const setting = (db.settings || []).find((item: any) => item.key === preferenceKey(userId));
-  return setting ? parsePreference(setting.value) : null;
+  return parsePreference(readSetting(preferenceKey(userId)));
 }
 
 export function resolveUserIdentityPreference(
@@ -104,10 +97,7 @@ export function resolveUserIdentityPreference(
   if (historyScanCompleted.has(userId)) return null;
   historyScanCompleted.add(userId);
 
-  const db = readDB();
-  const history = [...(db.interactions || [])]
-    .filter((item: any) => item.userId === userId && item.role === 'user')
-    .sort((a: any, b: any) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  const history = listUserInteractions(userId, { role: 'user', order: 'newest' });
   for (const item of history) {
     const preferredAddress = extractExplicitUserAddress(String(item.message || ''));
     if (preferredAddress) return savePreference(userId, preferredAddress, String(item.id || '') || undefined);

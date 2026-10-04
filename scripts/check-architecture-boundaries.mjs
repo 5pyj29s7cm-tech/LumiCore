@@ -10,11 +10,13 @@ const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--
 }).split('\0').filter(file => /^(?:server\/|shared\/|src\/|server\.ts$)/.test(file) && /\.tsx?$/.test(file));
 const databaseModule = path.join(root, 'db_layer');
 const importers = [];
+const databaseBindings = new Map();
 const duplicateProviderTypes = [];
 const providerFields = new Set(['getDeepSeek', 'getGemini', 'getOpenAI', 'getAnthropic', 'getQwen', 'getOllama', 'getLmStudio', 'getArk', 'getXiaomi', 'getKimi', 'getGlm', 'getRelay', 'isOllamaAvailable', 'isLmStudioAvailable']);
 for (const file of files) {
   const source = ts.createSourceFile(file, fs.readFileSync(path.join(root, file), 'utf8'), ts.ScriptTarget.Latest, true);
   let importsDatabase = false;
+  const bindings = new Set();
   function visit(node) {
     if (file !== 'server/llm/provider_getters.ts' && (ts.isInterfaceDeclaration(node) || ts.isTypeLiteralNode(node))) {
       const members = node.members;
@@ -29,12 +31,22 @@ for (const file of files) {
         ? node.arguments[0] : undefined;
     if (specifier && ts.isStringLiteral(specifier) && specifier.text.startsWith('.')) {
       const target = path.resolve(root, path.dirname(file), specifier.text).replace(/\.(?:[cm]?js|tsx?)$/, '');
-      if (target === databaseModule) importsDatabase = true;
+      if (target === databaseModule) {
+        importsDatabase = true;
+        if (ts.isImportDeclaration(node) && node.importClause?.namedBindings
+          && ts.isNamedImports(node.importClause.namedBindings) && !node.importClause.name) {
+          for (const binding of node.importClause.namedBindings.elements) bindings.add((binding.propertyName || binding.name).text);
+        } else bindings.add('*');
+      }
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
-  if (importsDatabase) importers.push(file.replaceAll('\\', '/'));
+  if (importsDatabase) {
+    const normalized = file.replaceAll('\\', '/');
+    importers.push(normalized);
+    databaseBindings.set(normalized, bindings);
+  }
 }
 importers.sort();
 if (process.argv.includes('--record-baseline')) {
@@ -46,13 +58,23 @@ if (process.argv.includes('--record-baseline')) {
   }, null, 2) + '\n');
 } else {
   const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-  const allowed = new Set([...baseline.allowedDatabaseImporters, ...Object.keys(baseline.approvedScopedImporters || {})]);
+  const durability = baseline.approvedDurabilityImporters || {};
+  const allowed = new Set([...baseline.allowedDatabaseImporters, ...Object.keys(baseline.approvedScopedImporters || {}), ...Object.keys(durability)]);
+  const escapedFences = importers.filter(file => durability[file]
+    && [...databaseBindings.get(file)].some(binding => !durability[file].allowedExports.includes(binding)));
+  if (escapedFences.length) {
+    console.error('Durability-only modules cannot regain database reads, writes or SQL:\n' + escapedFences.join('\n'));
+    process.exitCode = 1;
+  }
   const added = importers.filter(file => !allowed.has(file));
   if (added.length) {
     console.error('New global database dependencies require a scoped repository review:\n' + added.join('\n'));
     process.exitCode = 1;
-  } else {
-    console.log('[architecture] ' + importers.length + ' existing database importers; no new unreviewed crossings.');
+  } else if (!escapedFences.length) {
+    console.log('[architecture] ' + importers.length + ' database importers: '
+      + importers.filter(file => baseline.allowedDatabaseImporters.includes(file)).length + ' legacy, '
+      + importers.filter(file => baseline.approvedScopedImporters?.[file]).length + ' scoped, '
+      + importers.filter(file => durability[file]).length + ' durability-only; no new unreviewed crossings.');
   }
 }
 

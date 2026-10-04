@@ -193,7 +193,11 @@ it('does not let a stale initial list overwrite a just-completed upload', async 
 it('refreshes only active processing and stops polling after a terminal result is visible', async () => {
   let poll: (() => void) | undefined;
   const fakeTimer = 87654321 as unknown as ReturnType<typeof window.setInterval>;
-  vi.spyOn(window, 'setInterval').mockImplementation(callback => { poll = callback as () => void; return fakeTimer; });
+  const realSetInterval = window.setInterval.bind(window);
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, delay, ...args) => {
+    if (delay === 2000) { poll = callback as () => void; return fakeTimer; }
+    return realSetInterval(callback, delay, ...args);
+  });
   const clear = vi.spyOn(window, 'clearInterval');
   rows = [media({ status: 'processing' })];
   const h = panel(); await screen.findByText('Extracting records'); expect(poll).toBeTypeOf('function');

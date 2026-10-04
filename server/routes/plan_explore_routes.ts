@@ -21,7 +21,6 @@ import {
   SystemExplorationAlreadyRunningError,
 } from "../runtime/system_exploration_worker";
 import { getProfessionProfile, buildProfessionOverlay, detectProfession, saveProfessionProfile } from "../autonomy/professions";
-import { readDB } from "../../db_layer";
 import { getMember } from "../org/db";
 import type { PlanScope } from "../autonomy/planner";
 
@@ -117,9 +116,7 @@ export function mountExploreRoutes(router: Router) {
   });
 
   router.post("/explore/profession/rescan", ...systemAdmin, (_req, res) => {
-    const db = readDB();
-    const snapshots = (db as any).systemSnapshots || [];
-    const latest = snapshots[snapshots.length - 1];
+    const latest = getLatestExploration();
     const installedApps = latest?.software?.installedApps || [];
     const profiles = detectProfession(installedApps);
     if (profiles.length > 0) saveProfessionProfile(profiles);

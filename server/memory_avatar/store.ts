@@ -128,6 +128,11 @@ export function getMemoryAvatar(userId: string, id: string): MemoryAvatarRecord 
   const row = (readDB().memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId);
   return row ? normalize(row) : null;
 }
+/** Authorization observes raw status and generation without normalizing legacy rows. */
+export function readMemoryAvatarAuthorization(userId: string, id: string): { status: string; sourceGeneration: number } | null {
+  const row = (readDB().memoryAvatars || []).find(item => item.id === id && item.userId === userId);
+  return row ? { status: row.status, sourceGeneration: Number(parsePayload(row.payload).sourceGeneration) || 0 } : null;
+}
 function ownedRow(userId: string, id: string, archived = false): any {
   const row = (readDB().memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId && (archived || item.status === 'active'));
   if (!row) throw new MemoryAvatarError(404, 'memory_avatar_not_found', 'Memory avatar not found');

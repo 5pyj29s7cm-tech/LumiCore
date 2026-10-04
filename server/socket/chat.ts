@@ -3062,6 +3062,54 @@ export function registerChatHandler(
         });
       };
 
+      /** One receipt/publication path for cleanup, confirmation and model results. */
+      const commitRecordedTerminal = (input: {
+        payload: Record<string, any>;
+        unknownPayload: Record<string, any>;
+        persistTerminalState: () => ReturnType<typeof persistChatTakeoverExecution>;
+        persistAssistantMessage: () => void;
+        notification?: Record<string, any>;
+        llmWasCalled?: boolean;
+        repairUnknownAssistant?: boolean;
+        updateSource?: string;
+        errorContext: string;
+      }) => commitChatTerminalBoundary({
+        persistTerminalState: input.persistTerminalState,
+        persistAssistantMessage: input.persistAssistantMessage,
+        flush: flushDBOrThrow,
+        persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+          executionScope, requestId, 'agent:response', input.payload, input.unknownPayload,
+        ),
+        persistUnknownReceipt: async () => {
+          if (input.repairUnknownAssistant && conversationId) {
+            const updated = updateAssistantMessageTerminalPresentation({
+              userId: uid, conversationId, requestId, content: input.unknownPayload.text,
+              completionFeedback: input.unknownPayload.completionFeedback, source: eventSource, channel: 'chat',
+            });
+            if (!updated) addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId,
+              role: 'assistant', content: input.unknownPayload.text, personality: personality.id,
+              domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat',
+              cognitiveIntent: 'persistence_unknown', llmWasCalled: input.llmWasCalled, requestId,
+              completionFeedback: input.unknownPayload.completionFeedback });
+            try { await flushDBOrThrow(); } catch {}
+          }
+          return recordChatExecutionPersistenceUnknownDurably(executionScope, requestId, input.unknownPayload);
+        },
+        publishCommitted: executionWriteback => {
+          if (input.notification) publishRecordedAgent('agent:notification', normalizeAgentPayload('agent:notification', input.notification));
+          if (executionWriteback?.recorded) publishRecordedAgent('agent:task_execution_writeback', normalizeAgentPayload('agent:task_execution_writeback', executionWriteback));
+          publishRecordedAgent('agent:response', input.payload);
+          publishDurableTaskRelation();
+          if (conversationId) emitConversationUpdated({ conversationId, agentId: conversationAgentId,
+            source: input.updateSource || 'chat', rolledOver: conversationTurn.rolledOver,
+            previousConversationId: conversationTurn.previousConversationId });
+        },
+        publishUnknown: () => publishRecordedAgent('agent:response', input.unknownPayload),
+        persistenceUnknownProjection: { text: input.unknownPayload.text,
+          completionFeedback: input.unknownPayload.completionFeedback, reason: 'Terminal persistence outcome is unknown.' },
+        onPersistenceError: error => console.error('[ChatHandler] ' + input.errorContext, error),
+      });
+
       const actionFollowupIntent = executionPipeline.actionFollowupIntent;
       const operationModeMetaText = buildOperationModeMetaResponse({
         text: visibleUserText,
@@ -3599,7 +3647,7 @@ export function registerChatHandler(
               })
             : undefined,
         });
-        const cleanupCommitted = await commitChatTerminalBoundary({
+        const cleanupCommitted = await commitRecordedTerminal({
           persistTerminalState: () => persistChatTakeoverExecution(cleanupText, {
             toolRecords: [cleanupRecord],
             source: 'chat_runtime_cleanup_offer',
@@ -3609,7 +3657,7 @@ export function registerChatHandler(
             assistantTextTrusted: cleanupVerified,
             finalizationReason: cleanupReason,
           }),
-          persistAssistantMessage: () => {
+        persistAssistantMessage: () => {
             const summary = summarizeToolRecordForPersistence(cleanupRecord);
             if (summary) {
               addMessage({
@@ -3644,45 +3692,10 @@ export function registerChatHandler(
             // task row now, before the recovery receipt captures this payload.
             refreshTerminalPayloadTaskRelation(cleanupTerminalPayload, durableTaskId);
           },
-          flush: flushDBOrThrow,
-          persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-            executionScope,
-            requestId,
-            'agent:response',
-            cleanupTerminalPayload,
-            cleanupUnknownPayload,
-          ),
-          persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
-            executionScope,
-            requestId,
-            cleanupUnknownPayload,
-          ),
-          publishCommitted: executionWriteback => {
-            if (executionWriteback?.recorded) {
-              publishRecordedAgent(
-                'agent:task_execution_writeback',
-                normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
-              );
-            }
-            publishRecordedAgent('agent:response', cleanupTerminalPayload);
-            publishDurableTaskRelation();
-            emitConversationUpdated({
-              conversationId: conversation.id,
-              agentId: conversationAgentId,
-              source: 'chat_runtime_cleanup_offer',
-              rolledOver: conversationTurn.rolledOver,
-              previousConversationId: conversationTurn.previousConversationId,
-            });
-          },
-          publishUnknown: () => publishRecordedAgent('agent:response', cleanupUnknownPayload),
-          persistenceUnknownProjection: {
-            text: cleanupUnknownPayload.text,
-            completionFeedback: cleanupUnknownPayload.completionFeedback,
-            reason: 'Terminal persistence outcome is unknown.',
-          },
-          onPersistenceError: error => {
-            console.error('[ChatHandler] Runtime cleanup offer terminal persistence failed:', error);
-          },
+          payload: cleanupTerminalPayload,
+          unknownPayload: cleanupUnknownPayload,
+          updateSource: 'chat_runtime_cleanup_offer',
+          errorContext: 'Runtime cleanup offer terminal persistence failed:'
         });
         if (cleanupCommitted) {
           actionLeaseHeartbeat?.stop();
@@ -4021,8 +4034,8 @@ export function registerChatHandler(
           await releaseChatSession();
           return;
         }
-        const terminalCommitted = await commitChatTerminalBoundary({
-          persistTerminalState: () => persistChatTakeoverExecution(confirmationResponseText, {
+        const terminalCommitted = await commitRecordedTerminal({
+        persistTerminalState: () => persistChatTakeoverExecution(confirmationResponseText, {
             toolRecords: confirmationRecords,
             source: 'chat_confirmation',
             sourceInteractionId: `${interactionId}_confirmation`,
@@ -4061,66 +4074,12 @@ export function registerChatHandler(
             });
             refreshTerminalPayloadTaskRelation(confirmationTerminalPayload, durableTaskId);
           },
-          flush: flushDBOrThrow,
-          persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-            executionScope,
-            requestId,
-            'agent:response',
-            confirmationTerminalPayload,
-            confirmationUnknownPayload,
-          ),
-          persistUnknownReceipt: async () => {
-            if (conversationId) {
-              const updated = updateAssistantMessageTerminalPresentation({
-                userId: uid,
-                conversationId,
-                requestId,
-                content: confirmationUnknownPayload.text,
-                completionFeedback: confirmationUnknownPayload.completionFeedback,
-                source: eventSource,
-                channel: 'chat',
-              });
-              if (!updated) {
-                addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: confirmationUnknownPayload.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'persistence_unknown', llmWasCalled: confirmationLlmWasCalled, requestId, completionFeedback: confirmationUnknownPayload.completionFeedback });
-              }
-              try { await flushDBOrThrow(); } catch {}
-            }
-            return recordChatExecutionPersistenceUnknownDurably(
-              executionScope,
-              requestId,
-              confirmationUnknownPayload,
-            );
-          },
-          publishCommitted: executionWriteback => {
-            if (finalized.notification) {
-              publishRecordedAgent(
-                'agent:notification',
-                normalizeAgentPayload('agent:notification', finalized.notification),
-              );
-            }
-            if (executionWriteback?.recorded) {
-              publishRecordedAgent(
-                'agent:task_execution_writeback',
-                normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
-              );
-            }
-            publishRecordedAgent('agent:response', confirmationTerminalPayload);
-            publishDurableTaskRelation();
-            if (conversationId) {
-              emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-            }
-          },
-          publishUnknown: () => {
-            publishRecordedAgent('agent:response', confirmationUnknownPayload);
-          },
-          persistenceUnknownProjection: {
-            text: confirmationUnknownPayload.text,
-            completionFeedback: confirmationUnknownPayload.completionFeedback,
-            reason: 'Terminal persistence outcome is unknown.',
-          },
-          onPersistenceError: error => {
-            console.error('[ChatHandler] Confirmation terminal persistence failed:', error);
-          },
+          payload: confirmationTerminalPayload,
+          unknownPayload: confirmationUnknownPayload,
+          notification: finalized.notification,
+          llmWasCalled: confirmationLlmWasCalled,
+          repairUnknownAssistant: true,
+          errorContext: 'Confirmation terminal persistence failed:'
         });
         if (!terminalCommitted) {
           await releaseChatSession();
@@ -4689,8 +4648,8 @@ export function registerChatHandler(
         await releaseChatSession();
         return;
       }
-      const terminalCommitted = await commitChatTerminalBoundary({
-        persistTerminalState: () => persistChatTakeoverExecution(responseText, {
+      const terminalCommitted = await commitRecordedTerminal({
+          persistTerminalState: () => persistChatTakeoverExecution(responseText, {
           toolRecords: allToolRecords,
           source: 'chat',
           sourceInteractionId: interactionId,
@@ -4699,7 +4658,7 @@ export function registerChatHandler(
           assistantTextTrusted: !finalResponse.blocked,
           finalizationReason: finalResponse.reason,
         }),
-        persistAssistantMessage: () => {
+          persistAssistantMessage: () => {
           if (!conversationId) return;
           // Keep terminal tool evidence immediately before the assistant row in
           // the same strict durability boundary.
@@ -4736,66 +4695,12 @@ export function registerChatHandler(
           });
           refreshTerminalPayloadTaskRelation(responseTerminalPayload, durableTaskId);
         },
-        flush: flushDBOrThrow,
-        persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-          executionScope,
-          requestId,
-          'agent:response',
-          responseTerminalPayload,
-          responseUnknownPayload,
-        ),
-        persistUnknownReceipt: async () => {
-          if (conversationId) {
-            const updated = updateAssistantMessageTerminalPresentation({
-              userId: uid,
-              conversationId,
-              requestId,
-              content: responseUnknownPayload.text,
-              completionFeedback: responseUnknownPayload.completionFeedback,
-              source: eventSource,
-              channel: 'chat',
-            });
-            if (!updated) {
-              addMessageIdempotent({ userId: uid, agentId: conversationAgentId, conversationId, role: 'assistant', content: responseUnknownPayload.text, personality: personality.id, domain: resolvedDomain, orgId: resolvedOrgId, source: eventSource, channel: 'chat', cognitiveIntent: 'persistence_unknown', llmWasCalled, requestId, completionFeedback: responseUnknownPayload.completionFeedback });
-            }
-            try { await flushDBOrThrow(); } catch {}
-          }
-          return recordChatExecutionPersistenceUnknownDurably(
-            executionScope,
-            requestId,
-            responseUnknownPayload,
-          );
-        },
-        publishCommitted: executionWriteback => {
-          if (finalResponse.notification) {
-            publishRecordedAgent(
-              'agent:notification',
-              normalizeAgentPayload('agent:notification', finalResponse.notification),
-            );
-          }
-          if (executionWriteback?.recorded) {
-            publishRecordedAgent(
-              'agent:task_execution_writeback',
-              normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
-            );
-          }
-          publishRecordedAgent('agent:response', responseTerminalPayload);
-          publishDurableTaskRelation();
-          if (conversationId) {
-            emitConversationUpdated({ conversationId, agentId: conversationAgentId, source: 'chat', rolledOver: conversationTurn.rolledOver, previousConversationId: conversationTurn.previousConversationId });
-          }
-        },
-        publishUnknown: () => {
-          publishRecordedAgent('agent:response', responseUnknownPayload);
-        },
-        persistenceUnknownProjection: {
-          text: responseUnknownPayload.text,
-          completionFeedback: responseUnknownPayload.completionFeedback,
-          reason: 'Terminal persistence outcome is unknown.',
-        },
-        onPersistenceError: error => {
-          console.error('[ChatHandler] Terminal persistence failed:', error);
-        },
+        payload: responseTerminalPayload,
+        unknownPayload: responseUnknownPayload,
+        notification: finalResponse.notification,
+        llmWasCalled,
+        repairUnknownAssistant: true,
+        errorContext: 'Terminal persistence failed:',
       });
       if (!terminalCommitted) {
         await releaseChatSession();

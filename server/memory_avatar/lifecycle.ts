@@ -1,4 +1,4 @@
-﻿import { readDB } from '../../db_layer';
+﻿import { readMemoryAvatarAuthorization } from './store';
 
 const watchers = new Map<string, Set<AbortController>>();
 const keyFor = (userId: string, avatarId: string) => JSON.stringify([userId, avatarId]);
@@ -14,13 +14,13 @@ export function invalidateMemoryAvatarAuthorization(userId: string, avatarId: st
 }
 
 export function captureMemoryAvatarAuthorization(userId: string, avatarId: string) {
-  const row = () => (readDB().memoryAvatars || []).find((item: any) => item.id === avatarId && item.userId === userId);
+  const row = () => readMemoryAvatarAuthorization(userId, avatarId);
   const initial = row();
-  const generation = Number(initial?.payload?.sourceGeneration) || 0;
+  const generation = initial?.sourceGeneration || 0;
   let revoked = !initial || initial.status !== 'active';
   const isCurrent = () => {
     const current = row();
-    if (!current || current.status !== 'active' || (Number(current.payload?.sourceGeneration) || 0) !== generation) revoked = true;
+    if (!current || current.status !== 'active' || current.sourceGeneration !== generation) revoked = true;
     return !revoked;
   };
   return {

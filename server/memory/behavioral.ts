@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { listUserInteractions } from '../conversation/history_repository';
 import { addMemory } from './store';
 import { isOwnerInteractionEvidence } from './provenance';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
@@ -15,11 +15,8 @@ export interface BehavioralPattern {
  * Called periodically by the scheduler when observer mode is active.
  */
 export function analyzeBehavioralPatterns(userId: string, domain = 'personal', orgId = ''): BehavioralPattern[] {
-  const db = readDB();
-  const interactions = (db.interactions || []).filter((i: any) => {
-    if ((i.domain || 'personal') !== domain || (i.orgId || '') !== orgId) return false;
-    return i.userId === userId && isOwnerInteractionEvidence(i);
-  }).slice(-100);
+  const interactions = listUserInteractions(userId, { domain, orgId })
+    .filter(isOwnerInteractionEvidence).slice(-100);
 
   if (interactions.length < 10) return [];
 

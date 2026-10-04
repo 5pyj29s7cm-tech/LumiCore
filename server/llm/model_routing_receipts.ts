@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { readDB, writeDB } from '../../db_layer';
+import { cloneDatabaseValue } from '../db/snapshot_changes';
+import type { ProviderRuntimeObservation } from './provider_health';
 import type { UserLLMSelectionMode } from './user_preferences';
 import { normalizeNativeRequestBinding } from '../devices/native_identity';
 import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
@@ -159,21 +161,19 @@ export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'
     durationMs: Math.max(0, Math.trunc(Number(input.durationMs) || 0)),
   };
   const db = readDB();
-  if (!Array.isArray(db.modelRoutingReceipts)) db.modelRoutingReceipts = [];
-  db.modelRoutingReceipts.push(receipt);
+  const rows = [...(Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : []), cloneDatabaseValue(receipt)];
   let remainingForUser = MAX_RECEIPTS_PER_USER;
   const retained: ModelRoutingReceipt[] = [];
-  for (let index = db.modelRoutingReceipts.length - 1; index >= 0; index -= 1) {
-    const candidate = db.modelRoutingReceipts[index] as ModelRoutingReceipt;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const candidate = rows[index] as ModelRoutingReceipt;
     if (candidate.userId === receipt.userId) {
       if (remainingForUser <= 0) continue;
       remainingForUser -= 1;
     }
     retained.push(candidate);
   }
-  db.modelRoutingReceipts = retained.reverse();
-  writeDB(db);
-  return { ...receipt, attempts: receipt.attempts.map(attempt => ({ ...attempt })) };
+  writeDB({ ...db, modelRoutingReceipts: retained.reverse() });
+  return cloneDatabaseValue(receipt);
 }
 
 export function listModelRoutingReceipts(
@@ -195,8 +195,33 @@ export function listModelRoutingReceipts(
       Date.parse(right.completedAt || '') - Date.parse(left.completedAt || '')
     ))
     .slice(0, Math.max(1, Math.min(Math.trunc(limit) || 100, 1000)))
-    .map((receipt: ModelRoutingReceipt) => ({
-      ...receipt,
-      attempts: (receipt.attempts || []).map(attempt => ({ ...attempt })),
-    }));
+    .map((receipt: ModelRoutingReceipt) => cloneDatabaseValue(receipt));
+}
+
+export function findProviderRuntimeObservation(provider: string, model: string): ProviderRuntimeObservation | null {
+  try {
+    const db = readDB();
+    const receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
+    for (let receiptIndex = receipts.length - 1; receiptIndex >= 0; receiptIndex -= 1) {
+      const receipt = receipts[receiptIndex] as any;
+      const attempts = Array.isArray(receipt?.attempts) ? receipt.attempts : [];
+      for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex -= 1) {
+        const attempt = attempts[attemptIndex];
+        if (String(attempt?.provider || '') !== provider || String(attempt?.model || '') !== model) continue;
+        // Policy/circuit skips and user cancellation did not test the model.
+        // They must not hide the actual failure (or recovery) behind them.
+        if (!['succeeded', 'failed'].includes(attempt.status) || attempt.reason === 'cancelled') continue;
+        return {
+          provider,
+          model,
+          status: attempt.status,
+          observedAt: String(attempt.completedAt || receipt.completedAt || ''),
+          ...(attempt.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(attempt.durationMs) || 0)) } : {}),
+          ...(attempt.reason ? { reason: String(attempt.reason).slice(0, 100) } : {}),
+          ...(attempt.errorCategory ? { errorCategory: String(attempt.errorCategory).slice(0, 64) } : {}),
+        };
+      }
+    }
+  } catch {}
+  return null;
 }

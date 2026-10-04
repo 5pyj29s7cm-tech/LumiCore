@@ -2,7 +2,7 @@
 
 import { getUserNow, getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, getMonthDay, isWeekend, minutesSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
-import { readDB } from '../../db_layer';
+import { listUserInteractions } from '../conversation/history_repository';
 import { getUserDayRange } from './utils';
 
 export interface TemporalContext {
@@ -26,10 +26,7 @@ export function buildTemporalContext(userId: string): TemporalContext {
   // Last interaction time
   let minutesSinceLastInteraction = -1;
   try {
-    const db = readDB();
-    const interactions = (db.interactions || [])
-      .filter((i: any) => i.userId === userId)
-      .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
+    const interactions = listUserInteractions(userId, { order: 'newest', limit: 1 });
     if (interactions.length > 0) {
       minutesSinceLastInteraction = minutesSince(interactions[0].timestamp);
     }
@@ -38,11 +35,8 @@ export function buildTemporalContext(userId: string): TemporalContext {
   // Session duration (conversations active today)
   let sessionDurationMinutes = 0;
   try {
-    const db = readDB();
     const today = getUserDayRange(userId);
-    const todayInteractions = (db.interactions || []).filter(
-      (i: any) => i.userId === userId && i.timestamp >= today.after && i.timestamp < today.before,
-    ).sort((a: any, b: any) => a.timestamp.localeCompare(b.timestamp));
+    const todayInteractions = listUserInteractions(userId, { ...today, order: 'oldest' });
     if (todayInteractions.length >= 2) {
       const first = new Date(todayInteractions[0].timestamp).getTime();
       const last = new Date(todayInteractions[todayInteractions.length - 1].timestamp).getTime();

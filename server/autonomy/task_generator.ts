@@ -13,12 +13,12 @@ import {
   type AutonomousWorkflow,
 } from './workflows';
 import { createPlan, updatePlan, type LumiPlan } from './planner';
-import { readDB, writeDB } from '../../db_layer';
+import { readSetting, writeSetting } from '../persistence/settings_repository';
+import { listMemoryRows } from '../memory/repository';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getRecentActivity } from '../context/activity_stream';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { formatIndustryLearningContext } from './industry_learning';
-import { isMemoryAvatarScoped } from '../memory';
 
 type LLMGetters = SharedProviderGetters;
 
@@ -117,9 +117,7 @@ function localBodyLearningSettingKey(userId: string): string {
 
 function getLastPublicWebLearningAt(userId: string): number {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item.key === webLearningSettingKey(userId));
-    const value = Number(row?.value || 0);
+    const value = Number(readSetting(webLearningSettingKey(userId)) || 0);
     return Number.isFinite(value) ? value : 0;
   } catch {
     return 0;
@@ -128,9 +126,7 @@ function getLastPublicWebLearningAt(userId: string): number {
 
 function getLastLocalBodyLearningAt(userId: string): number {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item.key === localBodyLearningSettingKey(userId));
-    const value = Number(row?.value || 0);
+    const value = Number(readSetting(localBodyLearningSettingKey(userId)) || 0);
     return Number.isFinite(value) ? value : 0;
   } catch {
     return 0;
@@ -139,25 +135,13 @@ function getLastLocalBodyLearningAt(userId: string): number {
 
 function recordPublicWebLearningAt(userId: string, timestamp: number) {
   try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const key = webLearningSettingKey(userId);
-    const row = db.settings.find((item: any) => item.key === key);
-    if (row) row.value = String(timestamp);
-    else db.settings.push({ key, value: String(timestamp) });
-    writeDB(db);
+    writeSetting(webLearningSettingKey(userId), String(timestamp));
   } catch {}
 }
 
 function recordLocalBodyLearningAt(userId: string, timestamp: number) {
   try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const key = localBodyLearningSettingKey(userId);
-    const row = db.settings.find((item: any) => item.key === key);
-    if (row) row.value = String(timestamp);
-    else db.settings.push({ key, value: String(timestamp) });
-    writeDB(db);
+    writeSetting(localBodyLearningSettingKey(userId), String(timestamp));
   } catch {}
 }
 
@@ -173,10 +157,10 @@ function enqueueGeneratedLearningTask(
     userId,
     workflowId: workflow.id,
     planId: plan.id,
-    title: generated.title,
+    title: generated.title.slice(0, 120),
     description: generated.description.slice(0, descriptionLimit),
     source: 'curiosity',
-    priority: generated.priority,
+    priority: Math.max(1, Math.min(10, generated.priority || 5)),
     mode: generated.mode,
   });
 
@@ -330,9 +314,9 @@ export async function generateAutonomousTasks(
   if (hour >= 21 && hour <= 23) contextParts.push('晚间时段，用户可能在放松或学习');
 
   // Recent memories
-  const db = readDB();
-  const recentMemories = (db.memories || [])
-    .filter((m: any) => m.userId === userId && !isMemoryAvatarScoped(m) && m.confidence >= 0.4)
+  const memories = listMemoryRows({ userId, domain: 'personal', orgId: '' });
+  const recentMemories = memories
+    .filter(m => m.confidence >= 0.4)
     .slice(-10)
     .map((m: any) => m.content.slice(0, 100));
   if (recentMemories.length > 0) {
@@ -340,8 +324,8 @@ export async function generateAutonomousTasks(
   }
 
   // Pending reminders
-  const pendingReminders = (db.memories || [])
-    .filter((m: any) => m.userId === userId && !isMemoryAvatarScoped(m) && m.type === 'reminder' && m.confidence > 0)
+  const pendingReminders = memories
+    .filter(m => String(m.type) === 'reminder' && m.confidence > 0)
     .slice(0, 5)
     .map((m: any) => m.content);
   if (pendingReminders.length > 0) {
@@ -352,8 +336,6 @@ export async function generateAutonomousTasks(
   if (industryContext) {
     contextParts.push(industryContext);
   }
-
-  if (contextParts.length === 0) return 0;
 
   const prompt = `你是 Lumi 的后台自主学习与任务规划器。根据用户当前的上下文，建议 1-3 个你可以自主完成的小任务。
 
@@ -439,26 +421,7 @@ ${contextParts.join('\n')}
         console.log(`[AutoTasks] Skipped task with disallowed mode ${requestedMode} for workflow ${workflow.id}`);
         continue;
       }
-      const planScope = { userId, domain: 'personal' as const, orgId: '' };
-      const plan = createLearningPlanForTask(userId, t, workflow.title);
-      const task = enqueue({
-        userId,
-        workflowId: workflow.id,
-        planId: plan.id,
-        title: t.title.slice(0, 120),
-        description: t.description.slice(0, 500),
-        source: 'curiosity',
-        priority: Math.max(1, Math.min(10, t.priority || 5)),
-        mode: requestedMode,
-      });
-      if (task) {
-        enqueued++;
-      } else {
-        updatePlan(plan.id, {
-          status: 'cancelled',
-          result: 'Autonomous queue is full, so this Lumi learning plan was not started.',
-        }, planScope);
-      }
+      if (enqueueGeneratedLearningTask(userId, workflow, { ...t, mode: requestedMode }, 500)) enqueued++;
     }
 
     if (enqueued === 0) {

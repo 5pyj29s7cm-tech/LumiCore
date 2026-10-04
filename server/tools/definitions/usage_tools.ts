@@ -1,4 +1,4 @@
-import { readDB } from '../../../db_layer';
+import { listTokenUsageRows } from '../../llm/token_tracker';
 import { ToolRegistry } from '../registry';
 
 type UsageRange = 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'all' | 'custom';
@@ -177,12 +177,10 @@ function parseDateLike(value: unknown, exclusiveEnd: boolean): string | null {
 }
 
 function getFilteredUsageRows(userId: string, window: { startAt: string | null; endAt: string | null }, args: Record<string, any>): UsageRow[] {
-  const db = readDB();
   const providerFilter = String(args.provider || '').trim().toLowerCase();
   const modelFilter = String(args.model || '').trim().toLowerCase();
   const modeFilter = String(args.mode || '').trim().toLowerCase();
-  return ((db.tokenUsage || []) as UsageRow[])
-    .filter(row => row && (row.userId === userId || row.userId === 'anonymous' || userId === 'anonymous'))
+  return listTokenUsageRows(userId)
     .filter(row => !window.startAt || String(row.timestamp || '') >= window.startAt!)
     .filter(row => !window.endAt || String(row.timestamp || '') < window.endAt!)
     .filter(row => !providerFilter || String(row.provider || '').toLowerCase() === providerFilter)

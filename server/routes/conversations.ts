@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { sendDurableMutation } from './durable_mutation';
-import { readDB, flushDBOrThrow } from "../../db_layer";
+import { flushDBOrThrow } from "../../db_layer";
+import { conversationAccessStatus, listConversationHeaders, listUserInteractions } from '../conversation/history_repository';
 import { forgetConversationChatExecutionsDurably } from '../socket/chat_execution_registry';
 import { mutationScopeKey, runSerializedMutation, readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
@@ -33,11 +34,6 @@ function getConversationScope(req: any): ConversationScope {
   return req.user?.orgId
     ? { domain: 'work', orgId: String(req.user.orgId) }
     : { domain: 'personal', orgId: '' };
-}
-
-function conversationMatchesScope(conv: any, scope: ConversationScope): boolean {
-  if (scope.domain === 'work') return !!scope.orgId && conv.orgId === scope.orgId;
-  return !conv.orgId || conv.orgId === '';
 }
 
 function customerAssistantText(value: unknown): string {
@@ -134,24 +130,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     }
 
     const agentId = (req.query.agentId as string | undefined) || undefined;
-    const db = readDB();
-    const conversationIds = new Set(
-      (db.conversations || [])
-        .filter((conv: any) => {
-          if (conv.userId !== req.user!.uid) return false;
-          if (agentId && conv.agentId !== agentId) return false;
-          return conversationMatchesScope(conv, scope);
-        })
-        .map((conv: any) => conv.id)
-    );
-
-    const results = (db.interactions || [])
-      .filter((item: any) => {
-        if (item.userId !== req.user!.uid) return false;
-        if (!conversationIds.has(item.conversationId)) return false;
-        if (item.role === 'tool') return false;
-        return true;
-      })
+    const owner = { userId: req.user!.uid, ...scope, agentId };
+    const conversationIds = listConversationHeaders(owner).map(conversation => conversation.id);
+    const results = listUserInteractions(req.user!.uid, { conversationIds })
+      .filter(item => item.role !== 'tool')
       .map((item: any) => {
         const role = item.role === 'assistant' ? 'assistant' : 'user';
         const rawText = String(
@@ -179,14 +161,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
   });
 
   router.get("/conversations/:id/messages", requireAuth, (req, res) => {
-    const db = readDB();
-    const conv = (db.conversations || []).find((c: any) => c.id === req.params.id);
-    if (!conv) return res.status(404).json({ error: "Conversation not found" });
-    // Ownership check
-    if (conv.userId !== req.user!.uid) return res.status(403).json({ error: "Unauthorized" });
-    // Domain check
     const scope = getConversationScope(req);
-    if (!conversationMatchesScope(conv, scope)) return res.status(403).json({ error: "Unauthorized" });
+    const access = conversationAccessStatus(req.params.id, { userId: req.user!.uid, ...scope });
+    if (access === 'missing') return res.status(404).json({ error: 'Conversation not found' });
+    if (access !== 'allowed') return res.status(403).json({ error: 'Unauthorized' });
     const limit = parseInt(req.query.limit as string) || 50;
     const messages = getMessages(req.params.id, limit).map(projectConversationMessageForCustomer);
     res.json({ messages });
@@ -210,12 +188,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
   });
 
   router.post("/conversations/:id/close", requireAuth, async (req, res) => {
-    const db = readDB();
-    const conv = (db.conversations || []).find((c: any) => c.id === req.params.id);
-    if (!conv) return res.status(404).json({ error: "Conversation not found" });
-    if (conv.userId !== req.user!.uid) return res.status(403).json({ error: "Unauthorized" });
     const scope = getConversationScope(req);
-    if (!conversationMatchesScope(conv, scope)) return res.status(403).json({ error: "Unauthorized" });
+    const access = conversationAccessStatus(req.params.id, { userId: req.user!.uid, ...scope });
+    if (access === 'missing') return res.status(404).json({ error: 'Conversation not found' });
+    if (access !== 'allowed') return res.status(403).json({ error: 'Unauthorized' });
     const { summary } = req.body || {};
     const closed = closeConversation(req.params.id, summary);
     if (!closed) return res.status(404).json({ error: "Conversation not found" });
@@ -233,13 +209,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     try {
       await runSerializedMutation(`conversation:${mutationScopeKey(owner)}`, async () => {
         if (!stillAuthorized()) return;
-        const db = readDB();
-        const conversation = (db.conversations || []).find((candidate: any) => (
-          candidate.id === req.params.id
-          && candidate.userId === owner.userId
-          && conversationMatchesScope(candidate, scope)
-        ));
-        if (!conversation) {
+        if (conversationAccessStatus(req.params.id, owner) !== 'allowed') {
           const receipt = readScopedDeletionReceipt(owner, 'conversation', req.params.id);
           if (!receipt) { res.status(404).json({ error: "Not found" }); return; }
           await forgetConversationChatExecutionsDurably({ ...owner, conversationId: req.params.id });
@@ -251,7 +221,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
         try {
           await ensurePendingConfirmationPersistenceInitialized();
           const channelScope = buildTransportNeutralConfirmationScope({
-            ...scope, conversationId: conversation.id,
+            ...scope, conversationId: req.params.id,
           });
           pendingConfirmationsCancelled = await revokePendingConfirmationChannelDurably(
             owner.userId, { ...scope, channelId: String(channelScope.channelId || '') },

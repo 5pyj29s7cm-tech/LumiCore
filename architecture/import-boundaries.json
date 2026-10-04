@@ -1,32 +1,31 @@
 {
   "schemaVersion": 1,
-  "policy": "Existing global database imports are migration debt. New importers require a reviewed scoped repository; update this allow-list explicitly with its scope justification.",
+  "policy": "Unreviewed business and SQL database imports are migration debt. Reviewed repositories must retain scoped, detached and staged data access. Durability-only modules may import only their declared fence exports; reintroducing reads, writes or SQL fails the gate.",
   "approvedScopedImporters": {
     "server/org/durable_routes.ts": "Organization-scoped snapshots, serialized writes and row-version compensation.",
     "server/persistence/settings_repository.ts": "Settings-table value access only; declared-key transactions are staged before writeDB accepts them. Durable writes restore only a still-current failed value.",
-    "server/memory/repository.ts": "Owned memory/reminder row values only; detached reads, staged single-row updates, immutable ownership, and same-lane parent validation before write acceptance."
+    "server/memory/repository.ts": "Owned memory/reminder row values only; detached reads, staged single-row updates, immutable ownership, and same-lane parent validation before write acceptance.",
+    "server/conversation/history_repository.ts": "Owner-filtered detached interaction history, bounded conversation display metadata, authorization status only, staged plain-message append; no database/row callbacks or task writes.",
+    "server/tts/profile_store.ts": "Personal/organization keyed voice profiles, detached snapshots, staged writes with immutable owner identity; provider metadata getter returns model string only.",
+    "server/llm/model_routing_receipts.ts": "Declared model receipt append and per-user retention staged before writeDB; detached owned receipts, global provider observation returns bounded status metadata only.",
+    "server/llm/token_tracker.ts": "Token-usage table append staged before writeDB; detached rows for an exact user; anonymous never grants instance-wide access."
   },
   "allowedDatabaseImporters": [
     "server/agents/external_ai_history_sync.ts",
-    "server/agents/health_audit.ts",
     "server/agents/workflows.ts",
     "server/autonomy/industry_learning.ts",
     "server/autonomy/planner.ts",
     "server/autonomy/professions.ts",
     "server/autonomy/system_explorer.ts",
-    "server/autonomy/task_generator.ts",
     "server/autonomy/task_queue.ts",
     "server/autonomy/workflows.ts",
     "server/biometrics/presence.ts",
-    "server/cognition/durable_task_diagnostics.ts",
     "server/command_center/plans.ts",
-    "server/command_center/runtime.ts",
     "server/contacts/store.ts",
     "server/context/read_only_tool_learning.ts",
     "server/conversation/action_turn_ledger.ts",
     "server/conversation/execution_facts.ts",
     "server/conversation/execution_receipt_archive.ts",
-    "server/conversation/lifecycle.ts",
     "server/conversation/manager.ts",
     "server/evidence/control_sequence_truth_snapshot.ts",
     "server/evidence/stale_receipt_reclassification.ts",
@@ -36,18 +35,10 @@
     "server/external_capabilities/registry.ts",
     "server/files/generated_archive.ts",
     "server/files/knowledge_directory.ts",
-    "server/llm/model_configuration.ts",
-    "server/llm/model_routing_receipts.ts",
-    "server/llm/provider_health.ts",
-    "server/llm/token_tracker.ts",
     "server/marketplace/registry.ts",
-    "server/mcp/lumi_server.ts",
-    "server/memory/behavioral.ts",
-    "server/memory/consolidator.ts",
     "server/memory/provenance.ts",
     "server/memory/store.ts",
     "server/memory/turn_memory.ts",
-    "server/memory_avatar/lifecycle.ts",
     "server/memory_avatar/live_history.ts",
     "server/memory_avatar/store.ts",
     "server/org/branch.ts",
@@ -55,48 +46,96 @@
     "server/org/db.ts",
     "server/org/resource_acl.ts",
     "server/org/work_routing.ts",
-    "server/personality/user_identity.ts",
-    "server/regions/packs/cn/business/finance_delivery.ts",
     "server/regions/packs/cn/business/workflow_service.ts",
     "server/regions/packs/cn/messaging_routes.ts",
     "server/routes/auth.ts",
-    "server/routes/autonomy_routes.ts",
-    "server/routes/chat_routes.ts",
-    "server/routes/conversations.ts",
-    "server/routes/durable_mutation.ts",
-    "server/routes/industry_workflow_routes.ts",
-    "server/routes/interactions_routes.ts",
     "server/routes/misc_routes.ts",
     "server/routes/notifications.ts",
-    "server/routes/personality_routes.ts",
-    "server/routes/plan_explore_routes.ts",
     "server/routes/system_routes.ts",
     "server/runtime/bootstrap.ts",
     "server/scheduler.ts",
     "server/skills/translations.ts",
-    "server/socket/ambient.ts",
     "server/socket/chat.ts",
     "server/socket/chat_execution_registry.ts",
-    "server/socket/conversations.ts",
-    "server/socket/memory_avatar_voice.ts",
     "server/socket/proactive_reminder_delivery.ts",
     "server/socket/scene.ts",
     "server/socket/task.ts",
-    "server/socket/voice.ts",
-    "server/time/spatiotemporal.ts",
-    "server/time/temporal_context.ts",
     "server/tools/definitions/data_tools.ts",
     "server/tools/definitions/knowledge_tools.ts",
     "server/tools/definitions/model_configuration_tools.ts",
-    "server/tools/definitions/usage_tools.ts",
     "server/tools/definitions/work_takeover_tools.ts",
     "server/tools/pending_confirmation_repository.ts",
     "server/tools/registry.ts",
-    "server/tts/profile_store.ts",
-    "server/tts/providers/cosyvoice.ts",
     "server/work_product/supervisor.ts",
     "server/work_takeover/evidence_workflow.ts",
-    "server/workflows/conversation_binding.ts",
-    "server/workflows/runtime.ts"
-  ]
+    "server/workflows/conversation_binding.ts"
+  ],
+  "approvedDurabilityImporters": {
+    "server/llm/model_configuration.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/mcp/lumi_server.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/regions/packs/cn/business/finance_delivery.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/routes/autonomy_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/routes/chat_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/routes/conversations.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/routes/durable_mutation.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/routes/industry_workflow_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/socket/memory_avatar_voice.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/socket/voice.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/workflows/runtime.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    }
+  }
 }

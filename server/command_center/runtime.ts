@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { readDB } from '../../db_layer';
+import { commandCenterPlanExists } from './plans';
 import { cancelTask, getTaskQueue, persistAutonomousTaskQueue, type AutonomousTask } from '../autonomy/task_queue';
 import { executeNextAutonomousTask, retryAutonomousTaskFinalizations, type LLMGetters } from '../autonomy/task_executor';
 import { runtimeBackgroundWork, runtimeShutdownCancellation } from '../runtime/shutdown_work';
@@ -11,9 +11,7 @@ const activeUsers = new Map<string, Promise<void>>();
 function isRequestedPlanTask(task: AutonomousTask): boolean {
   if (task.source !== 'user_request' || !task.planId
     || !task.idempotencyKey?.startsWith(`command-center-plan:${task.planId}:`)) return false;
-  return (readDB().commandCenterPlans || []).some((plan: any) => plan.id === task.planId
-    && plan.userId === task.userId && plan.domain === (task.domain || 'personal')
-    && plan.orgId === (task.orgId || ''));
+  return commandCenterPlanExists(task.planId, { userId: task.userId, domain: task.domain || 'personal', orgId: task.orgId || '' });
 }
 
 /** Consume explicit one-off requests without enabling unattended generation. */

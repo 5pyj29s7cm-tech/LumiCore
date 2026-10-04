@@ -1,5 +1,21 @@
 import { readDB, writeDB } from "../../db_layer";
-import { LLMUsage } from "../tools/types";
+import type { LLMUsage } from "../tools/types";
+import { cloneDatabaseValue } from '../db/snapshot_changes';
+
+export interface TokenUsageRow extends LLMUsage {
+  id: string;
+  userId: string;
+  provider: string;
+  model: string;
+  mode: string;
+  interactionId: string;
+  timestamp: string;
+}
+
+/** Anonymous is a literal owner, never a wildcard for the whole instance. */
+export function listTokenUsageRows(userId: string): TokenUsageRow[] {
+  return userId ? cloneDatabaseValue((readDB().tokenUsage || []).filter(row => row.userId === userId)) : [];
+}
 
 export function recordTokenUsage(
   userId: string,
@@ -11,8 +27,7 @@ export function recordTokenUsage(
 ): void {
   if (!usage || (usage.promptTokens === 0 && usage.completionTokens === 0)) return;
   const db = readDB();
-  if (!db.tokenUsage) db.tokenUsage = [];
-  db.tokenUsage.push({
+  const row: TokenUsageRow = {
     id: crypto.randomUUID(),
     userId,
     provider,
@@ -23,6 +38,6 @@ export function recordTokenUsage(
     mode,
     interactionId,
     timestamp: new Date().toISOString(),
-  });
-  writeDB(db);
+  };
+  writeDB({ ...db, tokenUsage: [...(db.tokenUsage || []), row] });
 }

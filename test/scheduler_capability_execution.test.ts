@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as database from '../db_layer';
+import { listMemoryRows } from '../server/memory/repository';
+import { listConversationHeaders, listUserInteractions } from '../server/conversation/history_repository';
+afterEach(() => vi.restoreAllMocks());
 import {
   buildScheduledExecutionId,
   buildScheduledProactiveInteractionId,
@@ -53,15 +57,17 @@ describe('scheduler capability execution protocol', () => {
     const now = Date.parse('2026-10-02T10:00:00Z'), cutoff = now - days * 86400000;
     class Clock extends Date { constructor(value: any = now) { super(value); } static now() { return now; } }
     const tasks: any[] = [], prompts: any[] = [], calls: any[] = [], saved: any[] = [];
-    const rows = [{}, { createdAt: new Date(cutoff - 1).toISOString(), type: 'preference' }, { domain: 'work' }, { orgId: 'organization' }, { userId: 'other' }, { avatarId: 'private' }]
+    const rows = [{}, { createdAt: new Date(cutoff - 1).toISOString(), type: 'preference' }, { domain: 'work' }, { orgId: 'organization' }, { userId: 'other' }, { agentId: 'memory_avatar_private' }]
       .map(override => ({ userId: 'owner', createdAt: new Date(cutoff).toISOString(), type: 'fact', keywords: Array.from({ length: 25 }, (_, i) => `topic-${i}`), ...override }));
+    const fixture = { memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] };
+    vi.spyOn(database, 'readDB').mockReturnValue(fixture as any);
     const getters = Array.from({ length: 12 }, () => () => null);
     const register = extractSourceExpression('server/scheduler.ts', 'registerScheduledTasks', {
       scheduler: { register: (task: any) => tasks.push(task) }, createReminderCheckTask: () => ({ id: 'reminder-fixture' }), Date: Clock,
       resolveScheduledUserIds: () => ['failed', 'owner', 'no-config', 'empty'],
       readDB: () => ({ memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] }),
       personalityRegistry: { getForUser: (_: string, uid: string) => uid === 'no-config' ? null : { name: uid, version: '3' }, getEvolutionHistory: () => [{ timestamp: new Date(cutoff).toISOString() }, { timestamp: new Date(cutoff - 1).toISOString() }] },
-      isMemoryAvatarScoped: (row: any) => Boolean(row.avatarId), loadEmotionalState: () => ({ connection: 0.8 }),
+      listMemoryRows, listConversationHeaders, listUserInteractions, loadEmotionalState: () => ({ connection: 0.8 }),
       generateReviewPrompt: (context: any) => { prompts.push(context); return context.personalityName; },
       getUserPreferredLLMConfig: (userId: string, options: any) => ({ userId, ...options }),
       makeLLMCall: async (_messages: any, _tools: any, config: any, ...actualGetters: any[]) => {

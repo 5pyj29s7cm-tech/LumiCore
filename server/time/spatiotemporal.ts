@@ -1,6 +1,7 @@
 // Spatiotemporal unification — cross-analyze time + location for pattern detection
 
-import { readDB } from '../../db_layer';
+import { listUserInteractions } from '../conversation/history_repository';
+import { listMemoryRows } from '../memory/repository';
 import { getDateString, getDayOfWeekCN, getTimeOfDay, getSeasonInfo, getNearbyHoliday, isWeekend, hoursSince, formatDuration } from './utils';
 import { queryMemories } from '../memory/store';
 
@@ -33,13 +34,8 @@ export function detectSpatiotemporalPatterns(userId: string, domain = 'personal'
   const patterns: SpatiotemporalPattern[] = [];
 
   try {
-    const db = readDB();
-    const memories: any[] = (db.memories || []).filter((m: any) =>
-      m.userId === userId && (m.domain || 'personal') === domain && (m.orgId || '') === orgId
-    );
-    const interactions: any[] = (db.interactions || []).filter((i: any) =>
-      i.userId === userId && (i.domain || 'personal') === domain && (i.orgId || '') === orgId
-    );
+    const memories = listMemoryRows({ userId, domain: domain === 'work' ? 'work' : 'personal', orgId });
+    const interactions = listUserInteractions(userId, { domain, orgId });
 
     // ── Location routine detection ──
     const memoriesWithLocation = memories.filter((m: any) => m.location && m.location.trim());
@@ -161,10 +157,7 @@ export function generateSpatiotemporalContext(userId: string, domain = 'personal
 
   // ── Recency ──
   try {
-    const db = readDB();
-    const userInteractions = (db.interactions || [])
-      .filter((i: any) => i.userId === userId && (i.domain || 'personal') === domain && (i.orgId || '') === orgId)
-      .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
+    const userInteractions = listUserInteractions(userId, { domain, orgId, order: 'newest', limit: 1 });
 
     if (userInteractions.length > 0) {
       const lastTs = userInteractions[0].timestamp;

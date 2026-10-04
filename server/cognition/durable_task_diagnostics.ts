@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { listPersistedAutonomousTasks, type AutonomousTask } from '../autonomy/task_queue';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
 import type { DurableTaskRecoveryState } from './durable_task_recovery';
 
@@ -52,9 +52,9 @@ export function getDurableTaskHealthSnapshot(
   userId: string,
   scope: { domain?: string; orgId?: string } = {},
 ): DurableTaskHealthSnapshot {
-  let db: any;
+  let tasks: AutonomousTask[];
   try {
-    db = readDB();
+    tasks = scope.domain === 'work' && scope.orgId ? [] : listPersistedAutonomousTasks(userId);
   } catch {
     return {
       active: 0,
@@ -66,11 +66,7 @@ export function getDurableTaskHealthSnapshot(
       forbiddenAutomaticRecovery: ['repeat_unknown_external_commit', 'bypass_confirmation', 'edit_runtime_code'],
     };
   }
-  const isWork = scope.domain === 'work' && Boolean(scope.orgId);
-  const autonomous = (Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [])
-    .filter((task: any) => !isWork && task.userId === userId)
-    .map((task: any) => toItem(projectAutonomousTaskFinalization(task), 'autonomous'));
-  const items = autonomous;
+  const items = tasks.map(task => toItem(projectAutonomousTaskFinalization(task), 'autonomous'));
   return {
     active: items.filter(item => ['pending', 'queued', 'running', 'pausing', 'paused'].includes(item.status)).length,
     retryScheduled: items.filter(item => Boolean(item.nextAttemptAt) && ['pending', 'queued'].includes(item.status)).length,

@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingJson, writeSetting } from '../persistence/settings_repository';
+import { findProviderRuntimeObservation } from './model_routing_receipts';
 import { getCircuitStatus, type CircuitState } from '../cloud/circuit_breaker';
 
 export interface ProviderProbeRecord {
@@ -42,55 +43,18 @@ function providerProbeKey(provider: string): string {
 }
 
 export function readProviderProbe(provider: string): ProviderProbeRecord | null {
-  try {
-    const db = readDB();
-    const setting = (db.settings || []).find((item: any) => item.key === providerProbeKey(provider));
-    return setting?.value ? JSON.parse(setting.value) : null;
-  } catch {
-    return null;
-  }
+  return readSettingJson<ProviderProbeRecord>(providerProbeKey(provider));
 }
 
 export function saveProviderProbe(probe: ProviderProbeRecord): void {
   try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const key = providerProbeKey(probe.provider);
-    const value = JSON.stringify(probe);
-    const setting = db.settings.find((item: any) => item.key === key);
-    if (setting) setting.value = value;
-    else db.settings.push({ key, value });
-    writeDB(db);
+    writeSetting(providerProbeKey(probe.provider), JSON.stringify(probe));
   } catch {}
 }
 
 /** Latest durable model-attempt evidence, without prompt, response, or error text. */
 export function readProviderRuntimeObservation(provider: string, model: string): ProviderRuntimeObservation | null {
-  try {
-    const db = readDB();
-    const receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
-    for (let receiptIndex = receipts.length - 1; receiptIndex >= 0; receiptIndex -= 1) {
-      const receipt = receipts[receiptIndex] as any;
-      const attempts = Array.isArray(receipt?.attempts) ? receipt.attempts : [];
-      for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex -= 1) {
-        const attempt = attempts[attemptIndex];
-        if (String(attempt?.provider || '') !== provider || String(attempt?.model || '') !== model) continue;
-        // Policy/circuit skips and user cancellation did not test the model.
-        // They must not hide the actual failure (or recovery) behind them.
-        if (!['succeeded', 'failed'].includes(attempt.status) || attempt.reason === 'cancelled') continue;
-        return {
-          provider,
-          model,
-          status: attempt.status,
-          observedAt: String(attempt.completedAt || receipt.completedAt || ''),
-          ...(attempt.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(attempt.durationMs) || 0)) } : {}),
-          ...(attempt.reason ? { reason: String(attempt.reason).slice(0, 100) } : {}),
-          ...(attempt.errorCategory ? { errorCategory: String(attempt.errorCategory).slice(0, 64) } : {}),
-        };
-      }
-    }
-  } catch {}
-  return null;
+  return findProviderRuntimeObservation(provider, model);
 }
 
 function probeAppliesToModel(probe: ProviderProbeRecord | null, model: string): boolean {

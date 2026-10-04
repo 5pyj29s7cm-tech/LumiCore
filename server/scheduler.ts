@@ -4,7 +4,7 @@ import { type ProviderGetters as SharedProviderGetters } from "./llm/provider_ge
 
 import crypto from 'node:crypto';
 import { Server as SocketIOServer } from 'socket.io';
-import { queryMemories, getDueReminders, runBehavioralAnalysis, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, isMemoryAvatarScoped, type Reminder } from './memory';
+import { queryMemories, getDueReminders, runBehavioralAnalysis, dynamicDecayMemories, promoteMemories, getUnconsolidatedEpisodic, type Reminder } from './memory';
 import { consolidateEpisodic, consolidateNarrative, ConsolidationContext } from './memory/consolidator';
 import { runDreamCycle } from './memory/dream';
 import { organizePersonalMemories } from './memory/auto_organize';
@@ -13,6 +13,8 @@ import { getTimeOfDay } from './time/utils';
 import { autoGenerateWorkflows } from './agents/workflows';
 import { runHealthAudit } from './agents/health_audit';
 import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
+import { listMemoryRows } from './memory/repository';
+import { listConversationHeaders, listUserInteractions } from './conversation/history_repository';
 import { personalityRegistry } from './personality';
 import { evolvePersonality, generateReviewPrompt } from './personality/evolution';
 import { backfillEmbeddings } from './memory/store';
@@ -2589,17 +2591,10 @@ Output ONLY the reflection — no preamble, no labels.`;
           if (personalityRegistry.isEvolutionFrozen('lumi', userId)) continue;
 
           // Gate: only evolve if enough new owner_trait memories since last evolution
-          const db = readDB();
           const lastEvolvedAt = (config as any).lastEvolvedAt as string | undefined;
           const newMemoriesSince = lastEvolvedAt
-            ? (db.memories || []).filter((m: any) =>
-                m.userId === userId &&
-                (m.domain || 'personal') === 'personal' &&
-                (m.orgId || '') === '' &&
-                !isMemoryAvatarScoped(m) &&
-                m.perspective === 'owner_trait' &&
-                m.createdAt > lastEvolvedAt
-              ).length
+            ? listMemoryRows({ userId, domain: 'personal', orgId: '' })
+                .filter(m => m.perspective === 'owner_trait' && m.createdAt > lastEvolvedAt).length
             : 999; // First time: always try
 
           if (newMemoriesSince < 20) {
@@ -2668,16 +2663,12 @@ Output ONLY the reflection — no preamble, no labels.`;
           try {
             const config = personalityRegistry.getForUser('lumi', userId);
             if (!config) continue;
-            const db = readDB();
             const periodStart = new Date(Date.now() - days * 86400000).toISOString();
 
-            const memories = (db.memories || []).filter((m: any) =>
-              m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m),
-            );
+            const owner = { userId, domain: 'personal' as const, orgId: '' };
+            const memories = listMemoryRows(owner);
             const periodMemories = memories.filter((m: any) => m.createdAt >= periodStart);
-            const periodInteractions = (db.interactions || []).filter((i: any) =>
-              i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '' && i.timestamp >= periodStart,
-            );
+            const periodInteractions = listUserInteractions(userId, { ...owner, after: periodStart });
             const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
             const periodEvolutions = evolutionHistory.filter((e: any) => e.timestamp >= periodStart);
 
@@ -2692,7 +2683,7 @@ Output ONLY the reflection — no preamble, no labels.`;
               connectionScore: loadEmotionalState(userId).connection,
               totalFacts: memories.filter((m: any) => m.type === 'fact').length,
               totalPreferences: memories.filter((m: any) => m.type === 'preference').length,
-              activeConversations: (db.conversations || []).filter((c: any) => c.userId === userId && (c.domain || 'personal') === 'personal' && (c.orgId || '') === '' && c.status === 'active').length,
+              activeConversations: listConversationHeaders(owner).filter(c => (c.domain || 'personal') === 'personal' && c.status === 'active').length,
             });
 
             const result = await makeLLMCall(
@@ -2800,20 +2791,17 @@ Output ONLY the reflection — no preamble, no labels.`;
 
       for (const userId of userIds) {
         try {
-          const db = readDB();
+          const owner = { userId, domain: 'personal' as const, orgId: '' };
           const now = new Date();
           const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
           // Collect yesterday's stats
-          const newMemories = (db.memories || []).filter((m: any) =>
-            m.userId === userId && (m.domain || 'personal') === 'personal' && !m.orgId && !isMemoryAvatarScoped(m) && m.createdAt && m.createdAt >= yesterday
+          const newMemories = listMemoryRows(owner).filter(m => m.createdAt && m.createdAt >= yesterday
               && !isTestMemory(m) && !isDerivedLearningMemory(m) && !isMalformedBehavioralMemory(m)
               && !m.sourceInteractionId?.startsWith('quarantine:'),
           );
-          const newInteractions = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday
-              && isOwnerInteractionEvidence(i) && (!i.role || i.role === 'user'),
-          );
+          const interactions = listUserInteractions(userId, { ...owner, after: yesterday });
+          const newInteractions = interactions.filter(i => isOwnerInteractionEvidence(i) && (!i.role || i.role === 'user'));
           const evolutionHistory = personalityRegistry.getEvolutionHistory('lumi', userId);
           const recentEvolution = evolutionHistory.filter((e: any) => e.timestamp >= yesterday);
 
@@ -2827,15 +2815,11 @@ Output ONLY the reflection — no preamble, no labels.`;
           }
 
           // Conversation stats
-          const conversations = (db.conversations || []).filter((c: any) =>
-            c.userId === userId && (c.domain || 'personal') === 'personal' && !c.orgId && c.lastActiveAt && c.lastActiveAt >= yesterday,
-          );
+          const conversations = listConversationHeaders(owner).filter(c =>
+            (c.domain || 'personal') === 'personal' && c.lastActiveAt && c.lastActiveAt >= yesterday);
 
           // Skill changes
-          const newSkills = (db.interactions || []).filter((i: any) =>
-            i.userId === userId && (i.domain || 'personal') === 'personal' && !i.orgId && i.timestamp && i.timestamp >= yesterday && (i as any).mode === 'skill_gen'
-              && isOwnerInteractionEvidence({ ...i, mode: '' }),
-          );
+          const newSkills = interactions.filter(i => i.mode === 'skill_gen' && isOwnerInteractionEvidence({ ...i, mode: '' }));
 
           // Build summary data
           const summaryData = {
@@ -2955,18 +2939,15 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
 
       for (const userId of userIds) {
         try {
-          const db = readDB();
+          const owner = { userId, domain: 'personal' as const, orgId: '' };
           const now = new Date();
           const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
           const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
           // 1. Memory spike detection: unusually high memory creation rate
-          const recentMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= oneHourAgo,
-          );
-          const dayMemories = (db.memories || []).filter(
-            (m: any) => m.userId === userId && (m.domain || 'personal') === 'personal' && (m.orgId || '') === '' && !isMemoryAvatarScoped(m) && m.createdAt >= twentyFourHoursAgo,
-          );
+          const memories = listMemoryRows(owner);
+          const recentMemories = memories.filter(m => m.createdAt >= oneHourAgo);
+          const dayMemories = memories.filter(m => m.createdAt >= twentyFourHoursAgo);
 
           const anomalySignals: string[] = [];
 
@@ -2991,9 +2972,7 @@ Write in first-person as Lumi, warm and introspective tone. Keep it under 150 Ch
           }
 
           // 2. Long inactivity check: >24h since last interaction
-          const userInteractions = (db.interactions || [])
-            .filter((i: any) => i.userId === userId && (i.domain || 'personal') === 'personal' && (i.orgId || '') === '')
-            .sort((a: any, b: any) => b.timestamp.localeCompare(a.timestamp));
+          const userInteractions = listUserInteractions(userId, { ...owner, order: 'newest', limit: 1 });
           if (userInteractions.length > 0) {
             const lastTs = new Date(userInteractions[0].timestamp).getTime();
             const hoursIdle = (now.getTime() - lastTs) / (1000 * 60 * 60);

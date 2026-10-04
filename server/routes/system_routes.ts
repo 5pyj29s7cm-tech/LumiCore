@@ -1,6 +1,6 @@
 import { runtimeFaults } from '../runtime/fault_state';
 import { Router } from "express";
-import jwt from "jsonwebtoken";
+import { listTokenUsageRows } from '../llm/token_tracker';
 import os from "os";
 import fs from "fs";
 import path from "path";
@@ -266,18 +266,6 @@ function collectRuntimeLogSources() {
     .slice(0, 8);
 }
 
-function getUserIdFromRequest(req: any, jwtSecret: string): string {
-  let uid = 'anonymous';
-  const token = req.cookies?.token || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
-  if (token) {
-    try {
-      const decoded: any = jwt.verify(token, jwtSecret);
-      uid = decoded.uid || 'anonymous';
-    } catch {}
-  }
-  return uid;
-}
-
 function sumTimes(times: Record<string, number>): number {
   return (times.user || 0) + (times.nice || 0) + (times.sys || 0) + (times.idle || 0) + (times.irq || 0);
 }
@@ -342,7 +330,7 @@ export async function getSystemStatsSnapshot() {
   return systemStatsInFlight;
 }
 
-export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, llm: TestableModelRuntime = {}) {
+export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, llm: TestableModelRuntime = {}) {
   router.get("/version", (_req, res) => {
     res.json(getRuntimeVersionInfo());
   });
@@ -777,22 +765,13 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   // Token usage aggregation
   router.get("/llm/usage", requireAuth, (req, res) => {
-    let token = req.cookies.token;
-    // Fallback: WebView2 may not send httpOnly cookies, check Authorization header
-    if (!token && req.headers.authorization?.startsWith('Bearer ')) {
-      token = req.headers.authorization.slice(7);
-    }
-    if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
-      const decoded: any = jwt.verify(token, jwtSecret);
       const days = parseInt(req.query.days as string) || 30;
       const providerFilter = req.query.provider as string | undefined;
-      const db = readDB();
-      const allUsage: any[] = db.tokenUsage || [];
+      const allUsage = listTokenUsageRows(req.user!.uid);
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
       const filtered = allUsage.filter((u: any) =>
-        u.userId === decoded.uid &&
         u.timestamp >= cutoff &&
         (!providerFilter || u.provider === providerFilter)
       );
@@ -827,7 +806,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
       res.json({ byProvider, daily, grandTotal, days, recordCount: filtered.length });
     } catch {
-      res.status(401).json({ error: "Invalid token" });
+      res.status(500).json({ error: 'Failed to read model usage' });
     }
   });
 
@@ -926,7 +905,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   });
 
   router.post("/llm/route/test", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
-    const uid = getUserIdFromRequest(req, jwtSecret);
+    const uid = req.user!.uid;
     try {
       res.json(req.body?.probe === 'forced_primary_failure'
         ? await testLumiModelFailoverConfiguration(uid, llm)
@@ -955,7 +934,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   });
 
   router.post("/retrieval-model/test", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
-    const uid = getUserIdFromRequest(req, jwtSecret);
+    const uid = req.user!.uid;
     try {
       const startedAt = Date.now();
       const preferences = getUserRetrievalModelPreferences(uid);
@@ -1005,7 +984,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // LLM model preferences — read/write per user
   router.put("/preferences/llm", requireAuth, async (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       const updated = upsertUserPreferredLLM(uid, req.body || {});
       return await sendDurableMutation(req, res, { success: true, ...updated, scope: 'lumi', organizationOverridesSupported: false });
     } catch (err: any) {
@@ -1015,7 +994,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/llm", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       res.json({
         ...getUserPreferredLLM(uid),
         scope: 'lumi',
@@ -1029,7 +1008,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/llm/routing-receipts", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       const requestedLimit = Number.parseInt(String(req.query.limit || '100'), 10);
       const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
       res.json({
@@ -1054,7 +1033,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // preference as well as the signed-in user's model roles. Keep it local and
   // administrator-only, just like credential writes and live provider probes.
   router.post("/preferences/official/apply", requireAuth, requireAdmin, requireLocalRequest, async (req, res) => {
-    const uid = getUserIdFromRequest(req, jwtSecret);
+    const uid = req.user!.uid;
     try {
       const result = await applyLumiOfficialModelConfiguration(uid);
       return res.json(result);
@@ -1098,7 +1077,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       if (!isVisionProvider(req.body?.provider)) {
         return res.status(400).json({ error: 'Invalid vision provider' });
       }
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       const updated = upsertUserPreferredVision(uid, req.body || {});
       return await sendDurableMutation(req, res, { success: true, ...updated });
     } catch (err: any) {
@@ -1108,7 +1087,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/vision", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       return res.json(getUserPreferredVision(uid));
     } catch {
       res.json(getUserPreferredVision('anonymous'));
@@ -1122,7 +1101,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       if (!isImageGenerationProvider(imageProvider) || !isVideoGenerationProvider(videoProvider)) {
         return res.status(400).json({ error: 'Invalid generation model provider' });
       }
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       const prefs = upsertUserPreferredGenerationModels(uid, req.body);
       return await sendDurableMutation(req, res, { success: true, ...prefs });
     } catch (err: any) {
@@ -1132,7 +1111,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/generation", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       res.json(getUserPreferredGenerationModels(uid));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1144,7 +1123,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       if (!isWorldModelProvider(req.body?.provider)) {
         return res.status(400).json({ error: 'Invalid world model provider' });
       }
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       const prefs = upsertUserWorldModelPrefs(uid, req.body);
       return await sendDurableMutation(req, res, { success: true, ...prefs, resolved: getUserPreferredWorldModel(uid) });
     } catch (err: any) {
@@ -1154,7 +1133,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/world", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       res.json({ ...getUserWorldModelPrefs(uid), resolved: getUserPreferredWorldModel(uid) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1163,7 +1142,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.put("/preferences/retrieval-model", requireAuth, async (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       return await sendDurableMutation(req, res, upsertUserRetrievalModelPreferences(uid, req.body));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1172,7 +1151,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
 
   router.get("/preferences/retrieval-model", requireAuth, (req, res) => {
     try {
-      const uid = getUserIdFromRequest(req, jwtSecret);
+      const uid = req.user!.uid;
       res.json(getUserRetrievalModelPreferences(uid));
     } catch (err: any) {
       res.status(500).json({ error: err.message });

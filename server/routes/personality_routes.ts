@@ -3,7 +3,7 @@ import { Router } from "express";
 import { personalityRegistry } from "../personality";
 import { evolvePersonality } from "../personality/evolution";
 import { loadEmotionalState } from "../personality/state";
-import { readDB } from "../../db_layer";
+import { listMemoryRows } from "../memory/repository";
 import { requireAuth } from "../middleware/auth";
 import { getMember } from "../org/db";
 import { scopedEmotionalStateKey } from "../socket/scope";
@@ -88,13 +88,11 @@ export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: 
       const scope = resolvePersonalityScope(req, res);
       if (!scope) return;
       const uid = scope.userId;
-      const db = readDB();
+      const memories = listMemoryRows({ userId: uid, domain: scope.orgId ? 'work' : 'personal', orgId: scope.orgId || '' });
       const limit = parseInt(req.query.limit as string) || 14;
 
-      const journalEntries = (db.memories || [])
+      const journalEntries = memories
         .filter((m: any) =>
-          m.userId === uid &&
-          (scope.orgId ? m.domain === 'work' && m.orgId === scope.orgId : (m.domain || 'personal') === 'personal' && !m.orgId) &&
           m.keywords?.includes('growth_journal') &&
           m.type === 'knowledge'
         )
@@ -107,10 +105,8 @@ export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: 
           tier: m.tier,
         }));
 
-      const dataEntries = (db.memories || [])
+      const dataEntries = memories
         .filter((m: any) =>
-          m.userId === uid &&
-          (scope.orgId ? m.domain === 'work' && m.orgId === scope.orgId : (m.domain || 'personal') === 'personal' && !m.orgId) &&
           m.keywords?.includes('growth_journal_data')
         )
         .sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || ''))

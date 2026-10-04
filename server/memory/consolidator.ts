@@ -1,7 +1,7 @@
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { getUnconsolidatedEpisodic, markConsolidated, addMemory, queryMemories } from './store';
 import { Memory, MemoryPerspective } from './types';
-import { readDB } from '../../db_layer';
+import { getMemoryRow } from './repository';
 import type { UserLLMProvider } from '../llm/user_preferences';
 
 interface ConsolidateResult {
@@ -104,11 +104,15 @@ function sourceIdentity(memory: Memory): string {
 
 /** Capture before the model call; source objects may be edited in place. */
 function sourceStillCurrent(memories: Memory[]): () => boolean {
-  const identities = memories.map(sourceIdentity);
-  return () => {
-    const current = new Set((readDB().memories || []).map(sourceIdentity));
-    return identities.every(identity => current.has(identity));
-  };
+  const sources = memories.map(memory => ({
+    id: memory.id, identity: sourceIdentity(memory),
+    scope: { userId: memory.userId, domain: memory.domain === 'work' ? 'work' as const : 'personal' as const,
+      orgId: memory.orgId || '', agentId: memory.agentId || '' },
+  }));
+  return () => sources.every(({ id, identity, scope }) => {
+    const current = getMemoryRow(scope, id);
+    return current !== undefined && sourceIdentity(current) === identity;
+  });
 }
 
 /**

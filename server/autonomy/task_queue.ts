@@ -871,3 +871,8 @@ export function resetAutonomousTaskQueueForTest(options: { clearPersisted?: bool
   hydrated = options.markHydrated === true;
   if (options.clearPersisted) persist();
 }
+
+/** Diagnostics read only persisted owned rows and do not trigger queue recovery. */
+export function listPersistedAutonomousTasks(userId: string): AutonomousTask[] {
+  return userId ? cloneDatabaseValue((readDB().autonomousTasks || []).filter(task => task.userId === userId)) : [];
+}

@@ -358,7 +358,7 @@ function isolateConversationSummaryForUse(conv: Conversation): boolean {
   return true;
 }
 
-function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): { domain: string; orgId: string } {
+function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): { domain: 'personal' | 'work'; orgId: string } {
   if (domainOrOrgId === 'personal') return { domain: 'personal', orgId: '' };
   if (domainOrOrgId === 'work') return { domain: 'work', orgId: orgIdMaybe || '' };
   return {
@@ -405,6 +405,19 @@ export function getConversationForScope(
   return conversation;
 }
 
+/** All entry points share the same empty transcript defaults and storage identity. */
+function newConversationRecord(
+  userId: string, agentId: string | undefined, scope: { domain: 'personal' | 'work'; orgId: string },
+  status: Conversation['status'], now: string,
+  continuity: Partial<Pick<Conversation, 'mode' | 'summary' | 'recentTopics' | 'lastTopicChangeAt'>> = {},
+): Conversation {
+  return {
+    id: 'conv_' + crypto.randomUUID(), userId, agentId: agentId || '', title: '', status,
+    summary: '', summaryChain: [], lastSummaryMessageCount: 0, messageCount: 0,
+    lastActiveAt: now, createdAt: now, ...continuity, domain: scope.domain, orgId: scope.orgId,
+  };
+}
+
 export function getOrCreateActiveConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
   const db = readDB();
   if (!db.conversations) db.conversations = [];
@@ -426,23 +439,8 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
     return active;
   }
 
-  const id = 'conv_' + crypto.randomUUID();
   const now = new Date().toISOString();
-  const conv: Conversation = {
-    id,
-    userId,
-    agentId: agentId || '',
-    title: '',
-    status: 'active',
-    summary: '',
-    summaryChain: [],
-    lastSummaryMessageCount: 0,
-    messageCount: 0,
-    lastActiveAt: now,
-    createdAt: now,
-    domain: scope.domain,
-    orgId: scope.orgId,
-  };
+  const conv: Conversation = newConversationRecord(userId, agentId, scope, 'active', now);
   db.conversations.push(conv);
   writeDB(db);
   return conv;
@@ -471,21 +469,7 @@ export function startNewConversation(userId: string, agentId?: string, domain?: 
     }
   }
 
-  const conversation: Conversation = {
-    id: 'conv_' + crypto.randomUUID(),
-    userId,
-    agentId: agentId || '',
-    title: '',
-    status: 'active',
-    summary: '',
-    summaryChain: [],
-    lastSummaryMessageCount: 0,
-    messageCount: 0,
-    lastActiveAt: now,
-    createdAt: now,
-    domain: scope.domain,
-    orgId: scope.orgId,
-  };
+  const conversation: Conversation = newConversationRecord(userId, agentId, scope, 'active', now);
   db.conversations.push(conversation);
   writeDB(db);
   return conversation;
@@ -502,21 +486,7 @@ export function startIsolatedConversation(userId: string, agentId?: string, doma
   if (!db.conversations) db.conversations = [];
   const scope = resolveConversationScope(domain, orgId);
   const now = new Date().toISOString();
-  const conversation: Conversation = {
-    id: 'conv_' + crypto.randomUUID(),
-    userId,
-    agentId: agentId || '',
-    title: '',
-    status: 'closed',
-    summary: '',
-    summaryChain: [],
-    lastSummaryMessageCount: 0,
-    messageCount: 0,
-    lastActiveAt: now,
-    createdAt: now,
-    domain: scope.domain,
-    orgId: scope.orgId,
-  };
+  const conversation: Conversation = newConversationRecord(userId, agentId, scope, 'closed', now);
   db.conversations.push(conversation);
   writeDB(db);
   return conversation;
@@ -724,24 +694,11 @@ export function getOrCreateConversationForTurn(
   active.lastActiveAt = now;
   delete active.pendingActionContinuation;
 
-  const next: Conversation = {
-    id: 'conv_' + crypto.randomUUID(),
-    userId,
-    agentId: agentId || '',
-    title: '',
-    status: 'active',
-    mode: active.mode,
-    summary: continuitySummary,
-    summaryChain: [],
-    lastSummaryMessageCount: 0,
-    messageCount: 0,
-    lastActiveAt: now,
-    createdAt: now,
+  const next = newConversationRecord(userId, agentId, resolveConversationScope(domain, orgId), 'active', now, {
+    mode: active.mode, summary: continuitySummary,
     recentTopics: active.recentTopics ? [...active.recentTopics] : undefined,
     lastTopicChangeAt: active.lastTopicChangeAt,
-    domain: resolveConversationScope(domain, orgId).domain,
-    orgId: resolveConversationScope(domain, orgId).orgId,
-  };
+  });
   db.conversations.push(next);
   writeDB(db);
 

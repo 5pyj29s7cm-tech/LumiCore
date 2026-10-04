@@ -275,48 +275,35 @@ describe('chat terminal durability boundary', () => {
     expect(JSON.stringify(rows[0])).not.toContain('uncommitted success');
   });
 
-  it('wires both chat finalization paths through the same strict boundary', () => {
+  it('wires cleanup, confirmation and model finalization through one strict receipt boundary', () => {
     const source = readFileSync(
       path.join(process.cwd(), 'server/socket/chat.ts'),
       'utf8',
     );
-    const starts = [...source.matchAll(/const terminalCommitted = await commitChatTerminalBoundary\(\{/g)]
-      .map(match => match.index || 0);
-
-    expect(starts).toHaveLength(2);
-    expect(source).toContain('import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";');
-    expect(source.match(/reason: 'persistence_unknown'/g)?.length || 0).toBeGreaterThanOrEqual(2);
-
-    for (const start of starts) {
-      const end = source.indexOf('if (!terminalCommitted)', start);
-      const boundary = source.slice(start, end);
-      const terminalState = boundary.indexOf('persistTerminalState:');
-      const takeoverWrite = boundary.indexOf('persistChatTakeoverExecution(', terminalState);
-      const assistantWrite = boundary.indexOf('persistAssistantMessage:', takeoverWrite);
-      const flush = boundary.indexOf('flush: flushDBOrThrow', assistantWrite);
-      const receipt = boundary.indexOf('persistTerminalReceipt:', flush);
-      const strictReceipt = boundary.indexOf('recordChatExecutionTerminalEventDurably(', receipt);
-      const committed = boundary.indexOf('publishCommitted:', strictReceipt);
-      const response = boundary.indexOf("publishRecordedAgent('agent:response'", committed);
-      const relation = boundary.indexOf('publishDurableTaskRelation()', response);
-      const conversationUpdate = boundary.indexOf('emitConversationUpdated(', relation);
-
-      expect(terminalState).toBeGreaterThan(-1);
-      expect(takeoverWrite).toBeGreaterThan(terminalState);
-      expect(assistantWrite).toBeGreaterThan(takeoverWrite);
-      expect(flush).toBeGreaterThan(assistantWrite);
-      expect(receipt).toBeGreaterThan(flush);
-      expect(strictReceipt).toBeGreaterThan(receipt);
-      expect(committed).toBeGreaterThan(strictReceipt);
-      expect(response).toBeGreaterThan(committed);
-      expect(relation).toBeGreaterThan(response);
-      expect(conversationUpdate).toBeGreaterThan(relation);
-      expect(boundary).not.toContain("emitAgent('agent:notification'");
-      expect(boundary).not.toContain("emitAgent('agent:task_execution_writeback'");
-      expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:notification'/);
-      expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:task_execution_writeback'/);
+    const calls = [...source.matchAll(/const (?:terminalCommitted|cleanupCommitted) = await commitRecordedTerminal\(\{/g)];
+    expect(calls).toHaveLength(3);
+    for (const call of calls) {
+      const boundary = source.slice(call.index, source.indexOf('payload:', call.index));
+      expect(boundary).toContain('persistTerminalState: () => persistChatTakeoverExecution(');
+      expect(boundary).toContain('persistAssistantMessage:');
     }
-
+    const start = source.indexOf('const commitRecordedTerminal =');
+    const boundary = source.slice(start, source.indexOf('const actionFollowupIntent', start));
+    expect(boundary).toContain('=> commitChatTerminalBoundary({');
+    const markers = ['persistTerminalState:', 'persistAssistantMessage:', 'flush: flushDBOrThrow',
+      'persistTerminalReceipt:', 'recordChatExecutionTerminalEventDurably(', 'publishCommitted:',
+      "publishRecordedAgent('agent:response'", 'publishDurableTaskRelation()', 'emitConversationUpdated('];
+    let position = -1;
+    for (const marker of markers) {
+      const next = boundary.indexOf(marker, position + 1);
+      expect(next, marker).toBeGreaterThan(position);
+      position = next;
+    }
+    expect(boundary).toContain('recordChatExecutionPersistenceUnknownDurably(');
+    expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:notification'/);
+    expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:task_execution_writeback'/);
+    expect(boundary).not.toContain("emitAgent('agent:notification'");
+    expect(boundary).not.toContain("emitAgent('agent:task_execution_writeback'");
     expect(source).not.toContain('A completed model turn must unlock the native chat surface before');
   });
 });

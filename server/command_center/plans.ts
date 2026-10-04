@@ -368,3 +368,9 @@ export function dispatchDueCommandCenterPlans(at = new Date()): number {
   }
   return dispatched;
 }
+
+/** Identity check for the dispatcher; never projects or changes authorization state. */
+export function commandCenterPlanExists(id: string, owner: { userId: string; domain: string; orgId: string }): boolean {
+  return (readDB().commandCenterPlans || []).some(plan => plan.id === id && plan.userId === owner.userId
+    && plan.domain === owner.domain && plan.orgId === owner.orgId);
+}
