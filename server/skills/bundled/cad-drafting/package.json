@@ -176,6 +176,7 @@
         "trust": "official",
         "lane": "cad"
       }
-    }
+    },
+    "documentRuntime": true
   }
 }

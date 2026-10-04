@@ -21,6 +21,7 @@ const runtimePackageTrees = [
   'zod',
   'jszip',
   'mammoth',
+  'exceljs',
   'pdf-parse',
   'pdf-lib',
   'playwright-core',

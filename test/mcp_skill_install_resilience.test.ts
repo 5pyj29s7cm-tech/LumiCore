@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createBundledSkillIdentity } from '../server/marketplace/official_identity';
+import { createBundledSkillIdentity, verifyManagedSkillRuntimeIdentity } from '../server/marketplace/official_identity';
 
 const ORIGINAL_LUMI_DATA_DIR = process.env.LUMI_DATA_DIR;
 const ORIGINAL_TEST_TMPDIR = process.env.LUMI_TEST_TMPDIR;
@@ -70,6 +70,34 @@ afterEach(() => {
 });
 
 describe('MCP skill install resilience', () => {
+  it('rejects a managed document skill when its host parser is changed', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock);
+    const host = path.join(tempHome, 'host');
+    const cli = path.join(host, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const skill = path.join(tempHome, 'document-skill');
+    const helpers = [
+      'files/document_text.ts', 'knowledge/rtf.ts', 'knowledge/pptx.ts',
+      'utils/pdf_text.ts', 'utils/spreadsheet.ts',
+      'utils/spreadsheet_formulas.ts', 'utils/spreadsheet_charts.ts',
+    ].map(file => path.join(host, 'server', file));
+    for (const file of [cli, ...helpers, path.join(skill, 'index.ts')]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'export const value = 1;\n');
+    }
+    fs.writeFileSync(path.join(skill, 'package.json'), JSON.stringify({ lumi: { documentRuntime: true } }));
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    vi.spyOn(manager as any, 'resolveRuntimeTsxCli').mockReturnValue(cli);
+    vi.spyOn(manager as any, 'collectManagedRuntimeDependencyDirectories').mockReturnValue([]);
+    const runtime = (manager as any).deriveManagedSkillRuntime(skill);
+    expect(verifyManagedSkillRuntimeIdentity(runtime).valid).toBe(true);
+    for (const helper of helpers) {
+      fs.writeFileSync(helper, 'export const value = 2;\n');
+      expect(verifyManagedSkillRuntimeIdentity(runtime).valid).toBe(false);
+      fs.writeFileSync(helper, 'export const value = 1;\n');
+      expect(verifyManagedSkillRuntimeIdentity(runtime).valid).toBe(true);
+    }
+  });
   it('does not seed the legacy online Playwright npx runtime', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);

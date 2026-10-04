@@ -905,7 +905,11 @@ export class MCPClientManager {
       args: [path.resolve(tsxCli), entry],
       cwd: path.resolve(directory),
       env: this.managedSkillRuntimeEnvironment(pkg),
-      files: [command, path.resolve(tsxCli), entry, ...dependencyDirectories],
+      files: [command, path.resolve(tsxCli), entry, ...dependencyDirectories,
+        ...(pkg.lumi?.documentRuntime === true ? [
+          'files/document_text.ts', 'knowledge/rtf.ts', 'knowledge/pptx.ts',
+          'utils/pdf_text.ts', 'utils/spreadsheet.ts', 'utils/spreadsheet_formulas.ts', 'utils/spreadsheet_charts.ts',
+        ].map(file => path.resolve(path.dirname(tsxCli), '../../../server', file)) : [])],
     });
   }
 
@@ -1813,6 +1817,9 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
       for (const dependency of Object.keys(pkg.peerDependencies || {})) visit(dependency, resolved, false);
     };
     visit('tsx', undefined, true);
+    if (skillPackage.lumi?.documentRuntime === true) {
+      for (const dependency of ['exceljs', 'jszip', 'mammoth', 'pdf-parse']) visit(dependency, undefined, true);
+    }
     for (const dependency of skillDependencies) visit(dependency, skillDir, true);
     return directories.sort((left, right) => left.localeCompare(right));
   }
