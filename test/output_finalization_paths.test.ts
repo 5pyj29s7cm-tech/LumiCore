@@ -216,7 +216,7 @@ describe('finalized output paths', () => {
     // at only the runWithTools call would miss speech queued from onChunk.
     const modelCandidateStart = voice.indexOf('const modelConfig: LLMConfig = {');
     const sharedTurnStart = voice.indexOf('const result = toolSessionActive', modelCandidateStart);
-    const sharedToolStart = voice.indexOf('await runWithTools(', sharedTurnStart);
+    const sharedToolStart = voice.indexOf('await runToolSession({', sharedTurnStart);
     const sharedConversationStart = voice.indexOf('await runConversationTurn({', sharedTurnStart);
     const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', sharedTurnStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
@@ -255,23 +255,16 @@ describe('finalized output paths', () => {
     expect(chat).toContain("cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind");
     expect(chat).toContain('if (!finalResponse.blocked) {');
 
-    for (const [finalized, committed] of [
-      ['finalizedRecentAction', 'recentActionCommitted'],
-      ['finalizedWorkflow', 'workflowCommitted'],
-      ['finalizedMode', 'modeCommitted'],
-      ['quickFinalized', 'quickCommitted'],
-      ['confirmedFinal', 'confirmationCommitted'],
-    ]) {
+    for (const finalized of ['finalizedRecentAction', 'finalizedWorkflow', 'finalizedMode', 'quickFinalized', 'confirmedFinal']) {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
-      expect(voice).toContain(`if (${committed} && !${finalized}.blocked) {`);
     }
-    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(2);
-    for (const committed of [
-      'messagingReadCommitted',
-      'messagingSendCommitted',
-    ]) {
-      expect(voice).toContain(`if (${committed} && !directFinal.blocked) {`);
-    }
+    expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(1);
+    expect(voice.match(/await finishVoiceTerminal\(\{/g)).toHaveLength(6);
+    expect(voice).toContain('commit: commitVoiceTerminal');
+    const completion = source('server/socket/voice/terminal_completion.ts');
+    expect(completion).toContain('if (committed && !input.blocked) options.onCommitted?.()');
+    expect(completion.indexOf('if (!deps.isCurrent())')).toBeLessThan(completion.indexOf('options.onCommitted?.()'));
+
   });
 
   it('keeps named workflow regex shortcuts out of main chat', () => {
@@ -293,7 +286,7 @@ describe('finalized output paths', () => {
     expect(workflowPath).toContain('const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary');
     expect(workflowPath).toContain('const workflowSpeechText = finalizedWorkflowSpeech.blocked');
     expect(workflowPath).toContain('? responseText');
-    expect(workflowPath).toContain('const workflowCommitted = await commitVoiceTerminal({');
+    expect(workflowPath).toContain('await finishVoiceTerminal({');
     expect(workflowPath).toContain('speechText: workflowSpeechText');
     expect(workflowPath).not.toContain('queueFinalizedSpeech(');
   });
@@ -320,7 +313,7 @@ describe('finalized output paths', () => {
     const feed = source('src/components/AutonomousFeed.tsx');
     const desktop = source('src/components/DesktopUI.tsx');
     const proactive = source('src/components/ProactiveNotifications.tsx');
-    const scheduler = source('server/scheduler.ts');
+    const scheduler = source('server/scheduler.ts') + source('server/scheduler/builtins/personal_memory.ts') + source('server/scheduler/builtins/growth.ts');
 
     expect(autonomous).toContain('evaluateAutonomousTaskOutcome');
     expect(autonomous).toContain('finalizeAutonomousTaskOutcomeForDelivery');
@@ -414,7 +407,7 @@ describe('finalized output paths', () => {
     const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
     const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
-    expect(voice.match(/await commitVoiceTerminal\(\{/g)?.length || 0).toBeGreaterThanOrEqual(13);
+    expect(voice.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBeGreaterThanOrEqual(12);
     expect(terminalBoundary).toContain('persistVoiceAssistantMessage(');
     expect(terminalBoundary).toContain('recordChatExecutionTerminalEventDurably(');
     expect(terminalBoundary).toContain('publishCommitted:');
@@ -438,19 +431,20 @@ describe('finalized output paths', () => {
     expect(voice).toContain('if (currentToolRecords.length === 0) return null;');
     expect(chat.match(/persistChatTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(2);
     expect(chat).not.toContain('executeSkillWorkflowAdapter');
-    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(6);
+    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(5);
     expect(writeback).toContain('input.flow.workTakeover.shouldResumeTask');
 
     expect(chat).not.toContain('registerBackgroundTask');
     for (const marker of [
       "source: 'voice_mode'",
       "source: 'voice_quick_command'",
-      "source: 'voice_foreground_messaging'",
       "source: 'voice_confirmation'",
     ]) {
       expect(voice).toContain(marker);
     }
 
+    expect(voice).toContain("const source = reading ? 'voice_foreground_messaging_read' : 'voice_foreground_messaging'");
+    expect(voice).toContain('persistVoiceTakeoverExecution(responseText, { toolRecords: [toolRecord], source,');
     const chatHistoryStart = chat.indexOf('const recentFailureExplanation =');
     const chatHistoryEnd = chat.indexOf('let pendingConfirmationCreatedThisTurn', chatHistoryStart);
     const chatHistoryPath = chat.slice(chatHistoryStart, chatHistoryEnd);

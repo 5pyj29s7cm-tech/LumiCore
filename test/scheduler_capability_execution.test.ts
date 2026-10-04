@@ -19,6 +19,8 @@ import {
 import { evaluateCapabilityRollout } from '../server/cognition/capability_rollout';
 import type { ToolExecutionRecord } from '../server/tools/types';
 import { extractSourceExpression } from './source_expression';
+import { createScheduledBuiltinTasks } from '../server/scheduler/builtins';
+import { providerGetterArguments } from '../server/llm/provider_getters';
 
 function verifiedRecord(plan: ReturnType<typeof buildScheduledTaskExecutionPlan>): ToolExecutionRecord {
   const node = plan.nodes.find(candidate => candidate.toolName === 'scheduler_task_handler')!;
@@ -62,7 +64,8 @@ describe('scheduler capability execution protocol', () => {
     const fixture = { memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] };
     vi.spyOn(database, 'readDB').mockReturnValue(fixture as any);
     const getters = Array.from({ length: 12 }, () => () => null);
-    const register = extractSourceExpression('server/scheduler.ts', 'registerScheduledTasks', {
+    const register = extractSourceExpression('server/scheduler/builtins/growth.ts', 'createGrowthTasks', {
+      providerGetterArguments,
       scheduler: { register: (task: any) => tasks.push(task) }, createReminderCheckTask: () => ({ id: 'reminder-fixture' }), Date: Clock,
       resolveScheduledUserIds: () => ['failed', 'owner', 'no-config', 'empty'],
       readDB: () => ({ memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] }),
@@ -75,10 +78,13 @@ describe('scheduler capability execution protocol', () => {
         if (config.userId === 'failed') throw new Error('synthetic provider failure');
         return { text: config.userId === 'empty' ? '   ' : '  Review narrative.  ' };
       },
-      require: (name: string) => { expect(name).toBe('./memory'); return { addMemory: (...args: any[]) => saved.push(args) }; },
+      require: (name: string) => { expect(name).toBe('../../memory'); return { addMemory: (...args: any[]) => saved.push(args) }; },
       console: { log: () => {}, error: () => {} }, redactSchedulerDiagnostic: String,
     });
-    register(...getters);
+    tasks.push(...register({ scheduler: {},
+      getters: Object.fromEntries(['getDeepSeek','getGemini','getOpenAI','getAnthropic','getQwen','getOllama','getLmStudio','getArk','getXiaomi','getKimi','getGlm','getRelay'].map((key, i) => [key, getters[i]])),
+      getAllUserIds: () => ['failed', 'owner', 'no-config', 'empty'], redactSchedulerDiagnostic: String,
+    }));
     const task = tasks.find(candidate => candidate.id === `${depth}_review`);
     expect(task).toMatchObject({ cron, quiet: true, lastRun: null, executionClass: 'maintenance' });
     expect(await task.handler()).toBe('[owner] Review narrative.');
@@ -412,9 +418,11 @@ describe('scheduler capability execution protocol', () => {
     expect(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'))
       .toBeLessThan(run.indexOf('task.lastStatus = completedTask.lastStatus'));
 
-    const registrations = source.match(/scheduler\.register\((?:\{|createReminderCheckTask\(\))/g) || [];
-    const declarations = source.match(/executionClass:\s*'(?:maintenance|proactive_delivery|client_probe|autonomous_orchestration)'/g) || [];
-    expect(registrations.length).toBeGreaterThan(0);
-    expect(declarations).toHaveLength(registrations.length);
+    const tasks = createScheduledBuiltinTasks({ scheduler: { io: null }, getters: { getDeepSeek: () => null, getGemini: () => null },
+      getAllUserIds: () => [], getSystemAdminUserIds: () => [],
+      createReminderCheckTask: () => ({ id: 'reminder_check', cron: 'every_1m', lastRun: null, executionClass: 'proactive_delivery', handler: async () => null }),
+      redactSchedulerDiagnostic: String });
+    expect(tasks).toHaveLength(27);
+    expect(tasks.every(task => ['maintenance', 'proactive_delivery', 'client_probe', 'autonomous_orchestration'].includes(task.executionClass))).toBe(true);
   });
 });

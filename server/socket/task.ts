@@ -1,3 +1,4 @@
+import { runToolSession } from "../llm/tool_session";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
@@ -13,7 +14,7 @@ import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { NormalizedMessage } from "../llm/providers";
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
-import { buildConfirmedStepContinuationMessages, runWithTools } from "../llm/adapter";
+import { buildConfirmedStepContinuationMessages } from "../llm/adapter";
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
 import { queryMemories, addMemory, addReminder, extractMemories, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
@@ -1546,16 +1547,16 @@ export function registerTaskHandler(
         )
         && !authority.isCancelled()
       ) {
-        const continuation = await runWithTools(
-          [
+        const continuation = await runToolSession({
+          messages: [
             { role: 'system', content: effectiveSystemPrompt },
             ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {
               messageId: taskUserMessageId,
               text: data.text,
             }),
           ],
-          toolRegistry,
-          {
+          registry: toolRegistry,
+          config: {
             provider: activeProvider,
             model: activeModel,
             userId: uid,
@@ -1564,7 +1565,7 @@ export function registerTaskHandler(
             signal: taskAbortController.signal,
             ...reasoningRoutePolicy,
           },
-          record => {
+          onToolCall: record => {
             emitAgent("agent:tool_call", {
               name: record.name,
               arguments: record.arguments,
@@ -1572,14 +1573,8 @@ export function registerTaskHandler(
               error: record.error,
             });
           },
-          modelToolPolicy.maxIterations || 25,
-          llmGetters.getDeepSeek,
-          llmGetters.getGemini,
-          llmGetters.getOpenAI,
-          llmGetters.getAnthropic,
-          llmGetters.getQwen,
-          undefined,
-          {
+          maxIterations: modelToolPolicy.maxIterations || 25,
+          context: {
             ...toolSecurityContext,
             ...pipelineToolContext,
             userId: uid,
@@ -1599,14 +1594,8 @@ export function registerTaskHandler(
             source: 'task_confirmation_resume',
             supervisedExternalCommits: true,
           },
-          llmGetters.getOllama,
-          llmGetters.getLmStudio,
-          llmGetters.getArk,
-          llmGetters.getXiaomi,
-          llmGetters.getKimi,
-          llmGetters.getGlm,
-          llmGetters.getRelay,
-        );
+          getters: llmGetters,
+        });
         confirmationRecords = continuation.toolCalls?.length
           ? continuation.toolCalls
           : [confirmationRecord];
@@ -1712,11 +1701,11 @@ export function registerTaskHandler(
       // Reuse the shared decision and the exact configured model.
       console.log(`[Task] Using configured model: ${activeProvider}/${activeModel} for category: ${executionPipeline.normalizedIntent.kind}`);
 
-      const result = await runWithTools(
-        messages,
-        toolRegistry,
-        { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy },
-        (record) => {
+      const result = await runToolSession({
+        messages: messages,
+        registry: toolRegistry,
+        config: { provider: activeProvider, model: activeModel, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId, signal: taskAbortController.signal, ...reasoningRoutePolicy },
+        onToolCall: (record) => {
           requestToolRecords.push(record);
           emitAgent("agent:tool_call", {
             name: record.name,
@@ -1725,9 +1714,8 @@ export function registerTaskHandler(
             error: record.error,
           });
         },
-        modelToolPolicy.maxIterations || 25,
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        (chunk) => {
+        maxIterations: modelToolPolicy.maxIterations || 25,
+        onStreamChunk: (chunk) => {
           if (!authority.isCancelled() && !deferTaskModelOutput) {
             const safeText = taskTextGate.push(chunk);
             if (safeText) {
@@ -1736,15 +1724,9 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, turnRowId: actionTaskExecution.turnRowId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => authority.isCancelled(), llmGetters, source: 'task', supervisedExternalCommits: true },
-        llmGetters.getOllama,
-        llmGetters.getLmStudio,
-        llmGetters.getArk,
-        llmGetters.getXiaomi,
-        llmGetters.getKimi,
-        llmGetters.getGlm,
-        llmGetters.getRelay,
-      );
+        context: { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, turnRowId: actionTaskExecution.turnRowId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => authority.isCancelled(), llmGetters, source: 'task', supervisedExternalCommits: true },
+        getters: llmGetters,
+      });
 
       // Persist token usage
       for (const u of result.usageRecords) {
@@ -1851,14 +1833,14 @@ export function registerTaskHandler(
         toolRecords: finalTaskToolRecords,
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
           console.warn('[TaskHandler] Recovering blocked execution internally.');
-          const recovery = await runWithTools(
-            [
+          const recovery = await runToolSession({
+            messages: [
               ...messages,
               { role: 'assistant', content: finalTaskText },
               { role: 'user', content: instruction },
             ],
-            toolRegistry,
-            {
+            registry: toolRegistry,
+            config: {
               provider: activeProvider,
               model: activeModel,
               userId: uid,
@@ -1867,7 +1849,7 @@ export function registerTaskHandler(
               signal: taskAbortController.signal,
               ...reasoningRoutePolicy,
             },
-            record => {
+            onToolCall: record => {
               requestToolRecords.push(record);
               recordTool(record);
               emitAgent('agent:tool_call', {
@@ -1877,14 +1859,8 @@ export function registerTaskHandler(
                 error: record.error,
               });
             },
-            Math.max(2, Math.min(12, modelToolPolicy.maxIterations || 8)),
-            llmGetters.getDeepSeek,
-            llmGetters.getGemini,
-            llmGetters.getOpenAI,
-            llmGetters.getAnthropic,
-            llmGetters.getQwen,
-            undefined,
-            {
+            maxIterations: Math.max(2, Math.min(12, modelToolPolicy.maxIterations || 8)),
+            context: {
               ...toolSecurityContext,
               ...pipelineToolContext,
               userId: uid,
@@ -1911,14 +1887,8 @@ export function registerTaskHandler(
               source: 'task_guard_recovery',
               supervisedExternalCommits: true,
             },
-            llmGetters.getOllama,
-            llmGetters.getLmStudio,
-            llmGetters.getArk,
-            llmGetters.getXiaomi,
-            llmGetters.getKimi,
-            llmGetters.getGlm,
-            llmGetters.getRelay,
-          );
+            getters: llmGetters,
+          });
           for (const usage of recovery.usageRecords) {
             recordTokenUsage(uid, usage.provider, usage.model, {
               promptTokens: usage.promptTokens,

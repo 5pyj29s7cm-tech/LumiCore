@@ -22,8 +22,8 @@ vi.mock('../server/llm/embedding_provider', async importOriginal => ({
   ...await importOriginal<any>(),
   generateConfiguredEmbedding: vi.fn(async () => ({ vector: [1, 0, 0], provider: 'synthetic', model: 'offline-fixture' })),
 }));
-const buildBackendAttachmentContext = extract('server/socket/chat.ts', 'buildChatAttachmentContext', {
-  getAudioAttachmentTranscript: extract('server/socket/chat.ts', 'getAudioAttachmentTranscript', {}),
+const buildBackendAttachmentContext = extract('server/socket/chat/attachments.ts', 'buildChatAttachmentContext', {
+  getAudioAttachmentTranscript: extract('server/socket/chat/attachments.ts', 'getAudioAttachmentTranscript', {}),
 });
 
 it('retries the latest selected bytes even when browser file metadata is unchanged', async () => {

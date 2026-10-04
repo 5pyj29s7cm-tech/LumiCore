@@ -1343,59 +1343,6 @@
       "0891256f459817c7c5dc": 1,
       "845b0f0f09ec2810d44c": 1
     },
-    "server/scheduler.ts": {
-      "36b5fce95a6b374a29ad": 1,
-      "d5a1c400a5c7517d9b3c": 1,
-      "eb9e9a4b465bca2756e6": 1,
-      "21d4a870955d326fa9e8": 1,
-      "ba5067bb27a42232a967": 1,
-      "209586af6b8b1f64daff": 1,
-      "725372d2e0ddd386af27": 1,
-      "8231956440890728b42b": 1,
-      "6c7406ee7d2d4f1c8ea2": 1,
-      "3a1cc39c7fa4c698e0f1": 1,
-      "76f6e87eb8aaec326e11": 1,
-      "b73bb35c6f4d484a54cf": 1,
-      "02a744e0100fadc1753a": 1,
-      "a5a9a287bcbce79ee28b": 1,
-      "65a90be213030c0ba7d5": 1,
-      "2ed63702899b6e68f8f9": 1,
-      "bed91ce24885cce7086f": 1,
-      "30b3fb7bd5f2a1956445": 1,
-      "5e4dec1f1fa4c806f1b7": 1,
-      "a21ecec4495ed3355c1f": 1,
-      "914092250aa2f47099f1": 1,
-      "d990b51b842c620cb2a1": 1,
-      "59e8bb225e3e93527919": 1,
-      "536efab2901121220b42": 1,
-      "58cc643c3c0d4d5669a6": 1,
-      "be0d338c857893896d46": 1,
-      "9c6f7c9b854ab8023638": 1,
-      "2ce2847cbc4743b66010": 1,
-      "6d011d852ac13c61e16b": 1,
-      "455cecc9f852b2e3506e": 1,
-      "afa29face67ab05ed016": 1,
-      "519f31e1a628a3919d92": 1,
-      "e3f61da124abf21d0439": 1,
-      "65abe9b0a36443829b66": 1,
-      "4f1b6a1edd9d42434f55": 1,
-      "2d273f96570020b98537": 1,
-      "33c94fe3ae346b005926": 1,
-      "11654edb1c0549767df9": 1,
-      "c48515591a718696b514": 1,
-      "7643fdb6515a928c0cac": 1,
-      "b4378013bf132ec3f4be": 1,
-      "5c7dc658a97d098fd1a1": 1,
-      "62ef900a8f5d5bff6407": 1,
-      "1625179badc027f0d0a2": 1,
-      "f46d9e208c6c5e902bea": 1,
-      "f17d80a0974025ac1cfa": 1,
-      "74f9109547132aa05215": 1,
-      "f76476d623b03e6f6942": 1,
-      "5799a902e9744f0f098e": 1,
-      "c0ab59f4b23b16a29122": 1,
-      "b232484fbeabbfb0e7e5": 1
-    },
     "server/self_extension/autofix.ts": {
       "aebfa01bc4e688b49512": 1,
       "684c096e3d4a9c4976c2": 1,
@@ -2070,21 +2017,6 @@
       "86a03c96939ceb521471": 1
     },
     "server/socket/chat.ts": {
-      "d1ec215c7f5849f5ccf2": 1,
-      "ad09e844be7bf004bf3d": 1,
-      "6c8e90e54b5687247456": 1,
-      "e6a485ce42272b7fd556": 1,
-      "0bf586384164a3c2839e": 1,
-      "85d8dd8b78d8b192acd3": 1,
-      "ade0fb7aa4423489148e": 1,
-      "875667f8b0f79505196d": 1,
-      "74e1cd9309712114545a": 1,
-      "d0fb36acc114cc0e0d14": 1,
-      "858cbd433a91f647c897": 1,
-      "5c6e0653cc250c7850bb": 1,
-      "1716bb8f19fbaca8c480": 1,
-      "15f8da2b87c6418b784c": 1,
-      "922f0f2a868a0760a673": 1,
       "35d64db853be008f05a6": 1,
       "d8c3578c40cf0ddd72c6": 1
     },
@@ -3430,11 +3362,6 @@
       "ea878d5d090510da46d4": 1,
       "515559957fd3acbdd969": 1
     },
-    "src/components/AgentChatPage.tsx": {
-      "65d691e9689904402b91": 1,
-      "ad09e844be7bf004bf3d": 1,
-      "093470d1e7023e599aaa": 1
-    },
     "src/components/DesktopPersonalizationSoundPanel.tsx": {
       "f64660efbe61dd28d596": 1,
       "1182c5454f113db566b4": 1,
@@ -3446,8 +3373,6 @@
       "c6a8410b52a1ab4d6bf1": 1
     },
     "src/components/DesktopUI.tsx": {
-      "14326e532fba61bcb521": 1,
-      "3a116815bc9da10d888f": 1,
       "0ac45e5afa719ca6bcf8": 1,
       "279c768406beafc786e8": 1
     },
@@ -3557,6 +3482,96 @@
     },
     "src/lib/legalCaseStore.ts": {
       "4faa6e299e268632bdde": 1
+    },
+    "server/scheduler/builtins/coordination.ts": {
+      "36b5fce95a6b374a29ad": 1,
+      "d5a1c400a5c7517d9b3c": 1,
+      "eb9e9a4b465bca2756e6": 1,
+      "21d4a870955d326fa9e8": 1
+    },
+    "server/scheduler/builtins/growth.ts": {
+      "2ed63702899b6e68f8f9": 1,
+      "bed91ce24885cce7086f": 1,
+      "30b3fb7bd5f2a1956445": 1,
+      "5e4dec1f1fa4c806f1b7": 1,
+      "a21ecec4495ed3355c1f": 1,
+      "914092250aa2f47099f1": 1,
+      "d990b51b842c620cb2a1": 1
+    },
+    "server/scheduler/builtins/personal_memory.ts": {
+      "ba5067bb27a42232a967": 1,
+      "209586af6b8b1f64daff": 1,
+      "725372d2e0ddd386af27": 1,
+      "8231956440890728b42b": 1,
+      "3a1cc39c7fa4c698e0f1": 1,
+      "76f6e87eb8aaec326e11": 1,
+      "b73bb35c6f4d484a54cf": 1,
+      "02a744e0100fadc1753a": 1,
+      "a5a9a287bcbce79ee28b": 1,
+      "65a90be213030c0ba7d5": 1
+    },
+    "server/scheduler/builtins/proactive_context.ts": {
+      "59e8bb225e3e93527919": 1,
+      "536efab2901121220b42": 1,
+      "58cc643c3c0d4d5669a6": 1,
+      "be0d338c857893896d46": 1,
+      "9c6f7c9b854ab8023638": 1,
+      "2ce2847cbc4743b66010": 1,
+      "6d011d852ac13c61e16b": 1,
+      "455cecc9f852b2e3506e": 1,
+      "afa29face67ab05ed016": 1,
+      "519f31e1a628a3919d92": 1,
+      "e3f61da124abf21d0439": 1,
+      "65abe9b0a36443829b66": 1,
+      "4f1b6a1edd9d42434f55": 1,
+      "2d273f96570020b98537": 1,
+      "33c94fe3ae346b005926": 1,
+      "11654edb1c0549767df9": 1,
+      "c48515591a718696b514": 1,
+      "7643fdb6515a928c0cac": 1,
+      "b4378013bf132ec3f4be": 1,
+      "5c7dc658a97d098fd1a1": 1,
+      "62ef900a8f5d5bff6407": 1,
+      "1625179badc027f0d0a2": 1,
+      "f46d9e208c6c5e902bea": 1,
+      "f17d80a0974025ac1cfa": 1,
+      "74f9109547132aa05215": 1,
+      "f76476d623b03e6f6942": 1,
+      "5799a902e9744f0f098e": 1,
+      "c0ab59f4b23b16a29122": 1,
+      "b232484fbeabbfb0e7e5": 1
+    },
+    "server/socket/chat/attachments.ts": {
+      "6c8e90e54b5687247456": 1,
+      "e6a485ce42272b7fd556": 1,
+      "0bf586384164a3c2839e": 1
+    },
+    "server/socket/chat/client_surface.ts": {
+      "5c6e0653cc250c7850bb": 1,
+      "1716bb8f19fbaca8c480": 1,
+      "15f8da2b87c6418b784c": 1,
+      "922f0f2a868a0760a673": 1
+    },
+    "server/socket/chat/history.ts": {
+      "d1ec215c7f5849f5ccf2": 1,
+      "ad09e844be7bf004bf3d": 1,
+      "85d8dd8b78d8b192acd3": 1,
+      "ade0fb7aa4423489148e": 1,
+      "875667f8b0f79505196d": 1,
+      "74e1cd9309712114545a": 1,
+      "d0fb36acc114cc0e0d14": 1,
+      "858cbd433a91f647c897": 1
+    },
+    "src/components/desktop/widget.tsx": {
+      "14326e532fba61bcb521": 1,
+      "3a116815bc9da10d888f": 1
+    },
+    "src/components/agent_chat/history.tsx": {
+      "65d691e9689904402b91": 1,
+      "ad09e844be7bf004bf3d": 1
+    },
+    "src/components/agent_chat/media_artifacts.tsx": {
+      "093470d1e7023e599aaa": 1
     }
   }
 }

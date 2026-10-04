@@ -4,10 +4,11 @@ import { extractMediaGenerationArtifacts, resolveMediaGenerationOperation } from
 
 // Read the real history-to-gallery path; a recovery query is not a new generation.
 const expression = extractSourceExpression.bind(null, 'src/components/AgentChatPage.tsx');
-const generationNames = expression('MEDIA_GENERATION_TOOL_NAMES', {});
-const gallery = expression('extractPersistedMediaArtifacts', {
+const persisted = extractSourceExpression.bind(null, 'src/components/agent_chat/media_artifacts.tsx');
+const generationNames = persisted('MEDIA_GENERATION_TOOL_NAMES', {});
+const gallery = persisted('extractPersistedMediaArtifacts', {
   MEDIA_GENERATION_TOOL_NAMES: generationNames,
-  parsePersistedToolRecords: expression('parsePersistedToolRecords', {}),
+  parsePersistedToolRecords: persisted('parsePersistedToolRecords', {}),
   extractMediaGenerationArtifacts,
 });
 const result = { ok: true, status: 'generated', verified: true, verificationStatus: 'verified',

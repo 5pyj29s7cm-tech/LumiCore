@@ -1,7 +1,8 @@
+import { runToolSession } from "../llm/tool_session";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 /**
  * Autonomous Task Executor — processes the autonomous task queue.
- * Executes tasks via runWithTools with tighter safety policy than user-initiated autonomous mode.
+ * Executes tasks via runToolSession with tighter safety policy than user-initiated autonomous mode.
  */
 import {
   attachAutonomousExecutionPlan,
@@ -31,7 +32,7 @@ import {
 } from './task_queue';
 import { toolExecutionInputDigests } from '../tools/execution_engine';
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from './safety_gate';
-import { runWithTools } from '../llm/adapter';
+
 import { toolRegistry, type ToolRegistry } from '../tools/registry';
 import { ToolContext, ToolExecutionRecord } from '../tools/types';
 import { attachAutonomousHostAuthority } from '../tools/host_execution_authority';
@@ -879,11 +880,11 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    const result = await runWithTools(
-      messages,
-      toolRegistry,
-      { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: running.conversationId, signal: executionAbort.signal },
-      async (record) => {
+    const result = await runToolSession({
+      messages: messages,
+      registry: toolRegistry,
+      config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: running.conversationId, signal: executionAbort.signal },
+      onToolCall: async (record) => {
         await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);
         if (record.result !== undefined || record.error !== undefined) {
@@ -902,18 +903,10 @@ export async function executeNextAutonomousTask(
           }, running.leaseId);
         }
       },
-      maxIterations,
-      getters.getDeepSeek, getters.getGemini,
-      getters.getOpenAI || (() => null),
-      getters.getAnthropic || (() => null),
-      getters.getQwen || (() => null),
-      undefined, // onStreamChunk
-      context,
-      getters.getOllama,
-      getters.getLmStudio,
-      getters.getArk,
-      getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay,
-    );
+      maxIterations: maxIterations,
+      context: context,
+      getters: { ...getters, getOpenAI: getters.getOpenAI || (() => null), getAnthropic: getters.getAnthropic || (() => null), getQwen: getters.getQwen || (() => null) },
+    });
 
     for (const record of result.toolCalls) upsertToolLedger(toolLedger, record);
     authorizationWasRevoked();

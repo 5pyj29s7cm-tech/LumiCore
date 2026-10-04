@@ -270,3 +270,16 @@ export class ChatTurnTimerGuard {
     this.timers.clear();
   }
 }
+
+/** Consume only this request bucket; React updaters retain the returned id. */
+export function takeChatStreamBucket(
+  messageIds: Map<string, string>,
+  rawText: Map<string, string>,
+  requestId?: string,
+): string | undefined {
+  const key = String(requestId || '__legacy__');
+  const messageId = messageIds.get(key);
+  messageIds.delete(key);
+  rawText.delete(key);
+  return messageId;
+}

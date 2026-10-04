@@ -1,3 +1,4 @@
+import { projectConversationReceiptHistory } from './receipt_history';
 import { readDB, writeDB } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import type { ConversationOwner } from './lifecycle';
@@ -76,4 +77,44 @@ export function listConversationHeaders(owner: ConversationOwner, limit?: number
   rows.sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
   if (limit !== undefined) rows = rows.slice(0, limit);
   return cloneDatabaseValue(rows.map(({ id, title, messageCount, lastActiveAt, createdAt, status, domain }: any) => ({ id, title, messageCount, lastActiveAt, createdAt, status, domain })));
+}
+
+/** Stable request history with receipt projection; duplicate legacy pairs use indexed lookup. */
+export function listConversationReceiptHistory(conversationId: string, limit = 1000): any[] {
+  const db = readDB();
+  const rows = (db.interactions || []).map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
+    .filter(({ row }: any) => row.conversationId === conversationId)
+    .sort((a: any, b: any) => {
+      const timestampDelta = new Date(a.row.timestamp).getTime() - new Date(b.row.timestamp).getTime();
+      if (timestampDelta) return timestampDelta;
+      const aSequence = Number(a.row.routeSequence), bSequence = Number(b.row.routeSequence);
+      if (Number.isFinite(aSequence) && Number.isFinite(bSequence) && aSequence !== bSequence) return aSequence - bSequence;
+      return a.insertionOrder - b.insertionOrder;
+    }).map(({ row }: any) => row);
+  const splitUsers = new Map<string, number[]>(), assistants = new Map<string, number[]>();
+  for (const row of rows) {
+    const time = new Date(row.timestamp).getTime();
+    if (!Number.isFinite(time)) continue;
+    const index = row.role === 'assistant' ? assistants
+      : row.role === 'user' && !String(row.response || '').trim() ? splitUsers : null;
+    if (!index) continue;
+    const key = String(row.message || row.content || '').trim();
+    const times = index.get(key) || []; times.push(time); index.set(key, times);
+  }
+  for (const times of [...splitUsers.values(), ...assistants.values()]) times.sort((a, b) => a - b);
+  const hasSibling = (index: Map<string, number[]>, text: string, time: number): boolean => {
+    const times = index.get(text) || [];
+    if (!Number.isFinite(time)) return false;
+    let low = 0, high = times.length;
+    while (low < high) { const mid = (low + high) >>> 1; if (times[mid] <= time - 2000) low = mid + 1; else high = mid; }
+    return low < times.length && times[low] < time + 2000;
+  };
+  const visible = rows.filter((row: any) => {
+    const response = String(row.response || '').trim();
+    if (row.role !== 'user' || !response) return true;
+    const time = new Date(row.timestamp).getTime();
+    return !hasSibling(splitUsers, String(row.message || row.content || '').trim(), time)
+      && !hasSibling(assistants, response, time);
+  }).slice(-limit);
+  return cloneDatabaseValue(projectConversationReceiptHistory(db, visible));
 }

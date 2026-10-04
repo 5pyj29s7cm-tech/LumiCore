@@ -28,7 +28,10 @@ describe('Executable skill generation policy', () => {
 
     expect(generatorSource).not.toContain('autoGenerateSkill');
     expect(generatorSource).not.toContain('LUMI_AUTO_GENERATE_EXECUTABLE_SKILLS');
-    expect(schedulerSource).not.toContain('auto_skill_gen');
+    const builtinDir = path.join(process.cwd(), 'server', 'scheduler', 'builtins');
+    const builtinSources = fs.readdirSync(builtinDir).filter(file => file.endsWith('.ts'))
+      .map(file => fs.readFileSync(path.join(builtinDir, file), 'utf8')).join('\n');
+    expect(schedulerSource + builtinSources).not.toContain('auto_skill_gen');
   });
 
   it('recognizes generated output only as a reviewed, approval-gated draft', () => {

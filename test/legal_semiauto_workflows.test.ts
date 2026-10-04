@@ -1526,7 +1526,10 @@ describe('semi-automated legal workflows', () => {
     const legalHubSource = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalHub.tsx'), 'utf-8');
     const toolRouterSource = fs.readFileSync(path.join(process.cwd(), 'server/cognition/tool_router.ts'), 'utf-8');
     const legalToolsShimSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/definitions/legal_tools.ts'), 'utf-8');
-    const legalToolsSource = fs.readFileSync(path.join(process.cwd(), 'server/regions/packs/cn/legal_tools.ts'), 'utf-8');
+    const legalToolDirectory = path.join(process.cwd(), 'server/regions/packs/cn/legal_tools');
+    const legalToolsSource = [fs.readFileSync(path.join(process.cwd(), 'server/regions/packs/cn/legal_tools.ts'), 'utf8'),
+      ...fs.readdirSync(legalToolDirectory).filter(file => file.endsWith('.ts')).sort()
+        .map(file => fs.readFileSync(path.join(legalToolDirectory, file), 'utf8'))].join('\n');
     const uiMessagesSource = fs.readFileSync(path.join(process.cwd(), 'src/i18n/locales/ui.generated.json'), 'utf-8');
     const chatRoutesSource = fs.readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf-8');
 

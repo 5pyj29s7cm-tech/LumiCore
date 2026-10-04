@@ -4,6 +4,7 @@ import {
   ChatRequestLedger,
   ChatTurnTimerGuard,
   finalizeStreamedChatMessage,
+  takeChatStreamBucket,
   normalizePersistedPendingChatExecutions,
   removePersistedPendingChatExecution,
   upsertPersistedPendingChatExecution,
@@ -128,4 +129,28 @@ describe('native chat terminal event receipts', () => {
     expect(normalizePersistedPendingChatExecutions(row)[0].mediaGeneration).not.toHaveProperty('referenceArtifactIds');
   });
 
+});
+
+describe('chat streaming bucket isolation', () => {
+  it('consumes a terminal bucket once and leaves concurrent requests intact', () => {
+    const ids = new Map([['request-1', 'stream-1'], ['request-2', 'stream-2']]);
+    const text = new Map([['request-1', 'partial one'], ['request-2', 'partial two']]);
+    const captured = takeChatStreamBucket(ids, text, 'request-1');
+    expect(takeChatStreamBucket(ids, text, 'request-1')).toBeUndefined();
+    expect([...ids]).toEqual([['request-2', 'stream-2']]);
+    expect([...text]).toEqual([['request-2', 'partial two']]);
+    const rows = [{ id: 'stream-1', text: 'partial one' }, { id: 'stream-2', text: 'partial two' }];
+    expect(finalizeStreamedChatMessage(rows, captured!, 'delivered one')).toEqual([
+      { id: 'stream-1', text: 'delivered one' }, { id: 'stream-2', text: 'partial two' },
+    ]);
+  });
+  it('clears raw text even without a bubble and keeps the legacy bucket separate', () => {
+    const ids = new Map([['__legacy__', 'legacy-message']]);
+    const text = new Map([['orphan', 'partial'], ['__legacy__', 'legacy text']]);
+    expect(takeChatStreamBucket(ids, text, 'orphan')).toBeUndefined();
+    expect(text.has('orphan')).toBe(false);
+    expect(takeChatStreamBucket(ids, text)).toBe('legacy-message');
+    expect(ids.size).toBe(0);
+    expect(text.size).toBe(0);
+  });
 });

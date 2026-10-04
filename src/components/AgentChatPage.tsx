@@ -1,3 +1,9 @@
+import { type GeneratedFileLink, type AgentChatVoiceSession, type ChatAttachment, type ConversationHistoryItem, type ConversationHistoryContextMenu, type WorkflowStatus, type ChatTurnUiMeta, type KnowledgeUpdateDetail, type ChatFilePanelItem, type ChatExecutionSnapshot, type ChatSendOptions } from "./agent_chat/contracts";
+export { type AgentChatVoiceSession } from "./agent_chat/contracts";
+import { makeChatMessageId, getDisplayText, stripStoredAttachmentSummary, buildChatHistoryPayload, getCustomerDisplayText } from "./agent_chat/history";
+export { buildChatHistoryPayload } from "./agent_chat/history";
+import { extractGeneratedFiles, generatedFileKind, extractPersistedMediaArtifacts, MEDIA_GENERATION_TOOL_NAMES, isExpectedMediaGenerationTool } from "./agent_chat/media_artifacts";
+import { CHAT_LIGHT_THEME, CHAT_NEUTRAL_THEME, getSelectedTextWithin } from "./agent_chat/appearance";
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSongWorkbenchHandle } from './ChatSongWorkbench';
@@ -16,7 +22,7 @@ import { Send, Loader2, ArrowLeft, Ghost, Castle, Zap, Cpu, Sparkles, FileText, 
 import { ChatFilePreview, type ChatPreviewFile } from './ChatFilePreview';
 import { ChatMessageMarkdown } from './ChatMessageMarkdown';
 import { chatArtifactKind, makeChatArtifact, type ChatArtifact } from '../../shared/chat_artifacts';
-import { legacyChatArtifacts } from '@/lib/chatArtifactLinks';
+
 import { projectAgentActivity } from '@/lib/agentStatusTruth';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -28,68 +34,22 @@ import { usePlatform } from '@/hooks/usePlatform';
 import { useApp } from '@/contexts/AppContext';
 import { VoiceCallButton } from './VoiceCallButton';
 import { socketService } from '@/services/socketService';
-import {
-  LUMI_VOICE_TRANSCRIPT_EVENT,
-  useVoiceCall,
-  type CallState,
-  type VoiceTranscriptEventDetail,
-} from '@/hooks/useVoiceCall';
+import { LUMI_VOICE_TRANSCRIPT_EVENT, useVoiceCall, type VoiceTranscriptEventDetail } from '@/hooks/useVoiceCall';
 import { listVoices, VOICE_PROVIDER_CHANGED_EVENT } from '@/services/voiceService';
-import {
-  describeToolProgress,
-  describeTurnCompletionProgress,
-  needsVisibleToolEvidence,
-  type ChatProgressLine,
-  type ChatResponseFinalization,
-  type ChatProgressTone,
-} from '@/lib/chatProgress';
-import {
-  normalizeTaskCompletionFeedback,
-} from './workflowTypes';
+import { describeToolProgress, describeTurnCompletionProgress, needsVisibleToolEvidence, type ChatProgressLine, type ChatResponseFinalization, type ChatProgressTone } from '@/lib/chatProgress';
+import { normalizeTaskCompletionFeedback } from './workflowTypes';
 import { TaskCompletionFeedbackDetails } from './TaskCompletionFeedbackDetails';
 import { WeChatSettings } from './WeChatSettings';
 import type { FileEntry } from './MemoryTree';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { CN_FOUNDER_ALIASES } from '../i18n/regions/cn/recognition';
-import {
-  MAX_CHAT_ATTACHMENTS,
-  isImageFileName, isAudioFileName, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT,
-  chatAttachmentIdentity,
-  chatAttachmentRequestMatchesScope,
-  createChatAttachmentReference,
-  mergeChatAttachmentReferences, mergePendingChatAttachments, mapImportedChatAttachments,
-  type ChatAttachmentReference,
-  type ChatAttachmentRequest,
-} from '@/lib/chatAttachmentReferences';
-import {
-  describeAgentResponseDelivery,
-  hasInternalAgentExecutionDetail,
-  isFinalizedSuccessfulResponse,
-  isTerminalAgentStatus,
-  sanitizeAgentStreamingTextForDisplay,
-  sanitizeAgentResponseTextForDisplay,
-  shouldDisplayAgentResponse,
-} from '@/lib/agentResponseDelivery';
+import { MAX_CHAT_ATTACHMENTS, isImageFileName, isAudioFileName, serializeChatAttachment, CHAT_ATTACHMENT_ACCEPT, chatAttachmentIdentity, chatAttachmentRequestMatchesScope, createChatAttachmentReference, mergeChatAttachmentReferences, mergePendingChatAttachments, mapImportedChatAttachments, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
+import { describeAgentResponseDelivery, hasInternalAgentExecutionDetail, isFinalizedSuccessfulResponse, isTerminalAgentStatus, sanitizeAgentStreamingTextForDisplay, sanitizeAgentResponseTextForDisplay, shouldDisplayAgentResponse } from '@/lib/agentResponseDelivery';
 import { buildChatConversationScopeKey } from '@/lib/chatConversationScope';
 import { chatExecutionStorageKey, ownedPendingChatExecutions, type ChatRecoveryOwner } from '@/lib/chatExecutionRecovery';
-import {
-  resolveChatExecutionEvent,
-  shouldApplyInitialConversationMessages,
-  shouldReloadPersistedConversation,
-} from '@/lib/conversationSync';
-import {
-  ChatTerminalReceiptLedger,
-  ChatRequestLedger,
-  ChatTurnTimerGuard,
-  finalizeStreamedChatMessage,
-  removePersistedPendingChatExecution,
-  upsertPersistedPendingChatExecution,
-  type PersistedPendingChatExecution,
-} from '@/lib/chatEventReceipts';
-import {
-  ChatTaskRelationLedger,
-  type ServerTaskRelationEvent,
-} from '@/lib/chatTaskRelations';
+import { resolveChatExecutionEvent, shouldApplyInitialConversationMessages, shouldReloadPersistedConversation } from '@/lib/conversationSync';
+import { ChatTerminalReceiptLedger, ChatRequestLedger, ChatTurnTimerGuard, finalizeStreamedChatMessage, takeChatStreamBucket, removePersistedPendingChatExecution, upsertPersistedPendingChatExecution, type PersistedPendingChatExecution } from '@/lib/chatEventReceipts';
+import { ChatTaskRelationLedger, type ServerTaskRelationEvent } from '@/lib/chatTaskRelations';
 import { CommandCenterPanel } from './CommandCenterPanel';
 import type { CommandCenterView } from './commandCenterTypes';
 import { ActiveTaskWidget } from './ActiveTaskWidget';
@@ -97,29 +57,9 @@ import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { CommandCenterPlanner } from './CommandCenterPlanner';
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
-import {
-  MediaGenerationStudio,
-  EMPTY_MEDIA_GENERATION_SOURCES,
-  type MediaGenerationRequest,
-  type MediaGenerationSourceChange,
-  type MediaGenerationSourceSlot,
-  type MediaGenerationStudioStatus,
-} from './MediaGenerationStudio';
-import {
-  extractMediaGenerationArtifacts,
-  mediaGenerationArgumentsMatch,
-  mediaGenerationReceiptSettingsMatch,
-  mediaGenerationToolForOperation,
-  resolveMediaGenerationOperation,
-  type MediaGenerationArtifact,
-  type MediaGenerationExpectation,
-  type MediaGenerationKind,
-  type MediaGenerationSourceOperation,
-} from '@/lib/mediaGenerationArtifacts';
-import {
-  normalizeStructuredMediaRequest,
-  type StructuredMediaRequest,
-} from '../../shared/media_generation';
+import { MediaGenerationStudio, EMPTY_MEDIA_GENERATION_SOURCES, type MediaGenerationRequest, type MediaGenerationSourceChange, type MediaGenerationSourceSlot, type MediaGenerationStudioStatus } from './MediaGenerationStudio';
+import { extractMediaGenerationArtifacts, mediaGenerationArgumentsMatch, mediaGenerationReceiptSettingsMatch, resolveMediaGenerationOperation, type MediaGenerationArtifact, type MediaGenerationExpectation, type MediaGenerationKind, type MediaGenerationSourceOperation } from '@/lib/mediaGenerationArtifacts';
+import { normalizeStructuredMediaRequest } from '../../shared/media_generation';
 
 const CHAT_HISTORY_LIMIT = 300;
 // Conversation index pages are deliberately small; the left rail keeps
@@ -128,250 +68,8 @@ const CHAT_HISTORY_LIMIT = 300;
 const CONVERSATION_HISTORY_PAGE_SIZE = 40;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
-type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'cancelled' | 'done' | 'error';
-
-type ChatTurnUiMeta = {
-  hadTool: boolean;
-  needsEvidence: boolean;
-  finalization: ChatResponseFinalization | null;
-};
-
-export interface AgentChatVoiceSession {
-  callState: CallState;
-  audioLevel: number;
-  error: string | null;
-  onStart: () => void;
-  onEnd: () => void;
-}
-
-type ChatExecutionSnapshot = {
-  requestId: string;
-  source: string;
-  status: 'acknowledged' | 'planning' | 'executing' | 'waiting_confirmation' | 'cancelling' | 'completed' | 'cancelled' | 'failed';
-  createdAt: string;
-  updatedAt: string;
-  terminal: boolean;
-  queued?: boolean;
-  terminalEvent?: { event: string; payload: Record<string, any> };
-};
-
-type ConversationHistoryItem = {
-  id: string;
-  displayTitle?: string;
-  title?: string;
-  preview?: string;
-  status: 'active' | 'paused' | 'closed';
-  messageCount: number;
-  lastActiveAt: string;
-  createdAt: string;
-};
-
-type ConversationHistoryContextMenu = {
-  conversationId: string;
-  x: number;
-  y: number;
-};
 
 const ACTIVE_CHAT_EXECUTION_TTL_MS = 24 * 60 * 60 * 1000;
-
-function makeChatMessageId(prefix = 'msg'): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-type ChatAttachment = ChatAttachmentReference;
-
-type GeneratedFileLink = ChatArtifact;
-
-type ChatSendOptions = {
-  onRequestCreated?: (requestId: string) => void;
-  mediaRequest?: StructuredMediaRequest;
-  includeConversationAttachments?: boolean;
-};
-
-type ChatFilePanelItem = {
-  id: string;
-  fileName: string;
-  subtitle: string;
-  kind: GeneratedFileLink['kind'] | ChatAttachment['kind'];
-  source: 'pending' | 'generated' | 'knowledge';
-  fileId?: string;
-  path?: string;
-  openUrl?: string;
-  saveUrl?: string;
-  status?: string;
-  mimeType?: string;
-  size?: number;
-};
-
-type KnowledgeUpdateDetail = {
-  domain?: 'personal' | 'work';
-  orgId?: string;
-  files?: Array<{ id?: string; name?: string; displayName?: string }>;
-};
-
-function getDisplayText(message: any): string {
-  if (typeof message?.text === 'string') return message.text;
-  if (message?.text == null) return '';
-  return String(message.text);
-}
-
-function getCustomerDisplayText(message: any, isZh: boolean): string {
-  const text = getDisplayText(message);
-  return message?.type === 'agent'
-    ? sanitizeAgentResponseTextForDisplay(text, isZh ? 'zh' : 'en')
-    : text;
-}
-
-const ASSISTANT_HISTORY_NOISE_RE =
-  /我还没有真正开始读取或审查|我还不能说这件事已经完成|没有记录到成功的工具执行|真正读取时|Completion claim|Maximum tool call iterations|Action Constitution|local_write action requires confirmation|已经落到(?:桌面|电脑|文件)|结果包已经|交付包已经|真实接管|WPS\s*表格|剪映已打开|微信已打开|文件生成也卡在权限确认|工具调用一直在跑/i;
-
-function shouldOmitAssistantHistoryMessage(message: any, text: string): boolean {
-  const role = String(message?.role || '').toLowerCase();
-  const type = String(message?.type || '').toLowerCase();
-  const isAssistantLike = role === 'assistant' || type === 'agent';
-  return isAssistantLike && (
-    message?.legacyExecutionReport === true
-    || hasInternalAgentExecutionDetail(text)
-    || ASSISTANT_HISTORY_NOISE_RE.test(text)
-  );
-}
-
-function stripStoredAttachmentSummary(value: string): string {
-  return String(value || '')
-    .replace(/\n{0,2}\[Attachments\][\s\S]*$/i, '')
-    .trim();
-}
-
-export function buildChatHistoryPayload(messages: any[]) {
-  return messages.flatMap((m) => {
-    const text = getDisplayText(m).trim();
-    if (!text) return [];
-    if (m.type === 'tool') return [];
-    if (['error', 'proactive'].includes(m.source)) return [];
-    if (/^(Request failed|请求失败|出错了|Failed to route)/i.test(text)) return [];
-    if (shouldOmitAssistantHistoryMessage(m, text)) return [];
-    if (m.type === 'agent') return [{ role: 'assistant', content: text }];
-    if (m.type === 'user' || m.type === 'file_context') return [{ role: 'user', content: text }];
-    return [];
-  }).slice(-80);
-}
-
-function getSelectedTextWithin(container?: HTMLElement | null): string {
-  if (typeof window === 'undefined') return '';
-  const selection = window.getSelection?.();
-  const text = selection?.toString().trim() || '';
-  if (!selection || !text) return '';
-  if (!container) return text;
-  const anchor = selection.anchorNode;
-  const focus = selection.focusNode;
-  if ((anchor && container.contains(anchor)) || (focus && container.contains(focus))) return text;
-  return '';
-}
-
-const CHAT_NEUTRAL_THEME = {
-  id: 'neutral',
-  label: 'Neutral',
-  saturn: '#e5e7eb',
-  glow: '#f8fafc',
-  nebula: '#cbd5e1',
-  mars: '#f87171',
-  background: 'linear-gradient(145deg, rgba(10,12,16,0.96) 0%, rgba(4,6,10,0.98) 48%, rgba(1,2,5,1) 100%)',
-  panel: 'linear-gradient(180deg, rgba(18,20,26,0.86) 0%, rgba(7,9,14,0.94) 100%)',
-  panelBorder: 'rgba(255, 255, 255, 0.14)',
-  panelShadow: '0 26px 80px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255,255,255,0.04)',
-  header: 'linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))',
-  progress: 'linear-gradient(90deg, rgba(255,255,255,0.07), rgba(0,0,0,0.18))',
-  agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.045))',
-  userBubble: 'linear-gradient(135deg, rgba(255,255,255,0.105), rgba(255,255,255,0.055))',
-  inputPanel: 'linear-gradient(90deg, rgba(255,255,255,0.06), rgba(0,0,0,0.30))',
-  input: 'rgba(6, 8, 12, 0.76)',
-} as const;
-
-const CHAT_LIGHT_THEME = {
-  id: 'light',
-  label: 'Light',
-  saturn: '#167a5f',
-  glow: '#0ea5a3',
-  nebula: '#2563eb',
-  mars: '#dc2626',
-  background: 'radial-gradient(circle at 18% 12%, rgba(22,122,95,0.10) 0%, transparent 30%), radial-gradient(circle at 82% 18%, rgba(37,99,235,0.07) 0%, transparent 34%), linear-gradient(145deg, #fbfcf8 0%, #f4f7f2 48%, #eef3ef 100%)',
-  panel: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(255,255,255,0.90) 100%)',
-  panelBorder: 'rgba(30, 66, 49, 0.13)',
-  panelShadow: '0 26px 80px rgba(31, 46, 39, 0.10), 0 0 0 1px rgba(255,255,255,0.72)',
-  header: 'linear-gradient(90deg, rgba(255,255,255,0.94), rgba(242,248,244,0.88))',
-  progress: 'linear-gradient(90deg, rgba(22,122,95,0.09), rgba(255,255,255,0.82))',
-  agentBubble: 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(249,252,249,0.95))',
-  userBubble: 'linear-gradient(135deg, rgba(232,246,240,0.98), rgba(242,248,255,0.92))',
-  inputPanel: 'linear-gradient(90deg, rgba(255,255,255,0.95), rgba(246,250,247,0.92))',
-  input: 'rgba(255,255,255,0.98)',
-} as const;
-
-const MEDIA_GENERATION_TOOL_NAMES = new Set(['generate_image', 'ai_edit_image', 'generate_video']);
-
-function isExpectedMediaGenerationTool(expectation: MediaGenerationExpectation, toolName: string): boolean {
-  return mediaGenerationToolForOperation(resolveMediaGenerationOperation(expectation)) === toolName;
-}
-
-function parsePersistedToolRecords(value: unknown): Array<Record<string, any>> {
-  if (Array.isArray(value)) return value.filter(item => item && typeof item === 'object');
-  if (typeof value !== 'string' || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : [];
-  } catch {
-    return [];
-  }
-}
-
-function extractPersistedMediaArtifacts(message: any): MediaGenerationArtifact[] {
-  const records = parsePersistedToolRecords(message?.toolCalls);
-  const collected: MediaGenerationArtifact[] = [];
-  for (const record of records) {
-    const toolName = String(record.name || record.toolName || '').trim();
-    if (!MEDIA_GENERATION_TOOL_NAMES.has(toolName) && toolName !== 'get_image_generation_status') continue;
-    const fallbackKind: MediaGenerationKind = toolName === 'generate_video' ? 'video' : 'image';
-    const args = record.arguments && typeof record.arguments === 'object'
-      ? record.arguments
-      : record.args && typeof record.args === 'object'
-        ? record.args
-        : {};
-    const persistedOperation = String(args.operation || '').trim();
-    const operation: NonNullable<MediaGenerationArtifact['operation']> = toolName === 'ai_edit_image'
-      ? 'image_edit'
-      : toolName === 'generate_video'
-        ? (persistedOperation === 'image_to_video' || String(args.first_frame_image || '').trim()
-            ? 'image_to_video'
-            : 'text_to_video')
-        : 'text_to_image';
-    const artifacts = extractMediaGenerationArtifacts(record.result, fallbackKind).map(artifact => ({
-      ...artifact,
-      requestId: String(record.requestId || message?.requestId || '').trim() || undefined,
-      operation,
-      prompt: String(args.prompt || '').trim() || undefined,
-      model: String((record.result as any)?.model || '').trim() || undefined,
-    }));
-    collected.push(...artifacts);
-  }
-  const seen = new Set<string>();
-  return collected.filter(artifact => {
-    const key = `${artifact.kind}:${artifact.url}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function generatedFileKind(fileName: string): GeneratedFileLink['kind'] {
-  return chatArtifactKind(fileName);
-}
-
-function extractGeneratedFiles(text: string, conversationId?: string): GeneratedFileLink[] {
-  const canExposeFiles =
-    /(?:Verified generated files|Generated and verified these files exist|Audio transcription result|Text file:|Output file:|Saved to:|已生成)/i.test(text || '');
-  if (!canExposeFiles) return [];
-
-  return legacyChatArtifacts(text, conversationId);
-}
 
 export function AgentChatPage({
   t,
@@ -1599,6 +1297,18 @@ export function AgentChatPage({
       acceptChatExecutionEvent(data)
     );
 
+    const dropRequestStream = (requestId?: string) => {
+      const id = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
+      if (id) setMessages(prev => prev.filter(message => message.id !== id));
+    };
+    const resumeForegroundRequest = (requestId: string) => {
+      const nextMeta = chatTurnUiMetaRef.current.get(requestId);
+      currentRequestHadToolRef.current = nextMeta?.hadTool || false;
+      currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
+      currentResponseFinalizationRef.current = nextMeta?.finalization || null;
+      setWorkflowStatus('thinking');
+    };
+
     const recordTaskRelation = (data?: ServerTaskRelationEvent) => {
       if (!data) return;
       taskRelationLedgerRef.current.record(data);
@@ -1787,8 +1497,7 @@ export function AgentChatPage({
       if (!terminalReceiptsRef.current.claim(data)) return;
       const requestId = String(data.requestId || '').trim();
       const turnMeta = chatTurnUiMetaRef.current.get(requestId);
-      const streamKey = requestId || '__legacy__';
-      const streamId = streamingMsgIdsRef.current.get(streamKey);
+      const streamId = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
       const tracked = settleTrackedChatRequest(requestId);
       const hasRemainingRequests = tracked.remaining > 0;
       const completionFeedback = normalizeTaskCompletionFeedback(data.completionFeedback);
@@ -1836,7 +1545,6 @@ export function AgentChatPage({
         } else if (!displayable) {
           setMessages(prev => prev.filter(message => message.id !== streamId));
         }
-        streamingMsgIdsRef.current.delete(streamKey);
       } else if (displayable && deliveredText) {
         setMessages(prev => [...prev, {
           id: makeChatMessageId('agent'),
@@ -1850,7 +1558,6 @@ export function AgentChatPage({
           conversationId: data.conversationId,
         }]);
       }
-      streamingRawTextRef.current.delete(streamKey);
 
       const activeMediaGeneration = activeMediaGenerationRef.current;
       if (activeMediaGeneration?.requestId === requestId) {
@@ -1897,13 +1604,9 @@ export function AgentChatPage({
         activeMediaGenerationRef.current = null;
       }
 
+      chatTurnUiMetaRef.current.delete(requestId);
       if (hasRemainingRequests) {
-        const nextMeta = chatTurnUiMetaRef.current.get(tracked.foregroundRequestId);
-        currentRequestHadToolRef.current = nextMeta?.hadTool || false;
-        currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
-        currentResponseFinalizationRef.current = nextMeta?.finalization || null;
-        setWorkflowStatus('thinking');
-        chatTurnUiMetaRef.current.delete(requestId);
+        resumeForegroundRequest(tracked.foregroundRequestId);
         // Every terminal owns only its own UI bucket. This applies to an
         // ordinary FIFO predecessor as well as a sidecar.
         return;
@@ -1925,7 +1628,7 @@ export function AgentChatPage({
           { finalized: false, blocked: true, reason: data.reason },
         );
         finishChatProgress(rejected.text, rejected.tone);
-        if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
+        scheduleWorkflowReset(data.requestId);
         return;
       }
       const finalizedSuccess = isFinalizedSuccessfulResponse(data);
@@ -1942,10 +1645,7 @@ export function AgentChatPage({
         finalization,
       );
       finishChatProgress(completion.text, completion.tone);
-      if (data.blocked || finalizedSuccess) {
-        if (!hasRemainingRequests) scheduleWorkflowReset(data.requestId);
-      }
-      chatTurnUiMetaRef.current.delete(requestId);
+      if (data.blocked || finalizedSuccess) scheduleWorkflowReset(data.requestId);
       // Auto-speak disabled
     };
 
@@ -2003,13 +1703,7 @@ export function AgentChatPage({
       }
       if (terminalStatus) {
         // Drop partial streaming chunks that were never finalized
-        const streamKey = String(data.requestId || '__legacy__');
-        const sid = streamingMsgIdsRef.current.get(streamKey);
-        if (sid) {
-          setMessages(prev => prev.filter(m => m.id !== sid));
-          streamingMsgIdsRef.current.delete(streamKey);
-        }
-        streamingRawTextRef.current.delete(streamKey);
+        dropRequestStream(data.requestId);
       }
     };
 
@@ -2029,11 +1723,7 @@ export function AgentChatPage({
       setIsTyping(hasRemainingRequests);
       chatTurnUiMetaRef.current.delete(String(data.requestId || '').trim());
       if (hasRemainingRequests) {
-        const nextMeta = chatTurnUiMetaRef.current.get(tracked.foregroundRequestId);
-        currentRequestHadToolRef.current = nextMeta?.hadTool || false;
-        currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
-        currentResponseFinalizationRef.current = nextMeta?.finalization || null;
-        setWorkflowStatus('thinking');
+        resumeForegroundRequest(tracked.foregroundRequestId);
       }
       if (!hasRemainingRequests) {
         setWorkflowStatus('error');
@@ -2043,13 +1733,7 @@ export function AgentChatPage({
         );
         scheduleWorkflowReset(data.requestId);
       }
-      const streamKey = String(data.requestId || '__legacy__');
-      const sid = streamingMsgIdsRef.current.get(streamKey);
-      if (sid) {
-        setMessages(prev => prev.filter(m => m.id !== sid));
-        streamingMsgIdsRef.current.delete(streamKey);
-      }
-      streamingRawTextRef.current.delete(streamKey);
+      dropRequestStream(data.requestId);
       setMessages(prev => {
         const text = `${t.requestFailed || 'Request failed'}\n\n${message}`;
         if (prev.some(m => m.type === 'agent' && m.text === text)) return prev;

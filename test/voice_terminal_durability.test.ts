@@ -147,7 +147,7 @@ describe('voice durability', () => {
   it('routes every in-turn terminal through the strict fence before speech', () => {
     const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
 
-    expect(source.match(/await commitVoiceTerminal\(\{/g)?.length || 0).toBeGreaterThanOrEqual(10);
+    expect(source.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBeGreaterThanOrEqual(10);
     expect(source).not.toMatch(/emitAgent\(["']agent:response["']/);
     expect(source).not.toMatch(/emitAgent\(["']agent:error["']/);
     expect(source.match(/persistVoiceAssistantMessage\(/g)?.length || 0).toBe(1);

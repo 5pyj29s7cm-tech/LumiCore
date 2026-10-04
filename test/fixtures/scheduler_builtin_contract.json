@@ -1,0 +1,187 @@
+[
+  {
+    "id": "command_center_plan_dispatch",
+    "cron": "every_1m",
+    "quiet": true,
+    "auditMode": "compact",
+    "lastRun": null,
+    "executionClass": "autonomous_orchestration"
+  },
+  {
+    "id": "legal_authority_source_refresh",
+    "cron": "23 4 * * *",
+    "lastRun": null,
+    "executionClass": "proactive_delivery"
+  },
+  {
+    "id": "reminder_check",
+    "cron": "every_1m",
+    "lastRun": null,
+    "executionClass": "proactive_delivery"
+  },
+  {
+    "id": "memory_decay",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "memory_crystallization",
+    "cron": "every_1h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "memory_consolidation",
+    "cron": "every_30m",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "narrative_consolidation",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "sleep_dream_cycle",
+    "cron": "17 3 * * *",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "daily_summary",
+    "cron": "daily_9am",
+    "lastRun": null,
+    "executionClass": "proactive_delivery"
+  },
+  {
+    "id": "evening_wrapup",
+    "cron": "evening_8pm",
+    "lastRun": null,
+    "executionClass": "proactive_delivery"
+  },
+  {
+    "id": "behavioral_analysis",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "memory_index_backfill",
+    "cron": "every_1h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "memory_auto_organize",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "personality_evolution",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "weekly_review",
+    "cron": "every_7d",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "monthly_review",
+    "cron": "1 0 1 * *",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "yearly_review",
+    "cron": "0 0 1 1 *",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "auto_workflow_gen",
+    "cron": "every_hour",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "health_audit",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "growth_journal",
+    "cron": "daily_9am",
+    "lastRun": null,
+    "executionClass": "proactive_delivery"
+  },
+  {
+    "id": "proactive_lumi_scan",
+    "cron": "every_1h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "memory_this_day",
+    "cron": "daily_9am",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "spatiotemporal_analysis",
+    "cron": "every_6h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  },
+  {
+    "id": "ambient_activity_poll",
+    "cron": "every_10s",
+    "lastRun": null,
+    "executionClass": "client_probe",
+    "auditMode": "compact"
+  },
+  {
+    "id": "idle_check",
+    "cron": "every_1m",
+    "lastRun": null,
+    "executionClass": "client_probe",
+    "auditMode": "compact"
+  },
+  {
+    "id": "autonomous_work_cycle",
+    "cron": "every_10m",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "autonomous_orchestration"
+  },
+  {
+    "id": "daily_system_scan",
+    "cron": "every_24h",
+    "quiet": true,
+    "lastRun": null,
+    "executionClass": "maintenance"
+  }
+]

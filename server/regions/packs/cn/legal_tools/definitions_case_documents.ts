@@ -1,0 +1,205 @@
+import type { ToolDefinition } from '../../../../tools/types';
+import { withLegalReceipt, legalCapability, legalEvidence } from "./tool_contracts";
+import { meetingMinutesToCaseHandler } from "./meetings";
+import { reasoningMatrixHandler } from "./case_workspace";
+import { generateLitigationPacketHandler, prepareFilingHandoffHandler } from "./litigation_packet";
+import { extractDisputeFocusHandler, generateArgumentOrOpinionHandler } from "./argument_drafting";
+import { analyzeFolderAndDraftArgumentHandler } from "./folder_analysis";
+import { defineLegalTool, stringField, numberField, booleanField, stringListField, CASE_ARCHIVE_FIELDS } from "./tool_contracts";
+
+export function case_documentsTools(): ToolDefinition[] {
+  return [
+  defineLegalTool({
+    name: 'legal_meeting_minutes_to_case',
+    description: '法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。',
+    properties: {
+      ...CASE_ARCHIVE_FIELDS,
+      cause: stringField('caseType 的别名'),
+      stage: stringField('阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段'),
+      participants: stringField('参会、沟通或咨询人员'),
+      meetingTime: stringField('会议或沟通时间'),
+      objective: stringField('办理目标、咨询目标或会议目标'),
+      claims: stringField('objective 的别名；也可填写诉求或抗辩目标'),
+      transcript: stringField('会议、语音、咨询或庭审转写全文'),
+      meetingText: stringField('transcript 的别名'),
+      notes: stringField('transcript 的别名；可填写沟通笔记'),
+      outputDir: stringField('可选输出目录；默认写入 data/legal_delivery/{orgId}'),
+    },
+    handler: withLegalReceipt(meetingMinutesToCaseHandler, {
+      status: 'generated', expectCaseMutation: 'always', requireArtifacts: true,
+    }),
+    capability: legalCapability({
+      id: 'legal.case.meeting-minutes.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'], requireArtifacts: true,
+      sideEffects: [
+        { type: 'local_state_change', scope: 'legal case meeting archive', reversible: true },
+        { type: 'local_write', scope: 'meeting minutes, action items, and case update files', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.case.meeting-minutes.generate', 'create', 'transcript'),
+  }),
+  defineLegalTool({
+    name: 'legal_case_reasoning_matrix',
+    description: '法律分析三段论底稿 — 围绕争议焦点生成“大前提/小前提/涵摄结论”办案分析矩阵，覆盖检索法律、解释法律、类案补强、待证事实、证据材料、举证质证和可转化文书成果，并可归档到案件空间。',
+    properties: {
+      ...CASE_ARCHIVE_FIELDS,
+      role: stringField('我方身份：原告/被告/申请人/被申请人等'),
+      cause: stringField('caseType 的别名'),
+      court: stringField('法院、仲裁机构或拟提交平台'),
+      parties: stringField('当事人身份信息、主体信息和联系方式摘要'),
+      claims: stringField('诉讼请求、抗辩目标或办理目标'),
+      objective: stringField('claims 的别名'),
+      facts: stringField('案件事实、时间线或沟通记录摘要'),
+      materials: stringField('综合案件材料摘要，facts 的补充来源'),
+      evidence: stringField('证据材料、证据目录或零碎证据列表'),
+      complaint: stringField('起诉状、申请书、答辩状或对方文书摘要'),
+      opponentMaterials: stringField('对方起诉状、证据、答辩意见或代理意见摘要'),
+      transcript: stringField('会议、庭审、沟通或询问笔录'),
+      issues: stringListField('争议焦点列表；未提供时由工具从材料中推断'),
+      legalAuthorities: stringField('已检索或拟引用的法条、司法解释、裁判规则'),
+      similarCases: stringField('已检索类案、案号、法院层级和有利/不利点'),
+      outputDir: stringField('可选输出目录；默认写入 data/legal_delivery/{orgId}'),
+      writeFiles: booleanField('是否写入 Markdown 底稿，默认 true'),
+    },
+    handler: withLegalReceipt(reasoningMatrixHandler, {
+      status: 'generated',
+      expectCaseMutation: 'always',
+      requireArtifacts: args => args.writeFiles !== false && args.writeFile !== false,
+    }),
+    capability: legalCapability({
+      id: 'legal.case.reasoning-matrix.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'legal case reasoning archive', reversible: true },
+        { type: 'local_write', scope: 'optional legal reasoning matrix file', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.case.reasoning-matrix.generate', 'create', 'caseName'),
+  }),
+  defineLegalTool({
+    name: 'legal_generate_litigation_packet',
+    description: '半自动诉讼文书包 — 根据我方身份和案件材料生成起诉/答辩/质证/委托/立案组卷等律师工作底稿，并明确所有人工确认点。不会自动提交或签发。',
+    properties: {
+      ...CASE_ARCHIVE_FIELDS,
+      role: stringField('我方身份：原告/被告/申请人/被申请人等'),
+      court: stringField('拟立案法院或审理法院'),
+      parties: stringField('当事人身份信息摘要'),
+      claims: stringField('诉讼请求、抗辩目标或办理目标'),
+      facts: stringField('案件事实和时间线'),
+      evidence: stringField('已有证据材料摘要'),
+      opponentMaterials: stringField('对方起诉状、证据或其他材料摘要'),
+      lawFirmName: stringField('律师事务所名称；未提供时在委托手续中保留待补字段'),
+      lawyerName: stringField('承办律师姓名；未提供时在委托手续中保留待补字段'),
+      outputDir: stringField('可选输出目录；默认写入 data/legal_delivery/{orgId}'),
+      writeFiles: booleanField('是否写入诉讼文书包 Markdown 文件，默认 true'),
+      includeDocx: booleanField('是否为总稿和每份独立文书同时生成可编辑 DOCX，默认 true'),
+    },
+    handler: withLegalReceipt(generateLitigationPacketHandler, {
+      status: 'generated',
+      expectCaseMutation: 'when_requested',
+      requireArtifacts: args => args.writeFiles !== false && args.writeFile !== false,
+    }),
+    capability: legalCapability({
+      id: 'legal.litigation.packet.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case litigation packet archive', reversible: true },
+        { type: 'local_write', scope: 'litigation packet Markdown and optional DOCX files', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.litigation.packet.generate', 'create', 'caseName'),
+  }),
+  defineLegalTool({
+    name: 'legal_prepare_filing_handoff',
+    description: '半自动立案网交接单 — 根据案件材料生成法院在线服务/网上立案字段映射、上传材料清单、文件命名建议、人工确认点和授权网页登录动作。不会自动提交、签名、缴费或确认送达。',
+    properties: {
+      caseName: stringField('案件名称或简称'),
+      caseId: stringField('已有案件工作台 ID；提供后会把立案交接单归档到该案件空间'),
+      role: stringField('我方身份：原告/申请人/被告等'),
+      caseType: stringField('案由或案件类型'),
+      court: stringField('拟立案法院或审理法院'),
+      parties: stringField('当事人身份信息摘要'),
+      claims: stringField('诉讼请求、申请事项或办理目标'),
+      facts: stringField('案件事实和时间线'),
+      evidence: stringField('已有证据材料摘要'),
+      materials: stringListField('已准备或待上传的材料名称列表'),
+      portalUrl: stringField('法院在线服务或地方诉讼服务平台 URL，默认人民法院在线服务'),
+      orgId: stringField('组织 ID，默认 default'),
+      userId: stringField('操作用户 ID，默认 system'),
+    },
+    handler: withLegalReceipt(prepareFilingHandoffHandler, { status: 'prepared', expectCaseMutation: 'when_requested' }),
+    capability: legalCapability({
+      id: 'legal.filing.handoff.prepare', operation: 'create', risk: 'medium', successStatuses: ['prepared'],
+      sideEffects: [{ type: 'local_state_change', scope: 'optional legal case filing handoff archive', reversible: true }],
+      limitations: ['Prepares a filing handoff only; it never logs in, submits, signs, pays, or confirms service.'],
+    }),
+    evidence: legalEvidence('legal.filing.handoff.prepare', 'create', 'caseName'),
+  }),
+  defineLegalTool({
+    name: 'legal_extract_dispute_focus',
+    description: '争议焦点提炼 — 根据起诉状、证据材料、庭审笔录、会议记录等案件材料，整理争议焦点、待证事实、证据对应、质证/抗辩点和外部检索关键词。用于聊天或语音办案结果，需律师复核。',
+    properties: {
+      ...CASE_ARCHIVE_FIELDS,
+      role: stringField('我方身份：原告/被告/申请人/被申请人等'),
+      facts: stringField('案件事实和时间线'),
+      issues: stringListField('已知争议焦点，可为空，由系统从材料中提炼'),
+      materials: stringField('综合案件材料摘要'),
+      complaint: stringField('起诉状、申请书或仲裁申请书内容'),
+      evidence: stringField('证据材料摘要或证据目录'),
+      transcript: stringField('庭审笔录、会议纪要或语音转写内容'),
+      trialNotes: stringField('庭审记录、律师笔记或沟通记录'),
+      opponentMaterials: stringField('对方起诉状、证据、代理意见等材料'),
+    },
+    handler: extractDisputeFocusHandler,
+  }),
+  defineLegalTool({
+    name: 'legal_generate_argument_or_opinion',
+    description: '代理词/法律意见书生成 — 根据案件事实、争议焦点、证据材料、对方观点和办理目标，生成代理词、法律意见书、庭审提纲或应对策略草稿。保留法条核验、证据补强和律师人工确认节点。',
+    properties: {
+      ...CASE_ARCHIVE_FIELDS,
+      role: stringField('我方身份：原告/被告/申请人/被申请人等'),
+      documentType: stringField('文书类型：代理词 / 法律意见书 / 庭审提纲 / 应对策略'),
+      facts: stringField('案件事实、时间线或材料摘要'),
+      issues: stringListField('争议焦点列表'),
+      evidence: stringField('证据材料摘要或证据目录'),
+      opponentArguments: stringField('对方主张、起诉状、答辩意见或代理意见摘要'),
+      objective: stringField('我方办理目标、诉请或抗辩目标'),
+      materials: stringField('综合案件材料摘要'),
+    },
+    handler: withLegalReceipt(generateArgumentOrOpinionHandler, { status: 'generated', expectCaseMutation: 'when_requested' }),
+    capability: legalCapability({
+      id: 'legal.argument-or-opinion.generate', operation: 'create', risk: 'medium', successStatuses: ['generated'],
+      sideEffects: [
+        { type: 'local_state_change', scope: 'optional legal case argument or opinion archive', reversible: true },
+        { type: 'network_read', scope: 'configured legal drafting model', reversible: true },
+      ],
+    }),
+    evidence: legalEvidence('legal.argument-or-opinion.generate', 'create', 'documentType'),
+  }),
+  defineLegalTool({
+    name: 'legal_analyze_folder_and_draft_argument',
+    description: '一句话案件文件夹代理词 — 读取本地案件材料文件夹，自动分析案情、提炼争议焦点、整理证据目录、生成代理词草稿，并默认保存 Markdown 工作底稿到案件文件夹下。适合用户说“读取桌面某案件文件夹，分析并生成代理词”。图片/扫描件会提示 OCR，不编造法条和类案。',
+    properties: {
+      folderPath: stringField('本地案件材料文件夹路径，例如 C:\\Users\\name\\Desktop\\张三借款案；也支持“桌面\\张三借款案”'),
+      folderName: stringField('如果未提供完整路径，可提供桌面/文档/下载目录中的文件夹名称或关键词'),
+      caseName: stringField('案件名称或简称，默认使用文件夹名'),
+      role: stringField('我方身份：原告/被告/申请人/被申请人等'),
+      clientRole: stringField('我方身份别名，和 role 二选一'),
+      caseType: stringField('案由或案件类型，未提供时从材料推断'),
+      matterType: stringField('案由或案件类型别名'),
+      parties: stringField('当事人身份信息摘要'),
+      objective: stringField('办理目标或代理词立场'),
+      claims: stringField('诉请、抗辩目标或结论请求'),
+      opponentMaterials: stringField('对方主张、起诉状、答辩意见或代理意见摘要，可为空'),
+      outputDir: stringField('可选输出目录，默认在案件文件夹下创建 Lumi代理词草稿'),
+      outputDirName: stringField('默认输出目录名称'),
+      writeFiles: booleanField('是否写入 Markdown 文件，默认 true；false 时只返回预览'),
+      recursive: booleanField('是否递归读取子目录，默认 true'),
+      maxFiles: numberField('最多读取文件数，默认 80，最高 200'),
+      maxChars: numberField('最多提取文本字数，默认 220000，最高 800000'),
+      importToKb: booleanField('律师确认后是否把生成的工作底稿导入组织知识库，默认 false'),
+      orgId: stringField('组织 ID，默认上下文 orgId 或 default'),
+      userId: stringField('操作用户 ID，默认上下文 userId 或 system'),
+    },
+    handler: analyzeFolderAndDraftArgumentHandler,
+  })
+  ];
+}

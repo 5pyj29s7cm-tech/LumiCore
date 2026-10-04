@@ -1,3 +1,4 @@
+import { runToolSession } from "../../../llm/tool_session";
 import { providerGetterArguments } from "../../../llm/provider_getters";
 import { createTurnConfirmation } from '../../../tools/turn_confirmation';
 import { reserveConversationExecution } from '../../../cognition/conversation_execution';
@@ -88,7 +89,7 @@ import {
   isRemoteConversationDismissalRequest,
 } from '../../../messaging/attachment_context';
 import { clearPendingLegalNotice } from '../../../messaging/legal_notice_pending';
-import { runWithTools } from '../../../llm/adapter';
+
 import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
 import { resolveModelRequestInputBudget } from '../../../llm/request_context_budget';
 import { toolRegistry } from '../../../tools/registry';
@@ -3161,19 +3162,13 @@ async function processWithPersonalityAdmitted(
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
       executionSource = source,
-    ) => runWithTools(
-      turnMessages,
-      toolRegistry,
-      userLLMPrefs,
-      record => { collectToolRecord(record); onToolRecord?.(record); },
-      modelToolPolicy.maxIterations || executionDecision.maxIterations,
-      llm?.getDeepSeek,
-      llm?.getGemini,
-      llm?.getOpenAI,
-      llm?.getAnthropic,
-      llm?.getQwen,
-      undefined,
-      {
+    ) => runToolSession({
+      messages: turnMessages,
+      registry: toolRegistry,
+      config: userLLMPrefs,
+      onToolCall: record => { collectToolRecord(record); onToolRecord?.(record); },
+      maxIterations: modelToolPolicy.maxIterations || executionDecision.maxIterations,
+      context: {
         userId: effectiveUserId,
         taskId: actionTaskExecution.state?.taskId,
         conversationId: conversation?.id,
@@ -3199,14 +3194,8 @@ async function processWithPersonalityAdmitted(
         onToolRecord: observeToolRecord,
         requestConfirmation: requestToolConfirmation,
       },
-      llm?.getOllama,
-      llm?.getLmStudio,
-      llm?.getArk,
-      llm?.getXiaomi,
-      llm?.getKimi,
-      llm?.getGlm,
-      llm?.getRelay,
-    );
+      getters: llm,
+    });
 
     if (!entryHandled && !toolSessionActive) {
       assertMessagingAuthorization(msg);

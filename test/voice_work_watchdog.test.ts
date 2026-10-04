@@ -13,7 +13,7 @@ describe('voice work liveness watchdog', () => {
   });
 
   it('keeps a server-owned work lease alive and rejects legacy watchdog cancellation', () => {
-    const server = read('server/socket/voice.ts');
+    const server = read('server/socket/voice.ts') + read('server/socket/voice/work_progress.ts');
     expect(server).toContain('function startVoiceWorkHeartbeat(');
     expect(server).toContain('}, 8_000);');
     expect(server).toContain("data?.reason === 'thinking_watchdog'");

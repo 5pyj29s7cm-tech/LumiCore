@@ -1,3 +1,4 @@
+import { runToolSession } from "../llm/tool_session";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { mergeToolExecutionRecords } from '../cognition/task_execution_ledger';
@@ -23,7 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { queryMemories, addMemory, getDueReminders, buildNarrativeChain } from '../memory';
-import { runWithTools } from '../llm/adapter';
+
 import { toolRegistry, ToolRegistry } from '../tools/registry';
 import { personalityRegistry } from '../personality';
 import { deviceRegistry } from '../devices';
@@ -200,25 +201,20 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
           onToolRecord?: (record: ToolRecordEvent) => void,
           onChunk?: (chunk: string) => void,
           source = 'mcp_chat',
-        ) => runWithTools(
-          turnMessages,
-          tr,
-          {
+        ) => runToolSession({
+          messages: turnMessages,
+          registry: tr,
+          config: {
             ...chatLLM,
             maxTokens: 2048,
             modelTurnState,
             requestId, conversationId,
             signal: controller.signal,
           },
-          onToolRecord,
-          Math.min(4, pipeline.authorizationPolicy.maxIterations),
-          g.getDeepSeek || (() => null),
-          g.getGemini || (() => null),
-          g.getOpenAI || (() => null),
-          g.getAnthropic || (() => null),
-          g.getQwen || (() => null),
-          onChunk,
-          {
+          onToolCall: onToolRecord,
+          maxIterations: Math.min(4, pipeline.authorizationPolicy.maxIterations),
+          onStreamChunk: onChunk,
+          context: {
             userId: scope.userId,
             domain: scope.domain,
             orgId: scope.orgId,
@@ -233,16 +229,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
             source,
             ...mcpToolSecurityContext,
           } as any,
-          g.getOllama,
-          g.getLmStudio,
-          g.getArk,
-          g.getXiaomi,
-          g.getKimi,
-          g.getGlm,
-          g.getRelay,
-        );
+          getters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
+        });
         const deliverFinalizedChatResponse = async (
-          response: Awaited<ReturnType<typeof runWithTools>>,
+          response: Awaited<ReturnType<typeof runToolSession>>,
           background: boolean,
         ) => {
           const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || []);
@@ -744,19 +734,13 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
           turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
           onToolRecord?: (record: ToolRecordEvent) => void,
           source = 'mcp_route_task',
-        ) => runWithTools(
-          turnMessages,
-          tr,
-          { ...routeLLM, maxTokens: 4096 },
-          onToolRecord,
-          Math.min(8, personality.toolPolicy.maxIterations),
-          g.getDeepSeek || (() => null),
-          g.getGemini || (() => null),
-          g.getOpenAI || (() => null),
-          g.getAnthropic || (() => null),
-          g.getQwen || (() => null),
-          undefined,
-          {
+        ) => runToolSession({
+          messages: turnMessages,
+          registry: tr,
+          config: { ...routeLLM, maxTokens: 4096 },
+          onToolCall: onToolRecord,
+          maxIterations: Math.min(8, personality.toolPolicy.maxIterations),
+          context: {
             ...mcpToolSecurityContext,
             userId: scope.userId,
             domain: scope.domain,
@@ -767,14 +751,8 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
               'remote_restricted',
             ),
           } as any,
-          g.getOllama,
-          g.getLmStudio,
-          g.getArk,
-          g.getXiaomi,
-          g.getKimi,
-          g.getGlm,
-          g.getRelay,
-        );
+          getters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
+        });
 
         const result = await runMcpTaskTurn(messages);
         const outbound = await finalizeLumiResponseForDelivery({

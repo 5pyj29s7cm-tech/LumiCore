@@ -1,0 +1,2922 @@
+[
+  {
+    "name": "legal_search_case",
+    "description": "类案检索 — 根据案由或事实描述在本地裁判文书库中搜索相似案例，返回案号、法院、相似度分数、摘要。数据来源：本地导入的中国裁判文书网公开文书。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "案由或事实描述，如\"民间借贷纠纷\"或\"开发商逾期交房\""
+        },
+        "limit": {
+          "type": "number",
+          "description": "返回结果数量上限，默认5"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_search_statute",
+    "description": "法条检索候选 — 按关键词或法条号搜索法名状态、权威网页结果及本地法条库。正式交付仅接受带权威来源和已核验条文范围的引用；未核验结果不得标记为现行有效。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "法条名称或关键词，如\"民法典合同编\"或\"劳动合同法\""
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "可选外部授权库，如 pkulaw、farui、national-law-regulations"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "includeOfficialWeb": {
+          "type": "boolean",
+          "description": "是否同时尝试国家法律法规数据库公开网页检索，默认 false"
+        },
+        "limit": {
+          "type": "number",
+          "description": "外部授权库返回数量上限，默认 5"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_generate_bid",
+    "description": "标书生成 — 导入招标文件要求，生成对应投标书框架（商务标+技术标）。使用住建部合同模板作为参考。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "requirements": {
+          "type": "string",
+          "description": "招标文件中的技术要求/评分标准/合同条款要求"
+        },
+        "content": {
+          "type": "string",
+          "description": "requirements 的别名，可粘贴招标文件正文"
+        },
+        "text": {
+          "type": "string",
+          "description": "requirements 的别名，可粘贴招标文件正文"
+        },
+        "filePath": {
+          "type": "string",
+          "description": "单个招标文件路径，支持 PDF/DOCX/XLSX/PPTX/RTF/TXT/MD/CSV"
+        },
+        "filePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "多个招标文件路径"
+        },
+        "folderPath": {
+          "type": "string",
+          "description": "招标文件夹路径，会批量读取支持的文档格式"
+        },
+        "folderName": {
+          "type": "string",
+          "description": "桌面/文档/下载目录中的招标文件夹名称或关键词"
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "读取文件夹时是否递归子目录，默认 true"
+        },
+        "maxFiles": {
+          "type": "number",
+          "description": "文件夹读取最大文件数，默认 30，最高 100"
+        },
+        "maxChars": {
+          "type": "number",
+          "description": "最多提取文本字数，默认 180000，最高 600000"
+        },
+        "projectName": {
+          "type": "string",
+          "description": "项目名称"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把标书工作底稿归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件、项目或工作空间名称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "事项类型，例如投标/招标文件响应"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.bid.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case work-product archive",
+          "reversible": true
+        },
+        {
+          "type": "local_read",
+          "scope": "optional tender files and folders",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured legal drafting model",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.bid.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "projectName"
+    }
+  },
+  {
+    "name": "legal_review_contract",
+    "description": "合同审查 — 对照本地案例库审查合同条款风险，标注风险等级、法律依据和修改建议。所有法条引用均会标注来源。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string",
+          "description": "待审查的合同全文"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把合同审查报告归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件、项目或合同审查事项名称"
+        },
+        "title": {
+          "type": "string",
+          "description": "caseName 的别名"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由、事项类型或合同类型"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "contract"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_draft_contract",
+    "description": "合同起草 — 基于中国住建部示范文本生成合同。支持施工合同、买卖合同、工程总承包、劳动合同等类型。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "合同类型：建设工程施工合同 / 商品房买卖合同 / 工程总承包合同 / 建筑工人劳动合同"
+        },
+        "details": {
+          "type": "string",
+          "description": "合同具体要求（项目信息、工期、价款等）"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把合同起草底稿归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件、项目或合同起草事项名称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由、事项类型或合同类型"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.contract.draft",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case contract draft archive",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured legal drafting model",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.contract.draft",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "type"
+    }
+  },
+  {
+    "name": "legal_trace_assets",
+    "description": "财产线索追踪 — 查询被执行人企业信息、公开执行记录、失信记录等财产线索。企查查仅在配置官方 API 凭证后自动查询；未配置时输出授权网页登录协作步骤。后续可查询婚姻状况和股权穿透。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "被执行主体名称（个人姓名/公司名称）"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把财产线索报告归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或事项类型；用于新建案件或归档标记"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_equity_penetration",
+    "description": "股权穿透分析 — 追溯目标公司的股东结构，多层穿透识别实际控制人和关联财产线索。企查查仅在配置官方 API 凭证后自动查询；未配置时输出授权网页登录协作和材料入库步骤。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "公司名称"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把股权穿透报告归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或事项类型；用于新建案件或归档标记"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_case_strategy",
+    "description": "诉讼策略分析 — 给定案件事实，结合相关法条和相似判例，制定应诉方案，包括：案由确定、证据建议、保全策略、风险预估。所有分析基于真实法条和判例，绝不编造。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "facts": {
+          "type": "string",
+          "description": "案件事实描述（时间、地点、主体、行为、争议焦点）"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把策略分析归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "facts"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.case.strategy.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case strategy archive",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "legal model and authority search context",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.case.strategy.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "facts"
+    }
+  },
+  {
+    "name": "legal_case_workspace",
+    "description": "统一案件工作台 — 创建或更新案件空间，归集身份信息、事实、证据、争议焦点、法源、类案、文书包、立案状态，并输出下一步工具链。用于把会议、聊天、材料、诉讼文书和外部检索串成同一个案件闭环。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件 ID；提供时更新该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "title": {
+          "type": "string",
+          "description": "caseName 的别名"
+        },
+        "stage": {
+          "type": "string",
+          "description": "阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "cause": {
+          "type": "string",
+          "description": "caseType 的别名"
+        },
+        "court": {
+          "type": "string",
+          "description": "法院、仲裁机构或拟提交平台"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息、主体信息和联系方式摘要"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉讼请求、抗辩目标或办理目标"
+        },
+        "objective": {
+          "type": "string",
+          "description": "claims 的别名"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实、时间线或沟通记录摘要"
+        },
+        "materials": {
+          "type": "string",
+          "description": "综合案件材料摘要，facts 的补充来源"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "证据材料、证据目录或零碎证据列表"
+        },
+        "complaint": {
+          "type": "string",
+          "description": "起诉状、申请书、答辩状或对方文书摘要"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方起诉状、证据、答辩意见或代理意见摘要"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "会议、庭审、沟通或询问笔录"
+        },
+        "trialNotes": {
+          "type": "string",
+          "description": "transcript 的别名"
+        },
+        "legalAuthorities": {
+          "type": "string",
+          "description": "已检索或拟引用的法条、司法解释、裁判规则"
+        },
+        "similarCases": {
+          "type": "string",
+          "description": "已检索类案、案号、法院层级和有利/不利点"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否写入组织案件档案，默认 true"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.case.workspace.update",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "mutate",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "organization legal case workspace",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "updated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.case.workspace.update",
+      "operation": "mutate",
+      "assurance": "verified",
+      "subjectArgument": "caseId"
+    }
+  },
+  {
+    "name": "legal_case_workflow_status",
+    "description": "案件闭环状态评估 — 只读取已有案件或临时案件材料，不创建文书；输出材料入案、身份主体、事实时间线、证据三性、三段论、现行有效法律、类案来源、文书策略、立案协作、正式交付的完成度、阻断项、待补项和下一步推荐工具。适合聊天、语音、飞书/企微里询问“这个案子还缺什么/下一步做什么/能不能正式交付”。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件 ID；提供时优先读取该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称；未提供 caseId 时按名称查找"
+        },
+        "title": {
+          "type": "string",
+          "description": "caseName 的别名"
+        },
+        "query": {
+          "type": "string",
+          "description": "caseName 的别名，适合自然语言查找"
+        },
+        "stage": {
+          "type": "string",
+          "description": "阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "cause": {
+          "type": "string",
+          "description": "caseType 的别名"
+        },
+        "court": {
+          "type": "string",
+          "description": "法院、仲裁机构或拟提交平台"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息、主体信息和联系方式摘要"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉讼请求、抗辩目标或办理目标"
+        },
+        "objective": {
+          "type": "string",
+          "description": "claims 的别名"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实、时间线或沟通记录摘要"
+        },
+        "materials": {
+          "type": "string",
+          "description": "综合案件材料摘要，facts 的补充来源"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "证据材料、证据目录或零碎证据列表"
+        },
+        "complaint": {
+          "type": "string",
+          "description": "起诉状、申请书、答辩状或对方文书摘要"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方起诉状、证据、答辩意见或代理意见摘要"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "会议、庭审、沟通或询问笔录"
+        },
+        "trialNotes": {
+          "type": "string",
+          "description": "transcript 的别名"
+        },
+        "legalAuthorities": {
+          "type": "string",
+          "description": "已检索或拟引用的法条、司法解释、裁判规则"
+        },
+        "similarCases": {
+          "type": "string",
+          "description": "已检索类案、案号、法院层级和有利/不利点"
+        },
+        "content": {
+          "type": "string",
+          "description": "需要纳入法源预检的文书或材料内容"
+        },
+        "documentText": {
+          "type": "string",
+          "description": "content 的别名"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_message_intake_to_case",
+    "description": "远程法律消息入案 — 把微信、飞书、企微、短信或聊天里转发的案件材料、法院短信链接、通知链接、附件说明和沟通记录写入统一案件空间，归档原文、识别案号/法院/日期、半自动处理链接，并返回案件闭环状态和下一步。适合 Lumi bot 收到“把这个发给 Lumi 入案/归档到案件/法院短信链接/案件材料”时使用。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string",
+          "description": "来源平台：feishu/wechat/wecom/sms/other，或中文“飞书/微信/企微/短信”"
+        },
+        "sender": {
+          "type": "string",
+          "description": "发送人、联系人或群名"
+        },
+        "message": {
+          "type": "string",
+          "description": "原始消息正文、短信原文、聊天记录或案件材料说明"
+        },
+        "text": {
+          "type": "string",
+          "description": "message 的别名"
+        },
+        "content": {
+          "type": "string",
+          "description": "message 的别名"
+        },
+        "receivedAt": {
+          "type": "string",
+          "description": "收到消息的时间，默认当前时间"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "附件对象，可包含 fileName/localPath/extractedText/content"
+        },
+        "fileNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "附件文件名列表"
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "消息中的链接列表；未提供时会从正文提取"
+        },
+        "url": {
+          "type": "string",
+          "description": "单个链接；未提供时会从正文提取"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后归档到该案件"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称；未提供时按案号或消息自动新建"
+        },
+        "title": {
+          "type": "string",
+          "description": "caseName 的别名"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "cause": {
+          "type": "string",
+          "description": "caseType 的别名"
+        },
+        "court": {
+          "type": "string",
+          "description": "法院或仲裁机构"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人或主体信息"
+        },
+        "stage": {
+          "type": "string",
+          "description": "案件阶段，默认咨询；识别到开庭日期时偏向庭审阶段"
+        },
+        "processLinks": {
+          "type": "boolean",
+          "description": "是否处理识别到的链接，默认 true；false 时只归档不抓取"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否写入案件空间，默认 true"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.case.message-intake.archive",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "legal case message intake and material archive",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "archived"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.case.message-intake.archive",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "message"
+    }
+  },
+  {
+    "name": "legal_meeting_minutes_to_case",
+    "description": "法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件 ID；提供时归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "cause": {
+          "type": "string",
+          "description": "caseType 的别名"
+        },
+        "stage": {
+          "type": "string",
+          "description": "阶段：consultation/filing/trial/judgment/enforcement/closed，或中文阶段"
+        },
+        "participants": {
+          "type": "string",
+          "description": "参会、沟通或咨询人员"
+        },
+        "meetingTime": {
+          "type": "string",
+          "description": "会议或沟通时间"
+        },
+        "objective": {
+          "type": "string",
+          "description": "办理目标、咨询目标或会议目标"
+        },
+        "claims": {
+          "type": "string",
+          "description": "objective 的别名；也可填写诉求或抗辩目标"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "会议、语音、咨询或庭审转写全文"
+        },
+        "meetingText": {
+          "type": "string",
+          "description": "transcript 的别名"
+        },
+        "notes": {
+          "type": "string",
+          "description": "transcript 的别名；可填写沟通笔记"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_delivery/{orgId}"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否写入组织案件档案，默认 true"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.case.meeting-minutes.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "legal case meeting archive",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "meeting minutes, action items, and case update files",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "artifact",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "requiredArtifactCollections": [
+          "artifacts"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.case.meeting-minutes.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "transcript"
+    }
+  },
+  {
+    "name": "legal_case_reasoning_matrix",
+    "description": "法律分析三段论底稿 — 围绕争议焦点生成“大前提/小前提/涵摄结论”办案分析矩阵，覆盖检索法律、解释法律、类案补强、待证事实、证据材料、举证质证和可转化文书成果，并可归档到案件空间。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件 ID；提供时归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "cause": {
+          "type": "string",
+          "description": "caseType 的别名"
+        },
+        "court": {
+          "type": "string",
+          "description": "法院、仲裁机构或拟提交平台"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息、主体信息和联系方式摘要"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉讼请求、抗辩目标或办理目标"
+        },
+        "objective": {
+          "type": "string",
+          "description": "claims 的别名"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实、时间线或沟通记录摘要"
+        },
+        "materials": {
+          "type": "string",
+          "description": "综合案件材料摘要，facts 的补充来源"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "证据材料、证据目录或零碎证据列表"
+        },
+        "complaint": {
+          "type": "string",
+          "description": "起诉状、申请书、答辩状或对方文书摘要"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方起诉状、证据、答辩意见或代理意见摘要"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "会议、庭审、沟通或询问笔录"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "争议焦点列表；未提供时由工具从材料中推断"
+        },
+        "legalAuthorities": {
+          "type": "string",
+          "description": "已检索或拟引用的法条、司法解释、裁判规则"
+        },
+        "similarCases": {
+          "type": "string",
+          "description": "已检索类案、案号、法院层级和有利/不利点"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_delivery/{orgId}"
+        },
+        "writeFiles": {
+          "type": "boolean",
+          "description": "是否写入 Markdown 底稿，默认 true"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否写入组织案件档案，默认 true"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.case.reasoning-matrix.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "legal case reasoning archive",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "optional legal reasoning matrix file",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.case.reasoning-matrix.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "caseName"
+    }
+  },
+  {
+    "name": "legal_generate_litigation_packet",
+    "description": "半自动诉讼文书包 — 根据我方身份和案件材料生成起诉/答辩/质证/委托/立案组卷等律师工作底稿，并明确所有人工确认点。不会自动提交或签发。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把诉讼文书包归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "court": {
+          "type": "string",
+          "description": "拟立案法院或审理法院"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息摘要"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉讼请求、抗辩目标或办理目标"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实和时间线"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "已有证据材料摘要"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方起诉状、证据或其他材料摘要"
+        },
+        "lawFirmName": {
+          "type": "string",
+          "description": "律师事务所名称；未提供时在委托手续中保留待补字段"
+        },
+        "lawyerName": {
+          "type": "string",
+          "description": "承办律师姓名；未提供时在委托手续中保留待补字段"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_delivery/{orgId}"
+        },
+        "writeFiles": {
+          "type": "boolean",
+          "description": "是否写入诉讼文书包 Markdown 文件，默认 true"
+        },
+        "includeDocx": {
+          "type": "boolean",
+          "description": "是否为总稿和每份独立文书同时生成可编辑 DOCX，默认 true"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.litigation.packet.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case litigation packet archive",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "litigation packet Markdown and optional DOCX files",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured legal drafting model",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.litigation.packet.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "caseName"
+    }
+  },
+  {
+    "name": "legal_prepare_filing_handoff",
+    "description": "半自动立案网交接单 — 根据案件材料生成法院在线服务/网上立案字段映射、上传材料清单、文件命名建议、人工确认点和授权网页登录动作。不会自动提交、签名、缴费或确认送达。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把立案交接单归档到该案件空间"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/申请人/被告等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "court": {
+          "type": "string",
+          "description": "拟立案法院或审理法院"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息摘要"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉讼请求、申请事项或办理目标"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实和时间线"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "已有证据材料摘要"
+        },
+        "materials": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "已准备或待上传的材料名称列表"
+        },
+        "portalUrl": {
+          "type": "string",
+          "description": "法院在线服务或地方诉讼服务平台 URL，默认人民法院在线服务"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.filing.handoff.prepare",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case filing handoff archive",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "prepared"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Prepares a filing handoff only; it never logs in, submits, signs, pays, or confirms service."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.filing.handoff.prepare",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "caseName"
+    }
+  },
+  {
+    "name": "legal_extract_dispute_focus",
+    "description": "争议焦点提炼 — 根据起诉状、证据材料、庭审笔录、会议记录等案件材料，整理争议焦点、待证事实、证据对应、质证/抗辩点和外部检索关键词。用于聊天或语音办案结果，需律师复核。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把争议焦点底稿归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实和时间线"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "已知争议焦点，可为空，由系统从材料中提炼"
+        },
+        "materials": {
+          "type": "string",
+          "description": "综合案件材料摘要"
+        },
+        "complaint": {
+          "type": "string",
+          "description": "起诉状、申请书或仲裁申请书内容"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "证据材料摘要或证据目录"
+        },
+        "transcript": {
+          "type": "string",
+          "description": "庭审笔录、会议纪要或语音转写内容"
+        },
+        "trialNotes": {
+          "type": "string",
+          "description": "庭审记录、律师笔记或沟通记录"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方起诉状、证据、代理意见等材料"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_generate_argument_or_opinion",
+    "description": "代理词/法律意见书生成 — 根据案件事实、争议焦点、证据材料、对方观点和办理目标，生成代理词、法律意见书、庭审提纲或应对策略草稿。保留法条核验、证据补强和律师人工确认节点。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把文书草稿归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "documentType": {
+          "type": "string",
+          "description": "文书类型：代理词 / 法律意见书 / 庭审提纲 / 应对策略"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实、时间线或材料摘要"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "争议焦点列表"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "证据材料摘要或证据目录"
+        },
+        "opponentArguments": {
+          "type": "string",
+          "description": "对方主张、起诉状、答辩意见或代理意见摘要"
+        },
+        "objective": {
+          "type": "string",
+          "description": "我方办理目标、诉请或抗辩目标"
+        },
+        "materials": {
+          "type": "string",
+          "description": "综合案件材料摘要"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.argument-or-opinion.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case argument or opinion archive",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured legal drafting model",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.argument-or-opinion.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "documentType"
+    }
+  },
+  {
+    "name": "legal_analyze_folder_and_draft_argument",
+    "description": "一句话案件文件夹代理词 — 读取本地案件材料文件夹，自动分析案情、提炼争议焦点、整理证据目录、生成代理词草稿，并默认保存 Markdown 工作底稿到案件文件夹下。适合用户说“读取桌面某案件文件夹，分析并生成代理词”。图片/扫描件会提示 OCR，不编造法条和类案。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "folderPath": {
+          "type": "string",
+          "description": "本地案件材料文件夹路径，例如 C:\\Users\\name\\Desktop\\张三借款案；也支持“桌面\\张三借款案”"
+        },
+        "folderName": {
+          "type": "string",
+          "description": "如果未提供完整路径，可提供桌面/文档/下载目录中的文件夹名称或关键词"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称，默认使用文件夹名"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份：原告/被告/申请人/被申请人等"
+        },
+        "clientRole": {
+          "type": "string",
+          "description": "我方身份别名，和 role 二选一"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型，未提供时从材料推断"
+        },
+        "matterType": {
+          "type": "string",
+          "description": "案由或案件类型别名"
+        },
+        "parties": {
+          "type": "string",
+          "description": "当事人身份信息摘要"
+        },
+        "objective": {
+          "type": "string",
+          "description": "办理目标或代理词立场"
+        },
+        "claims": {
+          "type": "string",
+          "description": "诉请、抗辩目标或结论请求"
+        },
+        "opponentMaterials": {
+          "type": "string",
+          "description": "对方主张、起诉状、答辩意见或代理意见摘要，可为空"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录，默认在案件文件夹下创建 Lumi代理词草稿"
+        },
+        "outputDirName": {
+          "type": "string",
+          "description": "默认输出目录名称"
+        },
+        "writeFiles": {
+          "type": "boolean",
+          "description": "是否写入 Markdown 文件，默认 true；false 时只返回预览"
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "是否递归读取子目录，默认 true"
+        },
+        "maxFiles": {
+          "type": "number",
+          "description": "最多读取文件数，默认 80，最高 200"
+        },
+        "maxChars": {
+          "type": "number",
+          "description": "最多提取文本字数，默认 220000，最高 800000"
+        },
+        "importToKb": {
+          "type": "boolean",
+          "description": "律师确认后是否把生成的工作底稿导入组织知识库，默认 false"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_import_materials_to_kb",
+    "description": "法律材料导入知识库 — Lumi 自主解析本地文件、案件文件夹或粘贴文本，导入组织知识库并建立法律标签。支持起诉状、证据、庭审笔录、合同、裁判文书、网页摘录、检索笔记等材料；外部网站材料需由律师确认来源和权限后再入库。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "单个本地材料文件路径，支持 PDF/DOCX/XLSX/PPTX/RTF/TXT/MD/CSV"
+        },
+        "folderPath": {
+          "type": "string",
+          "description": "案件材料文件夹路径，会批量导入支持的文档格式"
+        },
+        "content": {
+          "type": "string",
+          "description": "直接粘贴的材料文本、网页摘录或律师确认后的外部检索结果"
+        },
+        "title": {
+          "type": "string",
+          "description": "材料标题，未提供时使用文件名或案件名"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "materialType": {
+          "type": "string",
+          "description": "材料类型：起诉状/答辩状/证据/庭审笔录/合同/裁判文书/检索笔记/工商信息等"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "附加标签"
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "导入文件夹时是否递归子目录，默认 true"
+        },
+        "maxFiles": {
+          "type": "number",
+          "description": "文件夹导入最大文件数，默认 30，最高 100"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "导入人 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.materials.import-to-kb",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "organization legal knowledge base and vector index",
+          "reversible": true
+        },
+        {
+          "type": "local_read",
+          "scope": "selected legal files, folders, or pasted content",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured embedding provider when indexing",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "imported"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.materials.import-to-kb",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "folderPath"
+    }
+  },
+  {
+    "name": "legal_process_notice_link",
+    "description": "短信/法院通知链接处理 — 从法院短信、开庭通知、送达通知中的链接半自动下载 PDF/DOCX/网页材料，保存本地留痕；需要登录、验证码、人脸或短信验证时生成授权网页登录步骤，不绕过平台限制。律师确认来源和权限后可导入组织知识库。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "短信或通知中的 http(s) 链接；未提供时会从 message/noticeText 中提取第一个链接"
+        },
+        "message": {
+          "type": "string",
+          "description": "完整短信原文，可用于提取案号、法院、开庭/通知日期和链接"
+        },
+        "noticeText": {
+          "type": "string",
+          "description": "法院通知或送达通知文本"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把短信/通知处理结果归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "title": {
+          "type": "string",
+          "description": "材料标题，默认“短信/法院通知链接材料”"
+        },
+        "includeExtractedText": {
+          "type": "boolean",
+          "description": "是否在返回结果中包含正文摘录，默认 true"
+        },
+        "extractedTextLimit": {
+          "type": "number",
+          "description": "返回正文摘录最大字符数，默认 4000，最高 20000"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "confirmedForKb": {
+          "type": "boolean",
+          "description": "律师已确认来源、授权和使用权限后设为 true，工具会导入组织知识库"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "导入人 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.notice-link.process",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case or knowledge-base notice archive",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "downloaded notice/document and source trace files when directly accessible",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "provided public notice or document URL",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "downloaded",
+          "browser_handoff"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "browser_handoff means the link needs authorized visible login or verification; no download is claimed."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.notice-link.process",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "url"
+    }
+  },
+  {
+    "name": "legal_download_and_extract_document",
+    "description": "文书链接自动下载与正文提取 — 用户发送裁判文书、起诉状、合同、法院通知等 PDF/DOCX/网页链接后，Lumi 自动下载原文件、保存来源留痕、提取正文内容并返回摘要；需要登录/验证码时转授权浏览器协作，不绕过平台限制。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "需要下载和提取正文的 http(s) 文书链接；未提供时会从 message/linkText 中提取第一个链接"
+        },
+        "message": {
+          "type": "string",
+          "description": "包含链接的用户消息、短信或网页摘录"
+        },
+        "linkText": {
+          "type": "string",
+          "description": "包含链接的文本"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把文书链接处理结果归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "title": {
+          "type": "string",
+          "description": "材料标题，默认“链接文书材料”"
+        },
+        "includeExtractedText": {
+          "type": "boolean",
+          "description": "是否在返回结果中包含正文摘录，默认 true"
+        },
+        "extractedTextLimit": {
+          "type": "number",
+          "description": "返回正文摘录最大字符数，默认 4000，最高 20000"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "confirmedForKb": {
+          "type": "boolean",
+          "description": "律师已确认来源、授权和使用权限后设为 true，工具会导入组织知识库"
+        },
+        "importToKb": {
+          "type": "boolean",
+          "description": "confirmedForKb 的别名"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "导入人 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_external_source_status",
+    "description": "外部法律数据源接入状态 — 明确企查查、Alpha、法蝉、裁判文书网、人民法院案例库、国家企业信用等数据源当前是官方 API 接入、授权网页登录协作还是材料导入，不夸大自动抓取能力。",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_search_external_authorities",
+    "description": "外部法律数据库 API 检索 — 调用已配置授权网关（如北大法宝、通义法睿）检索法规、法条、案例和裁判规则；未配置时明确降级到授权网页登录协作，不抓取平台数据库。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "检索词、争议焦点、案由、法条名称或案件事实摘要"
+        },
+        "type": {
+          "type": "string",
+          "description": "检索类型：law/case/mixed，或中文“法规/案例/综合”"
+        },
+        "kind": {
+          "type": "string",
+          "description": "type 的别名"
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "指定数据源，如 pkulaw、farui、national-law-regulations"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "includeOfficialWeb": {
+          "type": "boolean",
+          "description": "是否同时尝试国家法律法规数据库公开网页检索，默认 false"
+        },
+        "limit": {
+          "type": "number",
+          "description": "返回结果数量上限，默认 5，最高 20"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把检索报告和来源登记归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型；用于新建案件或归档标记"
+        },
+        "confirmedForKb": {
+          "type": "boolean",
+          "description": "律师确认来源和授权后设为 true，可将检索报告导入组织知识库"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_company_database_lookup",
+    "description": "企业主体数据库 API 查询 — 调用已配置的企查查/天眼查官方 API 查询公司、股东和被执行主体基础信息；未配置时输出网页登录协作和材料入库步骤。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "公司、被执行人或主体名称"
+        },
+        "companyName": {
+          "type": "string",
+          "description": "name 的别名"
+        },
+        "subjectName": {
+          "type": "string",
+          "description": "name 的别名"
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "指定数据源，如 qichacha、tianyancha"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把主体信息报告归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型；用于新建案件或归档标记"
+        },
+        "confirmedForKb": {
+          "type": "boolean",
+          "description": "律师确认来源和授权后设为 true，可将报告导入组织知识库"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_external_research_plan",
+    "description": "半自动外部检索行动单 — 生成法条、人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务的检索顺序、网页登录预设和来源登记表。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把外部检索行动单归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实摘要"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "争议焦点列表"
+        },
+        "companyNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "需要查询的公司或被执行人名称"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；提供 caseId/caseName 时默认归档，设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_generate_citation_verification_report",
+    "description": "引用核验报告 — 对文书全文或文件中的法条、案号引用生成可落盘的核验报告，统计现行有效、已废止、未确认存在的风险项，并可导入组织知识库。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "需要核验的文书全文、代理词、法律意见或合同审查结果"
+        },
+        "content": {
+          "type": "string",
+          "description": "text 的别名"
+        },
+        "filePath": {
+          "type": "string",
+          "description": "需要核验的本地文件路径，支持 PDF/DOCX/TXT/MD 等法律材料格式"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "title": {
+          "type": "string",
+          "description": "报告标题或来源材料标题"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_delivery/{orgId}"
+        },
+        "importToKb": {
+          "type": "boolean",
+          "description": "律师确认后是否导入组织知识库，默认 false"
+        },
+        "confirmedForKb": {
+          "type": "boolean",
+          "description": "importToKb 的确认别名"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.citation-verification-report.generate",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal knowledge-base verification report",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "citation verification report file",
+          "reversible": true
+        },
+        {
+          "type": "local_read",
+          "scope": "optional source legal document",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "artifact",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "requiredArtifactCollections": [
+          "artifacts"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.citation-verification-report.generate",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "filePath"
+    }
+  },
+  {
+    "name": "legal_finalize_delivery_package",
+    "description": "正式文书交付包 — 将代理词、起诉状、答辩状、法律意见书、证据目录等草稿整理为律所交付包，生成正式 Markdown、DOCX、引用核验报告、来源登记表和提交签署清单。不会自动签发、提交、缴费或送达。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "需要整理成正式交付包的文书草稿或工作底稿"
+        },
+        "packetText": {
+          "type": "string",
+          "description": "content 的别名，用于诉讼文书包结果"
+        },
+        "documentText": {
+          "type": "string",
+          "description": "content 的别名，用于单份文书结果"
+        },
+        "reasoningMatrix": {
+          "type": "string",
+          "description": "legal_case_reasoning_matrix 生成的大前提/小前提/涵摄结论底稿；正式交付前建议提供"
+        },
+        "reasoningSummary": {
+          "type": "string",
+          "description": "三段论推理摘要：现行法/类案、事实证据、涵摄结论"
+        },
+        "legalReasoning": {
+          "type": "string",
+          "description": "reasoningMatrix 的别名，用于传入可复核的法律推理链"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后会把交付包或阻断记录归档到该案件空间"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "documentType": {
+          "type": "string",
+          "description": "文书类型：起诉状/答辩状/质证意见/代理词/法律意见书/证据目录/合同文本/投标书等"
+        },
+        "role": {
+          "type": "string",
+          "description": "我方身份"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "court": {
+          "type": "string",
+          "description": "拟提交或使用法院"
+        },
+        "lawFirmName": {
+          "type": "string",
+          "description": "律所名称，未提供时使用占位符"
+        },
+        "lawyerName": {
+          "type": "string",
+          "description": "承办律师，未提供时使用占位符"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_delivery/{orgId}"
+        },
+        "includeDocx": {
+          "type": "boolean",
+          "description": "是否生成 DOCX，默认 true"
+        },
+        "includePdf": {
+          "type": "boolean",
+          "description": "是否尝试用 Microsoft Word 转 PDF，默认 false"
+        },
+        "markDraft": {
+          "type": "boolean",
+          "description": "是否标记为律师复核稿，默认 true"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认上下文 userId 或 system"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.delivery-package.finalize",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "optional legal case delivery archive or gate-block record",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "formal-review legal package, verification, source, and checklist files",
+          "reversible": true
+        },
+        {
+          "type": "process_execution",
+          "scope": "optional Microsoft Word PDF conversion",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "artifact",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "generated"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "requiredArtifactCollections": [
+          "artifacts"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "A generated package remains a lawyer-review draft and is never automatically filed, signed, sent, paid, or served."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.delivery-package.finalize",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "outputDir"
+    }
+  },
+  {
+    "name": "legal_prepare_external_browser_workspace",
+    "description": "外部网页登录工作区 — 为人民法院案例库、裁判文书网、法蝉、Alpha、企查查、国家企业信用、法院在线服务等生成可见浏览器登录命令、检索词、来源登记表和授权边界说明。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "caseName": {
+          "type": "string",
+          "description": "案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "facts": {
+          "type": "string",
+          "description": "案件事实摘要"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "争议焦点列表"
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "额外检索词"
+        },
+        "companyNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "需要查询的公司或被执行人名称"
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "指定数据源/preset，如 people-court-case-library、china-judgments-online、fachan、alpha-lawyer、qichacha、national-enterprise-credit、court-online-service"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "action": {
+          "type": "string",
+          "description": "检索目的：类案检索/立案/企业查询/合同审查等"
+        },
+        "outputDir": {
+          "type": "string",
+          "description": "可选输出目录；默认写入 data/legal_external_workspaces/{orgId}"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认上下文 orgId 或 default"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.external-browser-workspace.prepare",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "local legal browser-workspace runbook state",
+          "reversible": true
+        },
+        {
+          "type": "local_write",
+          "scope": "browser runbook, source register, and login command files",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "artifact",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "prepared"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "requiredArtifactCollections": [
+          "artifacts"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Prepares commands and records only; it does not log in, bypass verification, scrape, or download."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.external-browser-workspace.prepare",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "outputDir"
+    }
+  },
+  {
+    "name": "legal_refresh_authoritative_sources",
+    "description": "立即巡检现行法权威来源 — 逐项访问国家法律法规数据库，核对版本日期、施行日期、效力状态、官方记录 ID、条文范围和稳定指纹。发现变化即阻断正式文书交付并进入人工复核，不会把网络失败当成有效。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timeoutMs": {
+          "type": "number",
+          "description": "单个官方请求超时毫秒数，范围 2000-30000；默认 12000"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.authoritative-sources.refresh",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "mutate",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "authoritative statute source refresh state and history",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "official national law and regulation sources",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "refreshed"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Network failure or changed official records are recorded for review and are never treated as valid law evidence."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.authoritative-sources.refresh",
+      "operation": "mutate",
+      "assurance": "verified",
+      "subjectArgument": "timeoutMs"
+    }
+  },
+  {
+    "name": "legal_authority_source_status",
+    "description": "查看现行法权威来源巡检状态 — 显示最近运行时间、已验证法源、待人工复核项目和暂时不可用来源，不发起新的外部请求。",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_verify_citation",
+    "description": "引用校验 — 验证法条引用和案例引用是否真实有效。可检查单个引用或全文中的所有引用，标注：存在/不存在、有效/已废止。禁止使用虚构法条和案例。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "citation": {
+          "type": "string",
+          "description": "单个引用文本，如\"《民法典》第585条\"或\"(2024)京0105民初12345号\""
+        },
+        "text": {
+          "type": "string",
+          "description": "包含多个引用的完整文本（将自动识别所有《XX法》和案号引用）"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe"
+  },
+  {
+    "name": "legal_import_judgment",
+    "description": "导入裁判文书 — 上传或粘贴裁判文书全文（PDF/DOCX/TXT），自动提取案号、法院、当事人、法条引用等元数据，分块并向量化索引到组织知识库。导入后可通过类案检索查询。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "裁判文书文件路径（PDF/DOCX/TXT）"
+        },
+        "content": {
+          "type": "string",
+          "description": "直接粘贴的裁判文书全文（与filePath二选一）"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户ID"
+        }
+      }
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "capability": {
+      "id": "legal.judgment.import",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "create",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "local_state_change",
+          "scope": "organization judgment knowledge base and vector index",
+          "reversible": true
+        },
+        {
+          "type": "local_read",
+          "scope": "selected judgment file or pasted content",
+          "reversible": true
+        },
+        {
+          "type": "network_read",
+          "scope": "configured embedding provider when indexing",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "imported"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "Generated legal work remains subject to lawyer review and is not automatically filed, signed, sent, or published."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.judgment.import",
+      "operation": "create",
+      "assurance": "verified",
+      "subjectArgument": "filePath"
+    }
+  }
+]

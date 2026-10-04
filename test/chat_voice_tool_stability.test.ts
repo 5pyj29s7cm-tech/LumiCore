@@ -256,7 +256,8 @@ describe('chat and voice tool-call stability', () => {
 
     const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
     expect(voice).toContain('executeForegroundMessagingAction');
-    expect(voice).toContain("action: 'send'");
+    expect(voice).toContain("foregroundWeChatReadArgs ? 'read' : 'send'");
+    expect(voice).toContain('action: foregroundMessagingAction');
     expect(voice).toContain('if (!isCurrentTurn()) return');
     expect(voice).toContain('session.pipelineAbortController === pipelineAbort');
   });

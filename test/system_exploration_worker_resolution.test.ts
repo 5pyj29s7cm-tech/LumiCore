@@ -157,7 +157,7 @@ describe('system exploration worker resolution', () => {
 
   it('keeps the scheduled daily scan off the backend event loop', () => {
     const schedulerSource = fs.readFileSync(
-      path.join(process.cwd(), 'server', 'scheduler.ts'),
+      path.join(process.cwd(), 'server', 'scheduler', 'builtins', 'background_runtime.ts'),
       'utf8',
     );
     const dailyScan = schedulerSource.slice(

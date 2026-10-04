@@ -648,7 +648,8 @@ describe('voice foreground release convergence', () => {
     expect(workLaneReleaseAt).toBeGreaterThan(desktopReleaseAt);
     expect(workHeartbeatReleaseAt).toBeGreaterThan(workLaneReleaseAt);
 
-    expect(source).toContain("releaseVoiceTurnResources('Voice quick-command fast path completed.')");
+    expect(source).toContain("completedReason: 'Voice quick-command fast path completed.'");
+    expect(source).toContain('release: releaseVoiceTurnResources');
     expect(source).toContain("releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.')");
 
     const outerFailureStart = source.indexOf("logger.error('[Voice Error]:', err);");

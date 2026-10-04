@@ -1,88 +1,31 @@
+import { type Conversation, type ConversationTurnOptions, type ConversationTurnResult, type MessageRecord } from "./manager/contracts";
+export { type Conversation, type MessageRecord, type ConversationTurnOptions, type ConversationTurnResult } from "./manager/contracts";
+import { getMessages, isPromptEligibleMessage } from "./manager/message_history";
+export { compactRecordForPrompt, getMessages, getMessagesByTokenBudget, getMessagesThroughExternalMessage } from "./manager/message_history";
+export { type DurableForegroundReleaseGateSnapshot, type DurableForegroundReleaseGate, type CreateDurableForegroundReleaseGateInput, createDurableForegroundReleaseGate } from "./manager/foreground_release_gate";
+
 import { parseStoredObject as parsePersistedObject } from '../tools/receipt_payload';
 import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
-import { buildHistoricalFileObservations } from './file_observation_history';
+
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { estimateTokenCount } from '../llm/providers';
-import {
-  buildConversationActionContinuationState,
-  classifyToolRecordTaskDurability,
-  classifyConversationActionFollowupIntent,
-  classifyRecentActionFollowupIntent,
-  formatConversationActionTaskStatus,
-  isUserObservedTaskCompletion,
-  needsRecentActionContinuationContext,
-  normalizeConversationActionState,
-  prepareConversationActionTaskState,
-  RECONFIRMATION_REQUIRED_BLOCKER,
-  type ConversationActionContinuationState,
-} from '../cognition/action_continuation';
-import {
-  conversationTaskStatusOwnsExecutionLease,
-  isTerminalConversationTaskStatus,
-  taskCompletionFromReceipts,
-} from '../cognition/task_execution_ledger';
+
+import { buildConversationActionContinuationState, classifyToolRecordTaskDurability, classifyConversationActionFollowupIntent, classifyRecentActionFollowupIntent, formatConversationActionTaskStatus, isUserObservedTaskCompletion, needsRecentActionContinuationContext, normalizeConversationActionState, prepareConversationActionTaskState, RECONFIRMATION_REQUIRED_BLOCKER, type ConversationActionContinuationState } from '../cognition/action_continuation';
+import { conversationTaskStatusOwnsExecutionLease, isTerminalConversationTaskStatus, taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
 import { buildActionContract } from '../cognition/action_contract';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
 import type { ToolPolicy } from '../personality/types';
-import {
-  isolateLegacyGuardSummaryState,
-  isGuardGeneratedAssistantText,
-  isGuardGeneratedConversationRecord,
-} from './guard_history';
-import {
-  buildCompactToolEvidenceNote,
-  isUnverifiedExecutionAssistantRecord,
-  isUnverifiedExecutionAssistantText,
-  sanitizeSummaryForPrompt,
-} from './summary_grounding';
+import { isolateLegacyGuardSummaryState, isGuardGeneratedAssistantText, isGuardGeneratedConversationRecord } from './guard_history';
+import { isUnverifiedExecutionAssistantRecord, isUnverifiedExecutionAssistantText, sanitizeSummaryForPrompt } from './summary_grounding';
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
-import { projectConversationReceiptHistory } from './receipt_history';
+
 import { normalizeNativeRequestBinding } from '../devices/native_identity';
 import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
-import {
-  normalizeCompletionFeedbackForPersistence,
-  type TaskCompletionFeedback,
-} from './completion_feedback';
-import {
-  formatConversationActionLedgerStatus,
-  attachConversationExecutionPlan,
-  migrateLegacyConversationActionLedger,
-  recoverConversationActionTaskLeases,
-  repairTerminalConversationActionPointers,
-  repairTerminalConversationActionTaskLeases,
-  repairContradictoryConversationActionReceipts,
-  compactLegacyScheduledCapabilityExecutions,
-  archiveBoundConversationActionReceipts,
-  finalizeConversationActionTask,
-  getConversationActionStateByTaskId,
-  getConversationActionStateFromLedger,
-  syncConversationActionTaskLedger,
-  type ConversationActionTerminalDisposition,
-  type ConversationActionLiveProjection,
-} from './action_ledger';
+import { normalizeCompletionFeedbackForPersistence } from './completion_feedback';
+import { formatConversationActionLedgerStatus, attachConversationExecutionPlan, migrateLegacyConversationActionLedger, recoverConversationActionTaskLeases, repairTerminalConversationActionPointers, repairTerminalConversationActionTaskLeases, repairContradictoryConversationActionReceipts, compactLegacyScheduledCapabilityExecutions, archiveBoundConversationActionReceipts, finalizeConversationActionTask, getConversationActionStateByTaskId, getConversationActionStateFromLedger, syncConversationActionTaskLedger, type ConversationActionTerminalDisposition, type ConversationActionLiveProjection } from './action_ledger';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
-import {
-  listConversationFocusThreads,
-  updateConversationFocusThread,
-  type ConversationFocusThread,
-} from './focus_threads';
-import {
-  acceptConversationActionTurn,
-  acquireConversationActionTurnLease,
-  bindConversationActionTurnTask,
-  finalizeConversationActionTurn,
-  getConversationActionTurn,
-  listConversationActionTurns,
-  quarantineConversationActionTurnPersistenceInDb,
-  reconcileConversationActionTurnLease,
-  reconcileConversationActionTurnLeases,
-  releaseConversationActionTurnLease,
-  type ConversationActionTurn,
-} from './action_turn_ledger';
-import {
-  buildTransportNeutralConfirmationScope,
-  getPendingConfirmation,
-} from '../tools/pending_confirmation';
+import { listConversationFocusThreads, updateConversationFocusThread, type ConversationFocusThread } from './focus_threads';
+import { acceptConversationActionTurn, acquireConversationActionTurnLease, bindConversationActionTurnTask, finalizeConversationActionTurn, getConversationActionTurn, listConversationActionTurns, quarantineConversationActionTurnPersistenceInDb, reconcileConversationActionTurnLease, reconcileConversationActionTurnLeases, releaseConversationActionTurnLease, type ConversationActionTurn } from './action_turn_ledger';
+import { buildTransportNeutralConfirmationScope, getPendingConfirmation } from '../tools/pending_confirmation';
 import { partitionConversationReceiptsByOwnership } from './receipt_ownership';
 
 function hasExactPendingConfirmationForTask(input: {
@@ -264,87 +207,6 @@ function detachUnrelatedConversationActionState(
   return true;
 }
 
-export interface Conversation {
-  id: string;
-  userId: string;
-  agentId: string;
-  title: string;
-  status: 'active' | 'paused' | 'closed';
-  mode?: string;  // Conversation style: casual, teaching, brainstorm, executive
-  summary: string;
-  /** Multi-level summary chain: [oldest, middle, newest]. Max 3 entries. */
-  summaryChain?: string[];
-  /** Number of stored messages covered by the newest successfully persisted summary. */
-  lastSummaryMessageCount?: number;
-  messageCount: number;
-  lastActiveAt: string;
-  createdAt: string;
-  /** Recent topic tags — tracked for cross-session continuity */
-  recentTopics?: string[];
-  /** ISO timestamp of the last topic change */
-  lastTopicChangeAt?: string;
-  /** Domain: personal or work */
-  domain?: string;
-  /** orgId when in work domain */
-  orgId?: string;
-  /** Runtime compatibility projection; durable state lives in conversation_action_tasks/receipts. */
-  actionContinuationState?: ConversationActionContinuationState;
-  /** Latest user turn waiting for its terminal assistant/tool record. */
-  pendingActionContinuation?: {
-    userText: string;
-    messageId: string;
-    requestId?: string;
-    updatedAt: string;
-  };
-}
-
-export interface MessageRecord {
-  id: string;
-  userId: string;
-  agentId?: string;
-  conversationId?: string;
-  module?: string;
-  message: string;
-  response?: string;
-  role: string;
-  personality?: string;
-  mode?: string;
-  toolCalls?: any[];
-  /** Server-derived receipt evidence retained after prompt compaction removes raw tool calls. */
-  toolReceiptLedger?: string;
-  /** In-process server projection; never accepted from client-supplied history. */
-  toolFileObservations?: string;
-  domain?: string;
-  orgId?: string;
-  source?: string;
-  channel?: string;
-  cognitiveIntent?: string;
-  llmWasCalled?: boolean;
-  /** Provider message identity used to keep asynchronous remote turns ordered. */
-  externalMessageId?: string;
-  /** Monotonic sequence within one external conversation. */
-  routeSequence?: number;
-  /** Time the remote transport received the message. */
-  receivedAt?: string;
-  /** Stable request identity for one local/socket turn. */
-  requestId?: string;
-  /** Proof-bound native request provenance; absent on web/remote/harness turns. */
-  nativeDeviceId?: string;
-  executionSessionId?: string;
-  nativeClientIdentitySha256?: string;
-  audioInputKind?: 'physical_microphone' | 'synthetic_accepted_transcript' | '';
-  syntheticAudio?: boolean;
-  captureSessionId?: string;
-  sttReceiptId?: string;
-  contextChainId?: string;
-  previousRequestId?: string;
-  /** Structured model/runtime classification for durable task ownership. */
-  taskIntent?: 'task' | 'conversation' | '';
-  /** Bounded, allowlisted task outcome summary shown after history reload. */
-  completionFeedback?: TaskCompletionFeedback;
-  timestamp: string;
-}
-
 function isolateConversationSummaryForUse(conv: Conversation): boolean {
   const isolated = isolateLegacyGuardSummaryState({
     summary: conv.summary,
@@ -365,21 +227,6 @@ function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): 
     domain: domainOrOrgId ? 'work' : 'personal',
     orgId: domainOrOrgId || '',
   };
-}
-
-export interface ConversationTurnOptions {
-  /** Current user text, used to avoid a soft rollover during a referential follow-up. */
-  userText?: string;
-  /** Test/diagnostic override. Production defaults to CONVERSATION_ROLLOVER_MESSAGE_LIMIT or 240. */
-  messageLimit?: number;
-  /** Bind this turn to the conversation selected by the client. */
-  conversationId?: string;
-}
-
-export interface ConversationTurnResult {
-  conversation: Conversation;
-  rolledOver: boolean;
-  previousConversationId?: string;
 }
 
 function conversationMatchesScope(c: Conversation, domainOrOrgId?: string, orgIdMaybe?: string): boolean {
@@ -2978,135 +2825,6 @@ export async function convergeForegroundRequestBeforeRelease(input: ForegroundRe
   return { convergence, finalization, converged: finalization.converged };
 }
 
-export interface DurableForegroundReleaseGateSnapshot {
-  attempts: number;
-  resourcesReleased: boolean;
-  recoveryOwned: boolean;
-  retryScheduled: boolean;
-}
-
-export interface DurableForegroundReleaseGate {
-  release(reason?: string): Promise<boolean>;
-  snapshot(): DurableForegroundReleaseGateSnapshot;
-  /** Cancel the unref'd recovery worker during test/server teardown. */
-  dispose(): void;
-}
-
-export interface CreateDurableForegroundReleaseGateInput {
-  /** Returns true only after the exact request is strictly durable/release-safe. */
-  converge(reason: string): Promise<boolean>;
-  /** Idempotent heartbeat/desktop/serial cleanup. */
-  releaseResources(): void;
-  onFailure?(input: { reason: string; error: unknown; attempts: number }): void;
-  onRecoveryTakeover?(input: { reason: string; error: unknown; attempts: number }): void;
-  retryDelaysMs?: readonly number[];
-  recoveryTakeoverAfterAttempts?: number;
-}
-
-/**
- * Gate transport cleanup behind strict durable convergence.
- *
- * Transient failures retain every foreground resource. A structurally broken
- * request cannot hold the desktop/serial lane forever, however: after bounded
- * exponential attempts this gate becomes the explicit fail-closed recovery
- * owner, releases transport resources, and continues low-frequency persistence
- * retries without reporting convergence. The manager request owner remains
- * intact until a later strict barrier succeeds.
- */
-export function createDurableForegroundReleaseGate(
-  input: CreateDurableForegroundReleaseGateInput,
-): DurableForegroundReleaseGate {
-  const retryDelaysMs = (input.retryDelaysMs?.length
-    ? input.retryDelaysMs
-    : [250, 500, 1_000, 2_000, 4_000, 10_000, 30_000])
-    .map(value => Math.max(1, Math.floor(Number(value) || 0)));
-  const recoveryTakeoverAfterAttempts = Math.max(
-    1,
-    Math.floor(Number(input.recoveryTakeoverAfterAttempts ?? 6) || 1),
-  );
-  let attempts = 0;
-  let resourcesReleased = false;
-  let recoveryOwned = false;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  let inFlight: Promise<boolean> | null = null;
-  let latestReason = 'Foreground request reached its release boundary.';
-  let disposed = false;
-
-  const releaseResourcesOnce = (): void => {
-    if (resourcesReleased) return;
-    input.releaseResources();
-    resourcesReleased = true;
-  };
-  const scheduleRetry = (): void => {
-    if (disposed || retryTimer) return;
-    const delay = retryDelaysMs[Math.min(Math.max(0, attempts - 1), retryDelaysMs.length - 1)];
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      void release(latestReason);
-    }, delay);
-    retryTimer.unref?.();
-  };
-  const release = async (reason = latestReason): Promise<boolean> => {
-    latestReason = String(reason || latestReason);
-    if (disposed) return false;
-    if (resourcesReleased && !recoveryOwned) return true;
-    if (inFlight) return inFlight;
-    // A finally block and a fast-path boundary may both call release. Once a
-    // retry worker is scheduled, those duplicate calls must not accelerate the
-    // takeover threshold or create a second worker.
-    if (retryTimer) return false;
-    const attempt = (async (): Promise<boolean> => {
-      attempts += 1;
-      let failure: unknown = null;
-      try {
-        if (await input.converge(latestReason)) {
-          releaseResourcesOnce();
-          recoveryOwned = false;
-          if (retryTimer) clearTimeout(retryTimer);
-          retryTimer = null;
-          return true;
-        }
-        failure = new Error('foreground_request_not_durably_converged');
-      } catch (error) {
-        failure = error;
-      }
-
-      input.onFailure?.({ reason: latestReason, error: failure, attempts });
-      if (!recoveryOwned && attempts >= recoveryTakeoverAfterAttempts) {
-        recoveryOwned = true;
-        input.onRecoveryTakeover?.({ reason: latestReason, error: failure, attempts });
-        // The gate, rather than the channel executor, now owns retry/recovery.
-        // This releases scarce transport resources but deliberately returns
-        // false so no caller can mistake takeover for durable convergence.
-        releaseResourcesOnce();
-      }
-      scheduleRetry();
-      return false;
-    })();
-    inFlight = attempt;
-    try {
-      return await attempt;
-    } finally {
-      if (inFlight === attempt) inFlight = null;
-    }
-  };
-
-  return {
-    release,
-    dispose: () => {
-      disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = null;
-    },
-    snapshot: () => ({
-      attempts,
-      resourcesReleased,
-      recoveryOwned,
-      retryScheduled: Boolean(retryTimer),
-    }),
-  };
-}
-
 function clearDurableForegroundRequestOwner(
   identity: Pick<ConvergeConversationActionRequestLeaseInput, 'conversationId' | 'userId' | 'requestId'>,
   terminal: boolean,
@@ -4182,179 +3900,8 @@ export function updateAssistantMessageTerminalPresentation(input: {
   return true;
 }
 
-const DEFAULT_CONTEXT_TOKENS = parseInt(process.env.CONTEXT_TOKEN_BUDGET || '18000', 10);
-const CONTEXT_HISTORY_LIMIT = parseInt(process.env.CONTEXT_HISTORY_LIMIT || '240', 10);
-const CONTEXT_MESSAGE_CHAR_LIMIT = parseInt(process.env.CONTEXT_MESSAGE_CHAR_LIMIT || '5000', 10);
-const CONTEXT_RESPONSE_CHAR_LIMIT = parseInt(process.env.CONTEXT_RESPONSE_CHAR_LIMIT || '5000', 10);
-
-function compactPromptText(value: string, limit: number): string {
-  const text = value || '';
-  if (text.length <= limit) return text;
-  const head = Math.floor(limit * 0.75);
-  const tail = Math.max(400, limit - head - 180);
-  return [
-    text.slice(0, head),
-    `\n\n[Prompt history compacted: ${text.length} characters total. Older detail is preserved in conversation storage and searchable history.]\n\n`,
-    text.slice(-tail),
-  ].join('');
-}
-
 function normalizeToolCalls(value: unknown): any[] | undefined {
   return sanitizeToolRecordsForPersistence(value);
-}
-
-function isPromptEligibleMessage(m: MessageRecord): boolean {
-  if (!m) return false;
-  if (m.role === 'tool' || m.mode === 'proactive') return false;
-  if (isGuardGeneratedConversationRecord(m)) return false;
-  return Boolean((m.message || '').trim() || (m.response || '').trim());
-}
-
-export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
-  const legacyCombinedGuardResponse = m.role === 'user'
-    && Boolean(String(m.response || '').trim())
-    && (
-      String(m.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
-      || isGuardGeneratedAssistantText(m.response)
-    );
-  const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
-  // Removing an ungrounded assistant reply while retaining its user question
-  // makes an already answered turn look pending to the next model. Preserve
-  // the reply boundary without replaying its unsupported outcome claims.
-  const suppressedReply = m.role === 'assistant'
-    && !evidenceNote
-    && isUnverifiedExecutionAssistantRecord(m);
-  const compactedMessage = suppressedReply
-    ? '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction. Refer to the original action receipts only when relevant to the newest user request.]'
-    : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT);
-  const compactedResponse = legacyCombinedGuardResponse
-    ? ''
-    : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
-  return {
-    ...m,
-    message: evidenceNote && m.role === 'assistant'
-      ? `${compactedMessage}\n${evidenceNote}`.trim()
-      : compactedMessage,
-    // Older interaction rows stored the assistant reply in `response` while
-    // keeping role=user. Preserve the user's side, but never reconstruct a
-    // marked/legacy guard reply as conversational assistant truth.
-    response: evidenceNote && m.role === 'user' && compactedResponse
-      ? `${compactedResponse}\n${evidenceNote}`.trim()
-      : compactedResponse,
-    toolReceiptLedger: evidenceNote || undefined,
-    toolFileObservations: buildHistoricalFileObservations(m.toolCalls) || undefined,
-    toolCalls: undefined,
-  };
-}
-
-export function getMessages(conversationId: string, limit = 1000): MessageRecord[] {
-  const db = readDB();
-  if (!db.interactions) return [];
-  const rows = db.interactions
-    .map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
-    .filter(({ row }: any) => row.conversationId === conversationId)
-    .sort((a: any, b: any) => {
-      const timestampDelta = new Date(a.row.timestamp).getTime() - new Date(b.row.timestamp).getTime();
-      if (timestampDelta) return timestampDelta;
-      const aSequence = Number(a.row.routeSequence);
-      const bSequence = Number(b.row.routeSequence);
-      if (Number.isFinite(aSequence) && Number.isFinite(bSequence) && aSequence !== bSequence) {
-        return aSequence - bSequence;
-      }
-      return a.insertionOrder - b.insertionOrder;
-    })
-    .map(({ row }: any) => row);
-
-  return projectConversationReceiptHistory(db, rows
-    .filter((row: any) => {
-      const response = String(row.response || '').trim();
-      if (row.role !== 'user' || !response) return true;
-      const message = String(row.message || row.content || '').trim();
-      const ts = new Date(row.timestamp).getTime();
-      const hasSplitUser = rows.some((other: any) =>
-        other !== row &&
-        other.role === 'user' &&
-        !String(other.response || '').trim() &&
-        String(other.message || other.content || '').trim() === message &&
-        Math.abs(new Date(other.timestamp).getTime() - ts) < 2000
-      );
-      const hasSplitAssistant = rows.some((other: any) =>
-        other !== row &&
-        other.role === 'assistant' &&
-        String(other.message || other.content || '').trim() === response &&
-        Math.abs(new Date(other.timestamp).getTime() - ts) < 2000
-      );
-      return !(hasSplitUser || hasSplitAssistant);
-    })
-    .slice(-limit));
-}
-
-/**
- * Get messages trimmed to a token budget rather than a fixed count.
- * Always keeps the last `keepRecent` messages (default 4).
- * Trims oldest messages first from the middle.
- */
-export function getMessagesByTokenBudget(
-  conversationId: string,
-  maxTokens: number = DEFAULT_CONTEXT_TOKENS,
-  keepRecent: number = 4,
-  throughExternalMessageId = '',
-): MessageRecord[] {
-  const messages = getMessages(conversationId, CONTEXT_HISTORY_LIMIT);
-  let cutoffIndex = -1;
-  if (throughExternalMessageId) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role !== 'user') continue;
-      if (messages[index].externalMessageId !== throughExternalMessageId) continue;
-      cutoffIndex = index;
-      break;
-    }
-  }
-  const visibleMessages = cutoffIndex >= 0 ? messages.slice(0, cutoffIndex + 1) : messages;
-  const all = visibleMessages
-    .filter(isPromptEligibleMessage)
-    .map(compactRecordForPrompt);
-  if (all.length <= keepRecent) return all;
-
-  const keep = all.slice(-keepRecent); // always keep most recent
-  const rest = all.slice(0, -keepRecent);
-
-  let budget = maxTokens;
-  // Count tokens for the kept portion first
-  for (const m of keep) {
-    budget -= estimateTokenCount(m.message + (m.response || ''));
-  }
-
-  // Walk backwards through rest, taking messages that fit
-  const selected: MessageRecord[] = [];
-  for (let i = rest.length - 1; i >= 0; i--) {
-    const cost = estimateTokenCount(rest[i].message + (rest[i].response || ''));
-    if (budget - cost > 0) {
-      selected.unshift(rest[i]);
-      budget -= cost;
-    } else {
-      break; // no more budget for older messages
-    }
-  }
-
-  return [...selected, ...keep];
-}
-
-export function getMessagesThroughExternalMessage(
-  conversationId: string,
-  externalMessageId: string,
-  limit = 1000,
-): MessageRecord[] {
-  const messages = getMessages(conversationId, 1000);
-  let cutoffIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role !== 'user') continue;
-    if (messages[index].externalMessageId !== externalMessageId) continue;
-    cutoffIndex = index;
-    break;
-  }
-  const visibleMessages = cutoffIndex >= 0 ? messages.slice(0, cutoffIndex + 1) : messages;
-  return visibleMessages.slice(-limit);
 }
 
 export function getMessagesForAgent(userId: string, agentId: string, limit = 500): MessageRecord[] {

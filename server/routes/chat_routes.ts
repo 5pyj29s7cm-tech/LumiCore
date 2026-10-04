@@ -1,3 +1,4 @@
+import { runToolSession } from "../llm/tool_session";
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
 import { reserveConversationExecution } from '../cognition/conversation_execution';
@@ -8,7 +9,7 @@ import { requireNotStrict } from '../config/privacy';
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { runWithTools } from "../llm/adapter";
+
 import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from "../llm/providers";
 import { toolRegistry } from "../tools/registry";
@@ -405,32 +406,21 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedP
           onToolRecord?: (record: ToolExecutionRecord) => void,
           onChunk?: (chunk: string) => void,
           source = toolContext.source,
-        ) => runWithTools(
-          turnMessages,
-          toolRegistry,
-          { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
-          async record => {
+        ) => runToolSession({
+          messages: turnMessages,
+          registry: toolRegistry,
+          config: { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
+          onToolCall: async record => {
             assertRequestActive();
             await receiptObserver?.persist(record);
             await onToolRecord?.(record);
           },
-          restModelToolPolicy.maxIterations || 3,
-          llm.getDeepSeek,
-          llm.getGemini,
-          llm.getOpenAI,
-          llm.getAnthropic,
-          llm.getQwen,
-          onChunk,
-          { ...toolContext, source, executionSignal: request.signal,
+          maxIterations: restModelToolPolicy.maxIterations || 3,
+          onStreamChunk: onChunk,
+          context: { ...toolContext, source, executionSignal: request.signal,
             isCancelled: () => request.signal.aborted || !isBusinessAuthorized(), onToolRecord: receiptObserver?.onToolRecord },
-          llm.getOllama,
-          llm.getLmStudio,
-          llm.getArk,
-          llm.getXiaomi,
-          llm.getKimi,
-          llm.getGlm,
-          llm.getRelay,
-        );
+          getters: llm,
+        });
 
         const finalizeRestToolResult = async (
           candidateText: string,

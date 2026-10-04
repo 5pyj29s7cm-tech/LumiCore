@@ -71,8 +71,8 @@ async function monitor() {
     useApp: () => ({ user: fixture.uid ? { uid: fixture.uid, role: 'admin' } : null }), systemService: await telemetryService(), uiMessage: (key: string) => key.split('.')[1],
     SystemExplorer: () => React.createElement('div', {}, 'Computer exploration remains available'), LazyPanelFallback: () => null, Cpu: () => null, Monitor: () => null,
     motion: { div: ({ children, style }: any) => React.createElement('div', { 'data-testid': style?.minWidth ? 'sample' : undefined }, children) } };
-  deps.KernelMonitorView = extractSourceExpression('src/components/DesktopUI.tsx', 'KernelMonitorView', deps);
-  return extractSourceExpression('src/components/DesktopUI.tsx', 'KernelMonitorApp', deps);
+  deps.KernelMonitorView = extractSourceExpression('src/components/desktop/kernel_monitor.tsx', 'KernelMonitorView', deps);
+  return extractSourceExpression('src/components/desktop/kernel_monitor.tsx', 'KernelMonitorApp', deps);
 }
 
 it('monitor serializes slow reads, removes failed samples and recovers without displaying false idle data', async () => {
