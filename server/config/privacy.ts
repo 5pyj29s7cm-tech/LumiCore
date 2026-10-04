@@ -6,7 +6,7 @@
  */
 
 import fs from 'node:fs';
-import crypto from 'node:crypto';
+import { writeJsonAtomic } from './atomic_json';
 import { isIP } from 'node:net';
 import { getDataPath } from './data_path';
 
@@ -43,19 +43,7 @@ export function savePrivacyMode(mode: PrivacyMode): void {
   getPrivacyMode(); // Freeze the active mode before changing the saved one.
   if (isPrivacyModeLocked()) throw new Error('Privacy mode is enforced by the environment.');
   const destination = getDataPath('privacy.json');
-  const temporary = `${destination}.${crypto.randomUUID()}.tmp`;
-  try {
-    const descriptor = fs.openSync(temporary, 'wx', 0o600);
-    try {
-      fs.writeFileSync(descriptor, `${JSON.stringify({ version: 1, mode })}\n`, 'utf8');
-      fs.fsyncSync(descriptor);
-    } finally { fs.closeSync(descriptor); }
-    fs.renameSync(temporary, destination);
-  } finally {
-    try { fs.unlinkSync(temporary); } catch (error: any) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
-  }
+  writeJsonAtomic(destination, { version: 1, mode });
 }
 
 export function requireLocalEndpoint(value: string, operation = 'Local AI processing'): void {

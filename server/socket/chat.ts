@@ -1,3 +1,7 @@
+import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
+import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
+import { resolveUserTurn, type TurnResolution } from '../cognition/turn_resolution';
+import { revalidateAcceptedTaskRelation } from '../cognition/task_concurrency';
 import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
 /**
  * agent:chat socket handler — the core conversational AI pipeline
@@ -923,6 +927,7 @@ export function registerChatHandler(
     let executionRoom = chatExecutionRoom(executionScope);
     let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
     let resolvedTaskRelation: ActiveTaskMessageResolution | null = null;
+    let acceptedTurnResolution: TurnResolution | undefined;
     const refreshResolvedTaskRelationFromLedger = (
       exactConversationId: string,
       exactTaskId = resolvedTaskRelation?.taskId || '',
@@ -1278,17 +1283,57 @@ export function registerChatHandler(
       resolvedDomain,
       resolvedOrgId,
     ) : null;
-    resolvedTaskRelation = resolveActiveTaskMessageRelation(
-      visibleUserText,
-      activeConversationForStatus?.actionContinuationState || selectedConversation.actionContinuationState,
-      {
+    acceptedTurnResolution = resolveUserTurn({
+      requestId, userText: visibleUserText,
+      state: activeConversationForStatus?.actionContinuationState || selectedConversation.actionContinuationState,
+      options: {
         activeRequestId: existingSession?.requestId,
         controlTargetRequestId,
         controlTargetTaskId,
         controlTargetRevision,
         pendingAssistantOfferContext,
       },
-    );
+    });
+    resolvedTaskRelation = { ...acceptedTurnResolution.taskRelation };
+    if (!isMemoryAvatar && acceptedTurnResolution.queryTarget === 'runtime_work'
+      && acceptedTurnResolution.userIntent.operation === 'status') {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      const admission = await admitAcceptedUserTurnDurably({
+        persistAcceptedUserTurn: () => addMessageIdempotent({
+          userId:uid,agentId:conversationAgentId,conversationId:selectedConversationId,role:'user',
+          content:storedUserContent,domain:resolvedDomain,orgId:resolvedOrgId,source:eventSource,
+          channel:'chat',requestId,receivedAt:requestReceivedAt,skipActionContinuation:true,
+        }),
+        flush:flushDBOrThrow,
+        onPersistenceUnknown:async error=>{
+          const payload=normalizeAgentPayload('agent:response',{text:chatDurabilityUnknownText(visibleUserText),
+            agentName:'Lumi',finalized:true,blocked:true,reason:'persistence_unknown',sidecar:true});
+          try {await recordChatExecutionPersistenceUnknownDurably(executionScope,requestId,payload);}
+          catch {console.error('[ChatHandler] Runtime status admission persistence failed:',error);}
+          publishRecordedAgent('agent:response',payload);
+          try {ack?.({ok:false,requestId,error:'Accepted user turn persistence is unknown'});} catch {}
+        },
+      });
+      if (!admission) return;
+      try {ack?.({ok:true,requestId,receivedAt:requestReceivedAt});} catch {}
+      const result = await readRuntimeWorkForTurn({
+        resolution:acceptedTurnResolution,userId:uid,domain:resolvedDomain,orgId:resolvedOrgId,
+        conversationId:selectedConversationId,source:eventSource,registry:toolRegistry,
+        securityContext:toolSecurityContext,authorization:turnAuthorization,
+      });
+      await commitDeterministicTerminal({
+        payload:{text:result.text,agentName:'Lumi',finalized:true,blocked:result.blocked,
+          reason:'runtime_work_status',sidecar:true},
+        persistAssistantMessage:()=>addMessageIdempotent({
+          userId:uid,agentId:conversationAgentId,conversationId:selectedConversationId,role:'assistant',
+          content:result.text,toolCalls:[result.record],domain:resolvedDomain,orgId:resolvedOrgId,
+          source:eventSource,channel:'chat',requestId,cognitiveIntent:'runtime_work_status',
+          llmWasCalled:false,skipActionContinuation:true,
+        }),
+        errorContext:'Read-only runtime status terminal',
+      });
+      return;
+    }
     const durableStatusTaskState = activeConversationForStatus?.actionContinuationState
       || selectedConversation.actionContinuationState;
     const durablePostCancelBinding = !existingSession && resolvedTaskRelation.feedback === 'status'
@@ -1577,6 +1622,7 @@ export function registerChatHandler(
         visibleUserText,
         activeConversationForStatus?.actionContinuationState || selectedConversation.actionContinuationState,
         {
+          acceptedFeedback: resolvedTaskRelation.feedback,
           activeRequestId: previousSession.requestId,
           controlTargetRequestId,
           controlTargetTaskId,
@@ -1801,7 +1847,8 @@ export function registerChatHandler(
       admission: chatAdmission,
       userId: uid,
       userText: visibleUserText,
-      actionState: conversation.actionContinuationState,
+      taskRelation: resolvedTaskRelation || undefined,
+        actionState: conversation.actionContinuationState,
       taskScope: confirmationScope,
       channelScope: confirmationChannelScope,
     });
@@ -1831,6 +1878,7 @@ export function registerChatHandler(
     };
     const unregisterShutdownCancellation = runtimeShutdownCancellation.register(abortController);
     let releaseDesktopControlLease: (() => void) | null = null;
+    let conversationAdmission: ConversationExecutionAdmission | undefined;
     let foregroundRequestIdentity: ChatForegroundRequestIdentity | null = null;
     const releaseChatTransportResources = (): void => {
       stopAuthorizationWatch();
@@ -1838,6 +1886,7 @@ export function registerChatHandler(
       actionLeaseHeartbeat?.stop();
       releaseDesktopControlLease?.();
       releaseDesktopControlLease = null;
+      conversationAdmission?.release();
       sessionLease.release();
     };
     const chatReleaseGate = createDurableForegroundReleaseGate({
@@ -1972,6 +2021,10 @@ export function registerChatHandler(
     }
 
     try {
+      conversationAdmission = reserveConversationExecution({
+        userId:uid, domain:resolvedDomain, orgId:resolvedOrgId, conversationId:selectedConversationId,
+      }, requestId, abortController.signal);
+      await conversationAdmission.waitForTurn();
       // The turn may have waited behind one or more executions. Re-read the
       // durable conversation and resolve the user's feedback against that
       // exact revision. Never merge a receive-time task id/revision over a
@@ -2013,17 +2066,7 @@ export function registerChatHandler(
         await releaseChatSession();
         return;
       }
-      resolvedTaskRelation = resolveActiveTaskMessageRelation(
-        visibleUserText,
-        conversation.actionContinuationState,
-        {
-          activeRequestId: conversation.actionContinuationState?.activeRequestId,
-          controlTargetRequestId,
-          controlTargetTaskId,
-          controlTargetRevision,
-          pendingAssistantOfferContext,
-        },
-      );
+      resolvedTaskRelation = revalidateAcceptedTaskRelation(resolvedTaskRelation, conversation.actionContinuationState);
       emitAgent('agent:task_relation', { relation: resolvedTaskRelation });
       if (resolvedTaskRelation.binding === 'stale' || (
         userObservedCompletionTaskId
@@ -2211,7 +2254,7 @@ export function registerChatHandler(
       const acceptedFollowupIntent = runtimeStatusOwnsThisTurn
         ? 'none' as const
         : taskRelationFollowupIntent(resolvedTaskRelation);
-      const acceptedNormalizedIntent = normalizeActionIntent(visibleUserText);
+      const acceptedNormalizedIntent = acceptedTurnResolution!.userIntent;
       const confirmationNeedsFreshReview = Boolean(
         acceptedFollowupIntent === 'status'
         && isExplicitConfirmationReply(visibleUserText)
@@ -2849,6 +2892,7 @@ export function registerChatHandler(
       ].filter(Boolean).join('\n\n');
 
       const executionPipeline = buildLumiExecutionPipeline({
+        requestId, userText: visibleUserText || text, acceptedResolution: acceptedTurnResolution,
         structuredMediaRequest,
         dispatch: {
           userId: uid,
@@ -3581,6 +3625,7 @@ export function registerChatHandler(
             toolPolicy: modelCapabilityPolicy,
             actionIntent: visibleUserText,
             currentTurnExecutionRequested: executionPipeline.executionRequested,
+              resolutionId: executionPipeline.resolution.id,
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: visibleUserText,
             acceptedTaskTarget: turnFlow.acceptedTaskTarget,
@@ -3840,6 +3885,7 @@ export function registerChatHandler(
             userConfirmed: true,
             actionIntent: confirmedTask,
             currentTurnExecutionRequested: executionPipeline.executionRequested,
+              resolutionId: executionPipeline.resolution.id,
             trustedActionContinuation: executionPipeline.trustedActionContinuation,
             routedTaskText: confirmedTask,
             acceptedTaskTarget: turnFlow.acceptedTaskTarget,
@@ -3956,6 +4002,7 @@ export function registerChatHandler(
               requestConfirmation: requestToolConfirmation,
               actionIntent: confirmedTask,
               currentTurnExecutionRequested: executionPipeline.executionRequested,
+              resolutionId: executionPipeline.resolution.id,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: confirmedTask,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,
@@ -4377,6 +4424,7 @@ export function registerChatHandler(
               modelToolProjection,
               actionIntent: visibleUserText,
               currentTurnExecutionRequested: executionPipeline.executionRequested,
+              resolutionId: executionPipeline.resolution.id,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,
@@ -4571,6 +4619,7 @@ export function registerChatHandler(
               modelToolProjection,
               actionIntent: visibleUserText,
               currentTurnExecutionRequested: executionPipeline.executionRequested,
+              resolutionId: executionPipeline.resolution.id,
               trustedActionContinuation: executionPipeline.trustedActionContinuation,
               routedTaskText: turnFlow.routeText,
               acceptedTaskTarget: turnFlow.acceptedTaskTarget,

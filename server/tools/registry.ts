@@ -251,6 +251,9 @@ export function executionIdempotencyKey(name: string, args: Record<string, any>,
   return crypto.createHash('sha256').update(JSON.stringify(stableValue({
     userId: context?.userId || '',
     taskId: context?.taskId || '',
+    // Task-bound retries reuse their durable operation. Taskless requests need
+    // their own immutable identity instead of sharing identical text/arguments.
+    requestId: context?.taskId ? undefined : context?.requestId || undefined,
     actionIntent: context?.actionIntent || '',
     name,
     args,

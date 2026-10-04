@@ -1,3 +1,4 @@
+import { redactDraftIdentifiers } from './draft_privacy';
 import type { ToolContext, ToolExecutionRecord } from '../../../../tools/types';
 import { recordIndustryWorkflowExecution, startOrReuseIndustryWorkflow } from '../../../../industry/workflow_service';
 
@@ -23,7 +24,7 @@ export interface EcommerceCustomerServiceDraftReceipt {
 
 /** Produce privacy-bounded, non-committal service and FAQ drafts only. */
 export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): EcommerceCustomerServiceDraftReceipt {
-  const sourceInput = String(context?.industryWorkflowSourceInput || context?.actionIntent || context?.routedTaskText || '').trim();
+  const sourceInput = redactDraftIdentifiers(String(context?.industryWorkflowSourceInput || context?.actionIntent || context?.routedTaskText || '').trim());
   const customerAlias = textFrom(sourceInput, /客户代号|客户别名|customer\s*alias/iu) || '';
   const orderAlias = textFrom(sourceInput, /订单代号|订单别名|order\s*alias/iu) || '';
   const product = textFrom(sourceInput, /商品|product/iu) || '';
@@ -34,8 +35,10 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
     throw new Error('内容与客服草稿缺少已脱敏客户/订单代号、商品、问题、店铺规则或品牌语气，已停止而不是补猜。');
   }
   const maskedAliasPattern = /^[A-Za-z0-9-]*\*{2,}[A-Za-z0-9-]*$/u;
-  const privacyVerified = maskedAliasPattern.test(customerAlias) && maskedAliasPattern.test(orderAlias);
-  if (!privacyVerified) {
+  const aliasesVerified = maskedAliasPattern.test(customerAlias) && maskedAliasPattern.test(orderAlias);
+  const privacyVerified = false; // Free-text identities still require human review.
+  const privacyReview = { aliasesVerified, checkedFields: ['sourceInput', 'product', 'customerIssue', 'storeRule', 'brandTone'], uncheckedFields: ['free_text_semantic_identity'], scope: 'aliases-and-detected-identifiers' };
+  if (!aliasesVerified) {
     throw new Error('客户或订单标识未达到当前草稿路径的脱敏要求，已停止生成。');
   }
 
@@ -57,10 +60,19 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
     requestId,
   }, context?.industryWorkflowTaskId);
 
+  const classification = /开票|发票|\binvoice\b/iu.test(customerIssue) ? ['开票咨询']
+    : /物流|快递|配送|\b(?:shipping|delivery|tracking)\b/iu.test(customerIssue) ? ['物流咨询']
+    : /质量|破损|损坏|故障|\b(?:damaged|defect|quality)\b/iu.test(customerIssue) ? ['质量问题']
+    : /尺寸|放不下|大小|\b(?:size|fit)\b/iu.test(customerIssue) ? ['售后退货咨询', '尺寸不适配', '运费与补偿待人工审核']
+    : /退款|退货|\b(?:refund|return)\b/iu.test(customerIssue) ? ['退款退货咨询'] : ['未分类', '待人工核验'];
+  const greeting = /正式|professional|formal/iu.test(brandTone) ? '尊敬的客户，您好，'
+    : /亲切|温暖|friendly|warm/iu.test(brandTone) ? '您好，感谢您告诉我们这个情况，' : '您好，';
   const replyDraft = [
-    `您好，已收到您关于订单 ${orderAlias}、商品“${product}”的反馈：${customerIssue}。`,
+    `${greeting}已收到您关于订单 ${orderAlias}、商品“${product}”的反馈：${customerIssue}。`,
     `当前提供的店铺规则为：${storeRule}。请通过安全渠道提供核验所需的最少凭证。`,
-    '退货是否符合条件、运费由谁承担以及是否补偿，均需人工审核；在审核完成前我们无法预先承诺结果。',
+    classification.some(item => /退|尺寸/u.test(item))
+      ? '退货是否符合条件、运费由谁承担以及是否补偿，均需人工审核；在审核完成前我们无法预先承诺结果。'
+      : '具体处理方式需按当前规则与凭证人工核验；在审核完成前我们无法预先承诺结果。',
     '为保护隐私，请不要在公开渠道发送姓名、电话、详细地址等敏感信息。我们会在事实核验后同步审核结论。',
   ].join('');
   const faqDraft = [
@@ -70,7 +82,7 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
   const risks = [
     '资格事实不完整：尚未核对当前问题与店铺规则涉及的事实和凭证，不能直接批准退货。',
     '承诺风险：运费承担和补偿均需人工审核，草稿不得使用“保证”“一定”“已批准”等表述。',
-    '隐私风险：当前仅使用脱敏代号；如后续核验需要真实订单信息，应在受控渠道按最小必要原则收集。',
+    '隐私风险：已检查别名和可识别标识，自由文本仍需人工隐私审核；如后续核验需要真实订单信息，应在受控渠道按最小必要原则收集。',
     '商品描述风险：应核对本次具体问题与详情页描述，避免重复投诉。',
   ];
   const escalationConditions = [
@@ -84,14 +96,14 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
     `内容与客服审核包已生成并持久化（任务 ${started.task.id}）。当前只生成草稿，没有发送、发布、退款或承诺赔偿。`,
     '',
     '## 工单分类',
-    `- 类型：客户问题与店铺规则核验 / 具体处理待人工审核。`,
+    `- 类型：${classification.join(' / ')}。`,
     `- 客户代号：${customerAlias}；订单代号：${orderAlias}；商品：${product}。`,
     `- 原始问题：${customerIssue}。`,
     '',
     '## 规则与隐私验证',
     `- 店铺规则：${storeRule}。`,
     '- 已验证边界：退货资格是条件性申请，不是自动批准；运费承担需人工审核；当前没有足够事实承诺补偿。',
-    `- 隐私：客户与订单均为脱敏代号（${customerAlias} / ${orderAlias}）；草稿不索取或暴露姓名、电话、地址。`,
+    `- 隐私：客户与订单均为脱敏代号（${customerAlias} / ${orderAlias}）；已清理可识别标识；自由文本仍需人工隐私审核，不能视为全局匿名。`,
     `- 品牌语气：${brandTone}。`,
     '',
     '## 客服回复草稿（未发送）',
@@ -118,7 +130,8 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
     customerIssue,
     storeRule,
     brandTone,
-    classification: ['售后退货咨询', '尺寸不适配', '运费与补偿待人工审核'],
+    classification,
+    privacyReview,
     privacyVerified,
     replyDraft,
     faqDraft,
@@ -146,7 +159,7 @@ export function executeEcommerceCustomerServiceDrafts(context?: ToolContext): Ec
     terminalVerification: {
       status: 'verified',
       strategy: 'measured',
-      reason: 'Drafts use only masked current-turn facts, preserve conditional policy language, and contain no external delivery or compensation commitment.',
+      reason: 'Drafts use current-turn facts with aliases and detected identifiers redacted; free-text identities require human review. No external delivery or compensation commitment.',
     },
   };
   const recorded = recordIndustryWorkflowExecution({

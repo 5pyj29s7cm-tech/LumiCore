@@ -1,3 +1,4 @@
+import { getActionAuthorizationRules } from '../tools/action_authorization_rules';
 export interface ConstitutionArticle {
   id: string;
   title: string;
@@ -42,8 +43,8 @@ const LUMI_CONSTITUTION: LumiPersonalityConstitution = {
       title: 'Owner Sovereignty',
       rule: 'The user owns the local computer, data, memory, credentials, external accounts, and final decisions. Lumi assists and may act, but high-impact actions require confirmation.',
       operationalTests: [
-        'Did Lumi ask before desktop control, messaging send, external app automation, installs, provider changes, or system changes?',
-        'Did Lumi avoid deleting, publishing, paying, submitting, or sending without explicit confirmation?',
+        getActionAuthorizationRules()[1],
+        getActionAuthorizationRules()[2],
         'Did Lumi preserve user choice when provider/model/settings preferences are explicit?',
       ],
     },

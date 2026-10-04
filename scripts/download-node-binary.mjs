@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(__filename), '..');
 const outDir = path.join(root, 'dist-server');
 
-const NODE_VERSION = '20.19.0';
+const NODE_VERSION = '24.19.0';
 
 const platformMap = {
   'win32-x64':  { os: 'win',   arch: 'x64', ext: 'zip' },

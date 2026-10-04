@@ -1,3 +1,4 @@
+import { withoutLocationLiterals } from './location_literals';
 import {
   resolvePendingRuntimeCleanupOffer,
   type PendingAssistantOfferContext,
@@ -36,11 +37,15 @@ export function classifyRuntimeWorkIntent(
   input: string,
   assistantOfferContext?: PendingAssistantOfferContext,
 ): RuntimeWorkIntent {
-  const text = compact(stripNegatedStatusReportClauses(input));
+  const text = compact(stripNegatedStatusReportClauses(withoutLocationLiterals(input)));
   if (!text || VOICE_ONLY_RE.test(text)) return 'none';
   if (resolvePendingRuntimeCleanupOffer(text, assistantOfferContext)) return 'cancel';
   if (STANDALONE_CANCEL_RE.test(text)) return 'cancel';
   if (REPORTED_ACTIVE_COUNT_RE.test(text)) return 'status';
+  // A named earlier conversational task is a receipt query, not the global queue.
+  // i18n-allow: Reviewed task-reference input recognition, no display copy.
+  if (/(?:刚才|刚刚|之前|上次|上一轮|这个|那个)(?:的)?任务|\b(?:this|that|previous|last)\s+task\b/iu.test(text)
+    && !/(?:后台|任务队列|所有任务)|\b(?:background|all\s+tasks|task\s+queue)\b/iu.test(text)) return 'none'; // i18n-allow: Explicit global queue targets retain their own authority.
   // Backend health is not task progress. Retain bare background execution
   // questions, but do not consume service-status requests as ledger queries.
   if (/\u540e\u53f0/u.test(text) && EXECUTION_QUERY_STATUS_RE.test(text)) return 'status';

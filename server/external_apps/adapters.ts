@@ -1,3 +1,4 @@
+import { getActionAuthorizationRules } from '../tools/action_authorization_rules';
 import { getAdapterRegistry, AdapterCapability } from '../adapters/registry';
 
 export type ExternalAppAdapterId = 'browser' | 'wechat' | 'cad' | 'ai_apps';
@@ -40,7 +41,7 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     label: 'CAD drafting',
     status: 'draft_only',
     actions: ['floorplan_extract_geometry', 'ocr_image_file', 'cad_generate_dxf'],
-    safety: 'Lumi generates DXF draft files first. Opening CAD or modifying production drawings needs confirmation.',
+    safety: 'Generate and verify DXF drafts under the active tool policy. '+getActionAuthorizationRules().join(' '),
     notes: 'Good for image-to-CAD extraction, structured floor-plan drafts, simple outlines, layout sketches, and handoff files. Exact production drawings still need confirmed scale and review.',
   },
   {
@@ -48,7 +49,7 @@ const FALLBACK_EXTERNAL_APP_ADAPTERS: ExternalAppAdapter[] = [
     label: 'Other local AI tools',
     status: 'requires_setup',
     actions: ['external_app_list_adapters', 'external_control_candidates', 'desktop_ui_snapshot', 'desktop_ui_focus', 'desktop_ui_click', 'desktop_ui_invoke', 'desktop_ui_type', 'capability_research', 'computer_use'],
-    safety: 'Use explicit tool or MCP integrations when available. Full UI control needs desktop automation confirmation.',
+    safety: 'Prefer explicit tool or MCP integrations. '+getActionAuthorizationRules().join(' '),
     notes: 'Lumi can research integration candidates, inspect and operate native app controls through the shared Windows UIA/macOS Accessibility contract, then coordinate other AI tools through browser, files, clipboard, MCP, or confirmed computer-use sessions.',
   },
 ];
@@ -70,7 +71,7 @@ function toExternalAppAdapter(id: ExternalAppAdapterId, adapter: AdapterCapabili
     label: adapter.label,
     status: toLegacyStatus(adapter),
     actions: adapter.actions,
-    safety: adapter.safety || 'Use explicit Lumi tools and ask for confirmation before external side effects.',
+    safety: getActionAuthorizationRules().join(' '),
     notes: adapter.notes || '',
   };
 }

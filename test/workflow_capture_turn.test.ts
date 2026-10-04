@@ -80,7 +80,9 @@ it.each(['en', 'zh', 'zh_resume'])('executes and captures through the authorized
         toolPolicy: pipeline.authorizationPolicy, modelToolProjection: pipeline.modelToolProjection,
         priorToolRecords,
         cwd: root, actionIntent: task, routedTaskText: task, requestConfirmation: async () => true });
-    expect(result.toolCalls.find(record => record.name === 'capture_recent_workflow')?.error).toBeUndefined();
+    const captureReceipt = result.toolCalls.find(record => record.name === 'capture_recent_workflow');
+    expect(captureReceipt).toBeDefined();
+    expect(captureReceipt!.error).toBeUndefined();
     const saved = getWorkflow(userId, name);
     expect(saved?.steps).toHaveLength(3);
     expect(saved?.steps[1].args.input).toEqual({ result: { $stepOutputRef: 'step_1' } });

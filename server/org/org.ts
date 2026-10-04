@@ -6,6 +6,7 @@
  */
 
 import * as EDB from './db';
+import { assertMemberOperation, OrganizationMemberAuthorizationError } from './member_authorization';
 import { logAudit } from './db';
 
 // ── Organization ─────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ export function deleteOrganization(orgId: string, userId: string) {
 // ── Members ──────────────────────────────────────────────────────────────
 
 export function inviteMember(orgId: string, invitedBy: string, userId: string, role: EDB.OrgRole = 'member', departmentId?: string) {
+  assertMemberOperation(orgId, invitedBy, userId, role);
   const membership = EDB.addMember(orgId, userId, role, departmentId, invitedBy);
   logAudit({
     orgId,
@@ -81,6 +83,7 @@ export function inviteMember(orgId: string, invitedBy: string, userId: string, r
 }
 
 export function removeOrgMember(orgId: string, removedBy: string, userId: string) {
+  assertMemberOperation(orgId, removedBy, userId);
   const result = EDB.removeMember(orgId, userId);
   if (result) {
     logAudit({
@@ -96,6 +99,7 @@ export function removeOrgMember(orgId: string, removedBy: string, userId: string
 }
 
 export function changeMemberRole(orgId: string, changedBy: string, userId: string, newRole: EDB.OrgRole) {
+  assertMemberOperation(orgId, changedBy, userId, newRole);
   const m = EDB.updateMemberRole(orgId, userId, newRole);
   if (m) {
     logAudit({
@@ -124,6 +128,20 @@ export function createOrgDepartment(orgId: string, name: string, parentId?: stri
   return EDB.createDepartment(orgId, name, parentId);
 }
 
+/** Ownership is an explicit operation, never an arbitrary member role update. */
+export function transferOrganizationOwnership(orgId: string, actorId: string, newOwnerId: string) {
+  const org = EDB.getOrgById(orgId);
+  const actor = EDB.getMember(orgId, actorId);
+  const target = EDB.getMember(orgId, newOwnerId);
+  if (!org || org.ownerUid !== actorId || actor?.role !== 'owner' || actor.status !== 'active') {
+    throw new OrganizationMemberAuthorizationError('Only the active organization owner can transfer ownership.');
+  }
+  if (!target || target.status !== 'active' || newOwnerId === actorId) {
+    throw new OrganizationMemberAuthorizationError('The new owner must be a different active member.', 400);
+  }
+  return EDB.transferOrgOwnership(orgId, actorId, newOwnerId);
+}
+
 // ── Invitations ──────────────────────────────────────────────────────────
 
 export function createOrgInvitation(
@@ -131,6 +149,7 @@ export function createOrgInvitation(
   createdBy: string,
   opts: { role?: EDB.OrgRole; departmentId?: string; maxUses?: number; expiresAt?: string } = {}
 ) {
+  assertMemberOperation(orgId, createdBy, undefined, opts.role);
   const inv = EDB.createInvitation(orgId, createdBy, opts);
   logAudit({
     orgId,
@@ -163,6 +182,7 @@ export function acceptInvitation(code: string, userId: string) {
     return { success: false, reason: validation.reason };
   }
   const inv = validation.invitation;
+  if (inv.role === 'owner') throw new OrganizationMemberAuthorizationError('Invitations cannot transfer organization ownership.');
   const used = EDB.useInvitation(code);
   if (!used) return { success: false, reason: 'Failed to use invitation' };
 
@@ -181,6 +201,7 @@ export function acceptInvitation(code: string, userId: string) {
 // ── Connection management ────────────────────────────────────────────────
 
 export function revokeMemberConnection(orgId: string, revokedBy: string, userId: string) {
+  assertMemberOperation(orgId, revokedBy, userId);
   const m = EDB.setMemberStatus(orgId, userId, 'left');
   if (m) {
     logAudit({

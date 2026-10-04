@@ -1,6 +1,7 @@
 import { PERSONAL_CLIENT_SURFACES } from '../../shared/client_surfaces';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
+import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { withoutLocationLiterals } from './location_literals';
 import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from '../regions/packs/cn/action_continuation';
 
@@ -560,22 +561,10 @@ function statusQuery(text: string): NormalizedActionIntent | null {
   // File/folder names such as chat/repair/progress are data. Keep the original
   // artifact target above, then classify only the surrounding instruction.
   text = withoutLocationLiterals(text);
-  // Explicit current-runtime questions must be read-only status intents even
-  // when they do not contain the narrow "task status/progress" wording. This
-  // covers the production utterance "你现在有在执行的任务吗" and keeps it out
-  // of the generic desktop-operation fallback.
-  if (/^(?:\u4f60|lumi)?\s*(?:\u73b0\u5728|\u5f53\u524d)?\s*(?:\u6709\s*)?(?:\u5728|\u6b63\u5728)?\s*(?:\u6267\u884c|\u5904\u7406|\u8fd0\u884c|\u505a)\s*(?:\u7684)?\s*(?:\u4efb\u52a1|\u5de5\u4f5c)(?:\u5417|\u5462|\u6ca1\u6709)?[\u3002\uff01\uff1f.!?\s]*$/iu.test(text)) {
-    return {
-      kind: 'status_query',
-      operation: 'status',
-      subject: 'lumi',
-      target: 'runtime_work',
-      payload: '',
-      sideEffectClass: 'none',
-      relation: 'status',
-      confidence: 0.99,
-      rule: 'current-runtime-work-status',
-    };
+  if (classifyRuntimeWorkIntent(text) === 'status') {
+    return { kind: 'status_query', operation: 'status', subject: 'lumi',
+      target: 'runtime_work', payload: '', sideEffectClass: 'none', relation: 'status',
+      confidence: 0.99, rule: 'current-runtime-work-status' };
   }
   // Terse questions immediately after an operation ask for its persisted
   // outcome. Treat them as receipt reads; task relation resolution decides

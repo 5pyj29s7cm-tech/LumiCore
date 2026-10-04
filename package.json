@@ -4,7 +4,7 @@
   "version": "3.1.0",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "scripts": {
     "dev": "tsx launcher.ts",
@@ -23,7 +23,8 @@
     "start": "tsx launcher.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-electron",
-    "lint": "npm run lint:i18n && npm run lint:hooks && npm run lint:hooks:critical && tsc --noEmit",
+    "check:architecture": "node scripts/check-architecture-boundaries.mjs",
+    "lint": "npm run check:architecture && npm run lint:i18n && npm run lint:hooks && npm run lint:hooks:critical && tsc --noEmit",
     "lint:hooks": "eslint \"src/**/*.{ts,tsx}\" --quiet",
     "lint:hooks:critical": "eslint src/components/AgentChatPage.tsx src/components/DesktopUI.tsx src/hooks/useVoiceCall.ts src/hooks/useVoiceprint.ts src/hooks/useWakeWord.ts --max-warnings 0",
     "lint:i18n": "node scripts/check-i18n-boundaries.mjs",
@@ -154,7 +155,10 @@
     "three-stdlib": {
       "fflate": "0.6.11"
     },
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "pptxgenjs": {
+      "image-size": "2.0.4"
+    }
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.1",

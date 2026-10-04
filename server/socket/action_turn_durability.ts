@@ -3,7 +3,7 @@ import {
   conversationActionRequiresFreshConfirmationReview,
   type ConversationActionContinuationState,
 } from '../cognition/action_continuation';
-import { resolveActiveTaskMessageRelation } from '../cognition/task_concurrency';
+import { resolveActiveTaskMessageRelation, taskRelationFollowupIntent, type ActiveTaskMessageResolution } from '../cognition/task_concurrency';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
 import {
   clearPendingConfirmationDurably,
@@ -80,17 +80,18 @@ export async function resolveAcceptedTurnConfirmation(input: {
   userId: string;
   userText: string;
   actionState?: ConversationActionContinuationState | null;
+  taskRelation?: ActiveTaskMessageResolution;
   taskScope: PendingConfirmationScope;
   channelScope: PendingConfirmationScope;
 }): Promise<AcceptedTurnConfirmationResolution> {
   return runAfterAcceptedUserTurnAdmission(input.admission, async () => {
     const explicitConfirmation = isExplicitConfirmationReply(input.userText);
     const cancellation = isConfirmationCancellation(input.userText);
-    const followupIntent = classifyConversationActionFollowupIntent(input.userText, input.actionState);
+    const taskRelation = input.taskRelation || resolveActiveTaskMessageRelation(input.userText, input.actionState);
+    const followupIntent = taskRelationFollowupIntent(taskRelation);
     const unrelated = !explicitConfirmation
       && !cancellation
       && followupIntent === 'none';
-    const taskRelation = resolveActiveTaskMessageRelation(input.userText, input.actionState);
     const taskCapsuleTurn = classifyTaskCapsuleTurn(input.userText, input.actionState);
     const correctionRequiresFreshConfirmation = Boolean(
       (

@@ -342,6 +342,7 @@ export async function executeAttachedExternalCommitReconciliation(
     limitations: ['This observation can prove a commit; absence or ambiguous evidence remains unknown and never authorizes replay.'],
   };
   const record: ToolExecutionRecord = {
+    ...(input.context?.resolutionId ? {resolutionId:input.context.resolutionId} : {}),
     id: input.reconciliationRecordId,
     taskId: input.context.taskId,
     turnId: input.context.turnId,

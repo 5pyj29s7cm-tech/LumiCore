@@ -1,3 +1,4 @@
+import { getActionAuthorizationRules } from '../tools/action_authorization_rules';
 import fs from 'fs';
 import path from 'path';
 import { getGateConfig } from '../autonomy/safety_gate';
@@ -196,7 +197,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit customer-takeover or customer-advance request. It prepares WeChat drafts and business materials without per-tool permission popups; ordinary supervised sends may proceed when requested. Payments, legal commitments, credential changes, and destructive actions remain hard boundaries.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'Use current customer messages, files, sales tools, task state, and messaging receipts. Local quotes, contracts, drafts, opened windows, and clipboard text are preparation only; report customer progress only from verified documents, task writeback, or a real target-action receipt.',
     },
     {
@@ -228,7 +229,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         state?.surfaces?.wallpaperMode ? 'wallpaper=on' : 'wallpaper=off',
         'externalAppAutomationGate=removed',
       ],
-      safety: 'Runs only after an explicit ecommerce/store/account/content-growth request. It generates local deliverables and drafts without per-tool permission popups; foreground user-requested ordinary messages, comments, replies, and non-commercial content posts can proceed. Ad spend, inventory/price changes, first-time login, account switching, verification, payment, purchase, and legal/contractual final commits stay hard-boundary gated.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'Use supplied product facts, platform exports, authenticated page state, and real tool results. Local content drafts are not store analysis or execution. Publishing, media generation, store changes, ad spend, and customer outreach require an external result or receipt before completion is reported.',
     },
     {
@@ -497,7 +498,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       requiresConfirmation: false,
       setup: [],
       diagnostics: ['externalAutomationGate=removed'],
-      safety: 'Prefer explicit adapters and files first. Low- and medium-risk computer_use, UIA, clipboard, raw input, saved/authorized login session reuse, and foreground user-requested social/content commits follow the active desktop mode without per-step prompts; payments, purchases, transfers, first-time login, QR/OTP/captcha/passkey/security verification, account switching, credential storage, third-party authorization, legal filings/signatures, ambiguous submits, installs, shell commands, destructive actions, and other high-risk boundaries still require confirmation.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'This is Lumi using the computer, not the default route for Lumi client UI. Registered tools expose observation, UIA, clipboard, mouse, keyboard, app opening, commands, and vision computer_use. Workflow-internal relay actions such as desktop_cursor_glow_*, desktop_mouse_click_at, and desktop_set_wallpaper_mode are available to controlled workflows including foreground WeChat sends, desktop demos, and computer_use cleanup. For external desktop work, inspect active window controls with desktop_ui_snapshot when possible, use desktop_ui_focus/click/invoke/type for accessible controls, inspect screen pixels when needed, show and move the visible cursor before raw clicks, explain task intent briefly, verify with screenshot/window/process/file evidence, and report only results, blockers, and needed confirmations. Prefer restoring already-running taskbar/background windows before launching duplicates.',
     },
     {
@@ -513,7 +514,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
         : process.platform === 'darwin' && macAccessibility !== 'granted'
           ? ['Grant LumiCore Accessibility permission in System Settings > Privacy & Security > Accessibility.']
           : [],
-      safety: 'Snapshot inspection plus low- and medium-risk focus/click/invoke/type can run under the active desktop mode. Foreground user-requested ordinary messages/comments/replies/posts and saved/authorized session reuse can proceed; payments, purchases, first-time login, security verification, credential storage, account switching, legal filings/signatures, ambiguous submits, and destructive actions remain confirmation-gated.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'The capability definition is platform-independent. Windows uses UIA and macOS uses Accessibility behind the same desktop_ui_* tools, schemas, risk, evidence, and verification contracts.',
     },
     {
@@ -526,7 +527,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       requiresConfirmation: false,
       setup: [],
       diagnostics: ['externalAutomationGate=removed'],
-      safety: 'Restore and use already logged-in windows/sessions and saved/authorized browser profiles without a separate prompt under the active desktop mode. Learning a new site login or storing encrypted credentials requires confirmation. Foreground user-requested ordinary messages/comments/replies/posts can proceed. Confirmation or handoff required: first-time login, QR/OTP/captcha/passkey/biometric verification, account switching, third-party authorization, saving credentials, payment, purchase, legal filing/signature, or other high-consequence commit.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'Use for store/account/video/customer/legal workflows. Lumi should first look for a running personal app window or an existing browser login profile, then continue safe preparation work inside that session with web_login_run or url_fetch_logged_in when appropriate. If no profile exists, use web_login_learn_site to create a generic authorized profile for the site after confirmation. Do not present login completion as autonomous work when the user had to scan, type a password, approve a prompt, or switch accounts.',
     },
     {
@@ -537,7 +538,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       actions: ['browser_open_task', 'web_search', 'url_fetch', 'web_login_site_presets', 'web_login_profile_save_from_preset', 'web_login_profile_save', 'web_login_learn_site', 'web_login_profile_list', 'web_login_run', 'url_fetch_logged_in', 'external_control_candidates', 'external_control_configure_candidate', 'mcp_playwright_browser_snapshot', 'mcp_playwright_browser_navigate', 'mcp_playwright_browser_fill_form', 'mcp_playwright_browser_click'],
       surfaces: ['browser', 'web search', 'URL fetch'],
       requiresConfirmation: false,
-      safety: 'Opening, reading, saved/authorized login profile reuse, and authenticated fetches through saved sessions are allowed when tools permit. Foreground user-requested ordinary comments/replies/content posts can proceed. Purchases, payments, ambiguous submissions, first-time login, QR/OTP/captcha/passkey/security verification, account switching, third-party authorization, credential storage, and sensitive transmissions require confirmation or handoff.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'Use for research, authenticated pages, and handoff to browser tasks. Prefer existing logged-in browser profiles or windows before asking for a new login; for new authorized sites use web_login_learn_site or web_login_profile_save after confirmation. Configure Playwright MCP when structured DOM/browser control is needed. Stop at QR/OTP/CAPTCHA/passkey/authorization boundaries.',
     },
     {
@@ -551,7 +552,7 @@ export function getAdapterRegistry(options: AdapterRegistryOptions = {}): Adapte
       setup: skillStats.connectedNames.includes('playwright')
         ? []
         : ['Run external_control_configure_candidate with candidateId=playwright-mcp, review the MCP config, then enable/restart the playwright server.'],
-      safety: 'Use for structured browser automation without per-tool permission popups. Foreground user-requested ordinary comments/replies/content posts can proceed. Account switching, payments, purchases, uploads of sensitive material, legal/business final submissions, and ambiguous submits require explicit confirmation or handoff.',
+      safety: getActionAuthorizationRules().join(' '),
       notes: 'This is the preferred upgrade path for browser-heavy work because Lumi can rely on page structure instead of only screenshot coordinates.',
     },
     {

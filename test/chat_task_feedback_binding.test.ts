@@ -8,7 +8,7 @@ const task = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'ut
 describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {
     const exactReplayGuard = chat.indexOf('if (existingExecution)');
-    const relation = chat.indexOf('resolvedTaskRelation = resolveActiveTaskMessageRelation(', exactReplayGuard);
+    const relation = chat.indexOf('acceptedTurnResolution = resolveUserTurn({', exactReplayGuard);
     const queueControl = chat.indexOf('const previousSession = chatExecutionQueue.getTail(sessionKey)', relation);
 
     expect(exactReplayGuard).toBeGreaterThan(-1);
@@ -105,14 +105,12 @@ describe('chat task feedback binding integration', () => {
     expect(chat.slice(bind, bind + 500)).toContain('userMessageId: acceptedUserMessageId');
   });
 
-  it('revalidates every explicit control fence after waiting without merging receive-time state', () => {
+  it('revalidates the accepted task binding after waiting through the shared identity/version guard', () => {
     const refresh = chat.indexOf('const refreshedConversation = getConversationForScope(');
-    const resolve = chat.indexOf('resolvedTaskRelation = resolveActiveTaskMessageRelation(', refresh);
-    const section = chat.slice(resolve, resolve + 800);
-    expect(section).toContain('controlTargetRequestId');
-    expect(section).toContain('controlTargetTaskId');
-    expect(section).toContain('controlTargetRevision');
-    expect(section).not.toContain('receivedTaskRelation');
+    const resolve = chat.indexOf('resolvedTaskRelation = revalidateAcceptedTaskRelation(', refresh);
+    expect(resolve).toBeGreaterThan(refresh);
+    expect(chat.slice(resolve,resolve+180)).toContain('conversation.actionContinuationState');
+    expect(chat.slice(refresh,resolve)).not.toContain('resolveActiveTaskMessageRelation(');
   });
 
   it('does not report an older durable pointer as the current runtime status', () => {

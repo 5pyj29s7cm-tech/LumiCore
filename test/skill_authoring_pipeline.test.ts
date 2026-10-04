@@ -176,7 +176,7 @@ describe('normal pipeline skill authoring after real same-conversation work', ()
       const currentIteration = iteration++;
       if (!explicitDraft && currentIteration === 0) return { text: '', toolCalls: [{ id: 'bad-source', name: 'capture_recent_workflow', arguments: { name, sourceTaskId: 'LC-TASK-ORDERS' } }] };
       if (!explicitDraft && currentIteration === 1) {
-        expect(String(messages.at(-1)?.content)).toContain('not exposed for the current task');
+        expect(messages.some(message => String(message.content).includes('not exposed for the current task'))).toBe(true);
       }
       if (currentIteration === (explicitDraft ? 0 : 1)) return { text: '', toolCalls: [{ id: 'author-draft', name: 'generate_skill', arguments: { name, description: 'Accept runtime rows with quantity and price. Return each quantity*price amount and their total. Do not hardcode sample values, read host files, install, or run the generated code.' } }] };
       return { text: '草稿已生成，等待审核。尚未安装或运行。', toolCalls: [] };

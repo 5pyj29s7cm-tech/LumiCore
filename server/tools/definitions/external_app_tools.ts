@@ -1661,7 +1661,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
   registry.register({
     name: 'wechat_send_message',
-    description: 'Send an ordinary user-requested foreground WeChat message through the real desktop client. It reuses an already-running WeChat window when possible, optionally selects a contact through WeChat search, focuses the input area with the virtual cursor click path, pastes the message, presses the configured send shortcut, and verifies the foreground WeChat window. Use only for low-risk social/content messages requested by the present user; QR/login/account switching, payments, legal/contractual commits, and ambiguous high-consequence sends still require handoff or confirmation.',
+    description: 'Send an ordinary user-requested foreground WeChat message through the real desktop client. It reuses an already-running WeChat window when possible, optionally selects a contact through WeChat search, focuses the input area with the virtual cursor click path, pastes the message, presses the configured send shortcut, and verifies the foreground WeChat window. Every send requires exact one-time destination/payload confirmation before invocation. Use only for low-risk social/content messages requested by the present user; QR/login/account switching, payments, legal/contractual commits, and ambiguous high-consequence sends still require handoff or confirmation.',
     parameters: {
       type: 'object',
       properties: {

@@ -161,8 +161,8 @@ async function openChat(withTask: boolean) {
   await new Promise<void>(resolve => client.once('connect', resolve));
   const requestId = `terminal-request-${suffix}`;
   const scope = { userId, domain: 'work' as const, orgId: org.id, source: 'command-center-chat', conversationId };
-  const send = (id = requestId, text = withTask ? '请读取 synthetic-project.txt 文件，并告诉我文件内容。' : '请解释我们之前记录的项目安排。') => client.timeout(5000).emitWithAck('agent:chat', {
-    text, history: [], agentId: 'lumi', ...scope, requestId: id,
+  const send = (id = requestId, text = withTask ? '请读取 synthetic-project.txt 文件，并告诉我文件内容。' : '请解释我们之前记录的项目安排。', source = scope.source) => client.timeout(5000).emitWithAck('agent:chat', {
+    text, history: [], agentId: 'lumi', ...scope, source, requestId: id,
   });
   const drain = () => client.timeout(5000).emitWithAck('fixture:barrier');
   return { userId, org, scope, requestId, send, drain, emitted, finished: finished.promise, completionFor, acknowledgements, errors };
@@ -353,3 +353,35 @@ it('ambiguous text goes straight to the shared model with its configured fallbac
   expect(h.emitted.some(([event, payload]) => event === 'agent:response' && payload.text === '4368.6')).toBe(true);
   classifierGate.resolve();
 }, 15000);
+
+it('serializes ordinary chat turns from different sources in the same exact conversation', async () => {
+  const h=await openChat(false), entered=deferred(), release=deferred();unblock.push(release.resolve);
+  let calls=0;
+  fixture.model.mockImplementation(async (...args:any[])=>{
+    if(args[2]?.source==='chat_intent_classifier') return outcome('{"category":"question","confidence":0.99,"entities":{}}');
+    if(args[2]?.source==='memory_turn') return outcome(JSON.stringify({changes:[]}));
+    calls+=1; if(calls===1){entered.resolve();await release.promise;} return outcome('serialized response');
+  });
+  await h.send(h.requestId,'解释第一条记录。','command-center-chat');await entered.promise;
+  const second='second-source-'+h.requestId;
+  await h.send(second,'解释第二条记录。','other-local-chat');
+  await h.drain();expect(calls).toBe(1);
+  release.resolve();await Promise.all([h.completionFor(h.requestId).promise,h.completionFor(second).promise]);
+  expect(calls).toBe(2);expect(h.errors).toEqual([]);
+},15000);
+
+it('answers a background-ledger query while another source owns the conversation writer',async()=>{
+  const h=await openChat(true), entered=deferred(), release=deferred();unblock.push(release.resolve);
+  fixture.model.mockImplementation(async(...args:any[])=>{
+    if(args[2]?.source==='memory_turn')return outcome('{"changes":[]}');
+    if(args[2]?.source==='chat_intent_classifier')return outcome('{"category":"question","confidence":0.99,"entities":{}}');
+    entered.resolve();await release.promise;return outcome('writer complete');
+  });
+  await h.send(h.requestId,'解释第一条记录。','command-center-chat');await entered.promise;
+  const query='runtime-status-'+h.requestId;
+  await h.send(query,'后台正在执行什么任务？','other-local-chat');
+  await vi.waitFor(()=>expect(h.emitted.some(([event,payload])=>event==='agent:response'&&payload.requestId===query&&payload.reason==='runtime_work_status'&&payload.blocked===false)).toBe(true),{timeout:1500});
+  expect(getChatExecution(h.scope,h.requestId)?.terminal).not.toBe(true);
+  release.resolve();await h.completionFor(h.requestId).promise;
+  expect(h.errors).toEqual([]);
+},15000);

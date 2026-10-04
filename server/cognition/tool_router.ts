@@ -56,6 +56,7 @@ import {
 import { toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { hasRequestedArtifactMutation, hasExplicitNoMutationInstruction } from './tool_intent';
 import { hasVisionIntent } from './vision_routing';
+import { requiresDesktopAiRequest, requiresDesktopAiInspection } from './action_contract';
 import { withoutLocationLiterals } from './location_literals';
 import { isModelConfigurationReadRequest } from './model_configuration_intent';
 
@@ -306,10 +307,7 @@ function isMessagingRead(text: string): boolean {
 }
 
 function isDesktopAiRequest(text: string): boolean {
-  if (requiresExternalAiHistory(text)) return false;
-  return /(?:WorkBuddy|Codex|ChatGPT|Claude|Gemini|DeepSeek|Kimi|豆包|通义|文心|Perplexity|Cursor|Copilot|Ollama|LM Studio|Cherry Studio|AnythingLLM|外部AI|外部 AI|桌面AI|桌面 AI|其它AI|其他AI|AI工具|AI客户端|AI\s*app)/iu.test(text)
-    || /(?:问|发给|发送给|交给|询问)[\s\S]{0,80}(?:AI|模型|agent|智能体)/iu.test(text)
-    || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
+  return requiresDesktopAiRequest(text) || requiresDesktopAiInspection(text);
 }
 
 function isLocalCadSourceRequest(text: string): boolean {
@@ -411,7 +409,7 @@ function strictDesktopObservationToolNames(
 
 function isDirectAutocadOperationsPlayback(text: string): boolean {
   const raw = String(text || '');
-  const hasOperations = /(?:_operations\.json\b|operationsPath|AutoCAD\s+operations)/i.test(raw);
+  const hasOperations = /(?:_operations\.json\b|operationsPath|AutoCAD\s+operations|\[file\.json\].*\b(?:MCP|playback)\b)/i.test(raw);
   const hasAutocadTarget = /\b(?:autocad|acad|mcp_cad-drafting_autocad_playback_file)\b/i.test(raw);
   const hasRunIntent = /\b(?:run|execute|launch|playback|acceptance|verify)\b/i.test(raw)
     || /(?:\u8fd0\u884c|\u6267\u884c|\u542f\u52a8|\u56de\u653e|\u9a8c\u6536|\u6821\u9a8c)/u.test(raw);
@@ -431,7 +429,7 @@ function priorityToolsForRoute(categories: string[], text: string): string[] {
   if (categories.includes('image_generation')) priorities.push('generate_image');
   if (categories.includes('image_editing')) priorities.push('ai_edit_image');
   if (categories.includes('video_generation')) priorities.push('generate_video');
-  const instructionText = primaryRoutingInstruction(text);
+  const instructionText = withoutLocationLiterals(primaryRoutingInstruction(text), true);
   if (requestsBlankAutoCadDocument(instructionText)) {
     priorities.push('mcp_cad-drafting_autocad_new_document');
   }
@@ -846,9 +844,9 @@ export function routeToolsForTurn(
     trustedTaskGoal
     && (!currentInstructionContract.applies || currentInstructionContract.kind === 'none'),
   );
-  const instructionText = restoredTrustedTaskRoute
+  const instructionText = withoutLocationLiterals(restoredTrustedTaskRoute
     ? trustedTaskGoal
-    : primaryInstructionText;
+    : primaryInstructionText, true);
   const hasCurrentTurnAttachments = /(?:^|\r?\n)\s*##\s+Current Turn Attachments\b/i.test(text);
   const availableNames = declarations.map(d => d.function.name);
   const available = new Set(
@@ -904,7 +902,7 @@ export function routeToolsForTurn(
     instructionText,
     options?.pendingAssistantOfferContext,
   );
-  const actionContract = buildActionContract(instructionText);
+  const actionContract = restoredTrustedTaskRoute ? buildActionContract(trustedTaskGoal) : currentInstructionContract;
   const explicitArtifactCreation = isExplicitArtifactCreationText(instructionText);
   const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(instructionText);
   const confirmationOnlyExternalCommit = actionContract.kind === 'messaging_send'
@@ -1457,7 +1455,7 @@ export function routeToolsForTurn(
   // in the same turn instead of relying on the model to invent undeclared tools.
   const artifactHandoffTools = actionContract.kind === 'artifact_work' && !currentAppEdit
     && (hasRequestedArtifactMutation(instructionText) || isExplicitArtifactCreationText(instructionText) || requiresArtifactOpen(instructionText))
-    ? ['modify_xlsx', 'modify_docx', 'read_xlsx', 'read_docx', ...(requiresArtifactOpen(instructionText) ? ['desktop_open', 'desktop_active_window'] : [])]
+    ? [...(explicitArtifactCreation && /\[file\.(?:txt|md|csv|json)\]|\b(?:text|markdown|csv|json)\s+file\b/i.test(instructionText) ? ['desktop_write_text_file'] : []), 'modify_xlsx', 'modify_docx', 'read_xlsx', 'read_docx', ...(requiresArtifactOpen(instructionText) ? ['desktop_open', 'desktop_active_window'] : [])]
     : [];
   for (const name of artifactHandoffTools) if (!forbiddenToolNames.has(name)) addIfAvailable(selected, available, name);
   if (requiresMediaPlaybackAction(instructionText) && categories.includes('music')

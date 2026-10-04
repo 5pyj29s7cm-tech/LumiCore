@@ -9,6 +9,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { requireTrustedMutationOrigin } from './client_origin';
 import { getJwtSecret } from '../config/local_identity';
 import { getMember } from '../org/db';
 
@@ -65,6 +66,9 @@ export function decodeUserSessionToken(token: string, secret = getJwtSecret()): 
 
 /** Require an ordinary user credential, independent of its previous org context. */
 export function requireUserSession(req: Request, res: Response, next: NextFunction): void {
+  let trustedOrigin = false;
+  requireTrustedMutationOrigin(req, res, () => { trustedOrigin = true; });
+  if (!trustedOrigin) return;
   const token = extractToken(req);
   if (!token) {
     res.status(401).json({ error: 'Authentication required' });

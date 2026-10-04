@@ -1,3 +1,4 @@
+import { resolveUserTurn, type TurnResolution } from './turn_resolution';
 import { restrictToolPolicyForExecutionBoundary, restrictVisibleToolRouteForExecutionBoundary } from '../tools/remote_policy';
 import type { ToolPolicy } from '../personality/types';
 import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
@@ -60,6 +61,7 @@ export interface LumiCapabilityPlan extends LumiCapabilitySelection {
 }
 
 export interface LumiExecutionPipeline {
+  resolution: TurnResolution;
   normalizedIntent: NormalizedActionIntent;
   turnIntent: LumiTurnDispatch;
   capabilityPlan: LumiCapabilityPlan;
@@ -82,6 +84,11 @@ export interface LumiExecutionPipeline {
 }
 
 export interface BuildLumiExecutionPipelineInput {
+  requestId?: string;
+  /** Server-owned semantic snapshot captured at admission, never accepted from a client. */
+  acceptedResolution?: TurnResolution;
+  /** Original visible user wording, before channel envelopes or model hints. */
+  userText?: string;
   /** Explicit creation operation; still subject to ordinary authorization and current-turn vetoes. */
   structuredMediaRequest?: StructuredMediaRequest | null;
   dispatch: LumiTurnDispatchInput;
@@ -351,11 +358,16 @@ export function buildLumiExecutionPipeline(
   ].join('\n\n') : null;
   const acceptedPlan = mediaRequest ? null : resolveAcceptedFilePlan({ text: input.dispatch.text, history: input.persistedConversationHistory });
   const effectiveText = mediaDecisionText || acceptedPlan?.text || input.dispatch.text;
+  const resolution = input.acceptedResolution || resolveUserTurn({
+    requestId:input.requestId, userText:input.userText ?? input.dispatch.text,
+    state:input.actionTaskState, taskRelation:input.taskRelation,
+    options:{pendingAssistantOfferContext:input.pendingAssistantOfferContext},
+  });
+  if (input.acceptedResolution && (resolution.userText !== (input.userText ?? input.dispatch.text)
+    || input.requestId && resolution.requestId !== input.requestId)) throw new Error('Accepted turn resolution does not match this request');
   let taskRelation = acceptedPlan || mediaRequest
     ? resolveActiveTaskMessageRelation(effectiveText, null)
-    : input.taskRelation || resolveActiveTaskMessageRelation(input.dispatch.text, input.actionTaskState, {
-        pendingAssistantOfferContext: input.pendingAssistantOfferContext,
-      });
+    : { ...(input.taskRelation || resolution.taskRelation) };
   if (taskRelation.taskId && (taskRelation.taskId !== input.actionTaskState?.taskId
     || taskRelation.revision !== input.actionTaskState?.revision)) {
     taskRelation = { ...taskRelation, binding: 'stale', operation: 'reject_stale', reason: 'planning_task_snapshot_changed' };
@@ -363,7 +375,9 @@ export function buildLumiExecutionPipeline(
   const boundTaskState = taskRelation.taskId === input.actionTaskState?.taskId
     && (taskRelation.binding === 'active_task' || taskRelation.binding === 'previous_task') ? input.actionTaskState : undefined;
   const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none' : taskRelationFollowupIntent(taskRelation);
-  const observationalFollowup = actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat';
+  const queryTarget = resolution.queryTarget;
+  const observationalFollowup = queryTarget === 'conversation_receipts'
+    && (actionFollowupIntent === 'status' || actionFollowupIntent === 'repeat');
   const trustedActionContinuation = !acceptedPlan && !mediaRequest && hasTrustedActionContinuation(input, taskRelation);
   const continuationContext = input.dispatch.continuationContext
     || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
@@ -411,7 +425,8 @@ export function buildLumiExecutionPipeline(
   }
   // A bound retry inherits its authorized goal, not the side-effect class of
   // the acknowledgement ("yes"). Keep current-turn denials authoritative below.
-  const currentIntent = normalizeActionIntent(decisionText);
+  const currentIntent = decisionText === resolution.userText
+    ? { ...resolution.userIntent } : normalizeActionIntent(decisionText);
   const requestedArtifact = requestedSingleArtifact(actionText);
   // An input/output transformation writes the destination, never the first
   // source path that a generic action recognizer happened to encounter.
@@ -437,6 +452,8 @@ export function buildLumiExecutionPipeline(
   const legacyExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     text: decisionText,
+    userText: resolution.userText,
+    queryTarget,
     toolDeclarations: input.registry.getToolDeclarations({ context: visibilityContext }),
     toolRegistry: input.registry,
     personalityToolPolicy: input.personalityToolPolicy,
@@ -520,6 +537,8 @@ export function buildLumiExecutionPipeline(
   // canonical tool loop.
   const turnOwnsExecution = Boolean(
     turnIntent.flow.allowToolUseForTurn
+    || Boolean(turnIntent.flow.workflowHint)
+    || queryTarget === 'runtime_work'
     || trustedActionContinuation
     || turnIntent.boundary === 'task_center'
     || turnIntent.boundary === 'work_takeover',
@@ -529,6 +548,13 @@ export function buildLumiExecutionPipeline(
     && execution.allowToolUse
     && modelToolProjection.toolNames.length > 0,
   );
+  // Publish the actual projection state; catalog visibility is not execution.
+  execution.promptOverlay = execution.promptOverlay.replace(/tools=(?:available|off)/u,
+    'tools=' + (executionRequested ? 'available' : 'off'));
+  if (!executionRequested) {
+    turnIntent.flow.allowToolUseForTurn = false;
+    turnIntent.flow.promptOverlay = turnIntent.flow.promptOverlay.replace(/Tool access: [^.]+\./u, 'Tool access: chat-only.');
+  }
   const capabilityPlan: LumiCapabilityPlan = {
     ...selection,
     schemaVersion: 1,
@@ -576,6 +602,7 @@ export function buildLumiExecutionPipeline(
     decision: { followup: actionFollowupIntent, skill: classifySkillAuthoringIntent(input.dispatch.text), executionRequested },
   });
   return {
+    resolution: Object.freeze({ ...resolution, taskRelation:Object.freeze({ ...taskRelation }) }),
     normalizedIntent,
     turnIntent,
     capabilityPlan,

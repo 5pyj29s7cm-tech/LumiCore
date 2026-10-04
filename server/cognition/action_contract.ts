@@ -24,6 +24,7 @@ import {
   requiresDesktopFileListingObservation,
   requiresRunningProcessObservation,
 } from './desktop_observation';
+import { withoutLocationLiterals } from './location_literals';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { isRuntimeCleanupOfferAcceptanceText } from './pending_assistant_offer';
 import {
@@ -383,7 +384,7 @@ export function requiresMediaPlaybackAction(input: string): boolean {
 }
 
 export function requiresDesktopAiRequest(input: string): boolean {
-  const text = compact(extractPrimaryTaskText(input));
+  const text = compact(withoutLocationLiterals(extractPrimaryTaskText(input)));
   const positiveText = text.replace(
     /(?:不要|不得|禁止|严禁|无需|不需要|不能|别|避免)[^。！？!?；;\n]{0,96}(?:AI|模型|agent|智能体)[^。！？!?；;\n]*/giu,
     ' ',
@@ -403,8 +404,16 @@ export function requiresDesktopAiRequest(input: string): boolean {
   return (hasNamedAiSurface || hasGenericAiTarget) && hasAskAction;
 }
 
+/** Inspection is a separate read capability; it never creates a submission contract. */
+export function requiresDesktopAiInspection(input: string): boolean {
+  const text = compact(withoutLocationLiterals(extractPrimaryTaskText(input)))
+    .split(/(?:\bdo\s+not\b|不要|不得|禁止)/iu)[0]; // i18n-allow: Reviewed negated inspection request recognition.
+  const target = /(?:\b(?:desktop|external|running)\s+AI\s+(?:applications?|apps?|tools?|clients?)\b|桌面\s*AI|外部\s*AI|Codex|ChatGPT|Claude|Cursor)/iu.test(text); // i18n-allow: Reviewed explicit AI application targets.
+  return target && /(?:\b(?:inspect|list|detect|check|find)\b|检查|检测|查看|列出)/iu.test(text); // i18n-allow: Reviewed read-only inspection verbs.
+}
+
 export function requiresExternalAiHistory(input: string): boolean {
-  const text = compact(extractPrimaryTaskText(input));
+  const text = compact(withoutLocationLiterals(extractPrimaryTaskText(input)));
   // i18n-allow: Multilingual external-AI history target recognition; not user-visible copy.
   const hasExternalAiTarget = /(?:\b(?:ChatGPT|Claude|Gemini|DeepSeek|Kimi|Perplexity|Copilot|Cursor|Ollama|LM\s*Studio|external\s+AI|AI\s+(?:assistant|agent|app|chat))\b|外部\s*AI|AI\s*(?:助手|智能体|客户端|应用))/iu.test(text);
   // i18n-allow: Multilingual external-AI history action recognition; not user-visible copy.
@@ -416,7 +425,7 @@ export function requiresExternalAiHistory(input: string): boolean {
 
 export function requiresDesktopAiAnswerReadback(input: string): boolean {
   if (!requiresDesktopAiRequest(input)) return false;
-  const text = compact(extractPrimaryTaskText(input));
+  const text = compact(withoutLocationLiterals(extractPrimaryTaskText(input)));
   // i18n-allow: multilingual answer-collection intent recognition; not user-visible copy.
   return /(?:聊天|聊|对话|讨论|回答|结果|带回|拿回|告诉我|总结|对比|汇总)|\b(?:chat|talk|discuss|answer|bring\s+back|collect|compare|summari[sz]e)\b/iu.test(text);
 }
@@ -1072,7 +1081,7 @@ export function buildActionContract(input: string): LumiActionContract {
     ) return primaryContract;
   }
 
-  const text = compact(withoutNegatedLookupClauses(rawInput));
+  const text = compact(withoutLocationLiterals(withoutNegatedLookupClauses(rawInput), true));
   if (!text) return NONE_CONTRACT;
   if (isAvatarAuthoringRequest(text)) return withDefaults({ kind:'avatar_authoring', label:'Memory person authoring',
     coreAction:'Create/import/configure the requested person through the memory person tools and read back the saved state.',

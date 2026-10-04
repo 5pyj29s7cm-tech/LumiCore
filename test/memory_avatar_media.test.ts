@@ -62,7 +62,7 @@ it('stores actual private image and thumbnail without calling a model, authentic
   expect((await fetch(url, { headers: { Authorization: `Bearer ${token(owner, 'work-scope')}` } })).status).toBe(403);
   expect(() => getMemoryAvatarMediaFile(owner, otherAvatar.id, mediaId)).toThrow('Media not found');
   const range = await fetch(url, { headers: { Authorization: `Bearer ${token()}`, Range: 'bytes=0-7' } });
-  expect(range.status).toBe(206); expect(Buffer.from(await range.arrayBuffer())).toEqual(png.subarray(0, 8)); expect(range.headers.get('cache-control')).toContain('no-store');
+  expect(range.status, range.status === 206 ? undefined : await range.clone().text()).toBe(206); expect(Buffer.from(await range.arrayBuffer())).toEqual(png.subarray(0, 8)); expect(range.headers.get('cache-control')).toContain('no-store');
   expect((await fetch(url, { headers: { Authorization: `Bearer ${token()}`, Range: 'bytes=9999999-' } })).status).toBe(416);
   const thumbnail = getMemoryAvatarMediaFile(owner, avatar.id, mediaId, 'thumbnail'); expect((await sharp(thumbnail.path).metadata()).format).toBe('jpeg');
 });

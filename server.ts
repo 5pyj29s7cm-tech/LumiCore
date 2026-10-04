@@ -1,3 +1,4 @@
+import { runtimeFaults } from './server/runtime/fault_state';
 // LumiCore unified server. Personal and organization work domains share one client.
 import "dotenv/config";
 import fs from "fs";
@@ -63,20 +64,22 @@ if (DESKTOP_LOG_FILE) {
 
 // ── Global exception handlers (must be first — before any async setup) ──
 process.on('uncaughtException', (err) => {
+  runtimeFaults.record('uncaught_exception');
   console.error('[FATAL] Uncaught exception:', err.message);
   console.error(err.stack);
   if (!IS_DESKTOP_RUNTIME || process.env.LUMI_EXIT_ON_UNCAUGHT_EXCEPTION === '1') {
     process.exit(1);
   }
-  console.error('[DesktopRuntime] Keeping local backend alive after uncaught exception.');
+  console.error('[DesktopRuntime] Backend degraded; new work stopped and durable shutdown requested.');
 });
 process.on('unhandledRejection', (reason) => {
+  runtimeFaults.record('unhandled_rejection');
   console.error('[UnhandledRejection]', reason);
   if (reason instanceof Error) console.error(reason.stack);
   if (!IS_DESKTOP_RUNTIME || process.env.LUMI_EXIT_ON_UNHANDLED_REJECTION === '1') {
     process.exit(1);
   }
-  console.error('[DesktopRuntime] Keeping local backend alive after unhandled rejection.');
+  console.error('[DesktopRuntime] Backend degraded; new work stopped and durable shutdown requested.');
 });
 
 import { fileURLToPath } from "url";

@@ -163,7 +163,7 @@ describe('model tool declaration projection', () => {
     });
     const selection = buildLumiCapabilitySelection({ dispatch, execution, text, registry });
 
-    expect(execution.allowToolUse).toBe(true);
+    expect(execution.allowToolUse).toBe(false);
     expect(selection.lane).toBe('conversation');
     expect(buildModelToolProjection(execution, {
       lane: selection.lane,

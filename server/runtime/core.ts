@@ -1,4 +1,6 @@
 import express from "express";
+import { isAllowedClientOrigin, requireTrustedMutationOrigin, getAuthCookieOptions } from '../middleware/client_origin';
+export { isAllowedClientOrigin } from '../middleware/client_origin';
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import http from "http";
@@ -24,28 +26,11 @@ export function resolveBindHost(): string {
   return String(process.env.HOST || '').trim() || '127.0.0.1';
 }
 
-export function isAllowedClientOrigin(origin?: string): boolean {
-  if (!origin) return true;
-
-  const configured = String(process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
-  if (configured.includes('*') || configured.includes(origin)) return true;
-
-  try {
-    const url = new URL(origin);
-    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1' || url.hostname === 'tauri.localhost') return true;
-    return url.protocol === 'tauri:' && url.hostname === 'localhost';
-  } catch {
-    return false;
-  }
-}
-
 export function createApp(): AppContext {
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, {
+    allowRequest: (req, callback) => callback(null, isAllowedClientOrigin(req.headers.origin)),
     pingInterval: 25_000,
     pingTimeout: 60_000,
     cors: {
@@ -62,6 +47,7 @@ export function createApp(): AppContext {
     origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => cb(null, isAllowedClientOrigin(origin)),
     credentials: true,
   }));
+  app.use(requireTrustedMutationOrigin);
   // Capture raw body before JSON parse (needed for WeCom XML webhooks)
   app.use(express.json({
     limit: '10mb',
@@ -95,16 +81,7 @@ export function createApp(): AppContext {
 
   const JWT_SECRET = getJwtSecret();
 
-  // Serialize personality file writes to prevent concurrent overwrites
-  // SameSite=None requires Secure (Chromium silently rejects otherwise).
-  // Chromium allows Secure cookies on localhost/127.0.0.1, so safe to always enable.
-  const isDev = !process.env.NODE_ENV || process.env.NODE_ENV === 'development';
-  const getCookieOptions = (): { httpOnly: true; secure: boolean; sameSite: "none" | "lax"; maxAge: number } => ({
-    httpOnly: true,
-    secure: !isDev,
-    sameSite: isDev ? "lax" : "none",
-    maxAge: 24 * 60 * 60 * 1000,
-  });
+  const getCookieOptions = getAuthCookieOptions;
 
   return { app, server, io, apiRouter, PORT, HOST, JWT_SECRET, getCookieOptions };
 }

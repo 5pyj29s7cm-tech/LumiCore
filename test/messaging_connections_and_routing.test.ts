@@ -494,14 +494,10 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(greeting.dispatch.boundary).toBe('conversation');
-    expect(greeting.execution.allowToolUse).toBe(true);
+    expect(greeting.execution.allowToolUse).toBe(false);
     const greetingModelPolicy = buildModelCapabilityPolicy(greeting.execution);
-    expect(greetingModelPolicy.forbiddenTools).not.toContain('*');
-    expect(greetingModelPolicy.allowedTools).toEqual(expect.arrayContaining([
-      'client_get_state',
-      'desktop_open',
-      'wechat_send_message',
-    ]));
+    expect(greetingModelPolicy.forbiddenTools).toContain('*');
+    expect(greetingModelPolicy.allowedTools).toEqual([]);
 
     const knowledgeFileCapabilityQuestion = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -509,13 +505,10 @@ describe('messaging long connections and organization routing', () => {
       operationMode: 'assistant',
     });
     expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
-    expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(true);
+    expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(false);
     const knowledgeModelPolicy = buildModelCapabilityPolicy(knowledgeFileCapabilityQuestion.execution);
-    expect(knowledgeModelPolicy.forbiddenTools).not.toContain('*');
-    expect(knowledgeModelPolicy.allowedTools).toEqual(expect.arrayContaining([
-      'read_file',
-      'wechat_send_file',
-    ]));
+    expect(knowledgeModelPolicy.forbiddenTools).toContain('*');
+    expect(knowledgeModelPolicy.allowedTools).toEqual([]);
 
     const chatAction = routes.buildRemoteLumiExecutionPlan({
       ...base,
@@ -557,11 +550,9 @@ describe('messaging long connections and organization routing', () => {
     expect(modeSwitch.dispatch.flow.requestedMode).toBeNull();
     expect(modeSwitch.dispatch.flow.effectiveOperationMode).toBe('assistant');
     const modeSwitchModelPolicy = buildModelCapabilityPolicy(modeSwitch.execution);
-    expect(modeSwitchModelPolicy.allowedTools).toEqual(expect.arrayContaining([
-      'client_get_state',
-      'client_action',
-      'desktop_open',
-    ]));
+    expect(modeSwitch.execution.allowToolUse).toBe(false);
+    expect(modeSwitchModelPolicy.allowedTools).toEqual([]);
+    expect(modeSwitchModelPolicy.forbiddenTools).toContain('*');
   });
 
   it('keeps unbound remote senders off private tools and organization viewers off write tools', () => {

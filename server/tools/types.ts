@@ -313,6 +313,8 @@ export interface ToolContext {
    * manifest was visible to it.
    */
   currentTurnExecutionRequested?: boolean;
+  /** Immutable server semantic snapshot shared by planning, prompts and tools. */
+  resolutionId?: string;
   /** Exact durable continuation proof produced by the shared execution pipeline. */
   trustedActionContinuation?: boolean;
   /**
@@ -337,8 +339,8 @@ export interface ToolContext {
   localWriteIntentReason?: string;
   /**
    * True for foreground, user-present execution surfaces where Lumi can perform
-   * ordinary social/content commits (messages, comments, non-commercial posts)
-   * without a separate confirmation popup. High-consequence actions still gate.
+   * ordinary social/content preparation. External commits still require the
+   * exact destination/payload confirmation enforced by the Action Constitution.
    */
   supervisedExternalCommits?: boolean;
   /** Personality's tool policy for security level resolution */
@@ -527,6 +529,8 @@ export interface NormalizedLLMResponse {
 }
 
 export interface ToolExecutionRecord {
+  /** Server-owned semantic snapshot; never an action, message, or task identity. */
+  resolutionId?: string;
   id?: string;
   taskId?: string;
   turnId?: string;
@@ -594,6 +598,7 @@ export type ToolExecutionEnvelopeStatus =
 
 /** Canonical result projected from every legacy/new tool record. */
 export interface ToolExecutionEnvelope<T = unknown> {
+  resolutionId?: string;
   version: 1;
   status: ToolExecutionEnvelopeStatus;
   toolName: string;

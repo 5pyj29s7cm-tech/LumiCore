@@ -1,3 +1,5 @@
+import { resolveUserTurn } from '../cognition/turn_resolution';
+import { reserveConversationExecution, type ConversationResourceLifetime } from '../cognition/conversation_execution';
 import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
 /**
  * Voice / Audio Pipeline — STT → LLM → TTS real-time handlers
@@ -55,6 +57,7 @@ import { extractFirstCompleteSpeechSentence } from "../tts/speculative_sentence"
 import { recordLatency } from "../monitor/latency_store";
 import { markVoiceLatencyMilestone, recordVoicePlaybackMetrics, startVoiceLatencyTrace } from "../monitor/voice_latency_store";
 import {
+  getConversationForScope,
   getOrCreateActiveConversation,
   getOrCreateConversationForTurn,
   addMessage,
@@ -1701,6 +1704,7 @@ async function processVoiceInput(
   userReceivedAt = new Date().toISOString(),
   voiceAuthorized = false,
   inputTiming: VoiceInputTiming = {},
+  resources: ConversationResourceLifetime = {},
 ): Promise<void> {
   if (!voiceAuthorized && !isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
@@ -1959,6 +1963,7 @@ async function processVoiceInput(
   // Once a verified final transcript is admitted to the execution lane it is
   // durable. Routing, model, tool, TTS, cancellation, or disconnect failures
   // may affect its result, but can no longer erase the user's instruction.
+  const acceptedVoiceResolution = resolveUserTurn({requestId,userText,state:conversationTurn.conversation.actionContinuationState,options:{pendingAssistantOfferContext}});
   const voiceAdmission = await admitAcceptedUserTurnDurably({
     persistAcceptedUserTurn: () => persistVoiceUserMessage(),
     flush: flushDBOrThrow,
@@ -1981,6 +1986,10 @@ async function processVoiceInput(
     return;
   }
   voiceUserMessageId = voiceAdmission.persisted;
+  resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id},requestId,pipelineAbort.signal);
+  await resources.admission.waitForTurn();
+  turnAuthorization.assertCurrent();
+  conversationTurn.conversation = getConversationForScope(conversationTurn.conversation.id,session.userId,voiceScope.domain,voiceScope.orgId) || conversationTurn.conversation;
   if (conversationTurn.rolledOver && conversationTurn.previousConversationId) {
     await runAfterAcceptedUserTurnAdmission(voiceAdmission, () => (
       clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({
@@ -1994,6 +2003,7 @@ async function processVoiceInput(
     admission: voiceAdmission,
     userId: session.userId,
     userText,
+    taskRelation:acceptedVoiceResolution.taskRelation,
     actionState: conversationTurn.conversation.actionContinuationState,
     taskScope: confirmationScope,
     channelScope: confirmationChannelScope,
@@ -2179,6 +2189,7 @@ async function processVoiceInput(
   })();
   const requestedMode = requestedModeHint;
   const executionPipeline = buildLumiExecutionPipeline({
+    requestId, userText, acceptedResolution:acceptedVoiceResolution,
     dispatch: {
       userId: session.userId,
       text: actionIntentText,
@@ -3040,6 +3051,7 @@ async function processVoiceInput(
   const toolContext = {
     ...toolSecurityContext,
     currentTurnExecutionRequested: executionPipeline.executionRequested,
+    resolutionId: executionPipeline.resolution.id,
     trustedActionContinuation: executionPipeline.trustedActionContinuation,
     acceptedTaskTarget: turnFlow.acceptedTaskTarget,
             currentAppTarget: turnFlow.currentAppEditTarget,
@@ -3500,6 +3512,7 @@ async function processVoiceInput(
   };
 
   const releaseVoiceTransportResources = (): void => {
+    resources.admission?.release();
     actionLeaseHeartbeat?.stop();
     speculativeSpeech?.controller.abort();
     speculativeSpeech = null;
@@ -3567,6 +3580,7 @@ async function processVoiceInput(
       attempts,
     }),
   });
+  resources.ownedByDurableRelease = true;
   const releaseVoiceTurnResources = (
     reason = 'Voice turn reached its release boundary.',
   ): Promise<boolean> => {
@@ -4873,8 +4887,9 @@ async function runVoiceInputPipeline(
   inputTiming: VoiceInputTiming = {},
 ): Promise<void> {
   const originalAuthorization = session.authorization;
+  const resources: ConversationResourceLifetime = {};
   try {
-    await processVoiceInput(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming);
+    await processVoiceInput(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
   } catch (err: any) {
     if (originalAuthorization && !originalAuthorization.isCurrent()) {
       if (session.authorization === originalAuthorization && session.activeTurnRequestId) {
@@ -5008,6 +5023,7 @@ async function runVoiceInputPipeline(
     session.inputQueue = queuedWork;
     socket.emit('audio:status', { status: 'listening', requestId: failedRequestId || undefined });
   } finally {
+    if (!resources.ownedByDurableRelease) resources.admission?.release();
     if (!session.isActive || session.isProcessing || session.inputQueue.length === 0) return;
     const next = session.inputQueue.shift();
     if (!next) return;

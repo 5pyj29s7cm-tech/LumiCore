@@ -1,3 +1,4 @@
+import { RuntimeFaultState } from '../server/runtime/fault_state';
 import { JWT_SECRET, makeApp } from './helpers';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
@@ -16,6 +17,14 @@ function deferred() {
 }
 
 describe('shutdown coordinator', () => {
+  it('fatal fault stops admission synchronously and preserves the first cause', () => {
+    const faults=new RuntimeFaultState(), stop=vi.fn();
+    faults.subscribe(stop); faults.record('uncaught_exception'); faults.record('unhandled_rejection');
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(faults.snapshot()).toMatchObject({degraded:true,acceptingWork:false,kind:'uncaught_exception'});
+    const late=vi.fn(); faults.subscribe(late); expect(late).toHaveBeenCalledTimes(1);
+  });
+
   it('a second signal waits for the original drain and save and exits only once', async () => {
     const drain = deferred();
     const save = deferred();
@@ -89,11 +98,11 @@ describe.sequential('authenticated shutdown ingress', () => {
   const servers: Server[] = [];
   afterEach(async () => { for (const server of servers.splice(0)) await new Promise<void>(resolve => server.close(() => resolve())); });
 
-  async function setup(saveAndClose = vi.fn(async () => {})) {
+  async function setup(saveAndClose = vi.fn(async () => {}), faults = new RuntimeFaultState()) {
     const context = await makeApp();
     const io = new Server(context.server, { serveClient: false });
     servers.push(io);
-    const ingress = installShutdownIngress(context.app, context.apiRouter, io);
+    const ingress = installShutdownIngress(context.app, context.apiRouter, io, faults);
     const exit = vi.fn();
     const coordinator = new RuntimeShutdownCoordinator({
       stopAdmission: ingress.stopAdmission,
@@ -115,8 +124,25 @@ describe.sequential('authenticated shutdown ingress', () => {
     const request = (overrideHeaders = headers, expectedPid = process.pid) => fetch(`${context.url}/api/runtime/shutdown`, {
       method: 'POST', headers: overrideHeaders, body: JSON.stringify({ expectedPid }), signal: AbortSignal.timeout(5_000),
     });
-    return { ...context, io, ingress, coordinator, exit, saveAndClose, headers, request };
+    return { ...context, io, ingress, coordinator, exit, saveAndClose, headers, request, faults };
   }
+
+  it('stops writes on fatal faults while keeping degradation and save retry observable', async () => {
+    const app=await setup(vi.fn(async () => { throw new Error('failed save'); }));
+    const write=vi.fn(); app.apiRouter.post('/write', (_req,res)=>{write();res.json({ok:true});});
+    app.apiRouter.get('/health', (_req,res)=>res.json(app.faults.snapshot()));
+    app.ingress.trackRegisteredHttpHandlers();
+    app.faults.record('uncaught_exception');
+    expect(app.ingress.isAccepting()).toBe(false);
+    const rejected=await fetch(app.url+'/api/write',{method:'POST'});
+    expect(rejected.status).toBe(503); expect(write).not.toHaveBeenCalled();
+    expect(await rejected.json()).toMatchObject({code:'RUNTIME_DEGRADED'});
+    const health=await fetch(app.url+'/api/health'); expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({degraded:true,acceptingWork:false});
+    expect(app.exit).not.toHaveBeenCalled();
+    app.saveAndClose.mockResolvedValue(undefined);
+    expect((await app.request()).status).toBe(200); expect(app.exit).toHaveBeenCalledTimes(1);
+  });
 
   it('requires local native proof plus an ordinary admin session and binds the exact process', async () => {
     const app = await setup();

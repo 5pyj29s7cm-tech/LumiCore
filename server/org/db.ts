@@ -225,6 +225,16 @@ export function deleteOrg(orgId: string): boolean {
   return true;
 }
 
+/** One in-memory revision; its caller owns the durable commit boundary. */
+export function transferOrgOwnership(orgId: string, previousOwnerId: string, newOwnerId: string): Organization {
+  const org = getOrgById(orgId), previous = getMember(orgId, previousOwnerId), next = getMember(orgId, newOwnerId);
+  if (!org || org.ownerUid !== previousOwnerId || !previous || !next || next.status !== 'active') throw new Error('Ownership snapshot changed.');
+  previous.role = 'admin'; next.role = 'owner'; org.ownerUid = newOwnerId; org.updatedAt = now();
+  logAudit({ orgId, userId: previousOwnerId, action: 'org.transfer', resourceType: 'organization', resourceId: orgId, details: { newOwnerId } });
+  entWrite();
+  return org;
+}
+
 // ── Memberships ──────────────────────────────────────────────────────────
 
 export function getMember(orgId: string, userId: string): OrgMembership | undefined {

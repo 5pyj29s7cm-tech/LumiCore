@@ -1,3 +1,5 @@
+import { resolveUserTurn } from '../cognition/turn_resolution';
+import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
 import { createModelTurnState } from '../llm/model_turn_state';
 /**
  * agent:task socket handler — multi-turn tool-augmented AI pipeline
@@ -261,6 +263,7 @@ export function registerTaskHandler(
       socket.emit('agent:error', { code: 'TASK_AUTHORIZATION_REVOKED', message: error, source: 'task', requestId });
       return;
     }
+    let releaseTaskOnExit: (() => Promise<boolean>) | undefined;
     try {
     const taskScope = authority.scope;
     let receiptObserver: ReturnType<typeof createConversationReceiptObserver> | undefined;
@@ -712,7 +715,7 @@ export function registerTaskHandler(
     const selectedConversation = data.conversationId
       ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
       : null;
-    const convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    let convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
     taskConversationId = convForHistory.id;
     try {
       await ensurePendingConfirmationPersistenceInitialized();
@@ -750,6 +753,7 @@ export function registerTaskHandler(
       conversationId: convForHistory.id,
       taskId: convForHistory.actionContinuationState?.taskId,
     });
+    const acceptedTaskResolution = resolveUserTurn({requestId,userText:data.text,state:convForHistory.actionContinuationState,options:{pendingAssistantOfferContext}});
     const taskAdmission = await admitAcceptedUserTurnDurably({
       persistAcceptedUserTurn: () => addMessageIdempotent({
         userId: uid,
@@ -791,6 +795,7 @@ export function registerTaskHandler(
       admission: taskAdmission,
       userId: uid,
       userText: data.text,
+      taskRelation:acceptedTaskResolution.taskRelation,
       actionState: convForHistory.actionContinuationState,
       taskScope: confirmationScope,
       channelScope: confirmationChannelScope,
@@ -813,11 +818,13 @@ export function registerTaskHandler(
       socket.emit('agent:status', { status: 'cancelling', source: 'task', requestId, code: 'TASK_AUTHORIZATION_REVOKED' });
     });
     let releaseDesktopControlLease: (() => void) | null = null;
+    let conversationAdmission: ConversationExecutionAdmission | undefined;
     let taskForegroundRequestIdentity: TaskForegroundRequestIdentity | null = null;
     const releaseTaskTransportResources = (): void => {
       actionLeaseHeartbeat?.stop();
       releaseDesktopControlLease?.();
       releaseDesktopControlLease = null;
+      conversationAdmission?.release();
       taskLease.release();
     };
     const taskReleaseGate = createDurableForegroundReleaseGate({
@@ -868,6 +875,7 @@ export function registerTaskHandler(
     const releaseTask = (
       reason = 'Task foreground request reached its release boundary.',
     ): Promise<boolean> => taskReleaseGate.release(reason);
+    releaseTaskOnExit = releaseTask;
 
     if (previous) {
       try {
@@ -918,6 +926,10 @@ export function registerTaskHandler(
     };
     let superseded = null as Awaited<ReturnType<typeof beginChatExecutionDurably>>;
     try {
+      conversationAdmission = reserveConversationExecution({userId:uid,domain:taskScope.domain,orgId:taskScope.orgId,conversationId:convForHistory.id},requestId,taskLease.signal);
+      await conversationAdmission.waitForTurn();
+      authority.assertAuthorized();
+      convForHistory = getConversationForScope(convForHistory.id,uid,taskScope.domain,taskScope.orgId) || convForHistory;
       superseded = await runAfterAcceptedUserTurnAdmission(
         taskAdmission,
         () => beginChatExecutionDurably(
@@ -1033,6 +1045,7 @@ export function registerTaskHandler(
 
     // ── Load persisted conversation history (survives page reload) ──
     const executionPipeline = buildLumiExecutionPipeline({
+      requestId, userText: data.text, acceptedResolution:acceptedTaskResolution,
       dispatch: {
         userId: uid,
         text: data.text,
@@ -1062,6 +1075,7 @@ export function registerTaskHandler(
     const pipelineToolContext = {
       currentAppTarget: turnFlow.currentAppEditTarget,
       currentTurnExecutionRequested: executionPipeline.executionRequested,
+      resolutionId: executionPipeline.resolution.id,
       trustedActionContinuation: executionPipeline.trustedActionContinuation,
     };
     const visibleToolRoute = executionDecision.toolRoute;
@@ -2270,6 +2284,7 @@ export function registerTaskHandler(
       await releaseTask();
     }
     } finally {
+      await releaseTaskOnExit?.();
       authority.dispose();
     }
   });

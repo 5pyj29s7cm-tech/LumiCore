@@ -169,6 +169,7 @@ export function buildToolExecutionEnvelope(
     version: 1,
     status,
     toolName: record.name,
+    ...(record.resolutionId ? {resolutionId:record.resolutionId} : {}),
     taskId: String(record.taskId || correlation.taskId || ''),
     turnId: String(record.turnId || correlation.turnId || ''),
     requestId: String(record.requestId || correlation.requestId || ''),

@@ -193,6 +193,8 @@ export interface NormalizedMessage {
   content: MessageContent;
   /** Server-only durable transcript provenance; never serialized to a provider. */
   sourceMessageId?: string;
+  /** Server-only semantic budget contract; never provider payload metadata. */
+  promptBlock?: import('./prompt_blocks').PromptBlock;
   toolCalls?: ParsedToolCall[];
   toolCallId?: string;
   name?: string;

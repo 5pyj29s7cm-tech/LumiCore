@@ -1,3 +1,4 @@
+import { promptBlockMessage } from '../server/llm/prompt_blocks';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -57,6 +58,23 @@ function oversizedRequest() {
 }
 
 describe('whole model-request context budget', () => {
+  it.each(['任意标题', 'plain prose without policy keywords'])('retains semantic task and receipt fields under %s', heading => {
+    const required=promptBlockMessage({id:'task-facts',kind:'task_state',authority:'server',required:true,content:heading,
+      fields:{requestId:'request-immutable',taskId:'task-exact',revision:7,amount:60,path:'D:/out/report.xlsx'},requiredFields:['requestId','taskId','revision','amount','path']});
+    const result=prepareModelRequestContext({messages:[
+      {role:'system',content:'style '.repeat(10000)},required,{role:'user',content:'Read the recorded result.'},
+    ],toolDeclarations:[],inputTokenBudget:4096});
+    expect(result.messages.find(message=>message.promptBlock?.id==='task-facts')?.content).toBe(required.content);
+    expect(result.estimatedInputTokens).toBeLessThanOrEqual(4096);
+  });
+  it('fails visibly when mandatory facts cannot fit instead of deleting them', () => {
+    const required=promptBlockMessage({id:'oversized-facts',kind:'receipt',authority:'tool',required:true,content:'exact fact '.repeat(2000)});
+    expect(()=>prepareModelRequestContext({messages:[required,{role:'user',content:'deliver'}],toolDeclarations:[],inputTokenBudget:4096})).toThrow(/budget cannot retain/);
+  });
+  it('rejects an incomplete field contract before any provider call', () => {
+    expect(()=>promptBlockMessage({id:'missing',kind:'task_state',authority:'server',content:'facts',required:true,fields:{taskId:'t'},requiredFields:['requestId']})).toThrow(/Missing required prompt field/);
+  });
+
   it('bounds system, schemas, history and current input as one assembled request', () => {
     const input = oversizedRequest();
     const prepared = prepareModelRequestContext({

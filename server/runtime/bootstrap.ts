@@ -1,3 +1,4 @@
+import { runtimeFaults } from './fault_state';
 import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
 import {
   readDB,
@@ -308,7 +309,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       setUnifiedRuntimeSupervisor(null);
       console.log('[Shutdown] Database saved and closed');
     },
-    exit: () => process.exit(0),
+    exit: () => process.exit(runtimeFaults.snapshot().degraded ? 1 : 0),
   });
   ctx.shutdownIngress.configure(shutdown);
   registerShutdownSignals(shutdown);

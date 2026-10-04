@@ -31,6 +31,9 @@ type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 export interface LumiExecutionDecisionInput {
   flow: LumiTurnFlow;
   text: string;
+  /** Original accepted user instruction, never a prompt/context bridge. */
+  userText?: string;
+  queryTarget?: 'runtime_work' | 'conversation_receipts';
   toolDeclarations: ToolDeclaration[];
   toolRegistry?: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
@@ -216,13 +219,13 @@ function addAvailable(out: Set<string>, available: Set<string>, names: string[])
 
 function primaryUserInstruction(text: string): string {
   return String(text || '')
-    .split(/\n## (?:Recent action continuation context|Exact Pending Action Confirmation)\b/i, 1)[0]
+    .split(/\n## (?:Recent action continuation context|Exact Pending Action Confirmation|Internal client-surface continuation)\b/i, 1)[0]
     .trim();
 }
 
 function isUnboundTerseContinuation(input: LumiExecutionDecisionInput): boolean {
   if (input.trustedActionContinuation) return false;
-  const text = primaryUserInstruction(input.text || input.flow.routeText);
+  const text = primaryUserInstruction(input.userText ?? input.text ?? input.flow.routeText);
   // i18n-allow: Multilingual terse-continuation input recognition; not user-visible copy.
   return /^(?:继续|接着|接着做|继续做|继续执行|再试(?:一次|一下)?|重试|可以了|好了|continue|resume|retry|try\s+again|go\s+on)[\s。！？.!?]*$/iu.test(text);
 }
@@ -517,7 +520,7 @@ function enhanceToolRouteForFlow(
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
   const recoveredCurrentAppEdit = Boolean(input.flow.currentAppEditTarget);
-  const statusOnlyContinuation = input.flow.actionFollowupIntent === 'status';
+  const statusOnlyContinuation = input.flow.actionFollowupIntent === 'status' && input.queryTarget !== 'runtime_work';
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
     input.flow.routeText || input.text,
     input.pendingAssistantOfferContext,
@@ -529,7 +532,8 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
   ).filter(tool => tool.name.startsWith('external_capability_action_')) || [];
   const allowToolUse = !unboundTerseContinuation && (
     input.flow.allowToolUseForTurn
-    || input.flow.modelToolAccess === 'manifest'
+    || Boolean(input.flow.workflowHint)
+    || input.trustedActionContinuation
     || runtimeWorkIntent !== 'none'
   ) && !input.isSanctuary && !statusOnlyContinuation;
   const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation

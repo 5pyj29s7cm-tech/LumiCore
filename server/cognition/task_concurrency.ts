@@ -10,7 +10,7 @@ import {
   type ConversationActionContinuationState,
 } from './action_continuation';
 import { classifyTaskCapsuleTurn } from '../conversation/task_capsule';
-import { normalizeActionIntent } from './normalized_action_intent';
+import { normalizeActionIntent, type NormalizedActionIntent } from './normalized_action_intent';
 import { hasExplicitNoToolInstruction } from './tool_intent';
 import {
   resolvePendingRuntimeCleanupOffer,
@@ -94,6 +94,10 @@ export interface ActiveTaskMessageResolution {
 export interface ActiveTaskRelationOptions {
   /** Request currently holding (or immediately preceding) the foreground lease. */
   activeRequestId?: string;
+  /** Server-resolved current instruction; not transport/client metadata. */
+  normalizedIntent?: NormalizedActionIntent;
+  /** Rebind a queued predecessor without reclassifying the same utterance. */
+  acceptedFeedback?: ActiveTaskFeedbackKind;
   /** Optional immutable target supplied by a client control event. */
   controlTargetRequestId?: string;
   /** Optional durable identity supplied by a client that rendered task state. */
@@ -164,6 +168,7 @@ function feedbackKind(
   normalized: string,
   state?: ConversationActionContinuationState | null,
   assistantOfferContext?: PendingAssistantOfferContext,
+  currentIntent?: NormalizedActionIntent,
 ): ActiveTaskFeedbackKind {
   if (REPLACE_RE.test(normalized)) return 'replace';
   if (isConfirmationCancellation(normalized)) return 'cancel';
@@ -182,7 +187,7 @@ function feedbackKind(
     // Never attach acceptance to a different task that appeared while queued.
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
-  const normalizedIntent = normalizeActionIntent(normalized);
+  const normalizedIntent = currentIntent || normalizeActionIntent(normalized);
   const followup = classifyConversationActionFollowupIntent(normalized, state);
   // One semantic answer owns queueing, planning and ledger preparation. A
   // phrase about continuing later must not override a current status question.
@@ -318,9 +323,9 @@ export function resolveActiveTaskMessageRelation(
   options: ActiveTaskRelationOptions = {},
 ): ActiveTaskMessageResolution {
   const normalized = compact(text, 700);
-  const feedback = normalized
-    ? feedbackKind(normalized, normalizeConversationActionState(state), options.pendingAssistantOfferContext)
-    : 'new_task';
+  const feedback = options.acceptedFeedback || (normalized
+    ? feedbackKind(normalized, normalizeConversationActionState(state), options.pendingAssistantOfferContext, options.normalizedIntent)
+    : 'new_task');
   const acceptedRuntimeCleanupOffer = feedback === 'accept'
     ? resolvePendingRuntimeCleanupOffer(normalized, options.pendingAssistantOfferContext)
     : null;
@@ -521,4 +526,17 @@ export function classifyActiveTaskMessage(
   state?: ConversationActionContinuationState | null,
 ): ActiveTaskMessageRelation {
   return resolveActiveTaskMessageRelation(text, state).relation;
+}
+
+/** Only identity/version is checked after queueing. The accepted meaning is immutable. */
+export function revalidateAcceptedTaskRelation(
+  relation: ActiveTaskMessageResolution,
+  state?: ConversationActionContinuationState | null,
+): ActiveTaskMessageResolution {
+  if (!relation.taskId || relation.binding === 'stale' || relation.binding === 'new_task') return relation;
+  if (relation.taskId !== state?.taskId || relation.revision !== state.revision
+    || relation.targetRequestId && state.activeRequestId && relation.targetRequestId !== state.activeRequestId) {
+    return {...relation, binding:'stale', operation:'reject_stale', reason:'accepted_task_snapshot_changed'};
+  }
+  return {...relation, binding:state.unfinished ? 'active_task' : 'previous_task'};
 }

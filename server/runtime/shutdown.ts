@@ -1,3 +1,4 @@
+import { runtimeFaults, type RuntimeFaultState } from './fault_state';
 import type { Express, RequestHandler, Router } from 'express';
 import type { Server, Socket } from 'socket.io';
 import { requireAdmin, requireLocalRequest, requireUserSession } from '../middleware/auth';
@@ -75,7 +76,7 @@ export function registerShutdownSignals(
 }
 
 /** Install before application routes and before any Socket.IO connection listeners. */
-export function installShutdownIngress(app: Express, apiRouter: Router, io: Server) {
+export function installShutdownIngress(app: Express, apiRouter: Router, io: Server, faults: RuntimeFaultState = runtimeFaults) {
   const work = new ShutdownWorkTracker();
   let accepting = true;
   let coordinator: RuntimeShutdownCoordinator | undefined;
@@ -120,9 +121,12 @@ export function installShutdownIngress(app: Express, apiRouter: Router, io: Serv
       next();
       return;
     }
+    if (!accepting && faults.snapshot().degraded && req.method === 'GET' && ['/health', '/api/health'].includes(req.path)) { next(); return; }
     if (!accepting) {
       res.setHeader('Connection', 'close');
-      res.status(503).json({ error: 'Backend is shutting down; no new work is accepted.' });
+      res.status(503).json(faults.snapshot().degraded
+        ? { error: 'Backend is degraded; no new work is accepted.', code: 'RUNTIME_DEGRADED', fault: faults.snapshot() }
+        : { error: 'Backend is shutting down; no new work is accepted.' });
       return;
     }
     if (!seen.has(req)) {
@@ -174,6 +178,17 @@ export function installShutdownIngress(app: Express, apiRouter: Router, io: Serv
     socket.off = socket.removeListener;
   });
 
+  const stopAdmission = () => {
+    if (!accepting) return;
+    accepting = false;
+    io.disconnectSockets(true);
+  };
+  const requestFaultShutdown = () => {
+    stopAdmission();
+    if (coordinator) void coordinator.request().then(() => coordinator!.requestExit(),
+      error => console.error('[RuntimeFault] Drain/save failed; degraded process retains pending data:', error));
+  };
+  faults.subscribe(requestFaultShutdown);
   return {
     trackRegisteredHttpHandlers() {
       const visited = new WeakSet<object>();
@@ -211,12 +226,8 @@ export function installShutdownIngress(app: Express, apiRouter: Router, io: Serv
       wrapStack((app as any)._router?.stack || []);
       wrapStack((apiRouter as any).stack || []);
     },
-    configure(value: RuntimeShutdownCoordinator) { coordinator = value; },
-    stopAdmission() {
-      if (!accepting) return;
-      accepting = false;
-      io.disconnectSockets(true);
-    },
+    configure(value: RuntimeShutdownCoordinator) { coordinator = value; if (faults.snapshot().degraded) requestFaultShutdown(); },
+    stopAdmission,
     waitForIdle: () => work.waitForIdle(),
     isAccepting: () => accepting,
   };

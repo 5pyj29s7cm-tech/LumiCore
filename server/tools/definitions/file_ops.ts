@@ -59,10 +59,13 @@ function resolveSafePath(userPath: string, cwd?: string): string {
   const resolved = path.resolve(base, expanded);
   const normalized = path.normalize(resolved);
 
+  const projectRoot = path.resolve(process.cwd());
+  const projectParent = path.dirname(projectRoot);
+  // A checkout at a volume root must not grant access to the whole volume.
   const allowedRoots = [
     os.homedir(),
-    process.cwd(),
-    path.resolve(process.cwd(), '..'),
+    projectRoot,
+    ...(projectParent === path.parse(projectParent).root ? [] : [projectParent]),
     os.tmpdir(),
   ];
 

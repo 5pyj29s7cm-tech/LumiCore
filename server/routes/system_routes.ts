@@ -1,3 +1,4 @@
+import { runtimeFaults } from '../runtime/fault_state';
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import os from "os";
@@ -370,6 +371,7 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
   // Health Check
   router.get("/health", optionalAuth, (req, res) => {
     try {
+      const fault = runtimeFaults.snapshot();
       const persistence = getDatabasePersistenceStatus();
       const scheduledTasks = scheduler.listTasks();
       const schedulerHealth = {
@@ -380,7 +382,8 @@ export function mountSystemRoutes(router: Router, jwtSecret: string, io?: any, l
       const detailed = /^(?:1|true|yes)$/i.test(String(req.query.details || ''));
       if (!detailed) {
         return res.json({
-          status: persistence.degraded || schedulerHealth.degraded ? 'degraded' : 'ok',
+          status: fault.degraded || persistence.degraded || schedulerHealth.degraded ? 'degraded' : 'ok',
+          fault,
           scheduler: schedulerHealth,
           timestamp: new Date().toISOString(),
           runtime: {

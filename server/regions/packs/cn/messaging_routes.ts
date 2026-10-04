@@ -1,3 +1,4 @@
+import { reserveConversationExecution } from '../../../cognition/conversation_execution';
 import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
 import { isRetiredOperationModeRequest } from '../../../cognition/operation_modes';
 /**
@@ -108,6 +109,8 @@ import {
   requestsOrganizationScope,
 } from '../../../messaging/personal_org_scope';
 import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition/turn_dispatch';
+import { resolveUserTurn, type TurnResolution } from '../../../cognition/turn_resolution';
+import { revalidateAcceptedTaskRelation, taskRelationFollowupIntent } from '../../../cognition/task_concurrency';
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
 import { buildLumiRuntimeCapabilityContext } from '../../../cognition/capability_context';
 import { buildInteractionModeOverlay } from '../../../cognition/turn_flow';
@@ -2172,6 +2175,9 @@ export interface RemoteLumiExecutionPlan extends LumiExecutionPipeline {
 }
 
 export interface RemoteLumiExecutionPlanInput {
+  requestId?: string;
+  userText?: string;
+  acceptedResolution?: TurnResolution;
   userId: string;
   text: string;
   source: string;
@@ -2229,6 +2235,7 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
   });
   const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
   const pipeline = buildLumiExecutionPipeline({
+    requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
     dispatch: {
       userId: input.userId,
       text: input.text,
@@ -2334,9 +2341,31 @@ export function buildRemoteConversationHistory(
 }
 
 export async function processWithPersonality(
+  msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
+): Promise<string> {
+  msg=captureMessagingOrganization(msg); assertMessagingAuthorization(msg);
+  if (!msg.boundUserId) return processWithPersonalityAdmitted(msg,options,preacceptedAdmission);
+  const accepted = preacceptedAdmission && preacceptedAdmission.persisted === msg.userMessageId
+    ? {message:msg,admission:preacceptedAdmission}
+    : await admitBoundMessagingTurnDurably(msg,options?.onConversationUpdated);
+  const conversation=conversationForMessagingTurn(accepted.message);
+  if (!conversation) throw new Error('The accepted messaging conversation is unavailable');
+  const acceptedResolution=resolveUserTurn({requestId:msg.platform+'_bot:'+msg.messageId,userText:getRequestText(accepted.message),state:conversation.actionContinuationState});
+  const admission=reserveConversationExecution({
+    userId:msg.boundUserId,domain:msg.boundOrgId?'work':'personal',orgId:msg.boundOrgId,
+    conversationId:conversation.id,
+  },msg.platform+'_bot:'+msg.messageId);
+  try {
+    await admission.waitForTurn(); assertMessagingAuthorization(msg);
+    return await processWithPersonalityAdmitted(accepted.message,options,accepted.admission,acceptedResolution);
+  } finally {admission.release();}
+}
+
+async function processWithPersonalityAdmitted(
   msg: IncomingMessage,
   options?: MessagingRouteOptions,
   preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
+  acceptedResolution?: TurnResolution,
 ): Promise<string> {
   msg = captureMessagingOrganization(msg);
   assertMessagingAuthorization(msg);
@@ -2484,7 +2513,10 @@ export async function processWithPersonality(
   // relation, tool projection and confirmation bind only to current wording.
   const routingText = buildRemoteTurnIntentText(msg, pendingConfirmationPrompt);
   const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
+  const turnResolution = acceptedResolution || resolveUserTurn({requestId,userText:requestText,state:conversation?.actionContinuationState});
   const provisionalPlan = buildRemoteLumiExecutionPlan({
+    requestId,userText:requestText,acceptedResolution:turnResolution,
+    actionTaskState:conversation?.actionContinuationState,
     userId: effectiveUserId,
     text: routingText,
     source,
@@ -2581,6 +2613,7 @@ export async function processWithPersonality(
   if (legalOverlay) systemPrompt += `\n\n${legalOverlay}`;
 
   const executionPlan = buildRemoteLumiExecutionPlan({
+    requestId,userText:requestText,acceptedResolution:turnResolution,
     userId: effectiveUserId,
     text: routingText,
     source,
@@ -2601,10 +2634,8 @@ export async function processWithPersonality(
   const modelToolPolicy = executionPlan.authorizationPolicy;
   const modelToolProjection = executionPlan.modelToolProjection;
   const toolSessionActive = executionPlan.executionRequested;
-  const actionFollowupIntent = classifyConversationActionFollowupIntent(
-    requestText,
-    conversation?.actionContinuationState,
-  );
+  const acceptedRelation = revalidateAcceptedTaskRelation(turnResolution.taskRelation, conversation?.actionContinuationState);
+  const actionFollowupIntent = taskRelationFollowupIntent(acceptedRelation);
   const actionTaskExecution = isIdentityBound && conversation
     ? prepareConversationActionExecution({
         conversationId: conversation.id,
@@ -3018,6 +3049,7 @@ export async function processWithPersonality(
           taskId: actionTaskExecution.state?.taskId,
           conversationId: conversation?.id,
           turnId: msg.messageId,
+          resolutionId: executionPlan.resolution.id,
           requestId,
           domain,
           orgId,
@@ -3105,6 +3137,7 @@ export async function processWithPersonality(
           id: `${requestId}:organization-command`,
           taskId: actionTaskExecution.state?.taskId,
           turnId: msg.messageId,
+          resolutionId: executionPlan.resolution.id,
           requestId,
           idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
           name: 'organization_business_command',
@@ -3171,6 +3204,7 @@ export async function processWithPersonality(
         taskId: actionTaskExecution.state?.taskId,
         conversationId: conversation?.id,
         turnId: msg.messageId,
+          resolutionId: executionPlan.resolution.id,
         requestId,
         domain,
         orgId,

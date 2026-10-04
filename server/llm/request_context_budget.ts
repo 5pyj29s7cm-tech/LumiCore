@@ -1,3 +1,4 @@
+import { promptBlockMessage } from './prompt_blocks';
 import type { MessageContent, NormalizedMessage } from './providers';
 
 export interface ModelRequestToolDeclaration {
@@ -215,6 +216,10 @@ function compactSystemBlock(value: string, budget: number): string {
 }
 
 function compactSystemMessage(message: NormalizedMessage, budget: number): NormalizedMessage {
+  if (message.promptBlock?.required) {
+    if (messageTokens(message) > budget) throw new Error('Model request budget cannot retain required prompt block '+message.promptBlock.id);
+    return { ...message };
+  }
   if (typeof message.content !== 'string') return compactMessage(message, budget, 'system message');
   if (messageTokens(message) <= budget) return { ...message };
   const blocks = message.content.split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
@@ -438,7 +443,11 @@ export function prepareModelRequestContext(input: {
   protectedToolNames?: readonly string[];
 }): PreparedModelRequestContext {
   const budgetTokens = resolveModelRequestInputBudget(input.inputTokenBudget);
-  const originalMessages = (input.messages || []).map(message => ({ ...message }));
+  const originalMessages = (input.messages || []).map(message => {
+    if (!message.promptBlock) return { ...message };
+    if (message.role !== 'system') throw new Error('Prompt block metadata requires a system message');
+    return promptBlockMessage(message.promptBlock);
+  });
   const originalTools = (input.toolDeclarations || []).map(declaration => ({
     ...declaration,
     function: { ...declaration.function, parameters: { ...(declaration.function.parameters || {}) } },
@@ -476,10 +485,12 @@ export function prepareModelRequestContext(input: {
     .join('\n');
   const originalCurrentCost = protectedUserIndexes
     .reduce((sum, index) => sum + messageTokens(originalMessages[index]), 0);
+  const requiredSystemCost = systemIndexes.reduce((sum, index) => sum + (originalMessages[index].promptBlock?.required
+    ? Math.max(messageTokens(originalMessages[index]), originalMessages[index].promptBlock!.minBudget || 0) : 32), 0);
   const minimumSystemBudget = systemIndexes.length > 0
     ? Math.min(
         originalMessages.filter(message => message.role === 'system').reduce((sum, message) => sum + messageTokens(message), 0),
-        Math.max(768, Math.floor(budgetTokens * 0.22)),
+        Math.max(requiredSystemCost, 768, Math.floor(budgetTokens * 0.22)),
       )
     : 0;
   const baseToolBudget = originalTools.length > 0
@@ -561,7 +572,12 @@ export function prepareModelRequestContext(input: {
   let remainingSystemBudget = systemBudget;
   for (const [position, index] of systemIndexes.entries()) {
     const systemsLeft = systemIndexes.length - position;
-    const share = Math.max(32, Math.floor(remainingSystemBudget / Math.max(1, systemsLeft)));
+    const requiredLater = systemIndexes.slice(position + 1).reduce((sum, later) => sum + (originalMessages[later].promptBlock?.required
+      ? Math.max(messageTokens(originalMessages[later]), originalMessages[later].promptBlock!.minBudget || 0) : 0), 0);
+    const capacity = Math.max(0, remainingSystemBudget - requiredLater);
+    const share = originalMessages[index].promptBlock?.required
+      ? capacity
+      : Math.min(capacity, Math.max(32, Math.floor(remainingSystemBudget / Math.max(1, systemsLeft))));
     const prepared = compactSystemMessage(originalMessages[index], share);
     const cost = messageTokens(prepared);
     if (cost > remainingSystemBudget) continue;
