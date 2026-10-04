@@ -151,12 +151,12 @@ describe('finalized output paths', () => {
   it('keeps MCP chat chunks, speech, and returns behind the shared finalizer', () => {
     const mcp = source('server/mcp/lumi_server.ts');
 
-    expect(mcp).toContain("import { finalizeLumiResponse } from '../cognition/result_finalizer';");
+    expect(mcp).toContain("finalizeLumiResponseForDelivery");
     expect(mcp).toContain('const bufferedChunks: string[] = [];');
     expect(mcp).toContain('chunk => bufferedChunks.push(chunk)');
     expect(mcp).not.toContain("(chunk) => bc('mcp:chunk'");
-    expect(mcp).toContain('finalizeMcpResponseForDelivery({');
-    expect(mcp).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(mcp).toContain('finalizeLumiResponseForDelivery({');
+    expect(mcp).not.toContain('finalizeMcpResponseForDelivery(');
     expect(mcp).toContain("'mcp_chat_guard_recovery'");
     expect(mcp).toContain("source: background ? 'mcp_chat_background' : 'mcp_chat'");
     expect(mcp).toContain("emit('agent:response', {");
@@ -390,7 +390,7 @@ describe('finalized output paths', () => {
     const delivery = source('server/cognition/response_delivery.ts');
     expect(rest).toContain('finalizeLumiResponseForDelivery as finalizeRestChatResponse');
     expect(delivery).toContain('finalizeExecutionForOutboundDelivery({');
-    expect(mcp).toContain('finalizeExecutionForOutboundDelivery({');
+    expect(mcp).toContain('finalizeLumiResponseForDelivery({');
     expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
     expect(messaging).toContain('`${source}_guard_recovery`');
@@ -398,7 +398,8 @@ describe('finalized output paths', () => {
     expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source)');
     expect(delivery).toContain('input.refinalize || ((candidateText, records) => finalize(candidateText, records, `${input.source}_guard_recovery`))');
     expect(rest).not.toMatch(/\bfinalizeLumiResponse\(\{/);
-    expect(mcp.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(2);
+    expect(mcp).not.toMatch(/\bfinalizeLumiResponse\(\{/);
+    expect(mcp).not.toContain('async function finalizeMcpResponseForDelivery');
   });
 
   it('uses one guarded summary scheduler for chat and every persisted voice path', () => {

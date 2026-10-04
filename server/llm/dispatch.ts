@@ -377,7 +377,8 @@ async function dispatchCandidatePhase(
         : candidateBlockReason(candidate, config, getters, phase === 'ordered' && index === 0);
     if (blocked) {
       attempts.push(skippedAttempt(candidate, blocked));
-      lastError = new Error(blocked);
+      // Policy/configuration skips must not replace an attempted primary failure.
+      if (phase !== 'ordered') lastError = new Error(blocked);
       continue;
     }
     config.signal?.throwIfAborted();

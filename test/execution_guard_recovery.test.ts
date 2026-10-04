@@ -1169,9 +1169,13 @@ describe('execution guard recovery', () => {
     expect(voiceSource).toContain('isAborted: () => !isCurrentTurn()');
 
     for (const source of [chatSource, taskSource, voiceSource]) {
-      expect(source).toMatch(/correctionRequiresFreshConfirmation\s+&& !pendingConfirmationMatchesExactProposal\(/);
-      expect(source).toContain("throw new Error('Corrected action confirmation was not bound to the current task request')");
+      expect(source).toContain('createTurnConfirmation({');
+      expect(source).toContain('correctionRequiresFreshConfirmation,');
+      expect(source).not.toContain('!pendingConfirmationMatchesExactProposal(');
     }
+    const confirmationSource = readFileSync(path.join(root, 'server/tools/turn_confirmation.ts'), 'utf8');
+    expect(confirmationSource).toContain('input.correctionRequiresFreshConfirmation && !pendingConfirmationMatchesExactProposal(');
+    expect(confirmationSource).toContain("throw new Error('Corrected action confirmation was not bound to the current task request')");
   });
 
   it('keeps desktop pause and request cancellation separate in chat, task and voice recovery wiring', () => {

@@ -182,8 +182,8 @@ describe('chat and voice tool-call stability', () => {
     const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
     for (const source of [chat, voice, task]) {
-      expect(source).toContain('canAutoApproveAction(toolName, args,');
-      expect(source).toContain('recordPendingConfirmation');
+      expect(source).toContain('createTurnConfirmation({');
+      expect(source).not.toContain('canAutoApproveAction(toolName, args,');
       expect(source).not.toContain("socket.emit('agent:confirm_tool'");
       expect(source).not.toContain('socket.emit("agent:confirm_tool"');
     }

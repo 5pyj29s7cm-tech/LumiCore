@@ -324,6 +324,7 @@ describe('encrypted pending confirmation repository', () => {
     for (const file of productionFiles) {
       const source = fs.readFileSync(path.resolve(file), 'utf8');
       expect(source).not.toMatch(/\b(?:record|get|consume|clear)PendingConfirmation\s*\(/);
+      expect(source).toContain('createTurnConfirmation({');
     }
     const messagingSource = fs.readFileSync(
       path.resolve('server/regions/packs/cn/messaging_routes.ts'),
@@ -331,7 +332,9 @@ describe('encrypted pending confirmation repository', () => {
     );
     expect(messagingSource).toContain('buildTransportNeutralConfirmationScope');
     expect(messagingSource).toContain('ensurePendingConfirmationPersistenceInitialized');
-    expect(messagingSource).toContain('consumePendingConfirmationDurably');
-    expect(messagingSource).toContain('recordPendingConfirmationDurably');
+    const boundary = fs.readFileSync(path.resolve('server/tools/turn_confirmation.ts'), 'utf8');
+    expect(boundary).toContain('await consumePendingConfirmationDurably(');
+    expect(boundary).toContain('await recordPendingConfirmationDurably(');
+    expect(boundary).not.toMatch(/\b(?:record|consume)PendingConfirmation\s*\(/);
   });
 });
