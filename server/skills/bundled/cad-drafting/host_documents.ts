@@ -1,11 +1,11 @@
 import { createRequire } from 'module';
 import path from 'path';
-import { pathToFileURL } from 'url';
-import { tsImport } from 'tsx/esm/api';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const require = createRequire(import.meta.url);
-// The manager binds these exact host files alongside the trusted tsx runtime.
-const hostRoot = path.resolve(path.dirname(require.resolve('tsx/package.json')), '../..');
+// Installed runtimes receive this signed root; source imports derive it from this file.
+const hostRoot = process.env.LUMI_DOCUMENT_RUNTIME_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const require = createRequire(path.join(hostRoot, 'package.json'));
+const { tsImport } = require('tsx/esm/api');
 const documents = require(path.join(hostRoot, 'server/files/document_text.ts'));
 
 let module: Promise<any> | undefined;

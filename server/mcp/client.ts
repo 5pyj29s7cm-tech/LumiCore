@@ -904,7 +904,11 @@ export class MCPClientManager {
       command,
       args: [path.resolve(tsxCli), entry],
       cwd: path.resolve(directory),
-      env: this.managedSkillRuntimeEnvironment(pkg),
+      env: {
+        ...this.managedSkillRuntimeEnvironment(pkg),
+        ...(pkg.lumi?.documentRuntime === true
+          ? { LUMI_DOCUMENT_RUNTIME_ROOT: path.resolve(path.dirname(tsxCli), '../../..') } : {}),
+      },
       files: [command, path.resolve(tsxCli), entry, ...dependencyDirectories,
         ...(pkg.lumi?.documentRuntime === true ? [
           'files/document_text.ts', 'knowledge/rtf.ts', 'knowledge/pptx.ts',
