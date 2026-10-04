@@ -62,3 +62,12 @@ export function computeSourceIdentity(root = process.cwd()) {
     fingerprint: fingerprintSourceSnapshot({ head, status, diff, untracked }),
   };
 }
+
+/** The same commit may have several dirty builds; verify the running content identity. */
+export function assertRuntimeSourceIdentity(expected, actual) {
+  for (const field of ['version', 'buildId', 'sourceFingerprint', 'sourceDirty']) {
+    if (expected[field] === undefined || actual?.[field] !== expected[field]) {
+      throw new Error('Runtime source identity mismatch: ' + field);
+    }
+  }
+}

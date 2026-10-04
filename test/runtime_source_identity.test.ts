@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeSourceIdentity, fingerprintSourceSnapshot } from '../scripts/lib/source-identity.mjs';
+import { computeSourceIdentity, fingerprintSourceSnapshot, assertRuntimeSourceIdentity } from '../scripts/lib/source-identity.mjs';
 import { prepareWebViewLoader } from '../scripts/copy-webview2-dll.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -7,6 +7,17 @@ import os from 'node:os';
 import path from 'node:path';
 
 describe('runtime source identity', () => {
+  const runtimeFixture = {version:'3.1.0', buildId:'same-commit', sourceFingerprint:'a'.repeat(64), sourceDirty:false};
+  it('accepts matching packaged and running content identities', () => {
+    expect(() => assertRuntimeSourceIdentity(runtimeFixture, {...runtimeFixture})).not.toThrow();
+  });
+  it.each([
+    ['version', '3.0.0'], ['buildId', 'different-commit'],
+    ['sourceFingerprint', 'b'.repeat(64)], ['sourceDirty', true],
+  ])('rejects a mismatched running %s even when other metadata matches', (field, value) => {
+    expect(() => assertRuntimeSourceIdentity(runtimeFixture, {...runtimeFixture, [field]:value})).toThrow('identity mismatch: '+field);
+  });
+
   it('preserves identity when build tools rewrite a fresh Windows checkout with LF', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi-build-crlf-'));
     const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });

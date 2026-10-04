@@ -182,7 +182,7 @@ LumiCore 把行业能力放在技能层，把具体执行放在工具和适配�
 
 ### 环境要求
 
-- Node.js `>=18`，推荐使用 Node.js 24；
+- Node.js `^22.12.0 || >=24.0.0`，当前构建固定使用 `.node-version` 中的 Node.js 24.19.0；
 - npm；
 - Git；
 - Rust stable 与平台构建依赖，仅桌面客户端需要。

@@ -1,3 +1,4 @@
+import { assertRuntimeSourceIdentity } from './lib/source-identity.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -381,6 +382,10 @@ async function main() {
       [DESKTOP_SESSION_HEADER]: bootstrap.desktopSessionProof,
     };
 
+    const detailedHealth = await fetchJson(`${baseUrl}/health?details=1`, { headers: authHeaders, timeoutMs: 8000 });
+    assertRuntimeSourceIdentity(runtimeMeta, detailedHealth.runtime);
+    health.runtime = detailedHealth.runtime;
+
     const privacy = await fetchJson(`${baseUrl}/privacy`, { headers: authHeaders, timeoutMs: 8000 });
     const expectedPrivacy = env.LUMI_PRIVACY === 'strict' ? 'strict' : 'standard';
     if (privacy.mode !== expectedPrivacy || privacy.configuredMode !== expectedPrivacy
@@ -502,6 +507,8 @@ async function main() {
       runtime: {
         version: health.runtime.version,
         buildId: health.runtime.buildId,
+        sourceFingerprint: health.runtime.sourceFingerprint,
+        sourceDirty: health.runtime.sourceDirty,
         channel: runtimeMeta.channel,
       },
       socketHandshake: true,

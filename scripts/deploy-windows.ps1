@@ -33,7 +33,7 @@ Write-Host "[1/6] Checking prerequisites..." -ForegroundColor Yellow
 
 $nodeVersion = Invoke-CheckedNativeCommand -FilePath "node" -ArgumentList @("--version")
 if (-not $nodeVersion) {
-  Write-Host "ERROR: Node.js not found. Install from https://nodejs.org (v18+)" -ForegroundColor Red
+  Write-Host "ERROR: Node.js not found. Install from https://nodejs.org (22.12+ on Node 22, or Node 24+)" -ForegroundColor Red
   exit 1
 }
 Write-Host "  Node.js $nodeVersion" -ForegroundColor Green
