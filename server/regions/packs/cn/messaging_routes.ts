@@ -3214,7 +3214,7 @@ async function processWithPersonalityAdmitted(
         messages,
         [],
         userLLMPrefs,
-        ...providerGetterArguments(llm, "primary"),
+        ...providerGetterArguments(llm ?? {}, "primary"),
       );
       responseText = response.text || '';
       if (response.usage) {
