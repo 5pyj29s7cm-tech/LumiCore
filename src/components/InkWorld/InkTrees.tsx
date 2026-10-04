@@ -15,7 +15,7 @@ export function InkTrees() {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const timeRef = useRef(0);
 
-  const { treeGeo, treeMat, positions } = useMemo(() => {
+  const { treeGeo, treeMat } = useMemo(() => {
     // Single tree geometry: trunk + 3 cones
     const trunk = new THREE.CylinderGeometry(0.1, 0.14, 1.6, 6);
     const cones: THREE.BufferGeometry[] = [];
@@ -81,7 +81,7 @@ export function InkTrees() {
     geo.computeBoundingSphere();
 
     const mat = new THREE.MeshBasicMaterial({ color: 0x0a0a0a });
-    return { treeGeo: geo, treeMat: mat, positions: [] as number[] };
+    return { treeGeo: geo, treeMat: mat };
   }, []);
 
   // Place trees on terrain — baked once

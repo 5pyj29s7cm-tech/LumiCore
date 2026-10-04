@@ -27,10 +27,6 @@ const finiteViewportDimension = (value: number, fallback: number) => (
   Number.isFinite(value) && value > 0 ? Math.round(value) : fallback
 );
 
-const clamp = (value: number, minimum: number, maximum: number) => (
-  Math.min(maximum, Math.max(minimum, value))
-);
-
 export function getDesktopDensity(viewport: ViewportSize): DesktopDensity {
   const width = finiteViewportDimension(viewport.width, 1280);
   const height = finiteViewportDimension(viewport.height, 820);

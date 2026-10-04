@@ -256,7 +256,7 @@ export function resolveEmotionVoice(defaultVoiceId: string, emotionalState?: {
 }): { voiceId: string; speechRate?: number; pitch?: number; volume?: number } {
   if (!emotionalState) return { voiceId: defaultVoiceId };
 
-  const { dominantMood, arousal = 0.5, valence = 0, energy = 0.5 } = emotionalState;
+  const { dominantMood, arousal = 0.5, valence = 0 } = emotionalState;
 
   // Mood → speech parameters only (voiceId stays as user selected)
   if (dominantMood) {

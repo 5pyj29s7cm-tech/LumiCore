@@ -493,7 +493,7 @@ describe('messaging long connections and organization routing', () => {
       text: '在吗',
       operationMode: 'assistant',
     });
-    expect(greeting.dispatch.boundary).toBe('conversation');
+    expect(greeting.turnIntent.boundary).toBe('conversation');
     expect(greeting.execution.allowToolUse).toBe(false);
     const greetingModelPolicy = buildModelCapabilityPolicy(greeting.execution);
     expect(greetingModelPolicy.forbiddenTools).toContain('*');
@@ -504,7 +504,7 @@ describe('messaging long connections and organization routing', () => {
       text: '\u77e5\u8bc6\u5e93\u91cc\u7684\u6587\u4ef6\u53ef\u4ee5\u53d1\u7ed9\u6211\u5417',
       operationMode: 'assistant',
     });
-    expect(knowledgeFileCapabilityQuestion.dispatch.boundary).toBe('conversation');
+    expect(knowledgeFileCapabilityQuestion.turnIntent.boundary).toBe('conversation');
     expect(knowledgeFileCapabilityQuestion.execution.allowToolUse).toBe(false);
     const knowledgeModelPolicy = buildModelCapabilityPolicy(knowledgeFileCapabilityQuestion.execution);
     expect(knowledgeModelPolicy.forbiddenTools).toContain('*');
@@ -515,8 +515,8 @@ describe('messaging long connections and organization routing', () => {
       text: '操作桌面打开微信',
       operationMode: 'chat',
     });
-    expect(chatAction.dispatch.flow.autoPromoteToAssistant).toBe(false);
-    expect(chatAction.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(chatAction.turnIntent.flow.autoPromoteToAssistant).toBe(false);
+    expect(chatAction.turnIntent.flow.effectiveOperationMode).toBe('assistant');
     expect(chatAction.execution.allowToolUse).toBe(true);
     expect(chatAction.execution.maxIterations).toBeGreaterThan(3);
     expect(chatAction.execution.toolRoute?.categories).toContain('messaging');
@@ -532,7 +532,7 @@ describe('messaging long connections and organization routing', () => {
       text: '给客户端做个自检',
       operationMode: 'assistant',
     });
-    expect(clientCheck.dispatch.flow.selfRepairTurn).toBe(true);
+    expect(clientCheck.turnIntent.flow.selfRepairTurn).toBe(true);
     const clientModelPolicy = buildModelCapabilityPolicy(clientCheck.execution);
     expect(clientModelPolicy.allowedTools).toEqual(expect.arrayContaining([
       'client_get_state',
@@ -547,8 +547,8 @@ describe('messaging long connections and organization routing', () => {
       text: '切换到自主模式',
       operationMode: 'assistant',
     });
-    expect(modeSwitch.dispatch.flow.requestedMode).toBeNull();
-    expect(modeSwitch.dispatch.flow.effectiveOperationMode).toBe('assistant');
+    expect(modeSwitch.turnIntent.flow.requestedMode).toBeNull();
+    expect(modeSwitch.turnIntent.flow.effectiveOperationMode).toBe('assistant');
     const modeSwitchModelPolicy = buildModelCapabilityPolicy(modeSwitch.execution);
     expect(modeSwitch.execution.allowToolUse).toBe(false);
     expect(modeSwitchModelPolicy.allowedTools).toEqual([]);
@@ -566,8 +566,8 @@ describe('messaging long connections and organization routing', () => {
       identityBound: false,
       canWriteOrganization: false,
     });
-    expect(unbound.dispatch.boundary).toBe('conversation');
-    expect(unbound.dispatch.flow.allowToolUseForTurn).toBe(false);
+    expect(unbound.turnIntent.boundary).toBe('conversation');
+    expect(unbound.turnIntent.flow.allowToolUseForTurn).toBe(false);
     expect(unbound.execution.allowToolUse).toBe(false);
     expect(unbound.execution.toolPolicy.forbiddenTools).toContain('*');
 

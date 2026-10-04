@@ -8,7 +8,7 @@ async function getMailParser() {
 }
 
 async function handler(args: any) {
-  const { action, content, host, port, user, password } = args;
+  const { action, content, user } = args;
   try {
     if (action === 'parse') {
       if (!content) throw new Error('Email content required for parse');

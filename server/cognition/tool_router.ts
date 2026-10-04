@@ -21,7 +21,6 @@ import {
   buildActionContract,
   extractDesktopLaunchTarget,
   requestsBlankAutoCadDocument,
-  requiresExternalAiHistory,
   requiresCurrentAuthoringDocumentInspection,
   requiresCurrentAppUiMutation,
   requiresCadGeometryExtractionOnly,

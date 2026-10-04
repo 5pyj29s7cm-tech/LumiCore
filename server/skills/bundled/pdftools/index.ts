@@ -9,7 +9,7 @@ async function getPDFLib() {
 }
 
 async function handler(args: any) {
-  const { action, files, output, pages } = args;
+  const { action, files, output } = args;
   try {
     const { PDFDocument } = await getPDFLib();
     if (action === 'merge') {
@@ -44,7 +44,6 @@ async function handler(args: any) {
       for (const filePath of files) {
         const bytes = await fs.readFile(String(filePath));
         const doc = await PDFDocument.load(bytes);
-        const texts: string[] = [];
         // pdf-lib doesn't support text extraction directly — use a simple approach
         // Report metadata + page count as structured info
         const pages = doc.getPages();

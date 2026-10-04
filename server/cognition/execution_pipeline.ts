@@ -5,7 +5,7 @@ import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_rout
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
 import { isCurrentContinuationTask, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';
-import { resolveActiveTaskMessageRelation, taskRelationFollowupIntent, formatActiveTaskRelationContext, type ActiveTaskMessageResolution } from './task_concurrency';
+import { revalidateAcceptedTaskRelation, resolveActiveTaskMessageRelation, taskRelationFollowupIntent, formatActiveTaskRelationContext, type ActiveTaskMessageResolution } from './task_concurrency';
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
@@ -171,7 +171,9 @@ function applyCurrentTurnNoMutationConstraint(
   registry: ToolRegistry,
   text: string,
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
+  acceptedIntent?: Readonly<NormalizedActionIntent>,
 ): LumiExecutionDecision {
+  const originalText = text;
   // A confirmation-only external-commit request deliberately says both
   // "prepare to send" and "do not send now". It must expose the exact
   // external tool so the executor can create a bound pending confirmation;
@@ -195,7 +197,7 @@ function applyCurrentTurnNoMutationConstraint(
   // launch tools, while the executor still binds the write to the explicit
   // path supplied in this turn.
   if (isExplicitArtifactCreationText(text) && !preservedOutput) return execution;
-  const normalizedIntent = normalizeActionIntent(text);
+  const normalizedIntent = acceptedIntent && text === originalText ? acceptedIntent : normalizeActionIntent(text);
   // A bounded Lumi client navigation request may explicitly prohibit opening
   // other applications or changing content. That wording is a scope fence,
   // not a veto of the requested in-client navigation itself. The hardened
@@ -365,13 +367,9 @@ export function buildLumiExecutionPipeline(
   });
   if (input.acceptedResolution && (resolution.userText !== (input.userText ?? input.dispatch.text)
     || input.requestId && resolution.requestId !== input.requestId)) throw new Error('Accepted turn resolution does not match this request');
-  let taskRelation = acceptedPlan || mediaRequest
+  const taskRelation = acceptedPlan || mediaRequest
     ? resolveActiveTaskMessageRelation(effectiveText, null)
-    : { ...(input.taskRelation || resolution.taskRelation) };
-  if (taskRelation.taskId && (taskRelation.taskId !== input.actionTaskState?.taskId
-    || taskRelation.revision !== input.actionTaskState?.revision)) {
-    taskRelation = { ...taskRelation, binding: 'stale', operation: 'reject_stale', reason: 'planning_task_snapshot_changed' };
-  }
+    : revalidateAcceptedTaskRelation(input.taskRelation || resolution.taskRelation, input.actionTaskState);
   const boundTaskState = taskRelation.taskId === input.actionTaskState?.taskId
     && (taskRelation.binding === 'active_task' || taskRelation.binding === 'previous_task') ? input.actionTaskState : undefined;
   const actionFollowupIntent = acceptedPlan || mediaRequest ? 'none' : taskRelationFollowupIntent(taskRelation);
@@ -420,7 +418,8 @@ export function buildLumiExecutionPipeline(
     // durable goal plus the user's current instruction.
     turnIntent.flow.routeText = actionText;
   }
-  if (trustedActionContinuation && isTaskPreparationContinuation(input.dispatch.text, input.actionTaskState)) {
+  if (trustedActionContinuation && isTaskPreparationContinuation(input.dispatch.text, input.actionTaskState,
+    input.dispatch.text === resolution.userText ? resolution.userIntent : undefined)) {
     turnIntent.flow.preparationRootText = input.actionTaskState?.goal;
   }
   // A bound retry inherits its authorized goal, not the side-effect class of
@@ -469,6 +468,7 @@ export function buildLumiExecutionPipeline(
     execution: legacyExecution,
     manifest: unrestrictedManifest,
   });
+  const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
   const execution = applyAdditionalForbiddenTools(
     applyCurrentTurnNoMutationConstraint(
       applySelectedWorkflowAdapterPolicy(
@@ -480,8 +480,9 @@ export function buildLumiExecutionPipeline(
         visibilityContext,
       ),
       input.registry,
-      trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText,
+      constraintText,
       visibilityContext,
+      constraintText === resolution.userText ? resolution.userIntent : undefined,
     ),
     observationalFollowup || taskRelation.binding === 'stale'
       ? ['*', ...(input.additionalForbiddenTools || [])] : input.additionalForbiddenTools,

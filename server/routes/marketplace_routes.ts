@@ -1,8 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { isStrictPrivacy } from '../config/privacy';
-import path from "path";
 import fs from "fs";
-import { fileURLToPath } from "url";
 import { activateInstalledSkill, mcpManager } from "../mcp";
 import { getMarketplaceSkills, getSkillById, searchSkills, getCategories, recordInstall, publishSkill, rateSkill, getSkillRatings } from "../marketplace/registry";
 import { translateSkills } from "../skills/translations";
@@ -21,9 +19,6 @@ import { isLoopbackAddress } from "../config/local_identity";
 import { toolRegistry } from "../tools/registry";
 import { getExtensionRuntimeStates } from "../skills/runtime_state";
 import { createBundledSkillIdentity } from "../marketplace/official_identity";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 function requireNativeDesktopSession(req: Request, res: Response, next: NextFunction): void {
   if (!req.user || !verifyDesktopSessionProof(req.headers[DESKTOP_SESSION_HEADER], req.user.uid)) {

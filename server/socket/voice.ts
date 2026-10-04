@@ -2230,7 +2230,7 @@ async function processVoiceInput(
     text: actionIntentText,
     allowToolUse: requestedToolSession,
   });
-  const { config: personality, systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
+  const { systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
     session.personalityId || 'lumi',
     {
       mode: requestedToolSession ? 'task' : 'chat',

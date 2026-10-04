@@ -1,3 +1,4 @@
+import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { resolveUserTurn } from '../cognition/turn_resolution';
 import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
 import { createModelTurnState } from '../llm/model_turn_state';
@@ -127,7 +128,6 @@ import { commitChatTerminalBoundary } from "./chat_terminal_boundary";
 import {
   sanitizeChatAgentErrorPayload,
 } from "./chat_public_error";
-import { classifyActiveTaskMessage } from "../cognition/task_concurrency";
 import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 import {
   executionBoundaryPromptOverlay,
@@ -536,15 +536,63 @@ export function registerTaskHandler(
 
     const runningTask = taskExecutionQueue.getCurrent(executionKey);
     const controlTargetRequestId = String(data.controlTargetRequestId || '').trim().slice(0, 120);
-    const activeConversationForStatus = runningTask
-      ? getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId)
+    const selectedConversation = data.conversationId
+      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
       : null;
-    const activeMessageRelation = runningTask
-      ? classifyActiveTaskMessage(
-          data.text,
-          activeConversationForStatus?.actionContinuationState,
-        )
-      : null;
+    let convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
+    taskConversationId = convForHistory.id;
+    const pendingAssistantOfferContext = buildPendingAssistantOfferContextFromTranscript({
+      messages: getMessages(convForHistory.id, 4), userId: uid, domain: taskScope.domain,
+      orgId: taskScope.orgId, conversationId: convForHistory.id,
+      taskId: convForHistory.actionContinuationState?.taskId,
+    });
+    const acceptedTaskResolution = resolveUserTurn({
+      requestId, userText: data.text, state: convForHistory.actionContinuationState,
+      options: { pendingAssistantOfferContext, activeRequestId: runningTask?.requestId, controlTargetRequestId },
+    });
+    const activeConversationForStatus = runningTask ? convForHistory : null;
+    const activeMessageRelation = runningTask ? acceptedTaskResolution.taskRelation.relation : null;
+    if (acceptedTaskResolution.queryTarget === 'runtime_work'
+      && acceptedTaskResolution.userIntent.operation === 'status') {
+      if (!beginChatSidecarExecution(executionScope, requestId)) return;
+      const admission = await admitAcceptedUserTurnDurably({
+        persistAcceptedUserTurn: () => addMessageIdempotent({
+          userId: uid, agentId: '', conversationId: convForHistory.id, role: 'user',
+          content: data.text, mode: 'task', source: 'task', channel: 'task', domain: taskScope.domain,
+          orgId: taskScope.orgId, requestId, cognitiveIntent: 'runtime_work_status', skipActionContinuation: true,
+        }),
+        flush: flushDBOrThrow,
+        onPersistenceUnknown: async () => {
+          const payload = normalizeAgentPayload('agent:response', { text: taskDurabilityUnknownText(),
+            agentName: 'Lumi', finalized: true, blocked: true, reason: 'persistence_unknown', sidecar: true });
+          try { await recordChatExecutionPersistenceUnknownDurably(executionScope, requestId, payload); } catch {}
+          publishRecordedAgent('agent:response', payload);
+          try { ack?.({ ok: false, requestId, error: 'Accepted user turn persistence is unknown' }); } catch {}
+        },
+      });
+      if (!admission) return;
+      try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
+      const result = await readRuntimeWorkForTurn({
+        resolution: acceptedTaskResolution, userId: uid, domain: taskScope.domain, orgId: taskScope.orgId,
+        conversationId: convForHistory.id, source: 'task', registry: toolRegistry,
+        securityContext: toolSecurityContext,
+        personalityToolPolicy: (personalityRegistry.getForUser(data.personalityId || 'lumi', uid,
+          taskScope.domain === 'work' ? taskScope.orgId : undefined) || personalityRegistry.getDefault()).toolPolicy,
+        authorization: { isCurrent: authority.isAuthorized, assertCurrent: authority.assertAuthorized },
+      });
+      await commitTaskTerminal({
+        payload: { text: result.text, agentName: 'Lumi', finalized: true, blocked: result.blocked,
+          reason: 'runtime_work_status', sidecar: true },
+        persistAssistantMessage: () => addMessageIdempotent({
+          userId: uid, agentId: '', conversationId: convForHistory.id, role: 'assistant',
+          content: result.text, toolCalls: [result.record], mode: 'task', source: 'task', channel: 'task',
+          domain: taskScope.domain, orgId: taskScope.orgId, requestId, cognitiveIntent: 'runtime_work_status',
+          llmWasCalled: false, skipActionContinuation: true,
+        }),
+        errorContext: 'Task read-only runtime status terminal',
+      });
+      return;
+    }
     if (runningTask && activeMessageRelation === 'status') {
       if (!beginChatSidecarExecution(executionScope, requestId)) return;
       // Natural-language status turns have no client fence. Bind them to the
@@ -712,11 +760,6 @@ export function registerTaskHandler(
     }
 
     const taskStateKey = scopedEmotionalStateKey(uid, taskScope);
-    const selectedConversation = data.conversationId
-      ? getConversationForScope(data.conversationId, uid, taskScope.domain, taskScope.orgId)
-      : null;
-    let convForHistory = selectedConversation || getOrCreateActiveConversation(uid, '', taskScope.domain, taskScope.orgId);
-    taskConversationId = convForHistory.id;
     try {
       await ensurePendingConfirmationPersistenceInitialized();
     } catch (error) {
@@ -734,14 +777,6 @@ export function registerTaskHandler(
       try { ack?.({ ok: false, requestId, error: 'Task authorization was revoked before admission.' }); } catch {}
       return;
     }
-    const pendingAssistantOfferContext = buildPendingAssistantOfferContextFromTranscript({
-      messages: getMessages(convForHistory.id, 4),
-      userId: uid,
-      domain: taskScope.domain,
-      orgId: taskScope.orgId,
-      conversationId: convForHistory.id,
-      taskId: convForHistory.actionContinuationState?.taskId,
-    });
     const confirmationChannelScope = buildTransportNeutralConfirmationScope({
       domain: taskScope.domain,
       orgId: taskScope.orgId,
@@ -753,7 +788,6 @@ export function registerTaskHandler(
       conversationId: convForHistory.id,
       taskId: convForHistory.actionContinuationState?.taskId,
     });
-    const acceptedTaskResolution = resolveUserTurn({requestId,userText:data.text,state:convForHistory.actionContinuationState,options:{pendingAssistantOfferContext}});
     const taskAdmission = await admitAcceptedUserTurnDurably({
       persistAcceptedUserTurn: () => addMessageIdempotent({
         userId: uid,

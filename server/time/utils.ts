@@ -93,10 +93,6 @@ export function hoursSince(isoString: string): number {
   return (Date.now() - new Date(isoString).getTime()) / (1000 * 60 * 60);
 }
 
-export function daysSince(isoString: string): number {
-  return hoursSince(isoString) / 24;
-}
-
 export function minutesSince(isoString: string): number {
   return (Date.now() - new Date(isoString).getTime()) / (1000 * 60);
 }

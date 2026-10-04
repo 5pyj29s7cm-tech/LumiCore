@@ -1,4 +1,4 @@
-import { promptBlockMessage } from '../server/llm/prompt_blocks';
+import { promptBlockMessage, replacePromptBlock } from '../server/llm/prompt_blocks';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -73,6 +73,20 @@ describe('whole model-request context budget', () => {
   });
   it('rejects an incomplete field contract before any provider call', () => {
     expect(()=>promptBlockMessage({id:'missing',kind:'task_state',authority:'server',content:'facts',required:true,fields:{taskId:'t'},requiredFields:['requestId']})).toThrow(/Missing required prompt field/);
+  });
+
+  it('retains only the current target slot within a tight budget and rejects an untrusted replacement atomically', () => {
+    const messages: NormalizedMessage[] = [{ role: 'system', content: 'style '.repeat(10000) }];
+    const block = { id: 'current-document-target', kind: 'task_state' as const, authority: 'server' as const,
+      required: true, content: 'facts without budget keywords', fields: { path: 'D:/old.docx', revision: 1 } };
+    replacePromptBlock(messages, block);
+    replacePromptBlock(messages, { ...block, fields: { path: 'D:/current.docx', revision: 2 } });
+    expect(() => replacePromptBlock(messages, { ...block, authority: 'untrusted' })).toThrow(/Untrusted/);
+    messages.push({ role: 'user', content: 'Read the current document.' });
+    const prepared = prepareModelRequestContext({ messages, toolDeclarations: [], inputTokenBudget: 4096 });
+    expect(JSON.stringify(prepared.messages)).toContain('D:/current.docx');
+    expect(JSON.stringify(prepared.messages)).not.toContain('D:/old.docx');
+    expect(prepared.estimatedInputTokens).toBeLessThanOrEqual(4096);
   });
 
   it('bounds system, schemas, history and current input as one assembled request', () => {

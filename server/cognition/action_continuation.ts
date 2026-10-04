@@ -4,6 +4,7 @@ import {
   hasMixedStatusExecutionIntent,
   isImmediateAssistantRestatementRequest,
   normalizeActionIntent,
+  type NormalizedActionIntent,
 } from './normalized_action_intent';
 import { matchesCnActionContinuation, matchesCnBoundArtifactEdit, matchesCnExplicitPlaybackRetry } from '../regions/packs/cn/action_continuation';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
@@ -975,9 +976,9 @@ export function isExplicitUnfinishedTaskContinuation(text: string, state?: Conve
 }
 
 /** An explicitly ordered preparation step retains the matching unfinished goal. */
-export function isTaskPreparationContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
+export function isTaskPreparationContinuation(text: string, state?: ConversationActionContinuationState | null, acceptedIntent?: NormalizedActionIntent): boolean {
   if (!state?.unfinished || !state.goal) return false;
-  const intent = normalizeActionIntent(text);
+  const intent = acceptedIntent || normalizeActionIntent(text);
   if (intent.kind !== 'desktop_operation' || intent.operation !== 'navigate' || !intent.target) return false;
   const browserPlaybackStep = requiresMediaPlaybackAction(state.goal)
     && /^(?:浏览器|默认浏览器|Chrome|Edge|Firefox|browser)$/iu.test(intent.target) // i18n-allow: Explicit browser as the medium for an unfinished viewing task.
@@ -1006,12 +1007,13 @@ export function isReferentialArtifactEdit(text: string, state?: ConversationActi
 export function classifyConversationActionFollowupIntent(
   text: string,
   state?: ConversationActionContinuationState | null,
+  acceptedIntent?: NormalizedActionIntent,
 ): RecentActionFollowupIntent {
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(text, 500);
   // Status must win before retry/target heuristics inspect the task's old goal.
-  const normalizedIntent = normalizeActionIntent(compactText);
+  const normalizedIntent = acceptedIntent || normalizeActionIntent(compactText);
   if (normalizedIntent.kind === 'status_query') return 'status';
   // Never let a readiness acknowledgement reconstruct a one-time dangerous
   // confirmation that was lost across restart.
@@ -1025,7 +1027,7 @@ export function classifyConversationActionFollowupIntent(
   if (isBlockedTaskRetryAcceptance(compactText, durableState)) return 'execute';
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
   if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
-  if (isTaskPreparationContinuation(compactText, durableState)) return 'execute';
+  if (isTaskPreparationContinuation(compactText, durableState, normalizedIntent)) return 'execute';
   if (isReferentialArtifactEdit(text, durableState)) return 'execute';
   if (isExplicitUnfinishedTaskContinuation(compactText, durableState)) return 'execute';
   if (

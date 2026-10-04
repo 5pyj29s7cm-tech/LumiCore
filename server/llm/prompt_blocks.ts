@@ -22,3 +22,12 @@ export function promptBlockMessage(block: PromptBlock): NormalizedMessage {
     }
     return { role: 'system', content: block.content + (block.fields ? '\n' + JSON.stringify(block.fields) : ''), promptBlock: block };
 }
+
+/** Replace an obsolete projection from the same server-owned slot. */
+export function replacePromptBlock(messages: NormalizedMessage[], block: PromptBlock): void {
+    const message = promptBlockMessage(block);
+    for (let index = messages.length - 1; index >= 0; index--) {
+        if (messages[index].promptBlock?.id === block.id) messages.splice(index, 1);
+    }
+    messages.push(message);
+}

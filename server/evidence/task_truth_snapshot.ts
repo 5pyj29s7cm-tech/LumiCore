@@ -719,7 +719,7 @@ export async function captureTaskTruthSnapshot(
       && row.userId === input.userId,
     'task_truth_snapshot_task_missing',
   );
-  const turn = exactRow<Record<string, any>>(
+  exactRow<Record<string, any>>(
     db.conversationActionTurns,
     row => row.requestId === input.requestId
       && row.conversationId === input.conversationId

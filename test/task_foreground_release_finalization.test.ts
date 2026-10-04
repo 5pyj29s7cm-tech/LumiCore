@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   loopFailure: null as 'error' | 'cancel' | 'cancel_return' | 'late_cancel' | null,
   lateRelease: undefined as (() => void) | undefined,
   lateExecution: undefined as Promise<unknown> | undefined,
+  loopPause: null as { entered: () => void; wait: Promise<void> } | null,
+  loopRequests: [] as string[],
   budgetProbe: false,
   budgetStates: [] as unknown[],
 }));
@@ -22,6 +24,10 @@ vi.mock('../server/llm/adapter', async importOriginal => {
   return {
     ...actual,
     runWithTools: async (...args: Parameters<typeof actual.runWithTools>) => {
+      mocks.loopRequests.push(String(args[2].requestId || ''));
+      const pause = mocks.loopPause;
+      mocks.loopPause = null;
+      if (pause) { pause.entered(); await pause.wait; }
       const delayMs = mocks.loopDelayMs;
       mocks.loopDelayMs = 0;
       if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -370,6 +376,67 @@ describe('task foreground Socket terminal integration', () => {
     client?.disconnect();
     if (io) await new Promise<void>(resolve => io.close(() => resolve()));
     if (httpServer?.listening) await new Promise<void>(resolve => httpServer.close(() => resolve()));
+  });
+
+  it('answers a runtime ledger query without waiting for or completing the active Task writer', async () => {
+    const writerId = 'task-writer-status-' + suffix;
+    const queryId = 'task-sidecar-status-' + suffix;
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    mocks.loopPause = { entered, wait: waiting };
+    mocks.loopError = new Error('Fixture writer ends after the status read');
+    const writerResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', writerId);
+    try {
+      expect(await client.timeout(5000).emitWithAck('agent:task', {
+        text: '读取 D:/synthetic/receipt.txt 并告诉我内容。', requestId: writerId, conversationId,
+      })).toMatchObject({ ok: true, requestId: writerId });
+      await started;
+      const writerTask = (readDB().conversationActionTasks || []).find((row: any) => row.activeRequestId === writerId);
+      expect(writerTask).toBeDefined();
+      const before = { id: writerTask!.id, revision: writerTask!.revision, status: writerTask!.status, activeRequestId: writerId };
+      const queryResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', queryId, 2000);
+      expect(await client.timeout(5000).emitWithAck('agent:task', {
+        text: '后台正在执行什么任务？', requestId: queryId, conversationId,
+      })).toMatchObject({ ok: true, requestId: queryId });
+      expect(await queryResponse).toMatchObject({ reason: 'runtime_work_status', blocked: false, finalized: true, sidecar: true });
+      expect((readDB().conversationActionTasks || []).find((row: any) => row.id === before.id)).toMatchObject(before);
+      const replayResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', queryId, 2000);
+      expect(await client.timeout(5000).emitWithAck('agent:task', {
+        text: '后台正在执行什么任务？', requestId: queryId, conversationId,
+      })).toMatchObject({ ok: true, requestId: queryId });
+      expect(await replayResponse).toMatchObject({ replayed: true, reason: 'runtime_work_status', blocked: false });
+      expect((readDB().conversationActionTasks || []).find((row: any) => row.id === before.id)).toMatchObject(before);
+      expect(mocks.loopRequests).not.toContain(queryId);
+      const queryTurns = getMessages(conversationId).filter(row => row.requestId === queryId);
+      expect(queryTurns.filter(row => row.role === 'assistant')).toHaveLength(1);
+      expect(queryTurns.find(row => row.role === 'assistant')?.toolCalls).toEqual([
+        expect.objectContaining({ name: 'runtime_work_status', requestId: queryId }),
+      ]);
+    } finally {
+      release();
+      await writerResponse;
+    }
+  }, 15000);
+
+  it('keeps the runtime read sidecar closed when the scoped personality forbids tools', async () => {
+    const { personalityRegistry } = await import('../server/personality/registry');
+    const config = personalityRegistry.getDefault();
+    const scoped = vi.spyOn(personalityRegistry, 'getForUser').mockReturnValue({ ...config,
+      toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 } });
+    const requestId = 'task-runtime-denied-' + suffix;
+    try {
+      const response = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
+      expect(await client.timeout(5000).emitWithAck('agent:task', {
+        text: '你现在有在执行的任务吗', requestId, conversationId,
+      })).toMatchObject({ ok: true, requestId });
+      expect(await response).toMatchObject({ reason: 'runtime_work_status', blocked: true, sidecar: true });
+      const row = getMessages(conversationId).find(item => item.role === 'assistant' && item.requestId === requestId)!;
+      expect(row.toolCalls?.[0]).toMatchObject({ name: 'runtime_work_status', requestId });
+      expect(row.toolCalls?.[0].error).toBeTruthy();
+      expect(mocks.loopRequests).not.toContain(requestId);
+    } finally { scoped.mockRestore(); }
   });
 
   it('persists an ordinary Task exception as one natural assistant response', async () => {

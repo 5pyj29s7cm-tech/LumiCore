@@ -153,11 +153,6 @@ function markMemoriesRetrieved(memories: Memory[]): void {
   saveMemoryStore(store);
 }
 
-/** Generate an embedding through the configured retrieval role. */
-export async function generateEmbedding(text: string, userId = 'anonymous', options: { signal?: AbortSignal } = {}): Promise<number[] | null> {
-  return (await generateEmbeddingWithIdentity(text, userId, options))?.vector || null;
-}
-
 function embeddingCacheKey(userId: string, provider: string, model: string, text: string): string {
   return JSON.stringify([userId, provider, model, text]);
 }

@@ -24,6 +24,18 @@ describe('accepted-turn decision consistency', () => {
         expect(Object.isFrozen(accepted)).toBe(true);
         expect(Object.isFrozen(accepted.userIntent)).toBe(true);
     });
+    it('uses the same identity check in planning when the active request changed without a revision bump', () => {
+        const state = { taskId: 'task-original', revision: 2, activeRequestId: 'request-first',
+            unfinished: true, status: 'running', goal: '读取 D:/fixtures/receipt.txt' } as any;
+        const accepted = resolveUserTurn({ requestId: 'followup', userText: '继续', state });
+        const pipeline = buildLumiExecutionPipeline({ registry, requestId: 'followup', acceptedResolution: accepted,
+            actionTaskState: { ...state, activeRequestId: 'request-replacement' },
+            dispatch: { userId: 'audit', text: '继续', channel: 'task', targetIsLumi: true } });
+        expect(pipeline.taskRelation).toMatchObject({ taskId: 'task-original', revision: 2,
+            targetRequestId: 'request-first', binding: 'stale', operation: 'reject_stale' });
+        expect(pipeline.trustedActionContinuation).toBe(false);
+        expect(pipeline.executionRequested).toBe(false);
+    });
     it('refuses reuse of a semantic snapshot for a different user request', () => {
         const accepted = resolveUserTurn({ requestId: 'one', userText: '你好' });
         expect(() => buildLumiExecutionPipeline({ registry, acceptedResolution: accepted, requestId: 'two',

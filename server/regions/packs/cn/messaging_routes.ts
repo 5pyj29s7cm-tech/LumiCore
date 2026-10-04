@@ -102,7 +102,9 @@ import {
 } from '../../../conversation/execution_facts';
 import { finalizeLumiResponseForDelivery, type LumiResponseDeliveryInput } from '../../../cognition/response_delivery';
 import { recordTokenUsage } from '../../../llm/token_tracker';
-import type { ToolPolicy } from '../../../personality/types';
+import type { PersonalityConfig, ToolPolicy } from '../../../personality/types';
+import type { personalityRegistry } from '../../../personality/registry';
+import { generateSystemPrompt } from '../../../personality/engine';
 import {
   commitPersonalOrganizationScopePlan,
   planPersonalOrganizationScope,
@@ -124,7 +126,6 @@ import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_
 import { formatClientSelfPromptForTurn } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { canAutoApproveAction } from '../../../tools/action_constitution';
-import { classifyConversationActionFollowupIntent } from '../../../cognition/action_continuation';
 import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
 import {
   persistExplicitRemoteRelationshipMemories,
@@ -271,7 +272,7 @@ type MessagingDesktopRelay = ((toolName: string, args: Record<string, any>) => P
 export interface MessagingRouteOptions {
   onMessage?: MessageHandler;
   llmGetters?: Record<string, () => any>;
-  personalityRegistry?: any;
+  personalityRegistry?: Pick<typeof personalityRegistry, 'getForUser' | 'getDefault'>;
   queryMemories?: (opts: { userId: string; query: string; limit: number; minConfidence: number; domain?: string; orgId?: string }) => any[];
   loadEmotionalState?: (userId: string) => any;
   onConfigChanged?: () => void | Promise<void>;
@@ -2168,12 +2169,6 @@ const ORGANIZATION_VIEWER_WRITE_TOOLS = [
   'feishu_send_file',
 ];
 
-export interface RemoteLumiExecutionPlan extends LumiExecutionPipeline {
-  /** Compatibility alias retained for route diagnostics and existing callers. */
-  dispatch: LumiTurnDispatch;
-  source: string;
-}
-
 export interface RemoteLumiExecutionPlanInput {
   requestId?: string;
   userText?: string;
@@ -2187,7 +2182,6 @@ export interface RemoteLumiExecutionPlanInput {
   identityBound: boolean;
   canWriteOrganization: boolean;
   personalityToolPolicy?: ToolPolicy;
-  dispatch?: LumiTurnDispatch;
   actionTaskState?: import('../../../cognition/action_continuation').ConversationActionContinuationState | null;
   taskId?: string;
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
@@ -2221,8 +2215,8 @@ function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDisp
   };
 }
 
-export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): RemoteLumiExecutionPlan {
-  const rawDispatch = input.dispatch || buildLumiTurnDispatch({
+export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): LumiExecutionPipeline {
+  const rawDispatch = buildLumiTurnDispatch({
     userId: input.userId,
     text: input.text,
     channel: 'chat',
@@ -2234,7 +2228,7 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     targetIsLumi: true,
   });
   const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
-  const pipeline = buildLumiExecutionPipeline({
+  return buildLumiExecutionPipeline({
     requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
     dispatch: {
       userId: input.userId,
@@ -2261,7 +2255,6 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     source: input.source,
     taskId: input.taskId,
   });
-  return { ...pipeline, dispatch: pipeline.turnIntent, source: input.source };
 }
 
 function desktopRelayReportedSuccess(raw: string): boolean {
@@ -2486,6 +2479,11 @@ async function processWithPersonalityAdmitted(
     }
     return correlated.text;
   }
+  const turnResolution = acceptedResolution || resolveUserTurn({
+    requestId, userText: requestText, state: conversation?.actionContinuationState,
+    options: { pendingAssistantOfferContext },
+  });
+  const acceptedRelation = revalidateAcceptedTaskRelation(turnResolution.taskRelation, conversation?.actionContinuationState);
   const confirmationResolution = isIdentityBound
     && acceptedTurnAdmission
     && confirmationScope
@@ -2495,6 +2493,7 @@ async function processWithPersonalityAdmitted(
         userId: effectiveUserId,
         userText: requestText,
         actionState: conversation?.actionContinuationState,
+        taskRelation: acceptedRelation,
         taskScope: confirmationScope,
         channelScope: confirmationChannelScope,
       })
@@ -2513,8 +2512,16 @@ async function processWithPersonalityAdmitted(
   // relation, tool projection and confirmation bind only to current wording.
   const routingText = buildRemoteTurnIntentText(msg, pendingConfirmationPrompt);
   const operationMode = isIdentityBound ? getStoredOperationMode(effectiveUserId) : 'chat';
-  const turnResolution = acceptedResolution || resolveUserTurn({requestId,userText:requestText,state:conversation?.actionContinuationState});
-  const provisionalPlan = buildRemoteLumiExecutionPlan({
+  let personality: PersonalityConfig | null = null;
+  if (registry) {
+    try {
+      personality = registry.getForUser('lumi', isIdentityBound ? effectiveUserId : undefined, domain === 'work' ? orgId : undefined)
+        || registry.getDefault();
+    } catch (error: any) {
+      console.warn('[Messaging] Personality configuration unavailable:', error.message);
+    }
+  }
+  const executionPlan = buildRemoteLumiExecutionPlan({
     requestId,userText:requestText,acceptedResolution:turnResolution,
     actionTaskState:conversation?.actionContinuationState,
     userId: effectiveUserId,
@@ -2525,6 +2532,7 @@ async function processWithPersonalityAdmitted(
     operationMode,
     identityBound: isIdentityBound,
     canWriteOrganization,
+    personalityToolPolicy: personality?.toolPolicy,
     pendingAssistantOfferContext,
   });
   const priorMessages = conversation
@@ -2545,7 +2553,7 @@ async function processWithPersonalityAdmitted(
   }
   if (newerMessageSupersedesThisTurn(msg)) return '';
 
-  const requestedMode = provisionalPlan.dispatch.flow.requestedMode;
+  const requestedMode = executionPlan.turnIntent.flow.requestedMode;
   // A semantic action match is only a planning hint. It must not silently
   // mutate the user's persisted client mode before the model has decided to
   // act. Keep the deterministic native fast path solely for an exact, explicit
@@ -2557,9 +2565,8 @@ async function processWithPersonalityAdmitted(
 
   // ── Build system prompt from Lumi personality ──
   let systemPrompt = '';
-  let personality: any = null;
 
-  if (registry) {
+  if (personality) {
     try {
       const memories = isIdentityBound && options?.queryMemories
         ? options.queryMemories({ userId: effectiveUserId, query: requestText, limit: 5, minConfidence: 0.4, domain, orgId })
@@ -2567,9 +2574,9 @@ async function processWithPersonalityAdmitted(
       const emotionalStateKey = domain === 'work' ? `${effectiveUserId}:org:${orgId}` : effectiveUserId;
       const emotionalState = isIdentityBound && options?.loadEmotionalState ? options.loadEmotionalState(emotionalStateKey) : undefined;
 
-      const result = registry.buildSystemPrompt(
-        'lumi',
-        { mode: provisionalPlan.execution.allowToolUse ? 'task' : 'chat', sensory: { hasAudio: false, hasVideo: false, hasSpatial: false, hasHaptic: false, hasHolographic: false, activeDeviceTypes: [], deviceCount: 0 } },
+      systemPrompt = generateSystemPrompt(
+        personality,
+        { mode: executionPlan.executionRequested ? 'task' : 'chat', sensory: { audio: false, visual: false, spatial: false, haptic: false, holographic: false, activeDeviceTypes: [], deviceCount: 0 } },
         {
           memories: memories.length > 0 ? memories : undefined,
           emotionalState,
@@ -2579,8 +2586,6 @@ async function processWithPersonalityAdmitted(
           orgId,
         },
       );
-      personality = result.config;
-      systemPrompt = result.systemPrompt;
     } catch (err: any) {
       console.warn(`[Messaging] ${source} personality build failed, using fallback:`, err.message);
     }
@@ -2612,29 +2617,13 @@ async function processWithPersonalityAdmitted(
   });
   if (legalOverlay) systemPrompt += `\n\n${legalOverlay}`;
 
-  const executionPlan = buildRemoteLumiExecutionPlan({
-    requestId,userText:requestText,acceptedResolution:turnResolution,
-    userId: effectiveUserId,
-    text: routingText,
-    source,
-    domain,
-    orgId,
-    operationMode,
-    identityBound: isIdentityBound,
-    canWriteOrganization,
-    personalityToolPolicy: personality?.toolPolicy,
-    dispatch: provisionalPlan.dispatch,
-    actionTaskState: conversation?.actionContinuationState,
-    pendingAssistantOfferContext,
-  });
-  const turnDispatch = executionPlan.dispatch;
+  const turnDispatch = executionPlan.turnIntent;
   const turnFlow = turnDispatch.flow;
   const executionDecision = executionPlan.execution;
   const capabilitySelection = executionPlan.capabilityPlan;
   const modelToolPolicy = executionPlan.authorizationPolicy;
   const modelToolProjection = executionPlan.modelToolProjection;
   const toolSessionActive = executionPlan.executionRequested;
-  const acceptedRelation = revalidateAcceptedTaskRelation(turnResolution.taskRelation, conversation?.actionContinuationState);
   const actionFollowupIntent = taskRelationFollowupIntent(acceptedRelation);
   const actionTaskExecution = isIdentityBound && conversation
     ? prepareConversationActionExecution({
@@ -3073,7 +3062,7 @@ async function processWithPersonalityAdmitted(
       const modeSynced = !modeRecord.error && desktopRelayReportedSuccess(modeRecord.result);
       if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
 
-      if (isPureOperationModeSwitchRequest(requestText, provisionalPlan.dispatch.flow.requestedMode)) {
+      if (isPureOperationModeSwitchRequest(requestText, requestedMode)) {
         const candidate = pendingConfirmationCreatedThisTurn
           ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
           : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);

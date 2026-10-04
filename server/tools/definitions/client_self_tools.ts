@@ -323,7 +323,6 @@ export function registerClientSelfTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const userId = context?.userId || 'anonymous';
       const installed = registry.getCapabilityManifest(undefined, { context });
       const turnExecutable = new Set(
         registry.getCapabilityManifest(context?.toolPolicy, { executableOnly: true, context })

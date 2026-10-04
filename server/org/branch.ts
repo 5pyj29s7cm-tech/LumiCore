@@ -556,11 +556,6 @@ export function disconnectFromOrg(): void {
   saveBranchState();
 }
 
-export function switchDomain(domain: 'personal' | 'work'): void {
-  bs().currentDomain = domain;
-  saveBranchState();
-}
-
 async function runSyncWorkData(includeUnsynced: boolean): Promise<SyncDrainResult> {
   const generation = connectionGeneration;
   const state = bs();

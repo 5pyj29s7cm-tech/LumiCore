@@ -167,9 +167,6 @@ import {
   buildStructuredMediaDeterministicToolRecoveryCall,
 } from '../cognition/deterministic_tool_recovery';
 import {
-  normalizeActionIntent,
-} from "../cognition/normalized_action_intent";
-import {
   coalesceToolExecutionRecords,
   confirmedStepNeedsContinuation,
   taskReceiptsToRecords,
@@ -1320,6 +1317,8 @@ export function registerChatHandler(
         resolution:acceptedTurnResolution,userId:uid,domain:resolvedDomain,orgId:resolvedOrgId,
         conversationId:selectedConversationId,source:eventSource,registry:toolRegistry,
         securityContext:toolSecurityContext,authorization:turnAuthorization,
+        personalityToolPolicy: (personalityRegistry.getForUser('lumi', uid, resolvedDomain === 'work' ? resolvedOrgId : undefined)
+          || personalityRegistry.getDefault()).toolPolicy,
       });
       await commitDeterministicTerminal({
         payload:{text:result.text,agentName:'Lumi',finalized:true,blocked:result.blocked,

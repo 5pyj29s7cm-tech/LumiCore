@@ -6,7 +6,14 @@ import * as bindings from '../server/messaging/bindings';
 import * as journal from '../server/messaging/message_journal';
 import type { IncomingMessage } from '../server/messaging/types';
 
-const model = vi.hoisted(() => ({ call: vi.fn() }));
+const model = vi.hoisted(() => ({ call: vi.fn(), pipeline: vi.fn() }));
+vi.mock('../server/cognition/execution_pipeline', async original => {
+  const actual = await original<typeof import('../server/cognition/execution_pipeline')>();
+  return { ...actual, buildLumiExecutionPipeline: (...args: Parameters<typeof actual.buildLumiExecutionPipeline>) => {
+    model.pipeline(...args);
+    return actual.buildLumiExecutionPipeline(...args);
+  } };
+});
 vi.mock('../server/llm/providers', async original => ({
   ...(await original<typeof import('../server/llm/providers')>()), makeLLMCall: model.call,
 }));
@@ -30,10 +37,10 @@ async function waitFor(check: () => boolean) {
   throw new Error('Message did not settle');
 }
 const done = () => ['ignored', 'completed', 'superseded'].includes(journal.getMessagingJournalEntry(message)?.status || '');
-const personalityRegistry = { buildSystemPrompt: () => ({
-  config: { id: 'lumi', toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 } },
-  systemPrompt: 'Synthetic system',
-}) } as any;
+const personalityRegistry = {
+  getForUser: () => ({ id: 'lumi', toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0 } }),
+  getDefault: () => { throw new Error('Fixture configuration is supplied by getForUser'); },
+} as any;
 
 beforeAll(async () => {
   await initDatabase();
@@ -55,6 +62,7 @@ beforeEach(() => {
   writeDB(readDB());
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('No network permitted')));
   model.call.mockReset().mockRejectedValue(new Error('Unexpected model call'));
+  model.pipeline.mockClear();
 });
 afterEach(async () => { await flushDBOrThrow(); vi.unstubAllGlobals(); });
 
@@ -139,6 +147,27 @@ describe('remote message authorization remains bound to its accepted identity', 
     expect(signal!.aborted).toBe(true);
     expect(reply).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('plans once from the scoped personality policy and exposes no tools when it forbids execution', async () => {
+    const { personalityRegistry: liveRegistry } = await import('../server/personality/registry');
+    const personality = { ...liveRegistry.getDefault(), toolPolicy: {
+      allowedTools: [], requireConfirmation: [], forbiddenTools: ['*'], maxIterations: 0,
+    } };
+    const scopedRegistry = { getForUser: vi.fn(() => personality), getDefault: vi.fn(() => personality) };
+    message = { ...message, text: '读取 D:/synthetic/receipt.txt 并告诉我内容。', attachments: [] };
+    model.call.mockResolvedValue({ text: '当前不能读取这份文件。', toolCalls: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
+    const reply = vi.fn(async () => 'reply-id');
+    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply }, { personalityRegistry: scopedRegistry });
+    await waitFor(done);
+    expect(journal.getMessagingJournalEntry(message)?.status).toBe('completed');
+    expect(scopedRegistry.getForUser).toHaveBeenCalledExactlyOnceWith('lumi', userId, orgId);
+    expect(model.pipeline).toHaveBeenCalledOnce();
+    expect(model.pipeline.mock.calls[0][0].personalityToolPolicy).toEqual(personality.toolPolicy);
+    const mainCalls = model.call.mock.calls.filter(args => args[2]?.source === model.pipeline.mock.calls[0][0].dispatch.source);
+    expect(mainCalls).toHaveLength(1);
+    expect(mainCalls[0][1]).toEqual([]);
+    expect(reply).toHaveBeenCalledOnce();
   });
 
   it('closes admission immediately and waits for an accepted attachment route to settle on shutdown', async () => {

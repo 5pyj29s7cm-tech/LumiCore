@@ -2592,7 +2592,7 @@ main().catch((err) => { console.error('[npm-skill] Fatal:', err); process.exit(1
     this.idleTimers.clear();
     this.activeCalls.clear();
     // Cancel all pending restart timers
-    for (const [n, tracker] of this.crashTrackers) {
+    for (const tracker of this.crashTrackers.values()) {
       if (tracker.restartTimer) {
         clearTimeout(tracker.restartTimer);
         tracker.restartTimer = null;

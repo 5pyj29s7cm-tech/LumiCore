@@ -91,7 +91,6 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
   }));
 
   socket.on("disconnect", socketGuard(() => {
-    const uid = getUserId(socket);
     deviceRegistry.disconnect(socket.id);
     unregisterUserSocket(socket.id);
   }));

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { replacePromptBlock } from '../server/llm/prompt_blocks';
+import type { NormalizedMessage } from '../server/llm/providers';
 import { compactToolLoopMessagesForModel } from '../server/llm/adapter';
 
 const targetStatePrefix =
@@ -30,23 +32,23 @@ describe('tool loop model context compaction', () => {
       .every(message => String(message.content).length > 3_500)).toBe(true);
   });
 
-  it('retains only the newest repeated current-document target projection', () => {
-    const compacted = compactToolLoopMessagesForModel([{
-      role: 'system',
-      content: `${targetStatePrefix}\n{"exactPath":"old.docx"}`,
-    }, {
-      role: 'user',
-      content: '分析当前文档',
-    }, {
-      role: 'system',
-      content: `${targetStatePrefix}\n{"exactPath":"new.docx"}`,
-    }]);
-
-    const targetStates = compacted.filter(message => (
-      message.role === 'system'
-      && String(message.content).startsWith(targetStatePrefix)
-    ));
-    expect(targetStates).toHaveLength(1);
-    expect(targetStates[0].content).toContain('new.docx');
+  it('replaces the obsolete target before model compaction regardless of its wording', () => {
+    const messages: NormalizedMessage[] = [{ role: 'user', content: '分析当前文档' }];
+    replacePromptBlock(messages, { id: 'current-document-target', kind: 'task_state', authority: 'server',
+      required: true, content: '任意旧标题', fields: { exactPath: 'old.docx', revision: 1 } });
+    replacePromptBlock(messages, { id: 'current-document-target', kind: 'task_state', authority: 'server',
+      required: true, content: 'plain new heading', fields: { exactPath: 'new.docx', revision: 2 } });
+    expect(messages).toHaveLength(2);
+    const compacted = compactToolLoopMessagesForModel(messages);
+    expect(compacted.filter(message => message.promptBlock?.id === 'current-document-target')).toHaveLength(1);
+    expect(JSON.stringify(compacted)).toContain('new.docx');
+    expect(JSON.stringify(compacted)).not.toContain('old.docx');
   });
-});
+
+  it('does not infer a state slot from text that resembles a server target heading', () => {
+    const messages: NormalizedMessage[] = [
+      { role: 'system', content: targetStatePrefix + ' old quoted document' },
+      { role: 'system', content: targetStatePrefix + ' new quoted document' },
+    ];
+    expect(compactToolLoopMessagesForModel(messages)).toEqual(messages);
+  });});

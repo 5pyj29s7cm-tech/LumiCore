@@ -143,7 +143,6 @@ export class WeComAdapter implements MessageAdapter {
     if (supportedMedia && !mediaId) return null;
 
     const fromUser = this.getTag(xml, 'FromUserName') || 'unknown';
-    const toUser = this.getTag(xml, 'ToUserName') || '';
     const createTime = this.getTag(xml, 'CreateTime') || String(Date.now() / 1000);
     const msgId = this.getTag(xml, 'MsgId') || `${Date.now()}`;
     const attachmentType: IncomingAttachment['type'] = msgType === 'image'

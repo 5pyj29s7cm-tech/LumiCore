@@ -26,10 +26,7 @@ describe('socket sidecar idempotency integration', () => {
     it(`${relativePath} checks an exact request receipt before classifying a sidecar replay`, () => {
       const code = source(relativePath);
       const existingReceipt = code.indexOf('existingExecution = getChatExecution(executionScope, requestId)');
-      const relation = Math.max(
-        code.indexOf('classifyActiveTaskMessage', existingReceipt),
-        code.indexOf('resolveActiveTaskMessageRelation', existingReceipt),
-      );
+      const relation = code.indexOf('resolveUserTurn({', existingReceipt);
 
       expect(existingReceipt).toBeGreaterThan(-1);
       expect(relation).toBeGreaterThan(existingReceipt);

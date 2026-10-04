@@ -1276,7 +1276,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
       return JSON.stringify({
         externalAppAutomationGate: 'removed',
         messagingSendRequiresConfirmation: isMessagingSendConfirmationRequired(userId),
-        adapters: getExternalAppAdapters(),
+        adapters: getExternalAppAdapters(adapterRegistry),
         adapterRegistrySummary: adapterRegistry.summary,
         adapterRegistry: adapterRegistry.adapters.filter(adapter => ['web', 'finance', 'messaging', 'cad_bim', 'ai', 'automation'].includes(adapter.category)),
       }, null, 2);

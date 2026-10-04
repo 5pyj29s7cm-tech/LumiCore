@@ -188,14 +188,14 @@ function feedbackKind(
     if (offeredConversationTaskId === currentConversationTaskId) return 'accept';
   }
   const normalizedIntent = currentIntent || normalizeActionIntent(normalized);
-  const followup = classifyConversationActionFollowupIntent(normalized, state);
+  const followup = classifyConversationActionFollowupIntent(normalized, state, normalizedIntent);
   // One semantic answer owns queueing, planning and ledger preparation. A
   // phrase about continuing later must not override a current status question.
   if (followup === 'status' && normalizedIntent.target !== 'runtime_work') return 'status';
   if (followup === 'repeat') return 'repeat';
   if (hasExplicitNoToolInstruction(normalized)) return 'new_task';
   if (isReferentialArtifactEdit(normalized, state)) return 'correction';
-  if (isTaskPreparationContinuation(normalized, state)) return 'continue';
+  if (isTaskPreparationContinuation(normalized, state, normalizedIntent)) return 'continue';
   if (isExplicitUnfinishedTaskContinuation(normalized, state)) return 'continue';
   if (isBlockedTaskRetryAcceptance(normalized, state)) return 'retry';
   // A runtime-work status query asks about Lumi's global execution ledger,
