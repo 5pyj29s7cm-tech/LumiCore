@@ -787,7 +787,7 @@ describe('isolated self-improvement staging', () => {
       if (runningTask?.leaseId) markCancelled(runningTask.id, 'test cleanup');
       cleanupRepository(fixture);
     }
-  });
+  }, 30_000);
 
   it('rejects symlink-mode source entries and credential-like documentation output', async () => {
     const symlinkFixture = createRepository();

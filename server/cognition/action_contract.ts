@@ -1858,6 +1858,8 @@ function hasMatchingDesktopOpenEvidence(record: ToolExecutionRecord, requestedTa
       const filename = requestedTarget.replace(/\\/g, '/').split('/').pop()!.normalize('NFKC').toLowerCase();
       const title = String(actual?.title || actual?.windowTitle || '').normalize('NFKC').trim().toLowerCase();
       if (title === filename || (title.startsWith(filename) && /^\s+[-–—|]\s+/u.test(title.slice(filename.length)))) return true;
+      // A document's mismatched title cannot fall back to its folder's app aliases.
+      if (!/\.(?:exe|lnk|appref-ms|url)$/iu.test(requestedTarget)) return false;
     }
   }
   return structuredTargets.some(value => matchesRequestedDesktopTarget(value, aliases));

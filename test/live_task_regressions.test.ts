@@ -66,7 +66,7 @@ describe('regressions from the two live task rounds', () => {
     expect(browserSessionObservation([nativeLaunch, observation], task)).toBe(observation.result);
     expect(browserSessionObservation([{ ...nativeLaunch, result: nativeLaunch.result.replace('chrome.exe', 'notepad.exe') }, observation], task)).toBeNull();
   });
-  it.each(['run', '发送', '分析', 'copy'])('finishes a spreadsheet under a %s folder without treating its name as another action', folderName => {
+  it.each(['run', '发送', '分析', 'copy', 'WPS', 'Chrome', 'AutoCAD', 'Notepad'])('finishes a spreadsheet under a %s folder without treating its name as another action', folderName => {
     const dir = mkdtempSync(path.join(os.tmpdir(), `lumi-${folderName}-sheet-`));
     const file = path.join(dir, 'report.xlsx'); writeFileSync(file, 'synthetic receipt fixture');
     try {
