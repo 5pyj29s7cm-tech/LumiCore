@@ -422,7 +422,8 @@ describe('finalized output paths', () => {
     expect(terminalBoundary.indexOf('scheduleVoiceSummary(conversationTurn.conversation.id)')).toBeGreaterThan(
       terminalBoundary.indexOf('publishCommitted:'),
     );
-    expect(ambient).toContain('Auto-summary eligible for conversation');
+    expect(ambient).not.toContain('triggerIdleProcessing');
+    expect(ambient).not.toContain('readDB');
     expect(ambient).not.toContain('Triggered auto-summary');
   });
 
