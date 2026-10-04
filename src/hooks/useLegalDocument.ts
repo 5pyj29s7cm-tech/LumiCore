@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'sonner';
 import { useApp } from '../contexts/AppContext';
 import { apiJson } from '../services/apiClient';
@@ -16,7 +16,7 @@ export function useLegalDocument(initialText: string, copy: { error: string; upl
   const [busy, setBusy] = useState<'' | 'upload' | 'generate' | 'archive'>('');
   const active = useRef(false);
   const request = useRef<AbortController | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     active.current = true;
     return () => { active.current = false; request.current?.abort(); };
   }, []);
