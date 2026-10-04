@@ -1,3 +1,4 @@
+import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { resolveUserTurn } from '../cognition/turn_resolution';
 import { reserveConversationExecution, type ConversationResourceLifetime } from '../cognition/conversation_execution';
 import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
@@ -141,16 +142,13 @@ import { buildCapabilityMetaResponse, isCapabilityMetaQuestion } from "../cognit
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
-import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildTransportNeutralConfirmationScope,
   clearPendingConfirmationDurably,
-  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   getPendingConfirmationDurably,
   formatPendingConfirmationRequest,
   isExplicitConfirmationReply,
-  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -2979,74 +2977,24 @@ async function processVoiceInput(
     confirmationResolution.revokedCorrectionBasis,
   );
   let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
-  const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-    if (
-      pendingConfirmation
-      && await consumePendingConfirmationDurably(
-        session.userId,
-        pendingConfirmation.id,
-        toolName,
-        args,
-        confirmationScope,
-      )
-    ) {
-      logger.info(`[Audio] Consumed one-time confirmation for "${toolName}".`);
-      return true;
-    }
-    if (
-      !correctionRequiresFreshConfirmation
-      && canAutoApproveAction(toolName, args, { actionIntent: routedUserText })
-    ) return true;
-    // One task turn owns one immutable confirmation boundary. The model may
-    // re-plan after a denial, but it cannot silently replace the action the
-    // user is being asked to approve.
-    if (pendingConfirmationCreatedThisTurn) return false;
-    const exactWriteCorrection = correctionRequiresFreshConfirmation
-      && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
-    if (
-      exactWriteCorrection
-      && (
-        !runtimeOwnedDeterministicRecoveryCall
-        || toolName !== runtimeOwnedDeterministicRecoveryCall.name
-        || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
-      )
-    ) {
-      throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
-    }
-    const pending = await recordPendingConfirmationDurably(session.userId, toolName, args, 'voice', {
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      channelId: confirmationChannelScope.channelId,
-      taskId: actionTaskExecution.state?.taskId,
-      originRequestId: requestId,
-      actionIntent: actionIntentText,
-    });
-    if (
-      correctionRequiresFreshConfirmation
-      && !pendingConfirmationMatchesExactProposal(
-        pending,
-        toolName,
-        args,
-        { taskId: actionTaskExecution.state?.taskId, originRequestId: requestId },
-      )
-    ) {
-      throw new Error('Corrected action confirmation was not bound to the current task request');
-    }
-    pendingConfirmationCreatedThisTurn = pending;
-    const confirmationMessage = formatPendingConfirmationRequest(pending);
-    trustedVoiceConfirmationText = confirmationMessage;
-    setConversationActionExecutionStatus(
-      conversationTurn.conversation.id,
-      session.userId,
-      'waiting_confirmation',
-      {
-        assistantState: confirmationMessage,
-        requestId,
-      },
-    );
-    logger.warn(`[Audio] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
-    return false;
-  };
+  const requestConfirmation = createTurnConfirmation({
+    userId: session.userId, source: 'voice', requestId, actionIntent: actionIntentText,
+    autoApprovalIntent: routedUserText,
+    pending: pendingConfirmation,
+    consumeScope: () => confirmationScope,
+    proposalScope: () => ({ ...confirmationChannelScope, taskId: actionTaskExecution.state?.taskId }),
+    correctionRequiresFreshConfirmation,
+    exactWriteCorrection: correctionRequiresFreshConfirmation && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file',
+    recoveryCall: () => runtimeOwnedDeterministicRecoveryCall,
+    isCancelled: () => pipelineAbort.signal.aborted,
+    onPending: pending => {
+      pendingConfirmationCreatedThisTurn = pending;
+      trustedVoiceConfirmationText = formatPendingConfirmationRequest(pending);
+      setConversationActionExecutionStatus(conversationTurn.conversation.id, session.userId, 'waiting_confirmation', {
+        assistantState: trustedVoiceConfirmationText, requestId,
+      });
+    },
+  });
 
   const toolContext = {
     ...toolSecurityContext,

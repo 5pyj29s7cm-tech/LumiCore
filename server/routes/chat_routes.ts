@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { reserveConversationExecution } from '../cognition/conversation_execution';
+import { getConversationActionTurn } from '../conversation/action_turn_ledger';
 import { getIndustryWorkflowTask, interruptIndustryWorkflow, observeIndustryWorkflowTool, recordIndustryWorkflowExecution, validateIndustryWorkflowSourceInput } from '../industry/workflow_service';
 import { Router } from "express";
 import { requireNotStrict } from '../config/privacy';
@@ -259,10 +262,15 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       if (!businessSource) return res.status(400).json({ error: 'The original business source is required' });
     }
     const businessMetadata = businessTask?.metadata?.industryWorkflow;
+    const requestId = businessMetadata?.requestId || randomUUID();
+    const persistedTurn = businessMetadata?.conversationId ? getConversationActionTurn({
+      conversationId: businessMetadata.conversationId, userId, requestId,
+    }) : null;
     const conversationMessages = buildRestConversationMessages(messages, prompt);
     // History informs interpretation; only the latest user message authorizes work.
     const routeText = businessSource || (conversationMessages.slice().reverse().find(item => item.role === 'user')?.content || '').trim().slice(-12000);
     const restExecutionPipeline = buildLumiExecutionPipeline({
+      requestId,
       dispatch: {
         userId,
         text: routeText,
@@ -290,6 +298,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         flow: restTurnDispatch.flow,
       });
     const toolContext = {
+      requestId, resolutionId: restExecutionPipeline.resolution.id,
+      ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
+        && persistedTurn.taskId === businessMetadata?.conversationTaskId ? { turnRowId: persistedTurn.id } : {}),
       ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
       currentTurnExecutionRequested: restExecutionPipeline.executionRequested,
       trustedActionContinuation: restExecutionPipeline.trustedActionContinuation,
@@ -334,7 +345,12 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
     const receiptObserver = businessTask ? createToolReceiptObserver(async record => {
       if (isBusinessAuthorized()) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
     }) : undefined;
+    let admission: ReturnType<typeof reserveConversationExecution> | undefined;
     try {
+      if (businessMetadata?.conversationId) {
+        admission = reserveConversationExecution({ userId, domain, orgId, conversationId: businessMetadata.conversationId }, requestId, request.signal);
+        await admission.waitForTurn();
+      }
       assertRequestActive();
       let responseText = '';
 
@@ -534,6 +550,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
         code: publicError.code,
       });
     } finally {
+      admission?.release();
       membershipWatcher?.dispose();
       request.dispose();
     }

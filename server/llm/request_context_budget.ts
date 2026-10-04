@@ -1,4 +1,4 @@
-import { promptBlockMessage } from './prompt_blocks';
+import { normalizePromptBlockMessages } from './prompt_blocks';
 import type { MessageContent, NormalizedMessage } from './providers';
 
 export interface ModelRequestToolDeclaration {
@@ -219,6 +219,12 @@ function compactSystemMessage(message: NormalizedMessage, budget: number): Norma
   if (message.promptBlock?.required) {
     if (messageTokens(message) > budget) throw new Error('Model request budget cannot retain required prompt block '+message.promptBlock.id);
     return { ...message };
+  }
+  if (message.promptBlock) {
+    // Typed optional context has no authority to promote itself with safety keywords.
+    const compacted = compactMessage(message, budget, message.promptBlock.kind);
+    return { ...compacted, promptBlock: { ...message.promptBlock, content: String(compacted.content || ''),
+      fields: undefined, requiredFields: undefined } };
   }
   if (typeof message.content !== 'string') return compactMessage(message, budget, 'system message');
   if (messageTokens(message) <= budget) return { ...message };
@@ -443,11 +449,7 @@ export function prepareModelRequestContext(input: {
   protectedToolNames?: readonly string[];
 }): PreparedModelRequestContext {
   const budgetTokens = resolveModelRequestInputBudget(input.inputTokenBudget);
-  const originalMessages = (input.messages || []).map(message => {
-    if (!message.promptBlock) return { ...message };
-    if (message.role !== 'system') throw new Error('Prompt block metadata requires a system message');
-    return promptBlockMessage(message.promptBlock);
-  });
+  const originalMessages = normalizePromptBlockMessages(input.messages || []);
   const originalTools = (input.toolDeclarations || []).map(declaration => ({
     ...declaration,
     function: { ...declaration.function, parameters: { ...(declaration.function.parameters || {}) } },

@@ -132,7 +132,7 @@ export function isLocalBodyLearningTask(task: Pick<AutonomousTask, 'title' | 'de
 }
 
 export function buildAutonomousToolPolicy(
-  task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery'>>,
+  task: Pick<AutonomousTask, 'title' | 'description'> & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
   maxIterations: number,
 ) {
   const recoveryToolBoundary = task.recovery?.planRevisions?.length && task.executionPlan
@@ -171,14 +171,16 @@ export function buildAutonomousToolPolicy(
 
 export function buildAutonomousCapabilityPipeline(
   task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
-    & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery'>>,
+    & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
   maxIterations: number,
   registry: ToolRegistry = toolRegistry,
+  requestId?: string,
 ): LumiExecutionPipeline {
   const policy = buildAutonomousToolPolicy(task, maxIterations);
   return buildLumiExecutionPipeline({
+    requestId,
     dispatch: {
-      userId: task.userId,
+      userId: task.userId, domain: task.domain, orgId: task.orgId,
       text: task.description || task.title,
       channel: task.source === 'scheduler' ? 'scheduler' : 'autonomy',
       source: `autonomous:${task.source}`,
@@ -795,7 +797,8 @@ export async function executeNextAutonomousTask(
     });
     releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
-    const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations);
+    const requestId = 'autonomy:' + running.leaseId;
+    const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations, toolRegistry, requestId);
     sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
     attachAutonomousExecutionPlan(
       running.id,
@@ -818,7 +821,8 @@ export async function executeNextAutonomousTask(
       domain: taskScope.domain,
       orgId: taskScope.orgId,
       conversationId: running.conversationId,
-      taskId: running.id,
+      taskId: running.id, requestId, resolutionId: executionPipeline.resolution.id,
+      currentTurnExecutionRequested: executionPipeline.executionRequested,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
       requestConfirmation: async (toolName, args) => {
         if (authorizationWasRevoked()) return false;
@@ -890,7 +894,7 @@ export async function executeNextAutonomousTask(
     const result = await runWithTools(
       messages,
       toolRegistry,
-      { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000 }), signal: executionAbort.signal },
+      { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: running.conversationId, signal: executionAbort.signal },
       async (record) => {
         await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);

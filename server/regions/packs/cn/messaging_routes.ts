@@ -1,3 +1,4 @@
+import { createTurnConfirmation } from '../../../tools/turn_confirmation';
 import { reserveConversationExecution } from '../../../cognition/conversation_execution';
 import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
 import { isRetiredOperationModeRequest } from '../../../cognition/operation_modes';
@@ -125,7 +126,6 @@ import { isPureOperationModeSwitchRequest, type OperationMode } from '../../../c
 import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_messages';
 import { formatClientSelfPromptForTurn } from '../../../client/self_model';
 import { buildResponseLanguageInstruction } from '../../../utils/language';
-import { canAutoApproveAction } from '../../../tools/action_constitution';
 import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsToRecords } from '../../../cognition/task_execution_ledger';
 import {
   persistExplicitRemoteRelationshipMemories,
@@ -135,7 +135,6 @@ import {
 import {
   buildTransportNeutralConfirmationScope,
   clearPendingConfirmationDurably,
-  consumePendingConfirmationDurably,
   formatPendingConfirmationRequest,
   recordPendingConfirmationDurably,
 } from '../../../tools/pending_confirmation';
@@ -2333,6 +2332,25 @@ export function buildRemoteConversationHistory(
   }).slice(-16);
 }
 
+function messagingPendingOffer(msg: IncomingMessage, conversation: ReturnType<typeof conversationForMessagingTurn>): PendingAssistantOfferContext | undefined {
+  const precedingTranscript = conversation
+    ? getMessagesThroughExternalMessage(conversation.id, msg.messageId, 8).filter(item => !(
+        item.role === 'user'
+        && (item.externalMessageId === msg.messageId || item.requestId === `${msg.platform}_bot:${msg.messageId}`)
+      ))
+    : [];
+  return conversation
+    ? buildPendingAssistantOfferContextFromTranscript({
+        messages: precedingTranscript,
+        userId: msg.boundUserId,
+        domain: msg.boundOrgId ? 'work' : 'personal',
+        orgId: msg.boundOrgId || '',
+        conversationId: conversation.id,
+        taskId: conversation.actionContinuationState?.taskId,
+      })
+    : undefined;
+}
+
 export async function processWithPersonality(
   msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
 ): Promise<string> {
@@ -2343,14 +2361,19 @@ export async function processWithPersonality(
     : await admitBoundMessagingTurnDurably(msg,options?.onConversationUpdated);
   const conversation=conversationForMessagingTurn(accepted.message);
   if (!conversation) throw new Error('The accepted messaging conversation is unavailable');
-  const acceptedResolution=resolveUserTurn({requestId:msg.platform+'_bot:'+msg.messageId,userText:getRequestText(accepted.message),state:conversation.actionContinuationState});
+  const pendingAssistantOfferContext = messagingPendingOffer(accepted.message, conversation);
+  const acceptedTurn = Object.freeze({
+    resolution: resolveUserTurn({ requestId: msg.platform + '_bot:' + msg.messageId, userText: getRequestText(accepted.message),
+      state: conversation.actionContinuationState, options: { pendingAssistantOfferContext } }),
+    pendingAssistantOfferContext,
+  });
   const admission=reserveConversationExecution({
     userId:msg.boundUserId,domain:msg.boundOrgId?'work':'personal',orgId:msg.boundOrgId,
     conversationId:conversation.id,
   },msg.platform+'_bot:'+msg.messageId);
   try {
     await admission.waitForTurn(); assertMessagingAuthorization(msg);
-    return await processWithPersonalityAdmitted(accepted.message,options,accepted.admission,acceptedResolution);
+    return await processWithPersonalityAdmitted(accepted.message,options,accepted.admission,acceptedTurn);
   } finally {admission.release();}
 }
 
@@ -2358,7 +2381,7 @@ async function processWithPersonalityAdmitted(
   msg: IncomingMessage,
   options?: MessagingRouteOptions,
   preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
-  acceptedResolution?: TurnResolution,
+  acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext },
 ): Promise<string> {
   msg = captureMessagingOrganization(msg);
   assertMessagingAuthorization(msg);
@@ -2420,22 +2443,8 @@ async function processWithPersonalityAdmitted(
     }
   }
   assertMessagingAuthorization(msg);
-  const precedingTranscript = conversation
-    ? getMessagesThroughExternalMessage(conversation.id, msg.messageId, 8).filter(item => !(
-        item.role === 'user'
-        && (item.externalMessageId === msg.messageId || item.requestId === requestId)
-      ))
-    : [];
-  const pendingAssistantOfferContext = conversation
-    ? buildPendingAssistantOfferContextFromTranscript({
-        messages: precedingTranscript,
-        userId: effectiveUserId,
-        domain,
-        orgId,
-        conversationId: conversation.id,
-        taskId: conversation.actionContinuationState?.taskId,
-      })
-    : undefined;
+  const pendingAssistantOfferContext = acceptedTurn
+    ? acceptedTurn.pendingAssistantOfferContext : messagingPendingOffer(msg, conversation);
   const confirmationChannelScope = conversation
     ? buildTransportNeutralConfirmationScope({
         domain,
@@ -2479,7 +2488,7 @@ async function processWithPersonalityAdmitted(
     }
     return correlated.text;
   }
-  const turnResolution = acceptedResolution || resolveUserTurn({
+  const turnResolution = acceptedTurn?.resolution || resolveUserTurn({
     requestId, userText: requestText, state: conversation?.actionContinuationState,
     options: { pendingAssistantOfferContext },
   });
@@ -2907,55 +2916,22 @@ async function processWithPersonalityAdmitted(
     { role: 'user', content: [msg.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
   ];
   let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
-  const requestToolConfirmation = async (
-    toolName: string,
-    args: Record<string, any>,
-  ): Promise<boolean> => {
-    if (actionWasCancelled()) return false;
-    if (
-      pendingConfirmation
-      && confirmationScope
-      && await consumePendingConfirmationDurably(
-        effectiveUserId,
-        pendingConfirmation.id,
-        toolName,
-        args,
-        confirmationScope,
-      )
-    ) {
-      console.log(`[Messaging] Consumed one-time ${source} confirmation for "${toolName}".`);
-      return true;
-    }
-    if (
-      !correctionRequiresFreshConfirmation
-      && canAutoApproveAction(toolName, args, { actionIntent: requestText })
-    ) return true;
-    if (pendingConfirmationCreatedThisTurn) return false;
-    if (!confirmationChannelScope) return false;
-    const pending = await recordPendingConfirmationDurably(
-      effectiveUserId,
-      toolName,
-      args,
-      source,
-      {
-        domain,
-        orgId,
-        channelId: confirmationChannelScope.channelId,
-        taskId: actionTaskExecution.state?.taskId,
-        originRequestId: requestId,
-        actionIntent: requestText,
-      },
-    );
-    pendingConfirmationCreatedThisTurn = pending;
-    if (conversation) {
-      setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationRequest(pending),
-        requestId,
+  const requestToolConfirmation = createTurnConfirmation({
+    userId: effectiveUserId, source, requestId, actionIntent: requestText,
+    pending: pendingConfirmation,
+    consumeScope: () => confirmationScope,
+    proposalScope: () => confirmationChannelScope
+      ? { ...confirmationChannelScope, taskId: actionTaskExecution.state?.taskId } : undefined,
+    correctionRequiresFreshConfirmation,
+    assertCurrent: () => assertMessagingAuthorization(msg),
+    isCancelled: actionWasCancelled,
+    onPending: pending => {
+      pendingConfirmationCreatedThisTurn = pending;
+      if (conversation) setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+        assistantState: formatPendingConfirmationRequest(pending), requestId,
       });
-    }
-    console.warn(`[Messaging] Tool "${toolName}" is waiting for scoped ${source} confirmation ${pending.id}.`);
-    return false;
-  };
+    },
+  });
   const settleRemoteTask = (fallbackBlocker?: string) => {
     if (!conversation) return;
     // Every accepted remote turn owns a durable request lease, including a

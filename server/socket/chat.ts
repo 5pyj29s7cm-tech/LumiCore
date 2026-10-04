@@ -1,3 +1,4 @@
+import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
 import { resolveUserTurn, type TurnResolution } from '../cognition/turn_resolution';
@@ -75,17 +76,14 @@ import {
 } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPromptForTurn } from "../client/self_model";
-import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildTransportNeutralConfirmationScope,
   clearPendingConfirmationDurably,
-  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   formatPendingConfirmationRequest,
   getPendingConfirmationDurably,
   isExplicitConfirmationReply,
   isConfirmationCancellation,
-  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -2356,6 +2354,8 @@ export function registerChatHandler(
               domain: resolvedDomain,
               orgId: resolvedOrgId,
               source: 'chat_runtime_cleanup_recheck',
+              turnRowId: 'turnRowId' in recheckPreparation ? recheckPreparation.turnRowId : undefined,
+              resolutionId: acceptedTurnResolution?.id,
               toolPolicy: recheckPolicy,
               actionIntent: previousActionState?.goal || visibleUserText,
               routedTaskText: previousActionState?.goal || visibleUserText,
@@ -3219,83 +3219,33 @@ export function registerChatHandler(
       let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
       let runtimeOwnedDeterministicRecoveryCall: ToolContext['runtimeOwnedDeterministicRecoveryCall'] | null = null;
       let pendingConfirmationAssistantState = '';
-      const requestToolConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-        if (pendingConfirmationCreatedThisTurn) return false;
-        if (
-          pendingConfirmation
-          && await consumePendingConfirmationDurably(
-            uid,
-            pendingConfirmation.id,
-            toolName,
-            args,
-            confirmationScope,
-          )
-        ) {
-          console.log(`[ChatHandler] Consumed one-time confirmation for "${toolName}".`);
-          return true;
-        }
-        if (
-          !correctionRequiresFreshConfirmation
-          && canAutoApproveAction(toolName, args, { actionIntent: visibleUserText })
-        ) return true;
-        // Tool-capable turns prepare their durable task before entering the
-        // relay, so confirmation and confirmation-resume keep the same task.
-        const confirmationTaskId = actionTaskExecution.state?.taskId;
-        confirmationScope = buildTransportNeutralConfirmationScope({
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          conversationId: conversationId || selectedConversationId,
-          taskId: confirmationTaskId,
-          originRequestId: requestId,
-        });
-        confirmationChannelScope = buildTransportNeutralConfirmationScope({
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          conversationId: conversationId || selectedConversationId,
-        });
-        const exactWriteCorrection = correctionRequiresFreshConfirmation
-          && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
-        if (
-          exactWriteCorrection
-          && (
-            !runtimeOwnedDeterministicRecoveryCall
-            || toolName !== runtimeOwnedDeterministicRecoveryCall.name
-            || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
-          )
-        ) {
-          throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
-        }
-        const pending = await recordPendingConfirmationDurably(uid, toolName, args, eventSource, {
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          channelId: confirmationScope.channelId,
-          taskId: confirmationTaskId,
-          originRequestId: requestId,
-          actionIntent: visibleUserText,
-        });
-        if (
-          correctionRequiresFreshConfirmation
-          && !pendingConfirmationMatchesExactProposal(
-            pending,
-            toolName,
-            args,
-            { taskId: confirmationTaskId, originRequestId: requestId },
-          )
-        ) {
-          throw new Error('Corrected action confirmation was not bound to the current task request');
-        }
-        pendingConfirmationCreatedThisTurn = pending;
-        const confirmationRequestText = formatPendingConfirmationRequest(pending);
-        pendingConfirmationAssistantState = confirmationRequestText;
-        if (conversationId) {
-          setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
-            assistantState: confirmationRequestText,
-            requestId,
+      const requestToolConfirmation = createTurnConfirmation({
+        userId: uid, source: eventSource, requestId, actionIntent: visibleUserText,
+        pending: pendingConfirmation,
+        consumeScope: () => confirmationScope,
+        proposalScope: () => {
+          confirmationScope = buildTransportNeutralConfirmationScope({
+            domain: resolvedDomain, orgId: resolvedOrgId, conversationId: conversationId || selectedConversationId,
+            taskId: actionTaskExecution.state?.taskId, originRequestId: requestId,
           });
-        }
-        console.warn(`[ChatHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
-        return false;
-      };
+          confirmationChannelScope = buildTransportNeutralConfirmationScope({
+            domain: resolvedDomain, orgId: resolvedOrgId, conversationId: conversationId || selectedConversationId,
+          });
+          return confirmationScope;
+        },
+        correctionRequiresFreshConfirmation,
+        exactWriteCorrection: correctionRequiresFreshConfirmation && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file',
+        recoveryCall: () => runtimeOwnedDeterministicRecoveryCall,
+        assertCurrent: () => turnAuthorization.assertCurrent(),
+        isCancelled: isChatCancelled,
+        onPending: pending => {
+          pendingConfirmationCreatedThisTurn = pending;
+          pendingConfirmationAssistantState = formatPendingConfirmationRequest(pending);
+          if (conversationId) setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
+            assistantState: pendingConfirmationAssistantState, requestId,
+          });
+        },
+      });
 
       emitAgent("agent:status", { status: "thinking", agentName: personality.name });
       console.log('[ChatHandler] emitted agent:status thinking');

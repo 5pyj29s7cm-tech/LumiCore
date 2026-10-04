@@ -8,7 +8,9 @@ import { getConversationForScope, startIsolatedConversation, getMessages, addMes
 import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from '../conversation/lifecycle';
 import { captureChatAuthorization } from '../socket/chat_authorization';
 import { isExplicitMemoryRequest, persistTurnMemory } from '../memory/turn_memory';
-import { runSerializedMutation } from '../persistence/durable_scope_mutation';
+import { reserveConversationExecution } from '../cognition/conversation_execution';
+import { resolveUserTurn } from '../cognition/turn_resolution';
+import { finalizeLumiResponseForDelivery } from '../cognition/response_delivery';
 /**
  * Lumi as an MCP Server — exposes Lumi's capabilities as MCP tools
  * so remote devices can connect and invoke Lumi via the MCP protocol.
@@ -28,11 +30,6 @@ import { canOutputHolographic, textToHolographicOutput } from '../output/hologra
 import { synthesizeSpeech, getActiveProvider } from '../tts/adapter';
 import { logger } from '../../logger';
 import type { Request, Response } from 'express';
-import { finalizeLumiResponse } from '../cognition/result_finalizer';
-import {
-  finalizeExecutionForOutboundDelivery,
-  type ExecutionGuardRecoveryRunInput,
-} from '../cognition/execution_guard_recovery';
 import type { ToolExecutionRecord } from '../tools/types';
 import { getScopedPreferredLLM } from '../llm/user_preferences';
 import {
@@ -63,39 +60,6 @@ function mcpToolFailure(operation: string, error: unknown) {
     content: [{ type: 'text' as const, text: publicMcpToolFailure() }],
     isError: true,
   };
-}
-
-type McpFinalization = ReturnType<typeof finalizeLumiResponse>;
-
-async function finalizeMcpResponseForDelivery(input: {
-  taskText: string;
-  responseText: string;
-  toolRecords?: ToolExecutionRecord[];
-  source: string;
-  allowToolUse?: boolean;
-  attempt?: ExecutionGuardRecoveryRunInput<McpFinalization>['attempt'];
-}) {
-  const toolRecords = input.toolRecords || [];
-  const finalization = finalizeLumiResponse({
-    taskText: input.taskText,
-    responseText: input.responseText,
-    toolRecords,
-    source: input.source,
-  });
-  return finalizeExecutionForOutboundDelivery({
-    task: input.taskText,
-    responseText: input.responseText,
-    finalization,
-    allowToolUse: input.allowToolUse === true,
-    toolRecords,
-    attempt: input.attempt,
-    finalize: (candidateText, records) => finalizeLumiResponse({
-      taskText: input.taskText,
-      responseText: candidateText,
-      toolRecords: records,
-      source: `${input.source}_guard_recovery`,
-    }),
-  });
 }
 
 export function createLumiMcpServer(llmGetters?: {
@@ -209,7 +173,8 @@ export function createLumiMcpServer(llmGetters?: {
         const chatLLM = resolveMcpLLM();
         emit('mcp:activity', { device: 'xiaozhi', action: 'chat', status: 'received' });
         emit('agent:status', { status: 'thinking', agentName: 'Lumi' });
-        const personality = personalityRegistry.get(pid) || personalityRegistry.get('lumi')!;
+        const personality = personalityRegistry.getForUser(pid, scope.userId, scope.orgId) || personalityRegistry.getDefault();
+        const acceptedResolution = resolveUserTurn({ requestId, userText: message, state: prior?.actionContinuationState });
         const ds = deviceRegistry.getSensoryContext(scope.userId, {
           domain: scope.domain,
           orgId: scope.orgId,
@@ -223,7 +188,6 @@ export function createLumiMcpServer(llmGetters?: {
           activeDeviceTypes: ds.activeDeviceTypes,
           deviceCount: ds.deviceCount,
         };
-        const { systemPrompt } = personalityRegistry.buildSystemPrompt(pid, { mode: 'task', sensory });
 
         const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
@@ -295,7 +259,7 @@ export function createLumiMcpServer(llmGetters?: {
         ) => {
           const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || []);
           const candidateText = String(response.text || bufferedChunks.join('') || 'No response.').trim();
-          const outbound = await finalizeMcpResponseForDelivery({
+          const outbound = await finalizeLumiResponseForDelivery({
             taskText: message,
             responseText: candidateText,
             toolRecords,
@@ -410,7 +374,11 @@ export function createLumiMcpServer(llmGetters?: {
         };
 
         let background = false;
-        const responsePromise = runSerializedMutation('mcp-chat:' + conversationId, async () => {
+        const admission = reserveConversationExecution({ ...scope, conversationId }, requestId, controller.signal);
+        const stopWatch = authorization.watch(controller);
+        const responsePromise = (async () => {
+          try {
+          await admission.waitForTurn();
           authorization.assertCurrent();
           // Read memory after prior queued turns have durably completed.
           const memories = queryMemories({
@@ -422,22 +390,23 @@ export function createLumiMcpServer(llmGetters?: {
             ? memories.map(m => `[${m.type}] ${m.content}`).join('\n')
             : '';
 
+          pipeline = buildLumiExecutionPipeline({ requestId, acceptedResolution, dispatch: { userId: scope.userId, text: message, channel: 'chat', source: 'mcp_chat', domain: scope.domain, orgId: scope.orgId },
+            registry: tr, personalityToolPolicy: personality.toolPolicy, executionBoundary: 'remote_restricted',
+            actionTaskState: getConversationForScope(conversationId, scope.userId, scope.domain, scope.orgId)?.actionContinuationState });
+          const { systemPrompt } = personalityRegistry.buildSystemPrompt(pid, { mode: pipeline.executionRequested ? 'task' : 'chat', sensory }, { ...memoryScope, userText: message });
           messages.push({ role: 'system', content: restrictSystemPromptForExecutionBoundary(systemPrompt, 'remote_restricted') + (memoryContext ? `\n\n## User context (memories):${memoryContext}` : '') });
           messages.push(...getMessages(conversationId, 30).filter(row => row.role === 'user' || row.role === 'assistant')
             .map(row => ({ role: row.role as 'user' | 'assistant', content: row.message })));
           messages.push({ role: 'user', content: message });
-          pipeline = buildLumiExecutionPipeline({ dispatch: { userId: scope.userId, text: message, channel: 'chat', source: 'mcp_chat', domain: scope.domain, orgId: scope.orgId },
-            registry: tr, personalityToolPolicy: personality.toolPolicy, executionBoundary: 'remote_restricted',
-            actionTaskState: getConversationForScope(conversationId, scope.userId, scope.domain, scope.orgId)?.actionContinuationState });
+
           const userMessageId = addMessageIdempotent({ ...identity, role: 'user', content: message, deferActionPreparation: true });
           const prepared = prepareConversationActionExecution({ ...identity, userText: message, userMessageId,
-            toolPolicy: pipeline.authorizationPolicy, forceTask: pipeline.executionRequested, followupIntent: pipeline.actionFollowupIntent });
+            toolPolicy: pipeline.authorizationPolicy, forceTask: pipeline.executionRequested, followupIntent: pipeline.actionFollowupIntent, forceResume: pipeline.trustedActionContinuation, preserveExistingTask: pipeline.taskRelation.binding === 'active_task' });
           if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
           taskId = prepared.state?.taskId;
           turnRowId = prepared.turnRowId;
           receiptObserver = createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent);
           await flushDBOrThrow();
-          const stopWatch = authorization.watch(controller);
           const heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
           try {
             const response = explicitMemory ? { text: '', toolCalls: [], usageRecords: [] }
@@ -449,8 +418,9 @@ export function createLumiMcpServer(llmGetters?: {
               await flushDBOrThrow();
             }
             throw error;
-          } finally { heartbeat.stop(); stopWatch(); }
-        });
+          } finally { heartbeat.stop(); }
+          } finally { admission.release(); stopWatch(); }
+        })();
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(() => reject(new Error('MCP_TIMEOUT')), MCP_TIMEOUT_MS);
@@ -634,7 +604,7 @@ export function createLumiMcpServer(llmGetters?: {
     },
     async ({ text, voiceId }) => {
       try {
-        const outbound = await finalizeMcpResponseForDelivery({
+        const outbound = await finalizeLumiResponseForDelivery({
           taskText: `Proactive speech request: ${text}`,
           responseText: text,
           toolRecords: [],
@@ -760,7 +730,7 @@ export function createLumiMcpServer(llmGetters?: {
       try {
         if (isWorkViewer) return viewerMutationDenied();
         const routeLLM = resolveMcpLLM();
-        const personality = personalityRegistry.get('lumi') || personalityRegistry.getDefault();
+        const personality = personalityRegistry.getForUser('lumi', scope.userId, scope.orgId) || personalityRegistry.getDefault();
         const { systemPrompt } = personalityRegistry.buildSystemPrompt('lumi', {
           mode: 'task',
           sensory: {
@@ -772,7 +742,7 @@ export function createLumiMcpServer(llmGetters?: {
             activeDeviceTypes: [],
             deviceCount: 0,
           },
-        });
+        }, { userId: scope.userId, domain: scope.domain, orgId: scope.orgId, userText: task });
         const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
           {
             role: 'system',
@@ -819,7 +789,7 @@ export function createLumiMcpServer(llmGetters?: {
         );
 
         const result = await runMcpTaskTurn(messages);
-        const outbound = await finalizeMcpResponseForDelivery({
+        const outbound = await finalizeLumiResponseForDelivery({
           taskText: task,
           responseText: result.text,
           toolRecords: result.toolCalls,

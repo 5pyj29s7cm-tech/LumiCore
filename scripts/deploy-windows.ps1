@@ -17,9 +17,38 @@ function Invoke-CheckedNativeCommand {
     [Parameter(Mandatory = $true)][string]$FilePath,
     [string[]]$ArgumentList = @()
   )
-  & $FilePath @ArgumentList
-  if ($LASTEXITCODE -ne 0) {
-    throw "$FilePath failed with exit code $LASTEXITCODE. Deployment stopped."
+  $commandPath = (Get-Command $FilePath -CommandType Application -ErrorAction Stop).Source
+  $quotedArguments = @($ArgumentList | ForEach-Object {
+    '"' + [regex]::Replace([regex]::Replace($_, '(\\*)"', '${1}${1}\"'), '(\\+)$', '${1}${1}') + '"'
+  }) -join ' '
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  if ([IO.Path]::GetExtension($commandPath) -in @('.cmd', '.bat')) {
+    $startInfo.FileName = if ($env:ComSpec) { $env:ComSpec } else { Join-Path ([Environment]::SystemDirectory) 'cmd.exe' }
+    $startInfo.Arguments = '/d /s /c ""' + $commandPath + '" ' + $quotedArguments + '"'
+  } else {
+    $startInfo.FileName = $commandPath
+    $startInfo.Arguments = $quotedArguments
+  }
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $nativeProcess = New-Object System.Diagnostics.Process
+  $nativeProcess.StartInfo = $startInfo
+  try {
+    if (-not $nativeProcess.Start()) { throw "Could not start $FilePath. Deployment stopped." }
+    $stdout = $nativeProcess.StandardOutput.ReadToEndAsync()
+    $stderr = $nativeProcess.StandardError.ReadToEndAsync()
+    $nativeProcess.WaitForExit()
+    $outputText = $stdout.GetAwaiter().GetResult()
+    $errorText = $stderr.GetAwaiter().GetResult()
+    if ($outputText) { Write-Output $outputText.TrimEnd() }
+    if ($errorText) { [Console]::Error.Write($errorText) }
+    if ($nativeProcess.ExitCode -ne 0) {
+      throw "$FilePath failed with exit code $($nativeProcess.ExitCode). Deployment stopped."
+    }
+  } finally {
+    $nativeProcess.Dispose()
   }
 }
 

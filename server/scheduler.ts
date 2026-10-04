@@ -2014,6 +2014,7 @@ export class Scheduler {
       taskId: plan.taskId,
       turnId: plan.taskId,
       requestId: plan.taskId,
+      resolutionId: 'resolution:' + plan.taskId,
       idempotencyKey: `${plan.taskId}:scheduler_task_handler:${input.status}`,
       name: 'scheduler_task_handler',
       arguments: { scheduledTaskId: plan.intent.target, executionId: plan.taskId },

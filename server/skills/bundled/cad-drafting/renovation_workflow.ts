@@ -1,3 +1,5 @@
+import { readDocumentText, walkSourceFiles } from '../../../files/document_text';
+export { extractRtfText } from '../../../knowledge/rtf';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -119,199 +121,6 @@ function selectPrimaryReferenceImage(images: ReferenceImage[]): ReferenceImage |
   return [...images].sort((a, b) => score(b) - score(a))[0];
 }
 
-function walkFiles(root: string, maxFiles: number): string[] {
-  const files: string[] = [];
-  const visit = (dir: string) => {
-    if (files.length >= maxFiles) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (files.length >= maxFiles) return;
-      if (entry.name.startsWith('.')) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!IGNORE_DIRS.has(entry.name)) visit(full);
-      } else if (entry.isFile()) {
-        files.push(full);
-      }
-    }
-  };
-  visit(root);
-  return files;
-}
-
-function decodeRtfUnicode(value: number): string {
-  const code = value < 0 ? value + 65536 : value;
-  return String.fromCharCode(code);
-}
-
-export function extractRtfText(rtf: string): string {
-  const destinationWords = new Set(['fonttbl', 'colortbl', 'stylesheet', 'info', 'pict', 'object']);
-  const stack: Array<{ ignorable: boolean; ucSkip: number }> = [{ ignorable: false, ucSkip: 1 }];
-  let output = '';
-  let index = 0;
-  let pendingIgnorable = false;
-  const current = () => stack[stack.length - 1];
-  const append = (text: string) => { if (!current().ignorable) output += text; };
-
-  while (index < rtf.length) {
-    const char = rtf[index];
-    if (char === '{') {
-      stack.push({ ...current(), ignorable: pendingIgnorable || current().ignorable });
-      pendingIgnorable = false;
-      index++;
-      continue;
-    }
-    if (char === '}') {
-      if (stack.length > 1) stack.pop();
-      pendingIgnorable = false;
-      index++;
-      continue;
-    }
-    if (char !== '\\') {
-      append(char);
-      index++;
-      continue;
-    }
-
-    const next = rtf[index + 1];
-    if (next === '\\' || next === '{' || next === '}') {
-      append(next);
-      index += 2;
-      continue;
-    }
-    if (next === '~') {
-      append(' ');
-      index += 2;
-      continue;
-    }
-    if (next === '*') {
-      pendingIgnorable = true;
-      index += 2;
-      continue;
-    }
-    if (next === "'") {
-      const byte = Number.parseInt(rtf.slice(index + 2, index + 4), 16);
-      if (Number.isFinite(byte)) append(Buffer.from([byte]).toString('latin1'));
-      index += 4;
-      continue;
-    }
-
-    const match = rtf.slice(index + 1).match(/^([a-zA-Z]+)(-?\d+)? ?/);
-    if (!match) {
-      index += 2;
-      continue;
-    }
-    const word = match[1];
-    const parameter = match[2] !== undefined ? Number(match[2]) : undefined;
-    index += 1 + match[0].length;
-
-    if (destinationWords.has(word)) current().ignorable = true;
-    else if (word === 'uc' && parameter !== undefined) current().ucSkip = Math.max(0, parameter);
-    else if (word === 'u' && parameter !== undefined) {
-      append(decodeRtfUnicode(parameter));
-      index += current().ucSkip;
-    } else if (word === 'par' || word === 'line') append('\n');
-    else if (word === 'tab') append('\t');
-  }
-  return normalizeWhitespace(output);
-}
-
-async function extractPdfText(filePath: string): Promise<string> {
-  const buffer = fs.readFileSync(filePath);
-  const pdfModule: any = await import('pdf-parse');
-  const legacyParser = typeof pdfModule.default === 'function'
-    ? pdfModule.default
-    : typeof pdfModule === 'function'
-      ? pdfModule
-      : null;
-  if (legacyParser) return String((await legacyParser(buffer))?.text || '');
-  const PDFParse = pdfModule.PDFParse || pdfModule.default?.PDFParse;
-  if (typeof PDFParse !== 'function') throw new Error('Unsupported pdf-parse API');
-  const parser = new PDFParse({ data: buffer });
-  try {
-    return String((await parser.getText())?.text || '');
-  } finally {
-    await parser.destroy?.();
-  }
-}
-
-function extractOoxmlTextBlocks(xml: string): string[] {
-  const decode = (value: string) => value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&');
-  const runs = (chunk: string) => Array.from(chunk.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g))
-    .map(match => decode(match[1] || '').replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  const paragraphs = Array.from(xml.matchAll(/<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g))
-    .map(match => runs(match[0]).join(' ').trim())
-    .filter(Boolean);
-  return paragraphs.length ? paragraphs : runs(xml);
-}
-
-async function extractPptxText(filePath: string): Promise<string> {
-  const JSZip = (await import('jszip')).default;
-  const zip: any = await JSZip.loadAsync(fs.readFileSync(filePath));
-  const entries = Object.values(zip.files as Record<string, any>)
-    .filter((entry: any) => !entry.dir && /^ppt\/(?:slides|notesSlides)\/(?:slide|notesSlide)\d+\.xml$/i.test(entry.name))
-    .sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  const sections: string[] = [];
-  for (const entry of entries as any[]) {
-    const xml = await entry.async('string');
-    const blocks = extractOoxmlTextBlocks(xml);
-    if (blocks.length) sections.push(`[${entry.name}]\n${blocks.join('\n')}`);
-  }
-  return sections.join('\n\n');
-}
-
-function cellValueToText(value: any): string {
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value !== 'object') return String(value);
-  if (Array.isArray(value.richText)) return value.richText.map((part: any) => String(part?.text ?? '')).join('');
-  if (Object.prototype.hasOwnProperty.call(value, 'result')) return cellValueToText(value.result);
-  if (Object.prototype.hasOwnProperty.call(value, 'text')) return cellValueToText(value.text);
-  return String(value);
-}
-
-function worksheetToCsv(worksheet: any): string {
-  const lines: string[] = [];
-  const columnCount = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
-  worksheet.eachRow({ includeEmpty: false }, (row: any) => {
-    const fields: string[] = [];
-    for (let col = 1; col <= columnCount; col++) {
-      const text = cellValueToText(row.getCell(col).value);
-      fields.push(/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
-    }
-    while (fields.length > 0 && fields[fields.length - 1] === '') fields.pop();
-    if (fields.length > 0) lines.push(fields.join(','));
-  });
-  return lines.join('\n');
-}
-
-async function extractXlsxText(filePath: string): Promise<string> {
-  const mod: any = await import('exceljs/dist/exceljs.min.js');
-  const ExcelJS = mod.default || mod;
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fs.readFileSync(filePath));
-  return workbook.worksheets.map((sheet: any) => `[${sheet.name}]\n${worksheetToCsv(sheet)}`).join('\n\n');
-}
-
-async function extractFileText(filePath: string): Promise<string> {
-  const ext = path.extname(filePath).toLowerCase();
-  if (['.txt', '.md', '.csv', '.json', '.log'].includes(ext)) return fs.readFileSync(filePath, 'utf-8');
-  if (ext === '.rtf') return extractRtfText(fs.readFileSync(filePath, 'utf-8'));
-  if (ext === '.docx') {
-    const mammoth = await import('mammoth');
-    return String((await mammoth.extractRawText({ path: filePath })).value || '');
-  }
-  if (ext === '.xlsx') return extractXlsxText(filePath);
-  if (ext === '.xls') throw new Error('Legacy .xls files are not supported. Convert the file to .xlsx or .csv first.');
-  if (ext === '.pptx') return extractPptxText(filePath);
-  if (ext === '.pdf') return extractPdfText(filePath);
-  throw new Error(`Unsupported file type: ${ext || '(none)'}`);
-}
 
 function countKeyword(corpus: string, keyword: string): number {
   return (corpus.match(new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
@@ -486,7 +295,7 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
 
   const maxFiles = Math.min(Math.max(Number(args.maxFiles) || 100, 1), 400);
   const maxChars = Math.min(Math.max(Number(args.maxChars) || 220000, 10000), 900000);
-  const files = walkFiles(folderPath, maxFiles);
+  const files = walkSourceFiles(folderPath, maxFiles, IGNORE_DIRS);
   const filesRead: ExtractedFile[] = [];
   const referenceImages: ReferenceImage[] = [];
   const filesSkipped: SkippedFile[] = [];
@@ -508,7 +317,7 @@ export async function runRenovationFolderWorkflow(args: RenovationFolderWorkflow
       continue;
     }
     try {
-      const text = normalizeWhitespace(await extractFileText(filePath));
+      const text = normalizeWhitespace(await readDocumentText(filePath, { blankSections: true }));
       if (!text) {
         filesSkipped.push({ path: filePath, reason: 'no extractable text' });
         continue;

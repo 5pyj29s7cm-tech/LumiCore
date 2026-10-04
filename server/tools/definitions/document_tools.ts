@@ -1,3 +1,4 @@
+import { readDocumentText } from '../../files/document_text';
 /**
  * Document Parsing Tools — read DOCX, XLSX, and extract text for RAG ingestion.
  */
@@ -12,12 +13,9 @@ import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import type { ToolCapabilityMetadata, ToolContext, ToolDefinition } from '../types';
 import { ingestDocument } from '../../agents/rag';
-import { extractPptxText } from '../../knowledge/pptx';
-import { extractRtfText } from '../../knowledge/rtf';
 import { AUDIO_FILE_EXTS, isAudioTranscriptionUnavailable, transcribeAudioFile } from '../../stt/file_transcription';
 import type { STTProvider } from '../../stt/types';
-import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, prepareSpreadsheetRows, workbookToText, worksheetToCsv, worksheetToCsvPage, writeXlsxWorkbook } from '../../utils/spreadsheet';
-import { extractPdfText } from '../../utils/pdf_text';
+import { applySpreadsheetOperations, createXlsxWorkbook, getWorksheetNames, getWorksheetOrThrow, loadXlsxWorkbook, prepareSpreadsheetRows, worksheetToCsv, worksheetToCsvPage, writeXlsxWorkbook } from '../../utils/spreadsheet';
 import { getGeneratedOutputDir } from '../../config/data_path';
 import { canonicalPathIdentity } from '../../conversation/task_target_anchor';
 import { requestedSingleArtifact, requestedArtifactSaveAsPath } from '../../cognition/artifact_write_scope';
@@ -319,37 +317,10 @@ async function extractDocumentText(args: Record<string, any>): Promise<string> {
   if (!filePath || !fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
 
   const ext = path.extname(filePath).toLowerCase();
-  let text: string;
-
-  switch (ext) {
-    case '.docx':
-      const mammoth = require('mammoth');
-      text = (await mammoth.extractRawText({ path: filePath })).value;
-      break;
-    case '.xlsx':
-      text = await workbookToText(filePath);
-      break;
-    case '.xls':
-      throw new Error('Legacy .xls files are not supported by the safe spreadsheet reader. Convert the file to .xlsx or .csv first.');
-    case '.pptx':
-      text = await extractPptxText(filePath);
-      break;
-    case '.pdf':
-      text = await extractPdfText(filePath, args.password);
-      break;
-    case '.txt':
-    case '.md':
-    case '.csv':
-      text = fs.readFileSync(filePath, 'utf-8');
-      break;
-    case '.rtf':
-      text = extractRtfText(fs.readFileSync(filePath, 'utf-8'));
-      break;
-    default:
-      throw new Error(`Unsupported format: ${ext}. Supported: .docx, .xlsx, .xls, .pptx, .pdf, .rtf, .txt, .md, .csv`);
+  if (!['.docx', '.xlsx', '.xls', '.pptx', '.pdf', '.rtf', '.txt', '.md', '.csv'].includes(ext)) {
+    throw new Error(`Unsupported format: ${ext}. Supported: .docx, .xlsx, .xls, .pptx, .pdf, .rtf, .txt, .md, .csv`);
   }
-
-  return text;
+  return readDocumentText(filePath, { password: args.password });
 }
 
 async function ingestDocumentToRag(args: Record<string, any>, context?: any): Promise<string> {
@@ -651,25 +622,12 @@ async function diffDocuments(args: Record<string, any>): Promise<string> {
   const ext1 = path.extname(filePath1).toLowerCase();
   const ext2 = path.extname(filePath2).toLowerCase();
 
-  async function extractText(fp: string, ext: string, password?: unknown): Promise<string> {
-    switch (ext) {
-      case '.docx': {
-        const mammoth = require('mammoth');
-        return (await mammoth.extractRawText({ path: fp })).value;
-      }
-      case '.pdf': {
-        return extractPdfText(fp, password);
-      }
-      case '.txt': case '.md': case '.csv':
-        return fs.readFileSync(fp, 'utf-8');
-      default:
-        throw new Error(`Unsupported format for diff: ${ext}. Supported: .docx, .pdf, .txt, .md, .csv`);
-    }
+  for (const ext of [ext1, ext2]) {
+    if (!['.docx', '.pdf', '.txt', '.md', '.csv'].includes(ext)) throw new Error(`Unsupported format for diff: ${ext}. Supported: .docx, .pdf, .txt, .md, .csv`);
   }
-
   const [text1, text2] = await Promise.all([
-    extractText(filePath1, ext1, args.password1),
-    extractText(filePath2, ext2, args.password2),
+    readDocumentText(filePath1, { password: args.password1 }),
+    readDocumentText(filePath2, { password: args.password2 }),
   ]);
 
   const diffLib = require('diff');

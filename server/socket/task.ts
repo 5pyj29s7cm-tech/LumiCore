@@ -1,3 +1,4 @@
+import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { resolveUserTurn } from '../cognition/turn_resolution';
 import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
@@ -68,13 +69,10 @@ import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { buildTextReplyStyleOverlay } from '../cognition/reply_style';
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
-import { canAutoApproveAction } from "../tools/action_constitution";
 import {
   buildTransportNeutralConfirmationScope,
-  confirmationArgumentsMatch,
   consumePendingConfirmationDurably,
   formatPendingConfirmationPrompt,
-  pendingConfirmationMatchesExactProposal,
   recordPendingConfirmationDurably,
 } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -1446,67 +1444,23 @@ export function registerTaskHandler(
       );
     };
     let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
-    const requestConfirmation = async (toolName: string, args: Record<string, any>): Promise<boolean> => {
-      authority.assertAuthorized();
-      if (pendingConfirmationCreatedThisTurn) return false;
-      if (
-        pendingConfirmation
-        && await consumePendingConfirmationDurably(
-          uid,
-          pendingConfirmation.id,
-          toolName,
-          args,
-          confirmationScope,
-        )
-      ) {
-        authority.assertAuthorized();
-        console.log(`[TaskHandler] Consumed one-time confirmation for "${toolName}".`);
-        return true;
-      }
-      if (
-        !correctionRequiresFreshConfirmation
-        && canAutoApproveAction(toolName, args, { actionIntent: routedTaskText })
-      ) return true;
-      const exactWriteCorrection = correctionRequiresFreshConfirmation
-        && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file';
-      if (
-        exactWriteCorrection
-        && (
-          !runtimeOwnedDeterministicRecoveryCall
-          || toolName !== runtimeOwnedDeterministicRecoveryCall.name
-          || !confirmationArgumentsMatch(args, runtimeOwnedDeterministicRecoveryCall.arguments)
-        )
-      ) {
-        throw new Error('Corrected write confirmation did not match the runtime-owned exact proposal');
-      }
-      const pending = await recordPendingConfirmationDurably(uid, toolName, args, 'task', {
-        domain: taskScope.domain,
-        orgId: taskScope.orgId,
-        channelId: confirmationChannelScope.channelId,
-        taskId: actionTaskExecution.state?.taskId,
-        originRequestId: requestId,
-        actionIntent: routedTaskText,
-      });
-      authority.assertAuthorized();
-      if (
-        correctionRequiresFreshConfirmation
-        && !pendingConfirmationMatchesExactProposal(
-          pending,
-          toolName,
-          args,
-          { taskId: actionTaskExecution.state?.taskId, originRequestId: requestId },
-        )
-      ) {
-        throw new Error('Corrected action confirmation was not bound to the current task request');
-      }
-      pendingConfirmationCreatedThisTurn = pending;
-      setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationPrompt(pending),
-        requestId,
-      });
-      console.warn(`[TaskHandler] Tool "${toolName}" is waiting for one-time confirmation ${pending.id}.`);
-      return false;
-    };
+    const requestConfirmation = createTurnConfirmation({
+      userId: uid, source: 'task', requestId, actionIntent: routedTaskText,
+      pending: pendingConfirmation,
+      consumeScope: () => confirmationScope,
+      proposalScope: () => ({ ...confirmationChannelScope, taskId: actionTaskExecution.state?.taskId }),
+      correctionRequiresFreshConfirmation,
+      exactWriteCorrection: correctionRequiresFreshConfirmation && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file',
+      recoveryCall: () => runtimeOwnedDeterministicRecoveryCall,
+      assertCurrent: () => authority.assertAuthorized(),
+      isCancelled: () => authority.isCancelled(),
+      onPending: pending => {
+        pendingConfirmationCreatedThisTurn = pending;
+        setConversationActionExecutionStatus(convForHistory.id, uid, 'waiting_confirmation', {
+          assistantState: formatPendingConfirmationPrompt(pending), requestId,
+        });
+      },
+    });
 
     if (actionFollowupIntent === 'status') {
       const statusText = getConversationActionStatus(

@@ -31,3 +31,22 @@ export function replacePromptBlock(messages: NormalizedMessage[], block: PromptB
     }
     messages.push(message);
 }
+
+/** Keep one projection per slot; data from another authority cannot replace it. */
+export function normalizePromptBlockMessages(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const latest = new Map<string, { index: number; authority: PromptBlock['authority']; kind: PromptBlock['kind'] }>();
+  const normalized = messages.map((message, index) => {
+    const block = message.promptBlock;
+    if (!block) return { ...message };
+    if (message.role !== 'system') throw new Error('Prompt block metadata requires a system message');
+    const previous = latest.get(block.id);
+    if (previous && (previous.authority !== block.authority || previous.kind !== block.kind)) {
+      throw new Error('Conflicting prompt block authority or kind: ' + block.id);
+    }
+    const canonical = promptBlockMessage(block);
+    latest.set(block.id, { index, authority: block.authority, kind: block.kind });
+    return canonical;
+  });
+  return normalized.filter((message, index) => !message.promptBlock
+    || latest.get(message.promptBlock.id)?.index === index);
+}

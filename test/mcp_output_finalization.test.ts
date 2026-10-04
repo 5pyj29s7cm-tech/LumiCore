@@ -46,6 +46,7 @@ vi.mock('../server/personality', () => {
   return {
     personalityRegistry: {
       get: vi.fn(() => personality),
+      getForUser: vi.fn(() => personality),
       getDefault: vi.fn(() => personality),
       buildSystemPrompt: vi.fn(() => ({ systemPrompt: 'You are Lumi.' })),
     },
@@ -567,4 +568,29 @@ describe('MCP finalized output delivery', () => {
     expect(context.toolPolicy.allowedTools).toEqual(['web_search']);
   });
 
+});
+
+it('shares its conversation lease with socket and messaging writers', async () => {
+  const { startIsolatedConversation } = await import('../server/conversation/manager');
+  const { reserveConversationExecution } = await import('../server/cognition/conversation_execution');
+  const userId = 'mcp-shared-queue-owner';
+  const conversation = startIsolatedConversation(userId, 'lumi', 'personal', '');
+  const prior = reserveConversationExecution({ userId, conversationId: conversation.id }, 'socket-prior-request');
+  await prior.waitForTurn();
+  mocks.runWithTools.mockResolvedValue({ text: 'Hello.', toolCalls: [], usageRecords: [] });
+  const calls = mocks.runWithTools.mock.calls.length;
+  const server = createLumiMcpServer(undefined, new ToolRegistry(), undefined, {
+    userId, username: 'fixture', role: 'user', domain: 'personal', orgId: '', authenticated: true,
+  });
+  const reply = getHandler(server, 'lumi_chat')({ message: 'Hello.', conversationId: conversation.id });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(mocks.runWithTools.mock.calls).toHaveLength(calls);
+  } finally { prior.release(); }
+  expect(await reply).toMatchObject({ finalized: true, conversationId: conversation.id });
+  const context = mocks.runWithTools.mock.calls.at(-1)![11];
+  expect(context.resolutionId).toBe('resolution:' + context.requestId);
+  expect(context.turnRowId).toEqual(expect.any(String));
+  const next = reserveConversationExecution({ userId, conversationId: conversation.id }, 'socket-next-request');
+  try { await next.waitForTurn(); } finally { next.release(); }
 });
