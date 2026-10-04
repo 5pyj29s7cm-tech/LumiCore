@@ -1,3 +1,5 @@
+import { providerGetterArguments } from "../llm/provider_getters";
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 /**
  * Autonomous Task Generator — curiosity-driven self-initiation.
  * Gathers context about the user's state and asks the LLM to suggest useful autonomous tasks.
@@ -18,20 +20,7 @@ import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { formatIndustryLearningContext } from './industry_learning';
 import { isMemoryAvatarScoped } from '../memory';
 
-interface LLMGetters {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}
+type LLMGetters = SharedProviderGetters;
 
 type GeneratedAutonomousTask = {
   title: string;
@@ -420,17 +409,7 @@ ${contextParts.join('\n')}
         requestId: routingRequestId,
         interactionId: routingRequestId,
       }), signal },
-      getters.getDeepSeek, getters.getGemini,
-      getters.getOpenAI || (() => null),
-      getters.getAnthropic || (() => null),
-      getters.getQwen || (() => null),
-      getters.getOllama || (() => null),
-      getters.getLmStudio || (() => null),
-      getters.getArk || (() => null),
-      getters.getXiaomi || (() => null),
-      getters.getKimi || (() => null),
-      getters.getGlm || (() => null),
-      getters.getRelay || (() => null),
+      ...providerGetterArguments(getters, "optional"),
     );
 
     if (signal?.aborted) return 0;

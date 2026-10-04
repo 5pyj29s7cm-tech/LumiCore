@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../../../llm/provider_getters";
 import { createTurnConfirmation } from '../../../tools/turn_confirmation';
 import { reserveConversationExecution } from '../../../cognition/conversation_execution';
 import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
@@ -3213,18 +3214,7 @@ async function processWithPersonalityAdmitted(
         messages,
         [],
         userLLMPrefs,
-        llm?.getDeepSeek || (() => null),
-        llm?.getGemini || (() => null),
-        llm?.getOpenAI,
-        llm?.getAnthropic,
-        llm?.getQwen,
-        llm?.getOllama,
-        llm?.getLmStudio,
-        llm?.getArk,
-        llm?.getXiaomi,
-        llm?.getKimi,
-        llm?.getGlm,
-        llm?.getRelay,
+        ...providerGetterArguments(llm, "primary"),
       );
       responseText = response.text || '';
       if (response.usage) {

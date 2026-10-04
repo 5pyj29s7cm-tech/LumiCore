@@ -1,4 +1,6 @@
-import { readDB, writeDB } from '../../db_layer';
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 import { getGateConfig, getRecentIdleState } from '../autonomy/safety_gate';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
@@ -14,20 +16,7 @@ import { Memory } from './types';
 import { loadEmotionalState } from '../personality/state';
 import { formatUserIdentityBoundary } from '../personality/user_identity';
 
-export interface DreamLLMGetters {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}
+export type DreamLLMGetters = SharedProviderGetters;
 
 export interface SleepCycleState {
   userId: string;
@@ -97,8 +86,7 @@ function stateKey(userId: string, domain: string, orgId: string): string {
 
 export function getSleepCycleState(userId: string, domain = 'personal', orgId = ''): SleepCycleState {
   try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === stateKey(userId, domain, orgId));
+    const setting = readSettingRecord(stateKey(userId, domain, orgId));
     if (setting?.value) {
       return {
         userId,
@@ -118,13 +106,7 @@ function saveSleepCycleState(userId: string, domain: string, orgId: string, patc
     userId,
   };
   try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    let setting = db.settings.find((s: any) => s.key === stateKey(userId, domain, orgId));
-    const value = JSON.stringify(next);
-    if (setting) setting.value = value;
-    else db.settings.push({ key: stateKey(userId, domain, orgId), value });
-    writeDB(db);
+    writeSetting(stateKey(userId, domain, orgId), JSON.stringify(next));
   } catch {}
   return next;
 }
@@ -224,18 +206,7 @@ async function synthesizeDream(
     messages,
     [],
     { provider: ctx.provider, model: ctx.model, maxTokens: 900, userId: ctx.userId, domain: ctx.domain, orgId: ctx.orgId, source: ctx.source || 'memory_dream' },
-    getters.getDeepSeek,
-    getters.getGemini,
-    getters.getOpenAI,
-    getters.getAnthropic,
-    getters.getQwen,
-    getters.getOllama,
-    getters.getLmStudio,
-    getters.getArk,
-    getters.getXiaomi,
-    getters.getKimi,
-    getters.getGlm,
-    getters.getRelay,
+    ...providerGetterArguments(getters),
   );
 
   const parsed = parseJsonObject(result.text || '');
@@ -383,12 +354,12 @@ export async function runDreamCycle(
 
   try {
     if (unconsolidated.length >= 6) {
-      consolidated = await consolidateEpisodic(ctx, Math.min(10, Math.max(6, unconsolidated.length)), getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+      consolidated = await consolidateEpisodic(ctx, Math.min(10, Math.max(6, unconsolidated.length)), ...providerGetterArguments(getters));
     }
     if (recent.length >= 6) {
-      narrative = await consolidateNarrative(ctx, Math.max(1, Math.ceil((options.windowHours ?? 36) / 24)), 6, getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+      narrative = await consolidateNarrative(ctx, Math.max(1, Math.ceil((options.windowHours ?? 36) / 24)), 6, ...providerGetterArguments(getters));
     }
-    reflection = await selfReflect(ctx, getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+    reflection = await selfReflect(ctx, ...providerGetterArguments(getters));
     dream = await synthesizeDream(ctx, recent, lowConfidence, getters);
     if (dream) dreamMemory = addDreamMemory(ctx, dream);
 

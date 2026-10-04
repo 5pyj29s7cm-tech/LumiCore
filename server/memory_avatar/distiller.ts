@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 /**
  * Personality Distillation Pipeline — 4-dimension human distillation
  * Inspired by GitHub's immortal-skill, relic.skill, and colleague-skill ecosystems.
@@ -224,9 +225,7 @@ async function callDistillLLM(
       signal: llmGetters.signal,
       maxTokens: 3000,
     },
-    llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-    llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
-    llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+    ...providerGetterArguments(llmGetters),
   );
   llmGetters.signal?.throwIfAborted();
   return result.text || '';

@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { runtimeFaults } from './fault_state';
 import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
 import {
@@ -265,7 +266,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       console.warn('[Messaging] Long-connection startup failed:', err?.message || err);
     });
     scheduler.setIO(io);
-    registerScheduledTasks(llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen, llm.getOllama, llm.getLmStudio, llm.getArk, llm.getXiaomi, llm.getKimi, llm.getGlm, llm.getRelay);
+    registerScheduledTasks(...providerGetterArguments(llm));
 
     scheduleFirstBootExploration(__dirname);
     schedulePostStartupFlush(5_000);

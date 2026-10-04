@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../../llm/provider_getters";
 /**
  * Lumi Skill Management Tools — generate, list, and install MCP skills.
  *
@@ -32,20 +33,7 @@ import { getExtensionRuntimeStates } from '../../skills/runtime_state';
 import { createBundledSkillIdentity } from '../../marketplace/official_identity';
 
 // Module-level LLM getters, set during registration
-let _llmGetters: {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-} | null = null;
+let _llmGetters: SharedProviderGetters | null = null;
 
 export function setSkillLLMGetters(getters: typeof _llmGetters): void {
   _llmGetters = getters;
@@ -99,18 +87,7 @@ async function generateSkillHandler(args: Record<string, any>, context?: ToolCon
       domain: context?.domain,
       orgId: context?.orgId,
     },
-    _llmGetters.getDeepSeek,
-    _llmGetters.getGemini,
-    _llmGetters.getOpenAI,
-    _llmGetters.getAnthropic,
-    _llmGetters.getQwen,
-    _llmGetters.getOllama,
-    _llmGetters.getLmStudio,
-    _llmGetters.getArk,
-    _llmGetters.getXiaomi,
-    _llmGetters.getKimi,
-    _llmGetters.getGlm,
-    _llmGetters.getRelay,
+    ...providerGetterArguments(_llmGetters),
   );
 
   if (!result.success) {

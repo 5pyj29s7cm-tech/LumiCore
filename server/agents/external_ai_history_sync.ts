@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -695,8 +696,7 @@ async function readDesktopVisiblePage(source: ExternalAiHistorySource, context?:
     selectionMode: 'pinned',
     allowCloudFallback: false,
     maxTokens: 3_000,
-  }, getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen,
-  getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+  }, ...providerGetterArguments(getters));
   const parsed = parsePage(parseJsonObject(raw));
   return {
     ...parsed,

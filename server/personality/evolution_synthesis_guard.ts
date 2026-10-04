@@ -1,5 +1,6 @@
+import { readSettingRecord, readSetting, writeSetting } from "../persistence/settings_repository";
 import { createHash } from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+
 import type { Memory } from '../memory/types';
 
 const SETTING_PREFIX = 'personality_evolution_synthesis_guard_v1_';
@@ -88,7 +89,7 @@ function parseState(value: unknown): EvolutionSynthesisGuardState | null {
 
 export function getEvolutionSynthesisGuardState(scope: EvolutionScope): EvolutionSynthesisGuardState | null {
   try {
-    const row = (readDB().settings || []).find((item: any) => item?.key === settingKey(scope));
+    const row = readSettingRecord(settingKey(scope));
     return row?.value ? parseState(JSON.parse(row.value)) : null;
   } catch {
     return null;
@@ -96,21 +97,9 @@ export function getEvolutionSynthesisGuardState(scope: EvolutionScope): Evolutio
 }
 
 function persistState(scope: EvolutionScope, state: EvolutionSynthesisGuardState | null): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
   const key = settingKey(scope);
-  const index = db.settings.findIndex((item: any) => item?.key === key);
-  if (!state) {
-    if (index >= 0) {
-      db.settings.splice(index, 1);
-      writeDB(db);
-    }
-    return;
-  }
-  const row = { key, value: JSON.stringify(state) };
-  if (index >= 0) db.settings[index] = row;
-  else db.settings.push(row);
-  writeDB(db);
+  if (!state && readSetting(key) === undefined) return;
+  writeSetting(key, state ? JSON.stringify(state) : undefined);
 }
 
 function normalizedEvidenceTime(memory: Pick<Memory, 'createdAt' | 'updatedAt'>): string {

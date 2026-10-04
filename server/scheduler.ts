@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "./llm/provider_getters";
 ﻿// Proactive agent scheduler - cron-like check-ins
 // Each check-in fires a socket event to the UI so the user sees "Lumi checked in"
 
@@ -435,20 +436,7 @@ export function resolveScheduledUserIds(db: any): string[] {
   return registered.size > 0 ? [...registered] : ['anonymous'];
 }
 
-type LLMGetters = {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-};
+type LLMGetters = SharedProviderGetters;
 
 class ScheduledTaskExecutionError extends Error {
   constructor(

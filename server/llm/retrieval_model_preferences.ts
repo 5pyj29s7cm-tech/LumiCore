@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readSetting } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
@@ -131,11 +131,8 @@ function legacySettingKey(userId: string): string {
 
 export function getUserRetrievalModelPreferences(userId: string): RetrievalModelPreferences {
   try {
-    const db = readDB();
-    const settings = db.settings || [];
-    const row = settings.find((item: any) => item.key === settingKey(userId))
-      || settings.find((item: any) => item.key === legacySettingKey(userId));
-    return normalizeRetrievalModelPreferences(row?.value ? JSON.parse(row.value) : null);
+    const value = readSetting(settingKey(userId)) ?? readSetting(legacySettingKey(userId));
+    return normalizeRetrievalModelPreferences(value ? JSON.parse(value) : null);
   } catch {
     return normalizeRetrievalModelPreferences(null);
   }

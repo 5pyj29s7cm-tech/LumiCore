@@ -1048,7 +1048,10 @@ export function compositeNavigationInstructions(value: string): Array<{ text: st
     && instructions.some(item => item.intent.kind === 'desktop_operation') ? instructions : [];
 }
 
-export function normalizeActionIntent(value: string): NormalizedActionIntent {
+export interface ActionIntentAnalysis { intent(value: string): NormalizedActionIntent }
+
+export function normalizeActionIntent(value: string, analysis?: ActionIntentAnalysis): NormalizedActionIntent {
+  if (analysis) return analysis.intent(value);
   const text = withoutNegatedLookupClauses(currentTurnText(value));
   if (!text) return { ...EMPTY_INTENT };
   // A fresh local observation is work. `status_query` means explaining saved

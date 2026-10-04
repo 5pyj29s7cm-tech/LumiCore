@@ -1,3 +1,4 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 /**
  * HIM (Homeostatic Intrinsic Motivation / 猫智能论) — comfort-driven intrinsic drive engine.
  *
@@ -14,7 +15,7 @@
  */
 
 import { EmotionalState } from './state';
-import { readDB, writeDB } from '../../db_layer';
+
 
 // ── Types ──
 
@@ -197,9 +198,7 @@ export function formatPeakForPrompt(peak: HIMPeak): string {
 
 export function loadHIMState(userId: string): HIMState {
   try {
-    const db = readDB();
-    if (!db.settings) return createDefaultHIMState();
-    const setting = db.settings.find((s: any) => s.key === `him_${userId}`);
+    const setting = readSettingRecord(`him_${userId}`);
     if (!setting) return createDefaultHIMState();
     return { ...createDefaultHIMState(), ...JSON.parse(setting.value) };
   } catch {
@@ -208,15 +207,5 @@ export function loadHIMState(userId: string): HIMState {
 }
 
 export function saveHIMState(userId: string, him: HIMState): void {
-  try {
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const existing = db.settings.findIndex((s: any) => s.key === `him_${userId}`);
-    if (existing >= 0) {
-      db.settings[existing].value = JSON.stringify(him);
-    } else {
-      db.settings.push({ key: `him_${userId}`, value: JSON.stringify(him) });
-    }
-    writeDB(db);
-  } catch {}
+  try { writeSetting(`him_${userId}`, JSON.stringify(him)); } catch {}
 }

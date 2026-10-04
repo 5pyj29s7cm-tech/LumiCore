@@ -1,5 +1,6 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import { createHash, randomUUID } from 'crypto';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow } from '../../db_layer';
 import type { OrganizationMembershipAuthorization } from '../org/membership_authorization';
 import type { ToolExecutionRecord, ToolContext } from '../tools/types';
 import {
@@ -590,9 +591,7 @@ function migrateStoredRun(raw: WorkflowRun): WorkflowRun {
 }
 
 function loadStore(): WorkflowRuntimeStore {
-  const db = readDB();
-  const settings = Array.isArray(db.settings) ? db.settings : [];
-  const row = settings.find((item: any) => item?.key === WORKFLOW_RUNTIME_SETTING);
+  const row = readSettingRecord(WORKFLOW_RUNTIME_SETTING);
   if (!row?.value) return { schemaVersion: WORKFLOW_RUNTIME_SCHEMA_VERSION, definitions: [], runs: [] };
   try {
     const parsed = JSON.parse(row.value) as Partial<WorkflowRuntimeStore>;
@@ -609,13 +608,7 @@ function loadStore(): WorkflowRuntimeStore {
 }
 
 function saveStore(store: WorkflowRuntimeStore): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const row = { key: WORKFLOW_RUNTIME_SETTING, value: JSON.stringify(store) };
-  const index = db.settings.findIndex((item: any) => item?.key === WORKFLOW_RUNTIME_SETTING);
-  if (index >= 0) db.settings[index] = row;
-  else db.settings.push(row);
-  writeDB(db);
+  writeSetting(WORKFLOW_RUNTIME_SETTING, JSON.stringify(store));
 }
 
 function getMutableRun(store: WorkflowRuntimeStore, runId: string): WorkflowRun {
@@ -1697,8 +1690,5 @@ export async function persistWorkflowRuntimeBarrier(): Promise<void> {
 }
 
 export function resetWorkflowRuntimeForTest(): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  db.settings = db.settings.filter((item: any) => item?.key !== WORKFLOW_RUNTIME_SETTING);
-  writeDB(db);
+  writeSetting(WORKFLOW_RUNTIME_SETTING, undefined);
 }

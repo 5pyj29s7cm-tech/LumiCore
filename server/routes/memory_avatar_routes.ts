@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { Router, Request, Response, NextFunction } from 'express';
 import { getActiveConversation, getMessages } from '../conversation/manager';
 import { requireAuth } from '../middleware/auth';
@@ -37,12 +38,7 @@ function publicAvatar(avatar: any) {
 
 export function mountMemoryAvatarRoutes(
   router: Router,
-  llmGetters: {
-    getDeepSeek: () => any; getGemini: () => any; getOpenAI?: () => any;
-    getAnthropic?: () => any; getQwen?: () => any; getOllama?: () => any;
-    getLmStudio?: () => any; getArk?: () => any; getXiaomi?: () => any;
-    getKimi?: () => any; getGlm?: () => any; getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters,
 ) {
   router.use('/memory-avatars', requireAuth, (req, res, next) => {
     if (req.user?.orgId) return res.status(403).json({ error: 'Memory Territory requires your personal workspace.', code: 'memory_avatar_personal_scope_required' });

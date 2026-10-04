@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { Router } from "express";
 import { serializedScopeRoute, sendDurableMutation } from "./durable_mutation";
 import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from "../persistence/durable_scope_mutation";
@@ -34,20 +35,7 @@ function getMemoryScope(req: Express.Request): MemoryScope {
 export function mountMemoryRoutes(
   router: Router,
   _jwtSecret: string,
-  llmGetters: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI?: () => any;
-    getAnthropic?: () => any;
-    getQwen?: () => any;
-    getOllama?: () => any;
-    getLmStudio?: () => any;
-    getArk?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters,
 ) {
   router.get("/memory/firewall/policy", (_req, res) => {
     res.json(getMemoryFirewallPolicy());
@@ -304,9 +292,7 @@ export function mountMemoryRoutes(
       const minCount = Number(req.body.minCount) || 10;
       const result = await consolidateEpisodic(
         ctx, minCount,
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
-        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
       if (result) {
         return sendDurableMutation(req, res, { success: true, memory: result }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', result.id));
@@ -334,9 +320,7 @@ export function mountMemoryRoutes(
       };
       const result = await selfReflect(
         ctx,
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
-        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
       if (result) {
         return sendDurableMutation(req, res, { success: true, memory: result }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', result.id));
@@ -521,9 +505,7 @@ Rules:
         [{ role: 'user', content: prompt }],
         [],
         getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId }),
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
-        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
 
       let plan: { branches: { title: string; memoryIds: string[] }[] };

@@ -17,6 +17,41 @@ import {
   type DesktopControlWindowBinding,
 } from "../desktop/control_lease";
 
+const directDesktopRelayTools = new Set([
+  'client_action',
+  'desktop_capability_status',
+  'desktop_system_info',
+  'desktop_list_files',
+  'desktop_list_apps',
+  'desktop_path_info',
+  'desktop_write_text_file',
+  'desktop_open',
+  'desktop_show_lumi_window',
+  'desktop_run_command',
+  'desktop_active_window',
+  'desktop_window_control',
+  'desktop_running_processes',
+  'desktop_capture_screen',
+  'desktop_clipboard_read',
+  'desktop_clipboard_write',
+  'desktop_idle_time',
+  'desktop_poll_activity',
+  'desktop_mouse_move',
+  'desktop_mouse_click',
+  'desktop_mouse_drag',
+  'desktop_mouse_click_at',
+  'desktop_mouse_double_click_at',
+  'desktop_mouse_right_click_at',
+  'desktop_keyboard_type',
+  'desktop_keyboard_press',
+  'desktop_set_wallpaper_mode',
+  'desktop_cursor_glow_show',
+  'desktop_cursor_glow_update',
+  'desktop_cursor_glow_click',
+  'desktop_cursor_glow_hide',
+]);
+export const isDirectDesktopTool = (toolName: string): boolean => directDesktopRelayTools.has(toolName);
+
 type DesktopRelayPayload = {
   correlationId: string;
   name: string;

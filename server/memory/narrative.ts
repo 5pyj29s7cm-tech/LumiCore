@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { makeLLMCall, NormalizedMessage } from '../llm/providers';
 import { queryMemories, addMemory, getAssociatedMemories } from './store';
 import { Memory } from './types';
@@ -119,18 +120,7 @@ export async function buildNarrativeChain(params: {
         orgId,
         source: 'memory_narrative',
       },
-      params.getDeepSeek,
-      params.getGemini,
-      params.getOpenAI,
-      params.getAnthropic,
-      params.getQwen,
-      params.getOllama,
-      params.getLmStudio,
-      params.getArk,
-      params.getXiaomi,
-      params.getKimi,
-      params.getGlm,
-      params.getRelay,
+      ...providerGetterArguments(params),
     );
 
     const text = response.text || '';

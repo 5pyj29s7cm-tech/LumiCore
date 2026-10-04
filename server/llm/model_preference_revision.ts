@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readSetting, updateSetting } from '../persistence/settings_repository';
 
 const REVISION_FIELD = '_modelRoleRevisions';
 
@@ -16,8 +16,7 @@ function revisionsFrom(value: unknown): Record<string, string> {
 
 /** Opaque, persisted write identities also distinguish same-value and ABA saves. */
 export function getModelPreferenceRevision(key: string, role: string): string | undefined {
-  const row = (readDB().settings || []).find(item => item.key === key);
-  return revisionsFrom(row?.value)[role];
+  return revisionsFrom(readSetting(key))[role];
 }
 
 /** All model preference writers use this boundary, including single-role UI saves.
@@ -29,15 +28,9 @@ export function writeModelPreference(
   roles: readonly string[],
   obsoleteKeys: readonly string[] = [],
 ): void {
-  const db = readDB();
-  const previous = (db.settings || []).find(item => item.key === key);
-  const revisions = revisionsFrom(previous?.value);
-  for (const role of roles) revisions[role] = randomUUID();
-  const row = { key, value: JSON.stringify({ ...value, [REVISION_FIELD]: revisions }) };
-  // Do not mutate the live row before writeDB accepts the write (e.g. closing).
-  const settings = (db.settings || []).filter(item => !obsoleteKeys.includes(item.key)).slice();
-  const index = settings.findIndex(item => item.key === key);
-  if (index >= 0) settings[index] = row;
-  else settings.push(row);
-  writeDB({ ...db, settings });
+  updateSetting(key, previous => {
+    const revisions = revisionsFrom(previous);
+    for (const role of roles) revisions[role] = randomUUID();
+    return JSON.stringify({ ...value, [REVISION_FIELD]: revisions });
+  }, obsoleteKeys);
 }

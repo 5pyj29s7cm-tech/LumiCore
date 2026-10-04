@@ -1,13 +1,13 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 // Time-space utilities — all local computation, zero LLM cost, zero npm deps
 
-import { readDB, writeDB } from '../../db_layer';
+
 
 // ── User timezone ──
 
 export function getUserTimezone(userId: string): string {
   try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === `timezone_${userId}`);
+    const setting = readSettingRecord(`timezone_${userId}`);
     return setting?.value || 'Asia/Shanghai';
   } catch {
     return 'Asia/Shanghai';
@@ -16,15 +16,7 @@ export function getUserTimezone(userId: string): string {
 
 export function setUserTimezone(userId: string, tz: string): void {
   new Intl.DateTimeFormat('en', { timeZone: tz }).format();
-  const db = readDB();
-  if (!db.settings) db.settings = [];
-  const existing = db.settings.findIndex((s: any) => s.key === `timezone_${userId}`);
-  if (existing >= 0) {
-    db.settings[existing].value = tz;
-  } else {
-    db.settings.push({ key: `timezone_${userId}`, value: tz });
-  }
-  writeDB(db);
+  writeSetting(`timezone_${userId}`, tz);
 }
 
 function zonedParts(userId: string, instant: Date): number[] {

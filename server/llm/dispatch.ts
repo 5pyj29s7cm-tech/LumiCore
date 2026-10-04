@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments as getterArguments } from "./provider_getters";
 import {
   NormalizedMessage,
   makeLLMCallDirect,
@@ -38,22 +39,7 @@ export interface DispatchConfig extends LLMCallConfig {
   requestedModel?: string;
 }
 
-export interface LLMGetters {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI: () => any;
-  getAnthropic: () => any;
-  getQwen: () => any;
-  getOllama: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-  isOllamaAvailable?: () => boolean;
-  isLmStudioAvailable?: () => boolean;
-}
+export type LLMGetters = SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getOllama'>>;
 
 export interface DispatchedLLMResponse extends NormalizedLLMResponse {
   tier: 'local' | 'cloud';
@@ -91,22 +77,6 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
   };
 }
 
-function getterArguments(getters: LLMGetters) {
-  return [
-    getters.getDeepSeek,
-    getters.getGemini,
-    getters.getOpenAI,
-    getters.getAnthropic,
-    getters.getQwen,
-    getters.getOllama,
-    getters.getLmStudio,
-    getters.getArk,
-    getters.getXiaomi,
-    getters.getKimi,
-    getters.getGlm,
-    getters.getRelay,
-  ] as const;
-}
 
 function attemptErrorCategory(error: unknown): string {
   const attached = String((error as any)?.cloudCategory || '').trim();

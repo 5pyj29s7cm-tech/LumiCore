@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { randomUUID } from 'node:crypto';
 import { buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import {
@@ -526,7 +527,7 @@ function normalizeMediaTarget(value: string): string {
 
 function isMediaPlaybackContinuationForTask(
   text: string,
-  state: ConversationActionContinuationState | null | undefined,
+  state: ConversationActionContinuationState | null | undefined, analysis?: ActionIntentAnalysis
 ): boolean {
   const durableState = normalizeConversationActionState(state);
   if (
@@ -538,8 +539,8 @@ function isMediaPlaybackContinuationForTask(
   // i18n-allow: Short acknowledgements for the same unfinished media request.
   if (/^(?:允许|可以|继续)[，,。.!！\s]*$/u.test(text)) return true;
   if (matchesCnExplicitPlaybackRetry(text)) return true;
-  const previousTarget = normalizeMediaTarget(requestedMediaPlayerTarget(durableState.goal));
-  const currentTarget = normalizeMediaTarget(requestedMediaPlayerTarget(text));
+  const previousTarget = normalizeMediaTarget(requestedMediaPlayerTarget(durableState.goal, analysis));
+  const currentTarget = normalizeMediaTarget(requestedMediaPlayerTarget(text, analysis));
   // i18n-allow: Restating the same named player after a failed attempt.
   if (/^(?:用|使用|还是用|就用)\s*[^，,。.!！?？]{1,32}[，,。.!！\s]*$/u.test(text)) {
     return Boolean(previousTarget && currentTarget && previousTarget === currentTarget);
@@ -587,11 +588,11 @@ export function isCurrentAppEditingRequest(text: string): boolean {
     || CURRENT_APP_DOCUMENT_CREATE_RE.test(current);
 }
 
-export function classifyRecentActionFollowupIntent(text: string): RecentActionFollowupIntent {
+export function classifyRecentActionFollowupIntent(text: string, analysis?: ActionIntentAnalysis): RecentActionFollowupIntent {
   const clean = compact(text, 500);
   if (!clean) return 'none';
   if (isImmediateAssistantRestatementRequest(clean)) return 'repeat';
-  const normalizedIntent = normalizeActionIntent(clean);
+  const normalizedIntent = normalizeActionIntent(clean, analysis);
   if (normalizedIntent.kind === 'status_query') return 'status';
   if (normalizedIntent.kind !== 'none' && normalizedIntent.relation === 'new') return 'none';
   if (hasMixedStatusExecutionIntent(clean)) return 'execute';
@@ -611,15 +612,15 @@ export function classifyRecentActionFollowupIntent(text: string): RecentActionFo
   return 'none';
 }
 
-function isContinuationOrPressureText(text: string): boolean {
-  return classifyRecentActionFollowupIntent(text) !== 'none';
+function isContinuationOrPressureText(text: string, analysis?: ActionIntentAnalysis): boolean {
+  return classifyRecentActionFollowupIntent(text, analysis) !== 'none';
 }
 
-function findTaskAnchorIndex(history: ActionContinuationHistoryItem[]): number {
+function findTaskAnchorIndex(history: ActionContinuationHistoryItem[], analysis?: ActionIntentAnalysis): number {
   for (let index = history.length - 1; index >= 0; index -= 1) {
     if (recordRole(history[index]) !== 'user') continue;
     const text = recordText(history[index]);
-    if (text && !isContinuationOrPressureText(text)) return index;
+    if (text && !isContinuationOrPressureText(text, analysis)) return index;
   }
 
   // A complete task can still contain a referential pronoun (for example,
@@ -631,7 +632,7 @@ function findTaskAnchorIndex(history: ActionContinuationHistoryItem[]): number {
   for (let index = history.length - 1; index >= 0; index -= 1) {
     if (recordRole(history[index]) !== 'user') continue;
     const text = recordText(history[index]);
-    if (!text || !isActionBearingGoal(text)) continue;
+    if (!text || !isActionBearingGoal(text, analysis)) continue;
     const hasTerminalEvidence = history.slice(index + 1).some(item =>
       parseToolCalls(item).some(call => Boolean(
         toolCallName(call)
@@ -643,13 +644,13 @@ function findTaskAnchorIndex(history: ActionContinuationHistoryItem[]): number {
   return -1;
 }
 
-function isActionBearingGoal(goal: string): boolean {
-  const contract = buildActionContract(goal);
+function isActionBearingGoal(goal: string, analysis?: ActionIntentAnalysis): boolean {
+  const contract = buildActionContract(goal, undefined, analysis);
   return contract.applies && contract.kind !== 'none';
 }
 
 export function extractRecentActionContinuationState(
-  history: ActionContinuationHistoryItem[] | undefined,
+  history: ActionContinuationHistoryItem[] | undefined, analysis?: ActionIntentAnalysis
 ): RecentActionContinuationState {
   if (!Array.isArray(history) || history.length === 0) {
     return {
@@ -662,7 +663,7 @@ export function extractRecentActionContinuationState(
     };
   }
 
-  const anchorIndex = findTaskAnchorIndex(history);
+  const anchorIndex = findTaskAnchorIndex(history, analysis);
   const relevant = anchorIndex >= 0 ? history.slice(anchorIndex) : history.slice(-12);
   const goal = anchorIndex >= 0 ? recordText(history[anchorIndex]) : '';
   const sourcePaths = new Set<string>();
@@ -865,7 +866,7 @@ export function normalizeConversationActionState(
  * widens an empty or malformed target set into cancel-all authority.
  */
 export function pendingRuntimeCancellationRecheck(
-  value: ConversationActionContinuationState | null | undefined,
+  value: ConversationActionContinuationState | null | undefined, analysis?: ActionIntentAnalysis
 ): PendingRuntimeCancellationRecheck | null {
   const state = normalizeConversationActionState(value);
   if (!state?.taskId || !state.unfinished) return null;
@@ -876,7 +877,7 @@ export function pendingRuntimeCancellationRecheck(
   const hasCancellationContract = [state.goal, state.latestInstruction]
     .filter(Boolean)
     .some(candidate => {
-      const contract = buildActionEvidenceContract(candidate);
+      const contract = buildActionEvidenceContract(candidate, analysis);
       return contract.kind === 'task_control'
         && contract.preferredTools.includes('runtime_work_cancel');
     });
@@ -950,21 +951,21 @@ export function isCurrentContinuationTask(text: string, state: ConversationActio
 }
 
 /** Explicitly referential resumption precedes the self-contained action gate. */
-export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null): boolean {
+export function isExplicitUnfinishedTaskContinuation(text: string, state?: ConversationActionContinuationState | null, analysis?: ActionIntentAnalysis): boolean {
   if (!state?.unfinished || !state.taskId || !state.goal) return false;
   const comparable = (value: string) => value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
   const repeatsUnfinishedGoal = comparable(text) === comparable(state.goal)
-    && normalizeActionIntent(text).operation !== 'status' && buildActionContract(text).applies;
+    && normalizeActionIntent(text, analysis).operation !== 'status' && buildActionContract(text, undefined, analysis).applies;
   if (!repeatsUnfinishedGoal && !explicitlyReferencesUnfinishedTask(text)) return false;
   const value = compact(text, 700);
-  const current = buildActionContract(value);
-  const root = buildActionContract(state.goal);
+  const current = buildActionContract(value, undefined, analysis);
+  const root = buildActionContract(state.goal, undefined, analysis);
   if (!current.applies) return true;
   const kinds = new Set([root.kind, ...(root.components || []).map(part => part.contract.kind)]);
   if (kinds.has(current.kind)) return true;
   // A workflow's named output step is still part of that workflow even though
   // the latest sentence describes a file write rather than the whole recipe.
-  if (normalizeActionIntent(state.goal).kind === 'workflow' && current.kind === 'artifact_work') {
+  if (normalizeActionIntent(state.goal, analysis).kind === 'workflow' && current.kind === 'artifact_work') {
     const target = buildTaskTargetAnchorProjection({ taskText: value }).target.path;
     if (target) {
       const normalized = (text: string) => text.replace(/\\/g, '/').toLowerCase();
@@ -976,9 +977,9 @@ export function isExplicitUnfinishedTaskContinuation(text: string, state?: Conve
 }
 
 /** An explicitly ordered preparation step retains the matching unfinished goal. */
-export function isTaskPreparationContinuation(text: string, state?: ConversationActionContinuationState | null, acceptedIntent?: NormalizedActionIntent): boolean {
+export function isTaskPreparationContinuation(text: string, state?: ConversationActionContinuationState | null, acceptedIntent?: NormalizedActionIntent, analysis?: ActionIntentAnalysis): boolean {
   if (!state?.unfinished || !state.goal) return false;
-  const intent = acceptedIntent || normalizeActionIntent(text);
+  const intent = acceptedIntent || normalizeActionIntent(text, analysis);
   if (intent.kind !== 'desktop_operation' || intent.operation !== 'navigate' || !intent.target) return false;
   const browserPlaybackStep = requiresMediaPlaybackAction(state.goal)
     && /^(?:浏览器|默认浏览器|Chrome|Edge|Firefox|browser)$/iu.test(intent.target) // i18n-allow: Explicit browser as the medium for an unfinished viewing task.
@@ -987,7 +988,7 @@ export function isTaskPreparationContinuation(text: string, state?: Conversation
   const key = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[\s_.-]+/gu, '');
   const target = key(intent.target).replace(/exe$/u, '');
   const goal = key(state.goal);
-  const rootContract = buildActionContract(state.goal);
+  const rootContract = buildActionContract(state.goal, undefined, analysis);
   return target.length > 1 && (goal.includes(target) || browserPlaybackStep) && rootContract.applies && rootContract.kind !== 'none';
 }
 
@@ -1007,13 +1008,13 @@ export function isReferentialArtifactEdit(text: string, state?: ConversationActi
 export function classifyConversationActionFollowupIntent(
   text: string,
   state?: ConversationActionContinuationState | null,
-  acceptedIntent?: NormalizedActionIntent,
+  acceptedIntent?: NormalizedActionIntent, analysis?: ActionIntentAnalysis
 ): RecentActionFollowupIntent {
   if (isImmediateAssistantRestatementRequest(text)) return 'repeat';
   const durableState = normalizeConversationActionState(state);
   const compactText = compact(text, 500);
   // Status must win before retry/target heuristics inspect the task's old goal.
-  const normalizedIntent = acceptedIntent || normalizeActionIntent(compactText);
+  const normalizedIntent = acceptedIntent || normalizeActionIntent(compactText, analysis);
   if (normalizedIntent.kind === 'status_query') return 'status';
   // Never let a readiness acknowledgement reconstruct a one-time dangerous
   // confirmation that was lost across restart.
@@ -1026,10 +1027,10 @@ export function classifyConversationActionFollowupIntent(
   ) return 'execute';
   if (isBlockedTaskRetryAcceptance(compactText, durableState)) return 'execute';
   if (isNegativeResultCorrectionForTask(compactText, durableState)) return 'execute';
-  if (isMediaPlaybackContinuationForTask(compactText, durableState)) return 'execute';
-  if (isTaskPreparationContinuation(compactText, durableState, normalizedIntent)) return 'execute';
+  if (isMediaPlaybackContinuationForTask(compactText, durableState, analysis)) return 'execute';
+  if (isTaskPreparationContinuation(compactText, durableState, normalizedIntent, analysis)) return 'execute';
   if (isReferentialArtifactEdit(text, durableState)) return 'execute';
-  if (isExplicitUnfinishedTaskContinuation(compactText, durableState)) return 'execute';
+  if (isExplicitUnfinishedTaskContinuation(compactText, durableState, analysis)) return 'execute';
   if (
     durableState?.unfinished
     && normalizedIntent.relation === 'correction'
@@ -1050,7 +1051,7 @@ export function classifyConversationActionFollowupIntent(
     || normalizedIntent.kind === 'work_task'
   ) return 'none';
   if (hasMixedStatusExecutionIntent(text)) return 'execute';
-  const direct = classifyRecentActionFollowupIntent(text);
+  const direct = classifyRecentActionFollowupIntent(text, analysis);
   if (direct !== 'none') return direct;
   if (!durableState?.unfinished) return 'none';
   return AMBIGUOUS_UNFINISHED_TASK_STATUS_RE.test(compact(text, 500)) ? 'status' : 'none';
@@ -1062,7 +1063,7 @@ export function classifyConversationActionFollowupIntent(
  * starts a fresh pointer and cannot accidentally absorb an older task.
  */
 export function buildConversationActionContinuationState(
-  input: ConversationActionContinuationUpdate,
+  input: ConversationActionContinuationUpdate, analysis?: ActionIntentAnalysis
 ): ConversationActionContinuationState | null {
   const userText = compact(input.userText, 700);
   const assistantText = compact(input.assistantText, 700);
@@ -1071,7 +1072,7 @@ export function buildConversationActionContinuationState(
   if (!userText || calls.length === 0) return null;
 
   const previous = normalizeConversationActionState(input.previous);
-  const followupIntent = classifyConversationActionFollowupIntent(userText, previous);
+  const followupIntent = classifyConversationActionFollowupIntent(userText, previous, undefined, analysis);
   const samePreparedTurn = Boolean(
     previous
     && previous.latestInstruction === userText
@@ -1086,7 +1087,7 @@ export function buildConversationActionContinuationState(
     { role: 'user', message: userText },
     { role: 'assistant', message: assistantText, toolCalls: calls },
   ];
-  const current = extractRecentActionContinuationState(currentHistory);
+  const current = extractRecentActionContinuationState(currentHistory, analysis);
   const currentSummaries = summarizeToolCalls(currentHistory);
   const goal = inheritsPrevious ? previous!.goal : userText;
   const receipts = mergeTaskReceipts(
@@ -1100,8 +1101,8 @@ export function buildConversationActionContinuationState(
   // the completion target for this turn.
   const completionGoal = inheritsPrevious
     && followupIntent === 'execute'
-    && isActionBearingGoal(userText)
-    && !isTaskPreparationContinuation(userText, previous)
+    && isActionBearingGoal(userText, analysis)
+    && !isTaskPreparationContinuation(userText, previous, undefined, analysis)
     ? userText
     : goal;
   const taskId = inheritsPrevious && previous?.taskId ? previous.taskId : `task_${randomUUID()}`;
@@ -1130,7 +1131,7 @@ export function buildConversationActionContinuationState(
     version: 2,
     taskId,
     status,
-    policySnapshot: isTaskPreparationContinuation(userText, previous) && previous?.policySnapshot
+    policySnapshot: isTaskPreparationContinuation(userText, previous, undefined, analysis) && previous?.policySnapshot
       ? previous.policySnapshot : snapshotTaskPolicy(input.toolPolicy) || (inheritsPrevious ? previous?.policySnapshot : undefined),
     receipts,
     activeRequestId: input.requestId || (inheritsPrevious ? previous?.activeRequestId : undefined),
@@ -1188,11 +1189,11 @@ export function prepareConversationActionTaskState(
     /** Resolved once by the shared pipeline; legacy callers may omit it. */
     followupIntent?: RecentActionFollowupIntent;
     now?: string;
-  },
+  }, analysis?: ActionIntentAnalysis
 ): { state: ConversationActionContinuationState | null; kind: 'new' | 'resume' | 'status' | 'conversation' } {
   const userText = compact(input.userText, 700);
   const previous = normalizeConversationActionState(previousValue);
-  const followupIntent = input.followupIntent ?? classifyConversationActionFollowupIntent(userText, previous);
+  const followupIntent = input.followupIntent ?? classifyConversationActionFollowupIntent(userText, previous, undefined, analysis);
   const resume = !input.forceNewTask && Boolean(
     previous && previous.unfinished && (input.forceResume || followupIntent === 'execute'),
   );
@@ -1206,7 +1207,7 @@ export function prepareConversationActionTaskState(
     && !input.forceResume
     && !input.forceNewTask
   ) return { state: previous, kind: 'status' };
-  const contract = buildActionContract(userText);
+  const contract = buildActionContract(userText, undefined, analysis);
   const isAction = (contract.applies && contract.kind !== 'none') || input.forceTask === true;
   // An unrelated conversational turn may inspect the same conversation, but
   // it does not own the durable action pointer. Returning the previous task
@@ -1236,7 +1237,7 @@ export function prepareConversationActionTaskState(
         latestInstruction: userText,
         latestInstructionRef: latestInstructionRef || undefined,
         activeRequestId: input.requestId,
-        policySnapshot: isTaskPreparationContinuation(userText, previous) ? previous.policySnapshot : snapshotTaskPolicy(
+        policySnapshot: isTaskPreparationContinuation(userText, previous, undefined, analysis) ? previous.policySnapshot : snapshotTaskPolicy(
           applyTaskPolicySnapshot(input.toolPolicy, previous.policySnapshot),
         ) || previous.policySnapshot,
         revision: (previous.revision || 0) + 1,
@@ -1375,11 +1376,11 @@ export function isUserObservedTaskCompletion(
     || /^(?:you|it|that|the\s+(?:message|file|window|task))\s+(?:already\s+)?(?:did|has|was|is)?[^.!?]{0,24}(?:completed|finished|sent|opened|saved|created|closed|maximized|minimized)(?:\s+successfully)?[.!\s]*$/iu.test(clean);
 }
 
-export function needsRecentActionContinuationContext(userText: string): boolean {
+export function needsRecentActionContinuationContext(userText: string, analysis?: ActionIntentAnalysis): boolean {
   const clean = compact(userText, 500);
   if (explicitlyReferencesUnfinishedTask(clean)) return true;
   if (!clean || (clean.length > 180 && !isCurrentAppEditingRequest(clean))) return false;
-  const normalizedIntent = normalizeActionIntent(clean);
+  const normalizedIntent = normalizeActionIntent(clean, analysis);
   if (normalizedIntent.kind === 'work_task') return false;
   if (
     normalizedIntent.kind === 'correction_explanation'
@@ -1390,14 +1391,14 @@ export function needsRecentActionContinuationContext(userText: string): boolean 
   // still naming its source and destination in the same sentence. Do not let
   // an older task overwrite that self-contained command.
   if (CONCRETE_LOCAL_SOURCE_RE.test(clean) && EXPLICIT_ACTION_TARGET_RE.test(clean)) return false;
-  return classifyRecentActionFollowupIntent(clean) !== 'none';
+  return classifyRecentActionFollowupIntent(clean, analysis) !== 'none';
 }
 
 export function buildRecentActionContinuationBridge(
   userText: string,
   history: ActionContinuationHistoryItem[] | undefined,
   persistedState?: ConversationActionContinuationState | null,
-  currentTurnRef?: string,
+  currentTurnRef?: string, analysis?: ActionIntentAnalysis
 ): string {
   const currentText = compact(userText, 700);
   const normalizedDurableState = normalizeConversationActionState(persistedState);
@@ -1408,13 +1409,13 @@ export function buildRecentActionContinuationBridge(
     normalizedDurableState
     && Number.isFinite(durableUpdatedAt)
     && Date.now() - durableUpdatedAt > REFERENTIAL_CONTEXT_MAX_AGE_MS
-    && classifyConversationActionFollowupIntent(currentText, normalizedDurableState) === 'execute'
+    && classifyConversationActionFollowupIntent(currentText, normalizedDurableState, undefined, analysis) === 'execute'
     && !explicitDurableTaskReference(currentText),
   );
   const durableState = staleReferentialExecution ? null : normalizedDurableState;
-  const followupIntent = classifyConversationActionFollowupIntent(currentText, durableState);
+  const followupIntent = classifyConversationActionFollowupIntent(currentText, durableState, undefined, analysis);
   if (
-    !(needsRecentActionContinuationContext(userText) || followupIntent !== 'none')
+    !(needsRecentActionContinuationContext(userText, analysis) || followupIntent !== 'none')
     || ((!Array.isArray(history) || history.length === 0) && !durableState)
   ) {
     return '';
@@ -1453,7 +1454,7 @@ export function buildRecentActionContinuationBridge(
       return `${candidateRoleGroup}:${recordText(candidate)}` === key;
     }) === index;
   });
-  const anchorIndex = findTaskAnchorIndex(recent);
+  const anchorIndex = findTaskAnchorIndex(recent, analysis);
   const executionTail = anchorIndex >= 0 ? recent.slice(anchorIndex) : recent;
   const relevantDeduplicated = deduplicate(executionTail);
   const userTurns = relevantDeduplicated
@@ -1467,7 +1468,7 @@ export function buildRecentActionContinuationBridge(
   const toolSummaries = durableState?.toolSummaries.length
     ? durableState.toolSummaries
     : summarizeToolCalls(executionTail);
-  const state = durableState || extractRecentActionContinuationState(executionTail);
+  const state = durableState || extractRecentActionContinuationState(executionTail, analysis);
   const taskCapsule = durableState
     ? buildTaskCapsuleV1(durableState, {
         previousCapsule: durableState.taskCapsule,
@@ -1482,7 +1483,7 @@ export function buildRecentActionContinuationBridge(
   // history-only bridge is allowed only when its actual user goal carries an
   // external-action contract. Durable state remains safe because it can only
   // be created from terminal tool evidence.
-  if (!durableState && !isActionBearingGoal(state.goal)) return '';
+  if (!durableState && !isActionBearingGoal(state.goal, analysis)) return '';
 
   if (
     userTurns.length === 0

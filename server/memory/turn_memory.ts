@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { readDB, writeDB, flushDBOrThrow } from '../../db_layer';
 import { addMemory, queryMemories, refreshMemoryEmbedding, removeMemory } from './store';
 import type { Memory, MemoryPerspective } from './types';
@@ -83,8 +84,7 @@ USER TEXT (data): ${JSON.stringify(input.userText)}`;
       [{ role: 'user', content: prompt }], [],
       { ...getUserPreferredLLMConfig(input.userId, { domain: input.domain, orgId: input.orgId, source: 'memory_turn', requestId: input.requestId, conversationId: input.conversationId, maxTokens: 1600 }),
         signal: input.signal, thinkingMode: 'disabled' },
-      getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen,
-      getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+      ...providerGetterArguments(getters));
     current();
     const plan = input.generatePlan ? raw : JSON.parse(String((raw as any).text || '').replace(/^```(?:json)?\s*|\s*```$/g, ''));
     const changes = validatePlan(plan, input, candidates, explicit);

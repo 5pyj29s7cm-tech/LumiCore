@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 
 export type CapabilityLearningStatus =
   | 'hypothesis'
@@ -97,8 +98,7 @@ function unique(values: Array<string | undefined>): string[] {
 }
 
 function readRecords(): CapabilityLearningRecord[] {
-  const db = readDB();
-  const row = (db.settings || []).find((item: any) => item.key === SETTINGS_KEY);
+  const row = readSettingRecord(SETTINGS_KEY);
   if (!row?.value) return [];
   try {
     const parsed = JSON.parse(row.value);
@@ -118,16 +118,8 @@ function readRecords(): CapabilityLearningRecord[] {
 }
 
 function writeRecords(records: CapabilityLearningRecord[]) {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const value = JSON.stringify(records
-    .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .slice(-MAX_RECORDS));
-  const index = db.settings.findIndex((item: any) => item.key === SETTINGS_KEY);
-  if (index >= 0) db.settings[index].value = value;
-  else db.settings.push({ key: SETTINGS_KEY, value });
-  writeDB(db);
+  writeSetting(SETTINGS_KEY, JSON.stringify(records.slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-MAX_RECORDS)));
 }
 
 function scoreRecord(record: CapabilityLearningRecord, goal: string, domain?: string): number {

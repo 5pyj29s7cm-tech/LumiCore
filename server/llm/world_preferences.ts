@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 import {
@@ -42,9 +42,7 @@ const WORLD_PROVIDERS = new Set<WorldModelProvider>([
 
 function parseSetting(userId: string): any {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item.key === `world_prefs_${userId}`);
-    return row?.value ? JSON.parse(row.value) : null;
+    return readSettingJson(`world_prefs_${userId}`);
   } catch {
     return null;
   }

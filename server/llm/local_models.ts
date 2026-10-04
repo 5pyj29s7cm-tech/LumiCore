@@ -1,4 +1,4 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import { isStrictPrivacy, requireLocalEndpoint } from '../config/privacy';
 import { resetCircuit } from '../cloud/circuit_breaker';
 
@@ -290,8 +290,7 @@ export function getLocalModelConfig(provider: LocalModelProvider): LocalModelCon
     consecutiveFailures: 0,
   };
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((setting: any) => setting.key === SETTING_KEYS[provider]);
+    const row = readSettingRecord(SETTING_KEYS[provider]);
     if (!row?.value) return fallback;
     const stored = JSON.parse(row.value);
     return {
@@ -335,9 +334,8 @@ export function saveLocalModelConfig(provider: LocalModelProvider, config: Local
     ...(config.probedModel ? { probedModel: config.probedModel } : {}),
   };
   endpointVersion(provider, payload.baseUrl);
-  let db: any;
   try {
-    db = readDB();
+    readSettingRecord(SETTING_KEYS[provider]);
   } catch {
     // Embedders and connection-test harnesses may construct the LLM runtime
     // before the durable database. The live probe result remains authoritative
@@ -345,12 +343,7 @@ export function saveLocalModelConfig(provider: LocalModelProvider, config: Local
     if (payload.detected) resetCircuit(provider);
     return payload;
   }
-  if (!db.settings) (db as any).settings = [];
-  const key = SETTING_KEYS[provider];
-  const existing = (db.settings || []).findIndex((setting: any) => setting.key === key);
-  if (existing >= 0) db.settings[existing].value = JSON.stringify(payload);
-  else db.settings.push({ key, value: JSON.stringify(payload) });
-  writeDB(db);
+  writeSetting(SETTING_KEYS[provider], JSON.stringify(payload));
   if (payload.detected) resetCircuit(provider);
   return payload;
 }

@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { mergeToolExecutionRecords } from '../cognition/task_execution_ledger';
 import { randomUUID } from 'node:crypto';
@@ -62,20 +63,7 @@ function mcpToolFailure(operation: string, error: unknown) {
   };
 }
 
-export function createLumiMcpServer(llmGetters?: {
-  getDeepSeek?: () => any;
-  getGemini?: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle): McpServer {
+export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle): McpServer {
   const g = llmGetters || {};
   const tr = toolReg || toolRegistry;
   const bc = broadcast || (() => {});

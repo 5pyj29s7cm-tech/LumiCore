@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { readSettingJson, writeSettingDurably } from '../persistence/settings_repository';
 import { enqueue, getTaskQueue, type AutonomousTask } from '../autonomy/task_queue';
 import {
   acquireSelfImprovementRepositoryLease,
@@ -278,9 +278,7 @@ function normalizeProgram(value: Partial<SelfImprovementProgram>, fallback: Self
 
 function readState(): PersistedSelfImprovementState {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item?.key === SETTINGS_KEY);
-    const parsed = row?.value ? JSON.parse(row.value) : null;
+    const parsed = readSettingJson(SETTINGS_KEY);
     return {
       programs: Array.isArray(parsed?.programs) ? parsed.programs : [],
       proposals: Array.isArray(parsed?.proposals) ? parsed.proposals : [],
@@ -291,10 +289,6 @@ function readState(): PersistedSelfImprovementState {
 }
 
 async function writeState(state: PersistedSelfImprovementState): Promise<void> {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const previousRow = db.settings.find((item: any) => item?.key === SETTINGS_KEY);
-  const previousValue = previousRow ? String(previousRow.value || '') : undefined;
   const value = JSON.stringify({
     programs: state.programs,
     proposals: state.proposals
@@ -302,30 +296,7 @@ async function writeState(state: PersistedSelfImprovementState): Promise<void> {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .slice(-MAX_PROPOSALS),
   });
-  const index = db.settings.findIndex((item: any) => item?.key === SETTINGS_KEY);
-  if (index >= 0) db.settings[index].value = value;
-  else db.settings.push({ key: SETTINGS_KEY, value });
-  writeDB(db);
-  try {
-    await flushDBOrThrow();
-  } catch (error) {
-    // Do not leave a failed durable authorization/receipt write visible only
-    // in memory. Restore this one registry row while preserving unrelated DB
-    // mutations that may have occurred during the awaited strict flush.
-    const current = readDB();
-    if (!Array.isArray(current.settings)) current.settings = [];
-    const currentIndex = current.settings.findIndex((item: any) => item?.key === SETTINGS_KEY);
-    if (previousValue === undefined) {
-      if (currentIndex >= 0) current.settings.splice(currentIndex, 1);
-    } else if (currentIndex >= 0) {
-      current.settings[currentIndex].value = previousValue;
-    } else {
-      current.settings.push({ key: SETTINGS_KEY, value: previousValue });
-    }
-    writeDB(current);
-    try { await flushDBOrThrow(); } catch {}
-    throw error;
-  }
+  await writeSettingDurably(SETTINGS_KEY, value);
 }
 
 export function getSelfImprovementProgram(scopeInput: SelfImprovementScope): SelfImprovementProgram {

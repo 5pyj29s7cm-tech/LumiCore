@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import type { Socket } from 'socket.io';
@@ -168,8 +169,7 @@ export function registerMemoryAvatarVoiceHandlers(socket: Socket, getters: LLMGe
           : getUserPreferredLLMConfig(call.userId, { maxTokens: 900, domain: 'personal', conversationId: conversation.id, requestId, source: 'memory_avatar_voice' });
         modelCalled = true;
         const response = await abortable(makeLLMCall(messages, [], { ...config, signal: controller.signal },
-          getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama,
-          getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay), controller.signal);
+          ...providerGetterArguments(getters)), controller.signal);
         assertCurrent();
         const reply = String(response.text || '').trim().slice(0, 8000);
         if (!reply) throw new Error('Empty avatar response');

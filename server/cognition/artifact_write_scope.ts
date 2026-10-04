@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { buildTaskTargetAnchorProjection, canonicalPathIdentity, outputDocumentInstruction, type AcceptedTaskTarget } from '../conversation/task_target_anchor';
 import { normalizeActionIntent } from './normalized_action_intent';
 import path from 'node:path';
@@ -29,10 +30,10 @@ function mixedTaskOutputPath(text: string): string {
 const OUTPUT_TOOLS = new Set(['write_file', 'desktop_write_text_file', 'create_xlsx', 'modify_xlsx', 'create_docx', 'create_ppt', 'create_pdf']);
 
 /** A single explicitly named deliverable retains its format throughout the loop. */
-export function requestedSingleArtifact(text: string): { path: string; producer: string; reader: string } | null {
+export function requestedSingleArtifact(text: string, analysis?: ActionIntentAnalysis): { path: string; producer: string; reader: string } | null {
   const fileCount = (text.match(/\.(?:xlsx?|docx?|pptx?|pdf|txt|md|csv|json)(?![a-z])/giu) || []).length;
   const mixedOutput = fileCount > 1 ? mixedTaskOutputPath(text) : '';
-  const intent = mixedOutput ? { operation: 'create', sideEffectClass: 'local_write', target: mixedOutput } : normalizeActionIntent(text);
+  const intent = mixedOutput ? { operation: 'create', sideEffectClass: 'local_write', target: mixedOutput } : normalizeActionIntent(text, analysis);
   if (intent.operation !== 'create' || intent.sideEffectClass !== 'local_write' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(intent.target)) return null;
   // Mixed source/output or multi-deliverable requests need their full plan;
   // do not reinterpret the first filename as the only requested output.
@@ -48,8 +49,8 @@ export function requestedSingleArtifact(text: string): { path: string; producer:
   return selected ? { path: intent.target, producer: selected[0], reader: selected[1] } : null;
 }
 
-export function matchesRequestedArtifactOutput(text: string, outputPath: string): boolean {
-  const requested = requestedSingleArtifact(text)?.path || requestedArtifactSaveAsPath(text);
+export function matchesRequestedArtifactOutput(text: string, outputPath: string, analysis?: ActionIntentAnalysis): boolean {
+  const requested = requestedSingleArtifact(text, analysis)?.path || requestedArtifactSaveAsPath(text);
   return !requested || canonicalPathIdentity(outputPath) === canonicalPathIdentity(requested);
 }
 
@@ -60,8 +61,8 @@ export function requestedArtifactSaveAsPath(text: string): string {
   return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(target) ? target : '';
 }
 
-export function requestedArtifactFormatBlockReason(text: string, toolName: string, args: Record<string, unknown>): string | null {
-  const artifact = requestedSingleArtifact(text);
+export function requestedArtifactFormatBlockReason(text: string, toolName: string, args: Record<string, unknown>, analysis?: ActionIntentAnalysis): string | null {
+  const artifact = requestedSingleArtifact(text, analysis);
   const producers = new Set(['write_file', 'desktop_write_text_file', 'create_xlsx', 'create_docx', 'create_ppt', 'create_pdf']);
   if (!artifact || !producers.has(toolName)) return null;
   if (toolName === artifact.producer || (artifact.producer === 'write_file' && toolName === 'desktop_write_text_file')) {

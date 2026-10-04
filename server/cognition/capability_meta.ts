@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { isRetiredOperationModeRequest, type OperationMode } from './operation_modes';
 import {
   formatCnCapabilityMetaResponse,
@@ -55,12 +56,12 @@ const INDEPENDENT_IMMEDIATE_ACTION_RE =
 const PURE_CAPABILITY_EXPLANATION_FORM_RE =
   /(?:\u5982\u4f55|\u600e\u4e48|\u600e\u6837).{0,36}(?:\u4f7f\u7528|\u8c03\u7528|\u5f00\u542f).{0,24}(?:\u5de5\u5177|\u6280\u80fd)|\bhow\b.{0,48}\b(?:use|using|call|access|enable)\b.{0,32}\b(?:tools?|skills?|capabilit(?:y|ies))\b/iu;
 
-function hasConcreteExecutionIntent(text: string): boolean {
+function hasConcreteExecutionIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').replace(/\s+/gu, ' ').trim();
   if (!normalized) return false;
   if (INDEPENDENT_IMMEDIATE_ACTION_RE.test(normalized)) return true;
   if (PURE_CAPABILITY_EXPLANATION_FORM_RE.test(normalized)) return false;
-  const intent = normalizeActionIntent(normalized);
+  const intent = normalizeActionIntent(normalized, analysis);
   return ![
     'none',
     'status_query',
@@ -69,16 +70,16 @@ function hasConcreteExecutionIntent(text: string): boolean {
   ].includes(intent.kind) && intent.operation !== 'status';
 }
 
-export function isSelfIntroductionMetaQuestion(text: string): boolean {
+export function isSelfIntroductionMetaQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   return SELF_INTRODUCTION_META_RE.test(normalized)
-    && !hasConcreteExecutionIntent(normalized);
+    && !hasConcreteExecutionIntent(normalized, analysis);
 }
 
-export function isOperationModeInventoryQuestion(text: string): boolean {
+export function isOperationModeInventoryQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
-  if (hasConcreteExecutionIntent(normalized)) return false;
+  if (hasConcreteExecutionIntent(normalized, analysis)) return false;
   if (CURRENT_OPERATION_MODE_RE.test(normalized) || OPERATION_MODE_CONFIRMATION_RE.test(normalized)) {
     return false;
   }
@@ -88,9 +89,9 @@ export function isOperationModeInventoryQuestion(text: string): boolean {
     || OPERATION_MODE_COUNT_ASSERTION_RE.test(normalized);
 }
 
-export function isCurrentOperationModeQuestion(text: string): boolean {
+export function isCurrentOperationModeQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
-  if (!normalized || hasConcreteExecutionIntent(normalized)) return false;
+  if (!normalized || hasConcreteExecutionIntent(normalized, analysis)) return false;
   // A meeting, an assistant or ordinary conversation is not itself a question
   // about operating modes. Require the actual subject before using a canned
   // answer; otherwise separate sentences can accidentally satisfy the regex.
@@ -102,20 +103,20 @@ export function isCurrentOperationModeQuestion(text: string): boolean {
   );
 }
 
-export function isOperationModeMetaQuestion(text: string): boolean {
-  return isOperationModeInventoryQuestion(text) || isCurrentOperationModeQuestion(text);
+export function isOperationModeMetaQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
+  return isOperationModeInventoryQuestion(text, analysis) || isCurrentOperationModeQuestion(text, analysis);
 }
 
 /**
  * Capability access questions describe Lumi's execution model. They are not
  * requests to run a tool, change modes, inspect client state, or create work.
  */
-export function isCapabilityMetaQuestion(text: string): boolean {
+export function isCapabilityMetaQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (isRetiredOperationModeRequest(normalized)) return true;
-  if (hasConcreteExecutionIntent(normalized)) return false;
-  if (isSelfIntroductionMetaQuestion(normalized)) return true;
-  if (isOperationModeMetaQuestion(normalized)) return true;
+  if (hasConcreteExecutionIntent(normalized, analysis)) return false;
+  if (isSelfIntroductionMetaQuestion(normalized, analysis)) return true;
+  if (isOperationModeMetaQuestion(normalized, analysis)) return true;
   if (!normalized || !CAPABILITY_SUBJECT_RE.test(normalized)) return false;
   // A no-tool clause is often an execution boundary attached to a substantive
   // question (for example, "do not call tools; explain how you would verify
@@ -142,14 +143,14 @@ function isChinese(text: string): boolean {
   return /[\u3400-\u9fff]/u.test(text);
 }
 
-export function buildOperationModeMetaResponse(input: CapabilityMetaResponseInput): string | null {
+export function buildOperationModeMetaResponse(input: CapabilityMetaResponseInput, analysis?: ActionIntentAnalysis): string | null {
   const normalizedText = String(input.text || '').replace(/\s+/g, ' ').trim();
   if (isRetiredOperationModeRequest(normalizedText)) return isChinese(normalizedText)
     ? formatCnOperationModeInventoryResponse()
     : 'Lumi uses one core for conversation, tasks and learning. There are no modes to switch; tell me what you would like to do.';
-  if (!normalizedText || hasConcreteExecutionIntent(normalizedText)) return null;
-  const inventoryQuestion = isOperationModeInventoryQuestion(normalizedText);
-  const currentQuestion = isCurrentOperationModeQuestion(normalizedText);
+  if (!normalizedText || hasConcreteExecutionIntent(normalizedText, analysis)) return null;
+  const inventoryQuestion = isOperationModeInventoryQuestion(normalizedText, analysis);
+  const currentQuestion = isCurrentOperationModeQuestion(normalizedText, analysis);
   if (!inventoryQuestion && !currentQuestion) return null;
 
   const mode = String(input.operationMode || 'assistant').toLowerCase();
@@ -165,10 +166,10 @@ export function buildOperationModeMetaResponse(input: CapabilityMetaResponseInpu
   return 'Lumi is one personal core for conversation, task execution, memory and learning. There are no Chat, Assistant or Autonomous modes to select. Background work follows your enabled workflows, schedules and permissions; meeting transcription is a separate capture function.';
 }
 
-export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput): string | null {
-  const operationModeResponse = buildOperationModeMetaResponse(input);
+export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput, analysis?: ActionIntentAnalysis): string | null {
+  const operationModeResponse = buildOperationModeMetaResponse(input, analysis);
   if (operationModeResponse) return operationModeResponse;
-  if (isSelfIntroductionMetaQuestion(input.text)) {
+  if (isSelfIntroductionMetaQuestion(input.text, analysis)) {
     if (!isChinese(input.text)) {
       return [
         'Hello, I am Lumi, a privately deployed local intelligence that works with you through conversation, memory, models, skills, tools, desktop applications, and explicitly authorized LAP peer Lumi systems.',
@@ -186,7 +187,7 @@ export function buildCapabilityMetaResponse(input: CapabilityMetaResponseInput):
       '\u9047\u5230\u4e0d\u4f1a\u6216\u6267\u884c\u5931\u8d25\u7684\u4e8b\uff0c\u6211\u4f1a\u5148\u67e5\u6e05\u771f\u5b9e\u963b\u585e\u548c\u73b0\u6709\u8bc1\u636e\uff0c\u53ea\u5728\u5b89\u5168\u3001\u5e42\u7b49\u65f6\u91cd\u8bd5\uff0c\u6709\u5408\u9002\u7684\u6388\u6743\u65b9\u6848\u65f6\u518d\u6362\u8def\u5f84\u3002\u5982\u679c\u5361\u5728\u6743\u9650\u3001\u5bc6\u94a5\u3001\u4e1a\u52a1\u5224\u65ad\u6216\u4e0d\u53ef\u9006\u52a8\u4f5c\uff0c\u6211\u4f1a\u505c\u4e0b\u8bf4\u660e\u5e76\u8bf7\u4f60\u51b3\u5b9a\uff0c\u800c\u4e0d\u662f\u5047\u88c5\u6210\u529f\u3002',
     ].join('\n\n');
   }
-  if (!isCapabilityMetaQuestion(input.text)) return null;
+  if (!isCapabilityMetaQuestion(input.text, analysis)) return null;
 
   const mode = String(input.operationMode || 'assistant').toLowerCase();
   const commandCenter = input.source === 'command-center-chat';

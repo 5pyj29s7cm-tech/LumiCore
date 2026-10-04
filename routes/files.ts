@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../server/llm/provider_getters";
 /**
  * AI Knowledge Base API — manages files in Lumi's knowledge vault.
  *
@@ -637,18 +638,7 @@ async function extractImageKnowledge(filePath: string, userId: string, signal?: 
       imagePayload,
       prompt,
       { provider, model, userId, maxTokens: 2200, signal },
-      g.getDeepSeek,
-      g.getGemini,
-      g.getOpenAI,
-      g.getAnthropic,
-      g.getQwen,
-      g.getOllama,
-      g.getLmStudio,
-      g.getArk,
-      g.getXiaomi,
-      g.getKimi,
-      g.getGlm,
-      g.getRelay,
+      ...providerGetterArguments(g),
     );
     const extracted = String(analysis || '').trim();
     if (!extracted) {

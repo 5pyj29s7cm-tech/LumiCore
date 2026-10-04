@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 // Socket aggregator — mounts all Socket.IO handlers
 import { Server } from "socket.io";
 import { decodeUserSessionToken } from '../middleware/auth';
@@ -30,9 +31,7 @@ import { setOfficeBroadcast } from '../tools/definitions/office_tools';
 interface SocketContext {
   io: Server;
   jwtSecret: string;
-  llm: {
-    getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any; getArk: any; getOllama: any; isOllamaAvailable: any; getLmStudio: any; isLmStudioAvailable: any; getXiaomi: any; getKimi: any; getGlm: any; getRelay: any;
-  };
+  llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getArk' | 'getOllama' | 'isOllamaAvailable' | 'getLmStudio' | 'isLmStudioAvailable' | 'getXiaomi' | 'getKimi' | 'getGlm' | 'getRelay'>>;
 }
 
 export function getSocketAuth(socket: any, jwtSecret: string): {

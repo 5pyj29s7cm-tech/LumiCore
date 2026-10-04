@@ -1,9 +1,10 @@
+import { TurnAnalysis } from './turn_analysis';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
 import { buildOperationModeToolPolicy } from './operation_modes';
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import { buildUnifiedLegalEntryPrompt } from './legal_entry';
-import { classifySkillAuthoringIntent, skillAuthoringTools } from '../skills/authoring_intent';
+import { skillAuthoringTools } from '../skills/authoring_intent';
 import {
   formatToolRouteForPrompt,
   mergeToolPolicyWithRoute,
@@ -20,7 +21,6 @@ import {
 import { WPS_CREATE_DOCUMENT_TOOL } from '../external_control/wps_automation';
 import type { ConversationActionContinuationState } from './action_continuation';
 import { applyTaskPolicySnapshot } from './task_execution_ledger';
-import { buildActionContract } from './action_contract';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import type { PendingAssistantOfferContext } from './pending_assistant_offer';
 import { hasExplicitToolIntent } from './tool_intent';
@@ -29,6 +29,7 @@ import type { ToolContext } from '../tools/types';
 type ToolDeclaration = ReturnType<ToolRegistry['getToolDeclarations']>[number];
 
 export interface LumiExecutionDecisionInput {
+  analysis?: TurnAnalysis;
   flow: LumiTurnFlow;
   text: string;
   /** Original accepted user instruction, never a prompt/context bridge. */
@@ -336,6 +337,7 @@ function enhanceToolRouteForFlow(
   registry?: ToolRegistry,
   semanticText = flow.routeText,
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
+  analysis = new TurnAnalysis(),
 ): ToolRoute {
   if (route.hardAllowlist) return route;
   // The media router already selected the generator and any explicitly
@@ -354,8 +356,8 @@ function enhanceToolRouteForFlow(
   const reasons = [...route.reasons];
   const recoveredCurrentAppEdit = Boolean(flow.currentAppEditTarget);
   const recoveredWpsCreateAndType = isWpsCreateTask(flow.routeText, flow.currentAppEditTarget);
-  const actionContract = buildActionContract(semanticText);
-  const authoringTools = skillAuthoringTools(classifySkillAuthoringIntent(semanticText));
+  const actionContract = analysis.contract(semanticText);
+  const authoringTools = skillAuthoringTools(analysis.authoring(semanticText));
   addAvailable(additions, available, authoringTools);
   addAvailable(semanticPriority, available, authoringTools);
   // Keep one compact discovery schema in every non-hard model route. Its
@@ -393,7 +395,7 @@ function enhanceToolRouteForFlow(
     && (
       actionContract.applies
       || classifyRuntimeWorkIntent(semanticText) !== 'none'
-      || hasExplicitToolIntent(semanticText)
+      || hasExplicitToolIntent(semanticText, analysis)
     )
     && discoveredEvidenceTools.length === 0;
   if (ordinaryWorkNeedsCapabilityDiscovery) {
@@ -519,6 +521,7 @@ function enhanceToolRouteForFlow(
 }
 
 export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): LumiExecutionDecision {
+  const analysis = input.analysis || new TurnAnalysis();
   const recoveredCurrentAppEdit = Boolean(input.flow.currentAppEditTarget);
   const statusOnlyContinuation = input.flow.actionFollowupIntent === 'status' && input.queryTarget !== 'runtime_work';
   const runtimeWorkIntent = classifyRuntimeWorkIntent(
@@ -571,6 +574,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         // keeps context stable while preserving access to every tool through
         // routing on the turn that actually needs it.
         maxTools: 32,
+        analysis,
         capabilityManifest: input.toolRegistry?.getCapabilityManifest(baseToolPolicy, { context: input.visibilityContext }),
         pendingAssistantOfferContext: input.pendingAssistantOfferContext,
         actionTaskState: input.actionTaskState,
@@ -587,6 +591,7 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
           ? input.actionTaskState.goal
           : primaryUserInstruction(input.flow.routeText || input.text),
         input.visibilityContext,
+        analysis,
       )
     : null;
   const routedPolicy = toolRoute

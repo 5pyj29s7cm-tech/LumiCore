@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readSetting, writeSetting } from './settings_repository';
 
 export interface MutationScope {
   userId: string;
@@ -36,7 +36,7 @@ const receiptKey = (scope: MutationScope) => `scoped_deletion_receipts_${digest(
 const resourceKey = (kind: string, resourceId: string) => digest(JSON.stringify([kind, resourceId]));
 
 function readReceipts(scope: MutationScope): DeletionReceipts {
-  const value = (readDB().settings || []).find((row: any) => row.key === receiptKey(scope))?.value;
+  const value = readSetting(receiptKey(scope));
   if (!value) return {};
   try {
     const parsed = JSON.parse(value);
@@ -65,12 +65,5 @@ export function recordScopedDeletionReceipt(
     .filter(([, receipt]) => Number.isFinite(receipt.deletedAt) && receipt.deletedAt >= now - RECEIPT_RETENTION_MS)
     .sort((a, b) => b[1].deletedAt - a[1].deletedAt)
     .slice(0, RECEIPT_LIMIT).reverse());
-  const db = readDB();
-  db.settings ||= [];
-  const key = receiptKey(scope);
-  const row = db.settings.find((item: any) => item.key === key);
-  const value = JSON.stringify(retained);
-  if (row) row.value = value;
-  else db.settings.push({ key, value });
-  writeDB(db);
+  writeSetting(receiptKey(scope), JSON.stringify(retained));
 }

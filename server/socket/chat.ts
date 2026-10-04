@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
@@ -191,7 +192,7 @@ import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { buildSocketNativeRequestBinding } from './native_request_binding';
 export { buildSocketNativeRequestBinding } from './native_request_binding';
 export type { SocketNativeRequestBinding } from './native_request_binding';
-import { createDesktopRelay } from "./desktop_relay";
+import { isDirectDesktopTool, createDesktopRelay } from "./desktop_relay";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { normalizeVoiceHistoryRecord } from "./voice_history";
 import {
@@ -588,22 +589,7 @@ function buildNaturalReplyStyleOverlay(source?: string): string {
 
 export function registerChatHandler(
   socket: Socket,
-  llmGetters: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI: () => any;
-    getAnthropic: () => any;
-    getQwen: () => any;
-    getOllama: () => any;
-    isOllamaAvailable: () => boolean;
-    getLmStudio: () => any;
-    isLmStudioAvailable: () => boolean;
-    getArk?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getOllama' | 'isOllamaAvailable' | 'getLmStudio' | 'isLmStudioAvailable'>>,
   sensoryFn: (uid: string) => any,
   userIdFn: (s: Socket) => string,
   io: Server,
@@ -2985,41 +2971,6 @@ export function registerChatHandler(
         emitAgent("agent:tool_call", normalized);
         emitAgent("agent:tool", normalized);
       };
-
-      const directDesktopRelayTools = new Set([
-        'client_action',
-        'desktop_capability_status',
-        'desktop_system_info',
-        'desktop_list_files',
-        'desktop_list_apps',
-        'desktop_path_info',
-        'desktop_write_text_file',
-        'desktop_open',
-        'desktop_show_lumi_window',
-        'desktop_run_command',
-        'desktop_active_window',
-        'desktop_window_control',
-        'desktop_running_processes',
-        'desktop_capture_screen',
-        'desktop_clipboard_read',
-        'desktop_clipboard_write',
-        'desktop_idle_time',
-        'desktop_poll_activity',
-        'desktop_mouse_move',
-        'desktop_mouse_click',
-        'desktop_mouse_drag',
-        'desktop_mouse_click_at',
-        'desktop_mouse_double_click_at',
-        'desktop_mouse_right_click_at',
-        'desktop_keyboard_type',
-        'desktop_keyboard_press',
-        'desktop_set_wallpaper_mode',
-        'desktop_cursor_glow_show',
-        'desktop_cursor_glow_update',
-        'desktop_cursor_glow_click',
-        'desktop_cursor_glow_hide',
-      ]);
-      const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
       const persistChatLearning = (
         assistantText: string,
         options: {

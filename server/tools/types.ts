@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import type { ModelRoutingTrace } from '../llm/model_routing_receipts';
 import type { LumiClientMode } from '../../shared/operation_modes';
 
@@ -405,20 +406,7 @@ export interface ToolContext extends ToolExecutionIdentity {
   /** Cooperative cancellation signal owned by the registry for this attempt. */
   executionSignal?: AbortSignal;
   /** LLM provider getters for tools that need to call vision/text models internally */
-  llmGetters?: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI?: () => any;
-    getAnthropic?: () => any;
-    getQwen?: () => any;
-    getArk?: () => any;
-    getOllama?: () => any;
-    getLmStudio?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  };
+  llmGetters?: SharedProviderGetters;
   /** True when the tool is being used by background autonomous work. */
   autonomous?: boolean;
   /** Surface that initiated the tool call, such as chat, voice, runtime-log, meeting, or mcp. */

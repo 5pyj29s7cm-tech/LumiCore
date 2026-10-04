@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import type { Request, Response, Router } from 'express';
 import sharp from 'sharp';
 import { requireAuth } from '../middleware/auth';
@@ -42,7 +43,7 @@ export function publicLiveMessages(brief: string, comment: { nickname: string; t
 export function mountMemoryAvatarLiveRoutes(router: Router, getters: Pick<LLMGetters, 'getDeepSeek' | 'getGemini'> & Partial<LLMGetters>) {
   const active = new Set<string>();
   const recent = new Map<string, number>();
-  const getterArgs = [getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay] as const;
+  const getterArgs = providerGetterArguments(getters);
   router.get('/memory-avatars/:id/live/history', requireAuth, (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     if (req.user?.orgId) { res.status(403).json({ code: 'live_personal_scope_required' }); return; }
@@ -127,9 +128,7 @@ export function mountMemoryAvatarLiveRoutes(router: Router, getters: Pick<LLMGet
       source: 'avatar_live_preview', requestId: String(req.body.requestId), conversationId: `avatar-live:${req.params.id}` };
     const messages = publicLiveMessages(brief, comment, history, req.body?.locale, publicIdentity);
     let result = await makeLLMCall(messages, [], { ...config, thinkingMode: 'disabled', signal },
-      getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic,
-      getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk,
-      getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+      ...providerGetterArguments(getters));
     signal.throwIfAborted();
     // Only regenerate unspoken text, once, within the original cancellation
     // and deadline. Never replay TTS or continue from an incomplete fragment.
@@ -138,9 +137,7 @@ export function mountMemoryAvatarLiveRoutes(router: Router, getters: Pick<LLMGet
         ...messages,
         { role: 'system', content: 'The previous generation was incomplete and was not spoken. Answer the same viewer again from the public briefing, in one complete short sentence (at most 80 words/Chinese characters). End with sentence punctuation. Do not continue a previous fragment or invent facts.' },
       ], [], { ...config, maxTokens: 1536, thinkingMode: 'disabled', signal },
-      getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic,
-      getters.getQwen, getters.getOllama, getters.getLmStudio, getters.getArk,
-      getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay);
+      ...providerGetterArguments(getters));
       signal.throwIfAborted();
     }
     const reply = result.text?.trim();

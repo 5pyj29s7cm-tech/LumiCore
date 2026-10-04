@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 import type {
   VoiceprintTemplate,
   FaceTemplate,
@@ -10,8 +11,7 @@ function storeKey(uid: string): string {
 }
 
 function readStore(uid: string): BiometricStore {
-  const db = readDB();
-  const row = (db.settings || []).find((s: any) => s.key === storeKey(uid));
+  const row = readSettingRecord(storeKey(uid));
   if (row) {
     try {
       return JSON.parse(row.value);
@@ -23,16 +23,7 @@ function readStore(uid: string): BiometricStore {
 }
 
 function writeStore(uid: string, store: BiometricStore): void {
-  const db = readDB();
-  const existing = (db.settings || []).findIndex((s: any) => s.key === storeKey(uid));
-  const value = JSON.stringify(store);
-  if (existing >= 0) {
-    db.settings[existing].value = value;
-  } else {
-    if (!db.settings) db.settings = [];
-    db.settings.push({ key: storeKey(uid), value });
-  }
-  writeDB(db);
+  writeSetting(storeKey(uid), JSON.stringify(store));
 }
 
 // ── Voiceprints ──

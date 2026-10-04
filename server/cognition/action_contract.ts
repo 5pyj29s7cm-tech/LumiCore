@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { withoutNegatedLookupClauses, compositeNavigationInstructions } from './normalized_action_intent';
 import { businessInstructionText } from '../regions/packs/cn/business_routing';
 import { isAvatarAuthoringRequest } from './media_creation_intent';
@@ -295,7 +296,7 @@ export function claimsCurrentAppSaveCompletion(input: string): boolean {
   return /(?:\u5df2\u7ecf|\u5df2|\u6210\u529f)?[^。！？!?\n]{0,18}(?:\u4fdd\u5b58\u6210\u529f|\u5df2\u4fdd\u5b58|\u4fdd\u5b58\u597d\u4e86|\u4fdd\u5b58\u5b8c\u6210)|\b(?:saved|save\s+completed|successfully\s+saved)\b/iu.test(stripped);
 }
 
-export function extractSimpleDesktopOpenTarget(input: string): string {
+export function extractSimpleDesktopOpenTarget(input: string, analysis?: ActionIntentAnalysis): string {
   const primary = extractPrimaryTaskText(input);
   const onlyOpen = /(?:只|仅)(?:需要|要|是)?打开|\b(?:only|just)\s+open\b/iu.test(primary); // i18n-allow: Multilingual desktop-open input recognition; not user-visible copy.
   // Normalization is useful for the special "only open" phrasing, but it is
@@ -303,7 +304,7 @@ export function extractSimpleDesktopOpenTarget(input: string): string {
   // intent pipeline over long conversational context before we even know the
   // turn contains an open command.
   if (onlyOpen) {
-    const normalizedIntent = normalizeActionIntent(primary);
+    const normalizedIntent = normalizeActionIntent(primary, analysis);
     if (
       normalizedIntent.kind === 'desktop_operation'
       && normalizedIntent.operation === 'navigate'
@@ -319,12 +320,12 @@ export function extractSimpleDesktopOpenTarget(input: string): string {
   // ignored, and never turn reported speech or a question into execution.
   const clauses = text.split(/[，,；;。]/u).map(clause => clause.trim()).filter(Boolean); // i18n-allow: Spoken sentence boundaries.
   if (clauses.length > 1 && clauses.slice(0, -1).every(clause => (
-    normalizeActionIntent(clause).kind === 'none'
+    normalizeActionIntent(clause, analysis).kind === 'none'
     && !/(?:读取|查看|检查|搜索|发送|创建|生成|绘制|画|保存|修改|删除|播放|登录|不要|别|如果|假设|说|问|为什么|怎么)|\b(?:read|check|search|send|create|draw|save|delete|play|login|if|said|say|ask|why|how)\b/iu.test(clause) // i18n-allow: Preserve action, negation, reported-speech and hypothetical prefixes.
-  ))) return extractSimpleDesktopOpenTarget(clauses[clauses.length - 1]);
+  ))) return extractSimpleDesktopOpenTarget(clauses[clauses.length - 1], analysis);
   // i18n-allow: Object-first launch instruction; exact single-clause input only.
   if (/^(?:(?:请|请你|帮我)\s*)?(?:先\s*)?(?:把|将|用)\s*[^，,。；;\n]{1,80}?(?:先\s*)?(?:打开|启动|运行)(?:一下|吧)?[。！!\s]*$/iu.test(text)) {
-    const intent = normalizeActionIntent(text);
+    const intent = normalizeActionIntent(text, analysis);
     if (intent.kind === 'desktop_operation' && intent.operation === 'navigate' && intent.sideEffectClass === 'none') return compact(intent.target);
   }
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
@@ -340,13 +341,13 @@ export function extractSimpleDesktopOpenTarget(input: string): string {
   return target;
 }
 
-export function isSimpleDesktopOpenRequest(input: string): boolean {
-  return Boolean(extractSimpleDesktopOpenTarget(input));
+export function isSimpleDesktopOpenRequest(input: string, analysis?: ActionIntentAnalysis): boolean {
+  return Boolean(extractSimpleDesktopOpenTarget(input, analysis));
 }
 
-export function extractDesktopLaunchTarget(input: string): string {
+export function extractDesktopLaunchTarget(input: string, analysis?: ActionIntentAnalysis): string {
   const primary = extractPrimaryTaskText(input);
-  const normalizedIntent = normalizeActionIntent(primary);
+  const normalizedIntent = normalizeActionIntent(primary, analysis);
   if (
     normalizedIntent.kind === 'desktop_operation'
     && normalizedIntent.operation === 'navigate'
@@ -354,7 +355,7 @@ export function extractDesktopLaunchTarget(input: string): string {
     && compact(normalizedIntent.target)
     && isDesktopLaunchVerificationOnly(primary, normalizedIntent)
   ) return compact(normalizedIntent.target);
-  return extractSimpleDesktopOpenTarget(primary);
+  return extractSimpleDesktopOpenTarget(primary, analysis);
 }
 
 /** A provider/model health question needs a real perception call. Directory
@@ -927,13 +928,13 @@ export function hasRequestedArtifactPostWriteReadback(
   return Boolean(resolveArtifactDelivery(records)?.readback);
 }
 
-export function getArtifactTaskProgress(task: string, records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}) {
+export function getArtifactTaskProgress(task: string, records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}, analysis?: ActionIntentAnalysis) {
   const current = expandSuccessfulRecords(records).filter(record => artifactRecordMatchesTurn(record, turn));
   return projectArtifactProgress(task, current, {
     readbackRequired: requiresArtifactPostWriteReadback(task),
     openRequired: requiresArtifactOpen(task),
-    openVerified: file => hasRequestedDesktopOpenEvidence(current, task, file),
-    acceptsOutput: file => matchesRequestedArtifactOutput(task, file),
+    openVerified: file => hasRequestedDesktopOpenEvidence(current, task, file, analysis),
+    acceptsOutput: file => matchesRequestedArtifactOutput(task, file, analysis),
   });
 }
 
@@ -1054,22 +1055,22 @@ function buildDesignDeliveryContract(): LumiActionContract {
   });
 }
 
-export function buildActionContract(input: string): LumiActionContract {
+export function buildActionContract(input: string, acceptedIntent?: Readonly<ReturnType<typeof normalizeActionIntent>>, analysis?: ActionIntentAnalysis): LumiActionContract {
   const rawInput = String(input || '');
-  const normalizedIntent = normalizeActionIntent(rawInput);
+  const normalizedIntent = acceptedIntent || normalizeActionIntent(rawInput, analysis);
   const primaryTaskText = extractPrimaryTaskText(rawInput);
   if (hasExplicitNoToolInstruction(primaryTaskText || rawInput)) return NONE_CONTRACT;
   const components = compositeNavigationInstructions(primaryTaskText || rawInput)
-    .map(item => ({ text: item.text, contract: buildActionContract(item.text) }));
+    .map(item => ({ text: item.text, contract: buildActionContract(item.text, undefined, analysis) }));
   if (components.length > 1) {
-    const primary = components.find(item => normalizeActionIntent(item.text).kind === 'desktop_operation')!.contract;
+    const primary = components.find(item => normalizeActionIntent(item.text, analysis).kind === 'desktop_operation')!.contract;
     const all = <K extends 'preferredTools' | 'verificationTools' | 'requiredEvidence'>(key: K) => Array.from(new Set(components.flatMap(item => item.contract[key])));
     return { ...primary, components, preferredTools: all('preferredTools'), verificationTools: all('verificationTools'),
       requiredEvidence: all('requiredEvidence'), coreAction: components.map(item => item.contract.coreAction).join('; '),
       nextStep: 'Complete every requested operation and verify each one. One successful operation does not complete the whole request.' };
   }
   if (primaryTaskText && primaryTaskText.trim() !== rawInput.trim()) {
-    const primaryContract = buildActionContract(primaryTaskText);
+    const primaryContract = buildActionContract(primaryTaskText, undefined, analysis);
     if (
       primaryContract.applies
       && primaryContract.kind !== 'none'
@@ -1111,12 +1112,12 @@ export function buildActionContract(input: string): LumiActionContract {
   const authoringIntent = classifySkillAuthoringIntent(rawInput);
   const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
   if (executionBeforeSave) {
-    const execution = buildActionContract(executionBeforeSave);
+    const execution = buildActionContract(executionBeforeSave, undefined, analysis);
     const saveText = rawInput.slice(rawInput.indexOf(executionBeforeSave) + executionBeforeSave.length);
     return withDefaults({ kind: 'skill_authoring', label: 'Execute and save workflow',
       components: [
         { text: executionBeforeSave, contract: execution },
-        { text: saveText, contract: buildActionContract(saveText) },
+        { text: saveText, contract: buildActionContract(saveText, undefined, analysis) },
       ],
       coreAction: 'Execute and verify the explicit current task, then save its input-dependent workflow draft.',
       preparationIsNotCompletion: ['saving a draft without performing the requested current task', 'performing the task without saving its executable workflow'],
@@ -1274,7 +1275,7 @@ export function buildActionContract(input: string): LumiActionContract {
   if (requiresVisualModelAvailabilityCheck(text)) {
     return buildVisualModelAvailabilityContract();
   }
-  if (isInformationOnlyQuestion(text) && !readOnlyArtifactInspection) return NONE_CONTRACT;
+  if (isInformationOnlyQuestion(text, analysis) && !readOnlyArtifactInspection) return NONE_CONTRACT;
   if (isReadOnlyKnowledgeBaseInspectionRequest(text)) return NONE_CONTRACT;
   // Blank AutoCAD creation has a dedicated verified COM path. It remains a
   // CAD document action even when continuation context also supplies the
@@ -1460,7 +1461,7 @@ export function buildActionContract(input: string): LumiActionContract {
     return buildMediaPlaybackContract();
   }
 
-  if (isSimpleDesktopOpenRequest(text)) {
+  if (isSimpleDesktopOpenRequest(text, analysis)) {
     return buildSimpleDesktopOpenContract();
   }
 
@@ -1675,12 +1676,12 @@ export function buildActionContract(input: string): LumiActionContract {
  * from directory/search receipts. Evidence adjudicators use this projection;
  * planners and routers must continue using buildActionContract.
  */
-export function buildActionEvidenceContract(input: string): LumiActionContract {
-  const contract = buildActionContract(input);
+export function buildActionEvidenceContract(input: string, analysis?: ActionIntentAnalysis): LumiActionContract {
+  const contract = buildActionContract(input, undefined, analysis);
   if (contract.applies || !isRuntimeCleanupOfferAcceptanceText(compact(input))) {
     return contract;
   }
-  return buildActionContract('Cancel all active background tasks');
+  return buildActionContract('Cancel all active background tasks', undefined, analysis);
 }
 
 function expandSuccessfulRecords(records: ToolExecutionRecord[]): ToolExecutionRecord[] {
@@ -1942,12 +1943,12 @@ function hasMatchingBrowserOpenEvidence(record: ToolExecutionRecord, requestedTa
   return evidenceValues.some(value => matchesRequestedDesktopTarget(value, aliases));
 }
 
-export function requestedMediaPlayerTarget(taskText: string): string {
+export function requestedMediaPlayerTarget(taskText: string, analysis?: ActionIntentAnalysis): string {
   const text = compact(extractPrimaryTaskText(taskText));
   const videoPlayer = text.match(/(?:爱奇艺|优酷|腾讯视频|哔哩哔哩|芒果TV)|\b(?:iqiyi|youku|youtube|netflix|bilibili)\b/iu)?.[0]; // i18n-allow: Named video application recognition.
   if (videoPlayer) return videoPlayer;
   const named = text.match(/(?:\u7f51\u6613\u4e91(?:\u97f3\u4e50)?|QQ\s*\u97f3\u4e50|\u9177\u72d7(?:\u97f3\u4e50)?|Spotify|Apple\s+Music|NetEase(?:\s+Cloud\s+Music)?|CloudMusic)/iu)?.[0];
-  return compact(named || extractDesktopLaunchTarget(text) || extractSimpleDesktopOpenTarget(text));
+  return compact(named || extractDesktopLaunchTarget(text, analysis) || extractSimpleDesktopOpenTarget(text, analysis));
 }
 
 function hasObservedMatchingTargetAfterOpenAttempt(
@@ -1998,13 +1999,13 @@ function hasObservedMatchingTargetAfterOpenAttempt(
 export function hasRequestedDesktopOpenEvidence(
   records: ToolExecutionRecord[] = [],
   taskText = '',
-  explicitTarget = '',
+  explicitTarget = '', analysis?: ActionIntentAnalysis
 ): boolean {
   const requestedTarget = compact(
     explicitTarget
-    || extractDesktopLaunchTarget(taskText)
-    || extractSimpleDesktopOpenTarget(taskText)
-    || requestedMediaPlayerTarget(taskText),
+    || extractDesktopLaunchTarget(taskText, analysis)
+    || extractSimpleDesktopOpenTarget(taskText, analysis)
+    || requestedMediaPlayerTarget(taskText, analysis),
   );
   if (!requestedTarget) return false;
   const successful = expandSuccessfulRecords(records);
@@ -2226,8 +2227,8 @@ export function requiresArtifactOpen(input: string): boolean {
   return /打开|\bopen\b/iu.test(positive); // i18n-allow: Artifact opening input grammar.
 }
 
-export function hasMediaPauseEvidence(records: ToolExecutionRecord[], taskText: string, currentTurn?: { requestId?: string; taskId?: string }): boolean {
-  const target = requestedMediaPlayerTarget(taskText);
+export function hasMediaPauseEvidence(records: ToolExecutionRecord[], taskText: string, currentTurn?: { requestId?: string; taskId?: string }, analysis?: ActionIntentAnalysis): boolean {
+  const target = requestedMediaPlayerTarget(taskText, analysis);
   let paused = false;
   for (const record of scopedMediaEvidence(records, currentTurn)) {
     if (!/^(?:desktop_ui_snapshot|ocr_screen|ocr_region|computer_vision|computer_use)$/i.test(record.name) || record.error) continue;
@@ -2245,10 +2246,10 @@ export function hasMediaPauseEvidence(records: ToolExecutionRecord[], taskText: 
   return paused;
 }
 
-export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], taskText = '', currentTurn?: { requestId?: string; taskId?: string }): boolean {
+export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], taskText = '', currentTurn?: { requestId?: string; taskId?: string }, analysis?: ActionIntentAnalysis): boolean {
   const successful = scopedMediaEvidence(records, currentTurn);
   const requested = requestedPlaybackContent(taskText);
-  let target = requestedMediaPlayerTarget(taskText);
+  let target = requestedMediaPlayerTarget(taskText, analysis);
   if (/^(?:音乐|歌曲?|播放器|视频|music|song|player|video)$/iu.test(target)) target = ''; // i18n-allow: Generic player labels.
   let playerMatched = !target;
   let actuated = false;
@@ -2275,7 +2276,7 @@ export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], ta
     if (record.name === 'computer_use') {
       const executedTask = String(record.arguments?.task || record.arguments?.prompt || '');
       const executedContent = requestedPlaybackContent(executedTask);
-      const executedPlayer = requestedMediaPlayerTarget(executedTask);
+      const executedPlayer = requestedMediaPlayerTarget(executedTask, analysis);
       const applicationIdentity = String(parseRecordJson(record)?.applicationIdentity || '').trim();
       const matchesTarget = (value: string) => matchesRequestedDesktopTarget(value, requestedDesktopTargetAliases(target));
       if (!currentObservation || !playbackObservationText(record) || !requiresMediaPlaybackAction(executedTask)
@@ -3462,18 +3463,18 @@ export function hasCoreActionEvidence(
   taskText = '',
   taskCapsule?: TaskCapsuleV1 | null,
   currentTurn?: { requestId?: string; taskId?: string },
-  acceptedTaskTarget?: AcceptedTaskTarget,
+  acceptedTaskTarget?: AcceptedTaskTarget, analysis?: ActionIntentAnalysis
 ): boolean {
   if (!contract.applies) return true;
-  if (contract.components?.length) return contract.components.every(item => hasCoreActionEvidence(item.contract, records, item.text, taskCapsule, currentTurn, acceptedTaskTarget));
+  if (contract.components?.length) return contract.components.every(item => hasCoreActionEvidence(item.contract, records, item.text, taskCapsule, currentTurn, acceptedTaskTarget, analysis));
   if (contract.kind === 'skill_authoring') return Boolean(verifiedSkillAuthoringReceipt(taskText, records, currentTurn));
   const successful = expandSuccessfulRecords(records);
   const recoverableObservedOpen = contract.kind === 'desktop_operation'
     ? (() => {
-        const target = extractDesktopLaunchTarget(taskText) || extractSimpleDesktopOpenTarget(taskText);
+        const target = extractDesktopLaunchTarget(taskText, analysis) || extractSimpleDesktopOpenTarget(taskText, analysis);
         return Boolean(target) && records.some(record => (
           /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
-          && hasRequestedDesktopOpenEvidence([record], taskText, target)
+          && hasRequestedDesktopOpenEvidence([record], taskText, target, analysis)
         ));
       })()
     : false;
@@ -3583,7 +3584,7 @@ export function hasCoreActionEvidence(
       return hasVerifiedExactReadOnlyArtifactEvidence(successful, taskText, resolvedTarget);
     }
     const current = successful.filter(record => artifactRecordMatchesTurn(record, currentTurn || {}));
-    return getArtifactTaskProgress(taskText, current)?.complete === true;
+    return getArtifactTaskProgress(taskText, current, undefined, analysis)?.complete === true;
   }
   if (contract.kind === 'external_cli_status') return verifiedExternalCliStatus(taskText, records, currentTurn) !== null;
   if (contract.kind === 'external_ai_request') {
@@ -3654,7 +3655,7 @@ export function hasCoreActionEvidence(
           && !/^(?:failed|error|blocked|denied|timeout|unavailable)$/.test(String(payload?.status || ''));
       }));
     }
-    const clientIntent = normalizeActionIntent(taskText);
+    const clientIntent = normalizeActionIntent(taskText, analysis);
     if (clientIntent.kind === 'client_navigation' && clientIntent.clientAction) {
       return successful.some(record => {
         if (record.name !== 'client_action') return false;
@@ -3675,9 +3676,9 @@ export function hasCoreActionEvidence(
     if (requiresVisualModelAvailabilityCheck(taskText)) {
       return hasVisualModelAvailabilityEvidence(records);
     }
-    if (isMediaPauseRequest(taskText)) return hasMediaPauseEvidence(records, taskText, currentTurn);
+    if (isMediaPauseRequest(taskText)) return hasMediaPauseEvidence(records, taskText, currentTurn, analysis);
     if (requiresMediaPlaybackAction(taskText)) {
-      return hasMediaPlaybackEvidence(records, taskText, currentTurn);
+      return hasMediaPlaybackEvidence(records, taskText, currentTurn, analysis);
     }
     const windowAction = requestedDesktopWindowAction(taskText);
     if (windowAction) {
@@ -3708,15 +3709,15 @@ export function hasCoreActionEvidence(
     }
     const desktopObservation = evaluateDesktopObservationEvidence(records, taskText);
     if (desktopObservation.requested) return desktopObservation.complete;
-    const desktopLaunchTarget = extractDesktopLaunchTarget(taskText);
+    const desktopLaunchTarget = extractDesktopLaunchTarget(taskText, analysis);
     const needsActiveWindow = requiresActiveWindowObservation(taskText);
     const needsDesktopFiles = requiresDesktopFileListingObservation(taskText);
     if (desktopLaunchTarget) {
-      const openedExactTarget = hasRequestedDesktopOpenEvidence(records, taskText, desktopLaunchTarget);
+      const openedExactTarget = hasRequestedDesktopOpenEvidence(records, taskText, desktopLaunchTarget, analysis);
       if (!openedExactTarget) return false;
       const hasBoundOpenAction = records.some(record => (
         /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
-        && hasRequestedDesktopOpenEvidence([record], taskText, desktopLaunchTarget)
+        && hasRequestedDesktopOpenEvidence([record], taskText, desktopLaunchTarget, analysis)
       ));
       if (!hasBoundOpenAction) return false;
       if (needsActiveWindow && !successful.some(record => hasMatchingDesktopObservationEvidence(record, desktopLaunchTarget))) {
@@ -3740,11 +3741,11 @@ export function hasCoreActionEvidence(
     if (isRunningSoftwareInspectionRequest(taskText)) {
       return successful.some(record => /^(?:desktop_running_processes|get_running_processes)$/i.test(record.name));
     }
-    if (isSimpleDesktopOpenRequest(taskText)) {
-      const target = extractSimpleDesktopOpenTarget(taskText);
+    if (isSimpleDesktopOpenRequest(taskText, analysis)) {
+      const target = extractSimpleDesktopOpenTarget(taskText, analysis);
       return successful.some(record => (
         /^(?:desktop_open|browser_open_task)$/iu.test(String(record.name || ''))
-        && hasRequestedDesktopOpenEvidence([record], taskText, target)
+        && hasRequestedDesktopOpenEvidence([record], taskText, target, analysis)
       ));
     }
     return hasVerifiedGenericDesktopMutation(successful)

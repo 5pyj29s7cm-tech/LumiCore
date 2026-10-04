@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../../llm/provider_getters";
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
@@ -1614,18 +1615,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
             screenCapture,
             query,
             visionConfig,
-            getters?.getDeepSeek,
-            getters?.getGemini,
-            getters?.getOpenAI,
-            getters?.getAnthropic,
-            getters?.getQwen,
-            getters?.getOllama,
-            getters?.getLmStudio,
-            getters?.getArk,
-            getters?.getXiaomi,
-            getters?.getKimi,
-            getters?.getGlm,
-            getters?.getRelay,
+            ...providerGetterArguments(getters),
           );
         } catch (err: any) {
           visionError = err?.message || String(err);
@@ -1741,18 +1731,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
                 'Return only JSON: {"ready":boolean,"confidence":number,"reason":"short visible evidence"}.',
               ].join('\n'),
               selectionVisionConfig,
-              getters?.getDeepSeek,
-              getters?.getGemini,
-              getters?.getOpenAI,
-              getters?.getAnthropic,
-              getters?.getQwen,
-              getters?.getOllama,
-              getters?.getLmStudio,
-              getters?.getArk,
-              getters?.getXiaomi,
-              getters?.getKimi,
-              getters?.getGlm,
-              getters?.getRelay,
+              ...providerGetterArguments(getters),
             );
             const verifiedSelection = parseWeChatConversationReadyVerification(verificationText);
             conversationReady = verifiedSelection.ready;
@@ -1818,18 +1797,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
               'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
             ].join('\n'),
             visionConfig,
-            getters?.getDeepSeek,
-            getters?.getGemini,
-            getters?.getOpenAI,
-            getters?.getAnthropic,
-            getters?.getQwen,
-            getters?.getOllama,
-            getters?.getLmStudio,
-            getters?.getArk,
-            getters?.getXiaomi,
-            getters?.getKimi,
-            getters?.getGlm,
-            getters?.getRelay,
+            ...providerGetterArguments(getters),
           );
           visionVerification = parseWeChatSendVisionVerification(verificationText);
         } catch (err: any) {
@@ -1881,18 +1849,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
         ].join('\n'),
         visionConfig,
-        getters?.getDeepSeek,
-        getters?.getGemini,
-        getters?.getOpenAI,
-        getters?.getAnthropic,
-        getters?.getQwen,
-        getters?.getOllama,
-        getters?.getLmStudio,
-        getters?.getArk,
-        getters?.getXiaomi,
-        getters?.getKimi,
-        getters?.getGlm,
-        getters?.getRelay,
+        ...providerGetterArguments(getters),
       );
       const verification = parseWeChatSendVisionVerification(verificationText);
       if (!verification.sent) return null;
@@ -2076,18 +2033,7 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
               'Return only JSON: {"sent":boolean,"confidence":number,"reason":"short visible evidence"}.',
             ].join('\n'),
             visionConfig,
-            getters?.getDeepSeek,
-            getters?.getGemini,
-            getters?.getOpenAI,
-            getters?.getAnthropic,
-            getters?.getQwen,
-            getters?.getOllama,
-            getters?.getLmStudio,
-            getters?.getArk,
-            getters?.getXiaomi,
-            getters?.getKimi,
-            getters?.getGlm,
-            getters?.getRelay,
+            ...providerGetterArguments(getters),
           );
           visionVerification = parseWeChatSendVisionVerification(verificationText);
         } catch (err: any) {

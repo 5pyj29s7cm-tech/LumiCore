@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
 
@@ -42,9 +42,7 @@ function normalizeVisionModels(value: unknown): Record<string, string> {
 export function getUserPreferredVision(userId: string): VisionPrefs {
   let raw: any = null;
   try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === `vision_prefs_${userId}`);
-    if (setting?.value) raw = JSON.parse(setting.value);
+    raw = readSettingJson(`vision_prefs_${userId}`);
   } catch {}
 
   const provider = normalizeVisionProvider(raw?.provider);

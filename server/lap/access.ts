@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 import { createHash } from 'crypto';
 import type { AuthUser } from '../middleware/auth';
 import { resolveDomain } from '../middleware/auth';
@@ -30,7 +31,7 @@ export function lapAccessScope(user: AuthUser): LAPAccessScope {
 
 function readBindings(): LAPSessionBinding[] {
   try {
-    const row = (readDB().settings || []).find((item: any) => item?.key === BINDING_SETTING_KEY);
+    const row = readSettingRecord(BINDING_SETTING_KEY);
     const parsed = row?.value ? JSON.parse(row.value) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -39,13 +40,7 @@ function readBindings(): LAPSessionBinding[] {
 }
 
 function writeBindings(bindings: LAPSessionBinding[]): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const value = JSON.stringify(bindings.slice(-500));
-  const index = db.settings.findIndex((item: any) => item?.key === BINDING_SETTING_KEY);
-  if (index >= 0) db.settings[index].value = value;
-  else db.settings.push({ key: BINDING_SETTING_KEY, value });
-  writeDB(db);
+  writeSetting(BINDING_SETTING_KEY, JSON.stringify(bindings.slice(-500)));
 }
 
 function sameScope(left: LAPAccessScope, right: LAPAccessScope): boolean {

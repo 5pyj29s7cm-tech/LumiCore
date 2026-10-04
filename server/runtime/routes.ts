@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { mountIndustryWorkflowRoutes } from '../routes/industry_workflow_routes';
 // Route aggregator — mounts all shared routes on the API router
 import { Router } from "express";
@@ -31,10 +32,7 @@ import { mountPrivacyRoutes } from '../routes/privacy_routes';
 interface RouteContext {
   apiRouter: Router;
   jwtSecret: string;
-  llm: {
-    getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any; getArk: any; getGlm: any;
-    getOllama?: any; getLmStudio?: any; getXiaomi?: any; getKimi?: any; getRelay?: any;
-  };
+  llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getArk' | 'getGlm'>>;
   getCookieOptions: () => { httpOnly: true; secure: boolean; sameSite: "none" | "lax"; maxAge: number };
   io: Server;
 }

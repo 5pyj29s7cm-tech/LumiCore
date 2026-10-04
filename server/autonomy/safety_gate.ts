@@ -1,8 +1,9 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 /**
  * Safety gate for autonomous work — controls when and how Lumi can work independently.
  * Gates: time-of-day, user-idle requirement, token budget, quiet hours.
  */
-import { readDB, writeDB } from '../../db_layer';
+
 import { isRealtimeUserActive } from './foreground_activity';
 
 export type AutonomyLevel = 'reactive' | 'semi' | 'full';
@@ -92,10 +93,8 @@ export function loadGateConfig(userId?: string): SafetyGateConfig {
   const scope = configScope(userId);
   let config = { ...DEFAULT_CONFIG };
   try {
-    const db = readDB();
-    const settings = db.settings || [];
-    const setting = settings.find((s: any) => s.key === configDbKey(userId))
-      || (userId ? settings.find((s: any) => s.key === DB_KEY) : undefined);
+    const setting = readSettingRecord(configDbKey(userId))
+      || (userId ? readSettingRecord(DB_KEY) : undefined);
     if (setting?.value) {
       config = normalizeGateConfig(JSON.parse(setting.value));
     }
@@ -114,18 +113,8 @@ export function saveGateConfig(partial: Partial<SafetyGateConfig>, userId?: stri
   const level = normalizeAutonomyLevel(partial.autonomyLevel);
   const patch = level ? { ...AUTONOMY_LEVEL_PRESETS[level], ...partial, autonomyLevel: level } : partial;
   const config = normalizeGateConfig({ ...current, ...patch });
+  writeSetting(configDbKey(userId), JSON.stringify(config));
   configs.set(configScope(userId), config);
-  const db = readDB();
-  const key = configDbKey(userId);
-  let setting = (db.settings || []).find((s: any) => s.key === key);
-  const value = JSON.stringify(config);
-  if (setting) {
-    setting.value = value;
-  } else {
-    if (!db.settings) db.settings = [];
-    db.settings.push({ key, value });
-  }
-  writeDB(db);
   return { ...config };
 }
 

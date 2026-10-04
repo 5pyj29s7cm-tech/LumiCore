@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 import type { WechatIntakeResult, WechatUrgency, WechatWorkCategory } from './wechat_intake';
 
 export type WorkTakeoverStatus =
@@ -155,8 +156,7 @@ function id(prefix: string): string {
 }
 
 function readStoredTasks(): WorkTakeoverTask[] {
-  const db = readDB();
-  const setting = (db.settings || []).find((item: any) => item.key === SETTINGS_KEY);
+  const setting = readSettingRecord(SETTINGS_KEY);
   if (!setting?.value) return [];
   try {
     const parsed = JSON.parse(setting.value);
@@ -167,17 +167,8 @@ function readStoredTasks(): WorkTakeoverTask[] {
 }
 
 function writeStoredTasks(tasks: WorkTakeoverTask[]) {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const trimmed = tasks
-    .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .slice(-MAX_TASKS);
-  const value = JSON.stringify(trimmed);
-  const index = db.settings.findIndex((item: any) => item.key === SETTINGS_KEY);
-  if (index >= 0) db.settings[index].value = value;
-  else db.settings.push({ key: SETTINGS_KEY, value });
-  writeDB(db);
+  writeSetting(SETTINGS_KEY, JSON.stringify(tasks.slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-MAX_TASKS)));
 }
 
 function event(type: WorkTakeoverEvent['type'], text: string): WorkTakeoverEvent {

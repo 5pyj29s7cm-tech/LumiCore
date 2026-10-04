@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { resolveUserTurn } from '../cognition/turn_resolution';
@@ -166,20 +167,7 @@ export function taskDurabilityUnknownText(): string {
 
 export function registerTaskHandler(
   socket: Socket,
-  llmGetters: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI: () => any;
-    getAnthropic: () => any;
-    getQwen: () => any;
-    getOllama?: () => any;
-    getLmStudio?: () => any;
-    getArk?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>,
   sensoryFn: (uid: string) => any,
   userIdFn: (s: Socket) => string,
   io: Server,

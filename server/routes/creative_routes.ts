@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { Router, Request, NextFunction } from 'express';
 import { makeLLMCall } from '../llm/providers';
 import { getUserPreferredLLMConfig } from '../llm/user_preferences';
@@ -15,20 +16,7 @@ const asyncHandler = (fn: (req: Request, res: any, next?: NextFunction) => Promi
 export function mountCreativeRoutes(
   router: Router,
   _jwtSecret: string,
-  llmGetters: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI?: () => any;
-    getAnthropic?: () => any;
-    getQwen?: () => any;
-    getOllama?: () => any;
-    getLmStudio?: () => any;
-    getArk?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters,
 ) {
   router.post("/audio/transcribe", requireAuth, asyncHandler(async (req, res) => {
     const { audio, fileName } = req.body || {};
@@ -73,18 +61,7 @@ export function mountCreativeRoutes(
           [{ role: 'user', content: llmPrompt }],
           [],
           getUserPreferredLLMConfig(userId, { maxTokens: 500 }),
-          llmGetters.getDeepSeek,
-          llmGetters.getGemini,
-          llmGetters.getOpenAI,
-          llmGetters.getAnthropic,
-          llmGetters.getQwen,
-          llmGetters.getOllama,
-          llmGetters.getLmStudio,
-          llmGetters.getArk,
-          llmGetters.getXiaomi,
-          llmGetters.getKimi,
-          llmGetters.getGlm,
-          llmGetters.getRelay,
+          ...providerGetterArguments(llmGetters),
         );
         let aiDesign: any = {};
         try { aiDesign = JSON.parse((result.text || '').replace(/```json\s*|```/g, '').trim()); } catch { aiDesign = {}; }

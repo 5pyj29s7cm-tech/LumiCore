@@ -1,3 +1,4 @@
+import type { TurnAnalysis } from './turn_analysis';
 import { businessToolHints } from '../regions/packs/cn/business_routing';
 import { ToolPolicy } from '../personality/types';
 import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
@@ -77,6 +78,7 @@ export interface ToolRoute {
 }
 
 export interface ToolRouteOptions {
+  analysis?: TurnAnalysis;
   maxTools?: number;
   connectedMcpServers?: string[];
   enableMcpHealthGate?: boolean;
@@ -831,7 +833,7 @@ export function routeToolsForTurn(
   const maxTools = Math.max(8, Math.min(options?.maxTools ?? 64, 80));
   const text = String(userText || '').trim();
   const primaryInstructionText = primaryRoutingInstruction(text);
-  const currentInstructionContract = buildActionContract(primaryInstructionText);
+  const currentInstructionContract = options?.analysis?.contract(primaryInstructionText) ?? buildActionContract(primaryInstructionText, undefined, options?.analysis);
   const trustedTaskGoal = options?.trustedActionContinuation
     && options.actionTaskState?.unfinished
     ? primaryRoutingInstruction(String(options.actionTaskState.goal || ''))
@@ -857,7 +859,7 @@ export function routeToolsForTurn(
       totalAvailable: availableNames.length, maxTools, truncated: false, hardAllowlist: true, maxIterations: 2,
       forbiddenToolNames: availableNames.filter(name => !toolNames.includes(name)) };
   }
-  const authoring = classifySkillAuthoringIntent(primaryInstructionText);
+  const authoring = options?.analysis?.authoring(primaryInstructionText) ?? classifySkillAuthoringIntent(primaryInstructionText);
   if (authoring !== 'none') {
     const executionText = executionBeforeWorkflowSave(primaryInstructionText);
     if (executionText) {
@@ -901,7 +903,7 @@ export function routeToolsForTurn(
     instructionText,
     options?.pendingAssistantOfferContext,
   );
-  const actionContract = restoredTrustedTaskRoute ? buildActionContract(trustedTaskGoal) : currentInstructionContract;
+  const actionContract = restoredTrustedTaskRoute ? options?.analysis?.contract(trustedTaskGoal) ?? buildActionContract(trustedTaskGoal, undefined, options?.analysis) : currentInstructionContract;
   const explicitArtifactCreation = isExplicitArtifactCreationText(instructionText);
   const readOnlyKnowledgeInspection = isReadOnlyKnowledgeBaseInspectionRequest(instructionText);
   const confirmationOnlyExternalCommit = actionContract.kind === 'messaging_send'
@@ -954,7 +956,7 @@ export function routeToolsForTurn(
   const desktopObservationOnly = desktopObservationToolNames.length > 0;
   const desktopLaunchRequest =
     actionContract.kind === 'desktop_operation'
-    && Boolean(extractDesktopLaunchTarget(text))
+    && Boolean(extractDesktopLaunchTarget(text, options?.analysis))
     && !documentOpenAndReview
     && !isDirectAutocadOperationsPlayback(instructionText);
   const extensionRegistryOnly = actionContract.kind === 'extension_registry';

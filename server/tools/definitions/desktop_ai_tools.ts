@@ -1,8 +1,10 @@
+import { providerGetterArguments } from "../../llm/provider_getters";
+import { readSettingRecord, writeSetting } from "../../persistence/settings_repository";
 import { ToolRegistry } from '../registry';
 import type { ToolContext } from '../types';
 import { analyzeScreen } from '../../llm/adapter';
 import { DEFAULT_VISION_MODELS, getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
-import { readDB, writeDB } from '../../../db_layer';
+
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 
 type DesktopAiSurface = 'desktop_app' | 'browser_app' | 'local_runtime' | 'developer_tool';
@@ -298,8 +300,7 @@ function storedTargetToRuntime(target: StoredDesktopAiTarget): DesktopAiTarget |
 
 function loadStoredTargetRecords(userId = 'anonymous'): StoredDesktopAiTarget[] {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item.key === storedTargetsKey(userId));
+    const row = readSettingRecord(storedTargetsKey(userId));
     const parsed = row?.value ? JSON.parse(row.value) : [];
     if (!Array.isArray(parsed)) return [];
     return parsed
@@ -313,14 +314,7 @@ function loadStoredTargetRecords(userId = 'anonymous'): StoredDesktopAiTarget[] 
 }
 
 function saveStoredTargetRecords(userId: string, targets: StoredDesktopAiTarget[]) {
-  const db = readDB();
-  if (!db.settings) db.settings = [];
-  const key = storedTargetsKey(userId);
-  const row = db.settings.find((item: any) => item.key === key);
-  const value = JSON.stringify(targets.slice(0, 80));
-  if (row) row.value = value;
-  else db.settings.push({ key, value });
-  writeDB(db);
+  writeSetting(storedTargetsKey(userId), JSON.stringify(targets.slice(0, 80)));
 }
 
 function storedTargetsFromDb(userId = 'anonymous'): DesktopAiTarget[] {
@@ -665,18 +659,7 @@ async function locateDesktopAiInput(
       captureRaw,
       query,
       { provider, model, userId: context?.userId || 'anonymous' },
-      g.getDeepSeek,
-      g.getGemini,
-      g.getOpenAI,
-      g.getAnthropic,
-      g.getQwen,
-      g.getOllama,
-      g.getLmStudio,
-      g.getArk,
-      g.getXiaomi,
-      g.getKimi,
-      g.getGlm,
-      g.getRelay,
+      ...providerGetterArguments(g),
     );
     const evidence = parseDesktopAiInputEvidence(rawEvidence);
     if (!evidence.ready || evidence.x === null || evidence.y === null) return { point: null, evidence };
@@ -975,18 +958,7 @@ export async function desktopAiCollectAnswer(args: Record<string, any>, context?
     captureRaw,
     query,
     { provider, model, userId: context?.userId || 'anonymous' },
-    g.getDeepSeek,
-    g.getGemini,
-    g.getOpenAI,
-    g.getAnthropic,
-    g.getQwen,
-    g.getOllama,
-    g.getLmStudio,
-    g.getArk,
-    g.getXiaomi,
-    g.getKimi,
-    g.getGlm,
-    g.getRelay,
+    ...providerGetterArguments(g),
   );
   const evidence = parseDesktopAiAnswerEvidence(rawAnswerEvidence);
   const blocker = evidence.ready ? null : detectDesktopAiAnswerBlocker(evidence.reason);

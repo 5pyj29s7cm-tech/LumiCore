@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../../llm/provider_getters";
 import { ToolRegistry } from '../registry';
 import { analyzeScreen } from '../../llm/adapter';
 import { DEFAULT_VISION_MODELS, getUserPreferredVision, type VisionProvider } from '../../llm/vision_preferences';
@@ -236,7 +237,7 @@ async function ocrScreen(args: Record<string, any>, context?: any): Promise<stri
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
-    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
+    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous', signal: context?.executionSignal }, ...providerGetterArguments(g));
     // Reading an error message is a successful observation. Keep the tool's
     // outcome separate from arbitrary words in the observed page content.
     return JSON.stringify({ status: 'observed', description, provider, model });
@@ -261,7 +262,7 @@ async function ocrRegion(args: Record<string, any>, context?: any): Promise<stri
 
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
-    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
+    const description = await analyzeScreen(base64, query, { provider, model, userId: context?.userId || 'anonymous' }, ...providerGetterArguments(g));
     return JSON.stringify({ status: 'observed', description, provider, model });
   } catch (err: any) {
     return JSON.stringify({ format: 'screenshot_base64', data: base64, error: err.message });
@@ -292,7 +293,7 @@ export async function ocrImageFile(args: Record<string, any>, context?: any): Pr
   const model = getUserPreferredVision(context?.userId || 'anonymous').model || DEFAULT_VISION_MODELS[provider];
   try {
     const imagePayload = JSON.stringify({ image_base64: base64, format: 'jpeg', width: meta.width || null, height: meta.height || null });
-    const description = await analyzeScreen(imagePayload, query, { provider, model, userId: context?.userId || 'anonymous' }, g.getDeepSeek, g.getGemini, g.getOpenAI, g.getAnthropic, g.getQwen, g.getOllama, g.getLmStudio, g.getArk, g.getXiaomi, g.getKimi, g.getGlm, g.getRelay);
+    const description = await analyzeScreen(imagePayload, query, { provider, model, userId: context?.userId || 'anonymous' }, ...providerGetterArguments(g));
     return JSON.stringify({
       path: imagePath,
       width: meta.width || null,
@@ -720,18 +721,7 @@ async function runFloorplanVisionPass(input: {
         maxTokens: input.maxTokens,
         responseFormat,
       },
-      input.getters.getDeepSeek,
-      input.getters.getGemini,
-      input.getters.getOpenAI,
-      input.getters.getAnthropic,
-      input.getters.getQwen,
-      input.getters.getOllama,
-      input.getters.getLmStudio,
-      input.getters.getArk,
-      input.getters.getXiaomi,
-      input.getters.getKimi,
-      input.getters.getGlm,
-      input.getters.getRelay,
+      ...providerGetterArguments(input.getters),
     );
     try {
       analysis = await call('json_object');

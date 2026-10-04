@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
 import { reserveConversationExecution } from '../cognition/conversation_execution';
 import { getConversationActionTurn } from '../conversation/action_turn_ledger';
@@ -211,11 +212,7 @@ export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
     .join('\n');
 }
 
-export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
-  getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
-  getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any;
-  getKimi?: any; getGlm?: any; getRelay?: any;
-}) {
+export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>) {
   const asyncHandler = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
     (req: any, res: any, next: any) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -801,9 +798,7 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: {
       [{ role: 'user', content: prompt }],
       [],
       { provider, model, maxTokens: 1800, userId },
-      llm.getDeepSeek, llm.getGemini, llm.getOpenAI, llm.getAnthropic, llm.getQwen,
-      llm.getOllama, llm.getLmStudio, llm.getArk, llm.getXiaomi,
-      llm.getKimi, llm.getGlm, llm.getRelay,
+      ...providerGetterArguments(llm),
     );
 
     const report = result.text || '';

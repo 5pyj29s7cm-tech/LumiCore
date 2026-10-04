@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { makeLLMCall } from '../llm/providers';
 import { runtimeBackgroundWork } from '../runtime/shutdown_work';
 import {
@@ -11,20 +12,7 @@ import { isGuardGeneratedConversationRecord } from './guard_history';
 import { buildEvidenceGroundedSummaryTranscript } from './summary_grounding';
 import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from '../llm/user_preferences';
 
-export interface ConversationSummaryLlmGetters {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}
+export type ConversationSummaryLlmGetters = SharedProviderGetters;
 
 export interface ConversationSummaryScheduleInput {
   conversationId: string;
@@ -88,18 +76,7 @@ async function generateSummaryWithLlm(
       fallbackCandidates: input.fallbackCandidates,
       allowCloudFallback: input.allowCloudFallback,
     },
-    getters.getDeepSeek,
-    getters.getGemini,
-    getters.getOpenAI,
-    getters.getAnthropic,
-    getters.getQwen,
-    getters.getOllama,
-    getters.getLmStudio,
-    getters.getArk,
-    getters.getXiaomi,
-    getters.getKimi,
-    getters.getGlm,
-    getters.getRelay,
+    ...providerGetterArguments(getters),
   );
   return String(result.text || '').trim();
 }

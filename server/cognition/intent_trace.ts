@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import type { ToolPolicy } from '../personality/types';
 import type { WorkTakeoverTurnSurface } from '../work_takeover/continuity';
 import type { LumiExecutionDecision } from './execution_decision';
@@ -154,13 +155,13 @@ function buildReasons(input: {
   return unique(reasons);
 }
 
-export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput): LumiIntentTrace {
+export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput, analysis?: ActionIntentAnalysis): LumiIntentTrace {
   const { dispatch, execution } = input;
   const flow = dispatch.flow;
   const source = input.source || dispatch.source || dispatch.channel;
   const text = input.text || '';
-  const normalizedActionIntent = input.normalizedActionIntent ?? normalizeActionIntent(text);
-  const toolIntent = traceToolIntentDecision(text, source, flow.effectiveOperationMode);
+  const normalizedActionIntent = input.normalizedActionIntent ?? normalizeActionIntent(text, analysis);
+  const toolIntent = traceToolIntentDecision(text, source, flow.effectiveOperationMode, analysis);
   const toolRoute = compactRoute(execution.toolRoute);
   const routeSummary = toolRoute
     ? `${toolRoute.toolNames.length}/${toolRoute.totalAvailable}:${toolRoute.categories.join(',') || 'fallback'}`

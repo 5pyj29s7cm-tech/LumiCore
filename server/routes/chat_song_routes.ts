@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { createRequestAbortController } from '../http/request_abort';
@@ -57,8 +58,7 @@ export function mountChatSongRoutes(router: Router, getters: Parameters<typeof m
       if (isStrictPrivacy() || config.provider !== 'relay') throw new ChatSongError(409, 'Choose Lumi Official API in model settings. Cloud creation is unavailable in local-only privacy mode.');
       const response = await makeLLMCall([{ role: 'user', content: chatSongDraftPrompt(project) }], [],
         { ...config, thinkingMode: 'disabled', responseFormat: 'json_object', selectionMode: 'pinned', fallbackCandidates: [], allowCloudFallback: false, signal: request.signal },
-        getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic, getters.getQwen, getters.getOllama,
-        getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi, getters.getGlm, getters.getRelay).catch(error => {
+        ...providerGetterArguments(getters)).catch(error => {
           request.signal.throwIfAborted();
           throw new ChatSongError(modelRoutingErrorReason(error) === 'timeout' ? 504 : 502, copy.draftUnavailable);
         });

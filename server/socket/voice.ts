@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { resolveUserTurn } from '../cognition/turn_resolution';
 import { reserveConversationExecution, type ConversationResourceLifetime } from '../cognition/conversation_execution';
@@ -164,7 +165,7 @@ import { formatCompactClientSelfPrompt } from "../client/self_model";
 import { collectAnticipatoryContext } from "../context/anticipatory_context";
 import { getIdleState } from "../context/activity_stream";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
-import { createDesktopRelay } from "./desktop_relay";
+import { isDirectDesktopTool, createDesktopRelay } from "./desktop_relay";
 import {
   resolveVoiceModelInputBudget,
   VOICE_CHAT_INPUT_BUDGET_TOKENS,
@@ -1504,18 +1505,7 @@ async function respondAlongsideActiveVoiceWork(
         ],
         [],
         preferred,
-        llmGetters.getDeepSeek,
-        llmGetters.getGemini,
-        llmGetters.getOpenAI,
-        llmGetters.getAnthropic,
-        llmGetters.getQwen,
-        llmGetters.getOllama,
-        llmGetters.getLmStudio,
-        llmGetters.getArk,
-        llmGetters.getXiaomi,
-        llmGetters.getKimi,
-        llmGetters.getGlm,
-        llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
       llmWasCalled = true;
       if (
@@ -2914,40 +2904,6 @@ async function processVoiceInput(
     emitAgent("agent:tool_call", normalized);
     emitAgent("agent:tool", normalized);
   };
-  const directDesktopRelayTools = new Set([
-    'client_action',
-    'desktop_capability_status',
-    'desktop_system_info',
-    'desktop_list_files',
-    'desktop_list_apps',
-    'desktop_path_info',
-    'desktop_write_text_file',
-    'desktop_open',
-    'desktop_show_lumi_window',
-    'desktop_run_command',
-    'desktop_active_window',
-    'desktop_window_control',
-    'desktop_running_processes',
-    'desktop_capture_screen',
-    'desktop_clipboard_read',
-    'desktop_clipboard_write',
-    'desktop_idle_time',
-    'desktop_poll_activity',
-    'desktop_mouse_move',
-    'desktop_mouse_click',
-    'desktop_mouse_drag',
-    'desktop_mouse_click_at',
-    'desktop_mouse_double_click_at',
-    'desktop_mouse_right_click_at',
-    'desktop_keyboard_type',
-    'desktop_keyboard_press',
-    'desktop_set_wallpaper_mode',
-    'desktop_cursor_glow_show',
-    'desktop_cursor_glow_update',
-    'desktop_cursor_glow_click',
-    'desktop_cursor_glow_hide',
-  ]);
-  const isDirectDesktopTool = (toolName: string) => directDesktopRelayTools.has(toolName);
 
   const receiptObserver = createConversationReceiptObserver({
     userId: session.userId, conversationId: conversationTurn.conversation.id,
@@ -6466,18 +6422,7 @@ export function registerVoiceHandlers(
         [{ role: 'user', content: greetingPrompt }],
         [],
         greetingLLM,
-        llmGetters.getDeepSeek,
-        llmGetters.getGemini,
-        llmGetters.getOpenAI,
-        llmGetters.getAnthropic,
-        llmGetters.getQwen,
-        llmGetters.getOllama,
-        llmGetters.getLmStudio,
-        llmGetters.getArk,
-        llmGetters.getXiaomi,
-        llmGetters.getKimi,
-        llmGetters.getGlm,
-        llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
 
       operation.assertCurrent();

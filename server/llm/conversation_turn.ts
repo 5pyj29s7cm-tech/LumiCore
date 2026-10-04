@@ -1,10 +1,11 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "./provider_getters";
 import {
   makeLLMCallStreaming,
   type NormalizedMessage,
   type StreamCallback,
 } from './providers';
 import type { LLMConfig, LLMResult, LLMUsageRecord } from './adapter';
-import type { LLMGetters } from './dispatch';
+
 import type { NormalizedLLMResponse } from '../tools/types';
 import { resolveConversationModelConfig } from './conversation_profile';
 import { createModelTurnState } from './model_turn_state';
@@ -20,7 +21,7 @@ import {
 export interface ConversationTurnInput {
   messages: NormalizedMessage[];
   config: LLMConfig;
-  getters: Pick<LLMGetters, 'getDeepSeek' | 'getGemini'> & Partial<LLMGetters>;
+  getters: SharedProviderGetters;
   onChunk?: StreamCallback;
   isCancelled?: () => boolean;
   /** Revalidate the original owner/conversation before every provider call. */
@@ -76,10 +77,7 @@ export async function runConversationTurn(input: ConversationTurnInput): Promise
         if (config.signal?.aborted || input.isCancelled?.()) return;
         onChunk(chunk);
       },
-      getters.getDeepSeek, getters.getGemini, getters.getOpenAI,
-      getters.getAnthropic, getters.getQwen, getters.getOllama,
-      getters.getLmStudio, getters.getArk, getters.getXiaomi,
-      getters.getKimi, getters.getGlm, getters.getRelay,
+      ...providerGetterArguments(getters),
     );
     recordUsage(response);
     assertActive();

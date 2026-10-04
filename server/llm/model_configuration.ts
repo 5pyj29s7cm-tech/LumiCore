@@ -1,4 +1,6 @@
-import { flushDBOrThrow, readDB } from '../../db_layer';
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "./provider_getters";
+import { flushDBOrThrow } from '../../db_layer';
+import { readSettingJson } from '../persistence/settings_repository';
 import { loadKeys } from '../config/keys';
 import {
   getRegisteredProviderDefaultModel,
@@ -91,20 +93,7 @@ export interface ModelConfigurationUpdate {
   allowCloudFallback?: boolean;
 }
 
-export interface TestableModelRuntime {
-  getDeepSeek?: () => any;
-  getGemini?: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getArk?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}
+export type TestableModelRuntime = Partial<SharedProviderGetters>;
 
 const TESTABLE_LLM_PROVIDERS = new Set([
   'deepseek', 'gemini', 'openai', 'anthropic', 'qwen', 'ark',
@@ -526,11 +515,7 @@ export function selectOfficialRoleModel(
 }
 
 function explicitlySelectedOfficialRoles(userId: string, includeEnvironment = true): Set<LumiModelRole> {
-  const settings = readDB().settings || [];
-  const readPreference = (key: string): any => {
-    try { return JSON.parse(settings.find(setting => setting.key === key)?.value || 'null'); }
-    catch { return null; }
-  };
+  const readPreference = readSettingJson;
   const generation = readPreference(`generation_prefs_${userId}`);
   const retrievalValue = readPreference(`retrieval_model_prefs_${userId}`)
     || readPreference(`model_role_prefs_${userId}`);
@@ -912,18 +897,7 @@ export async function testLLMProviderConnection(
         authorizedRoutingCandidate: true,
         signal: controller.signal,
       },
-      llm.getDeepSeek || (() => null),
-      llm.getGemini || (() => null),
-      llm.getOpenAI,
-      llm.getAnthropic,
-      llm.getQwen,
-      llm.getOllama,
-      llm.getLmStudio,
-      llm.getArk,
-      llm.getXiaomi,
-      llm.getKimi,
-      llm.getGlm,
-      llm.getRelay,
+      ...providerGetterArguments(llm, "primary"),
     ), provider === 'ollama' || provider === 'lmstudio' ? 45_000 : 20_000);
     if (!response.text?.trim()) throw new Error('The model returned an empty response to the connection test.');
   } finally {
@@ -945,18 +919,7 @@ export async function testVisionProviderConnection(
     VISION_TEST_IMAGE_BASE64,
     'Confirm that you received the image. Reply with only OK.',
     { provider: provider as any, model, maxTokens: 24 },
-    llm.getDeepSeek,
-    llm.getGemini,
-    llm.getOpenAI,
-    llm.getAnthropic,
-    llm.getQwen,
-    llm.getOllama,
-    llm.getLmStudio,
-    llm.getArk,
-    llm.getXiaomi,
-    llm.getKimi,
-    llm.getGlm,
-    llm.getRelay,
+    ...providerGetterArguments(llm),
   ), provider === 'ollama' || provider === 'lmstudio' ? 60_000 : 30_000);
   return { ok: true, provider, model, latencyMs: Date.now() - startedAt };
 }
@@ -985,18 +948,7 @@ export async function testLumiModelConfiguration(
           allowCloudFallback: preference.allowCloudFallback,
           maxTokens: 8,
         },
-        llm.getDeepSeek || (() => null),
-        llm.getGemini || (() => null),
-        llm.getOpenAI,
-        llm.getAnthropic,
-        llm.getQwen,
-        llm.getOllama,
-        llm.getLmStudio,
-        llm.getArk,
-        llm.getXiaomi,
-        llm.getKimi,
-        llm.getGlm,
-        llm.getRelay,
+        ...providerGetterArguments(llm, "primary"),
       );
       return {
         ok: true,

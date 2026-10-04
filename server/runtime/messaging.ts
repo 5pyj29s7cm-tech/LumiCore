@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 // Messaging integrations (Feishu, WeCom, etc.)
 import { Router } from "express";
 import type { Server as SocketIOServer } from "socket.io";
@@ -15,11 +16,7 @@ import { getActiveWeChatAdapter } from '../messaging/wechat_runtime';
 
 export function setupMessaging(
   apiRouter: Router,
-  llm: {
-    getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
-    getArk?: any; getOllama?: any; getLmStudio?: any; getXiaomi?: any; getKimi?: any;
-    getGlm?: any; getRelay?: any;
-  },
+  llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>,
   io?: SocketIOServer,
 ) {
   const cfg = getMessagingConfig();

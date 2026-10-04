@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 // MCP Server + LAP + remote device setup
 // Shared between personal and org servers
 import express from "express";
@@ -19,11 +20,7 @@ export function setupMcpServer(
   app: express.Express,
   server: http.Server,
   io: Server,
-  llm: {
-    getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
-    getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any;
-    getKimi?: any; getGlm?: any; getRelay?: any;
-  },
+  llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>,
   __dirname: string,
 ): () => Promise<void> {
   const lifecycle = new McpCallLifecycle();

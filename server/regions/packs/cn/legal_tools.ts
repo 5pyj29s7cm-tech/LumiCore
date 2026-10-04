@@ -1,3 +1,4 @@
+import { providerGetterArguments } from "../../../llm/provider_getters";
 import fs from 'fs';
 import { withLegalExecution, assertLegalExecutionActive, legalExecutionSignal, legalExecutionContext, legalWrite } from '../../../legal/execution';
 import { transformWordDocument } from '../../../tools/definitions/document_tools';
@@ -46,18 +47,7 @@ async function runLegalLLM(prompt: string, context?: any, maxTokens = 2048): Pro
     messages,
     [],
     { ...getUserPreferredLLMConfig(userId, { maxTokens, domain: context?.domain, orgId: context?.orgId }), signal: context?.executionSignal || legalExecutionSignal() },
-    getters.getDeepSeek,
-    getters.getGemini,
-    getters.getOpenAI,
-    getters.getAnthropic,
-    getters.getQwen,
-    getters.getOllama,
-    getters.getLmStudio,
-    getters.getArk,
-    getters.getXiaomi,
-    getters.getKimi,
-    getters.getGlm,
-    getters.getRelay,
+    ...providerGetterArguments(getters),
   );
   assertLegalExecutionActive(context);
   return response.text || null;

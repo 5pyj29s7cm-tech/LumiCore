@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ db: { settings: [] as any[] } }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: () => {} }));
+vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: (db: typeof state.db) => { state.db = db; } }));
 vi.mock('../server/cloud/circuit_breaker', () => ({ resetCircuit: () => {} }));
 import { ensureLocalModelReady, getLocalModelConfig, refreshLocalModelConfig, runLocalModelInference, saveLocalModelConfig } from '../server/llm/local_models';
 

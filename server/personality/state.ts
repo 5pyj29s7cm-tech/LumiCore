@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 import { addMemory } from '../memory/store';
 import { PersonalityVector } from './types';
 import { getSeasonInfo, getNearbyHoliday, isWeekend } from '../time/utils';
@@ -45,10 +46,7 @@ export function createDefaultEmotionalState(): EmotionalState {
 }
 
 export function loadEmotionalState(userId: string): EmotionalState {
-  const db = readDB();
-  if (!db.settings) return createDefaultEmotionalState();
-
-  const setting = db.settings.find((s: any) => s.key === `emotion_${userId}`);
+  const setting = readSettingRecord(`emotion_${userId}`);
   if (!setting) return createDefaultEmotionalState();
 
   try {
@@ -81,17 +79,8 @@ export function saveEmotionalState(userId: string, state: EmotionalState): void 
 
   prev.then(() => {
     try {
-      const db = readDB();
-      if (!db.settings) db.settings = [];
-
       state.lastUpdated = new Date().toISOString();
-      const existing = db.settings.findIndex((s: any) => s.key === `emotion_${userId}`);
-      if (existing >= 0) {
-        db.settings[existing].value = JSON.stringify(state);
-      } else {
-        db.settings.push({ key: `emotion_${userId}`, value: JSON.stringify(state) });
-      }
-      writeDB(db);
+      writeSetting(`emotion_${userId}`, JSON.stringify(state));
     } finally {
       release!();
     }

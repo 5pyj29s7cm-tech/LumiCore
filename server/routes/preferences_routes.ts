@@ -1,5 +1,6 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import { Router } from "express";
-import { readDB, writeDB } from "../../db_layer";
+
 import { requireAuth } from "../middleware/auth";
 import { broadcastPreferenceChange } from "../memory";
 import { broadcastToOrg } from '../org/ws_sync';
@@ -12,8 +13,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
 
   router.get("/preferences/pet", requireAuth, (req, res) => {
     try {
-      const db = readDB();
-      const setting = (db.settings || []).find((s: any) => s.key === petPreferenceKey(req.user!));
+      const setting = readSettingRecord(petPreferenceKey(req.user!));
       if (setting) {
         res.json(JSON.parse(setting.value));
       } else {
@@ -31,17 +31,7 @@ export function mountPreferencesRoutes(router: Router, _jwtSecret: string) {
         return res.status(403).json({ error: 'Only an organization owner or administrator can change the shared organization appearance overlay.' });
       }
       const { pet, accessories } = req.body || {};
-      const db = readDB();
-      if (!db.settings) db.settings = [];
-      const key = petPreferenceKey(req.user!);
-      const value = JSON.stringify({ pet: pet || null, accessories: accessories || [] });
-      const existing = db.settings.findIndex((s: any) => s.key === key);
-      if (existing >= 0) {
-        db.settings[existing].value = value;
-      } else {
-        db.settings.push({ key, value });
-      }
-      writeDB(db);
+      writeSetting(petPreferenceKey(req.user!), JSON.stringify({ pet: pet || null, accessories: accessories || [] }));
       const preference = { pet: pet || null, accessories: accessories || [] };
       if (req.user!.orgId) {
         broadcastToOrg(req.user!.orgId, 'preferences:changed', {

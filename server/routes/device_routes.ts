@@ -1,3 +1,4 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import { Router } from "express";
 import {
   deviceRegistry,
@@ -7,7 +8,7 @@ import {
 import type { DeviceScope } from "../devices";
 import { DESKTOP_SESSION_HEADER, resolveDesktopSession } from "../config/desktop_bootstrap";
 import { requireAdmin, requireAuth, requireLocalRequest } from "../middleware/auth";
-import { readDB, writeDB } from "../../db_layer";
+
 import { serializedScopeRoute, sendDurableMutation } from './durable_mutation';
 import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 
@@ -18,7 +19,7 @@ function pairedKey(userId: string, scope: DeviceScope): string {
 
 function getPairedDeviceIds(userId: string, scope: DeviceScope): string[] {
   try {
-    const row = (readDB().settings || []).find((s: any) => s.key === pairedKey(userId, scope));
+    const row = readSettingRecord(pairedKey(userId, scope));
     const value = row?.value ? JSON.parse(row.value) : [];
     return Array.isArray(value) ? value.filter((id: any) => typeof id === 'string') : [];
   } catch {
@@ -27,15 +28,8 @@ function getPairedDeviceIds(userId: string, scope: DeviceScope): string[] {
 }
 
 function savePairedDeviceIds(userId: string, scope: DeviceScope, ids: string[]): string[] {
-  const db = readDB();
-  if (!db.settings) db.settings = [];
   const unique = [...new Set(ids.filter(Boolean))];
-  const key = pairedKey(userId, scope);
-  const idx = db.settings.findIndex((s: any) => s.key === key);
-  const value = JSON.stringify(unique);
-  if (idx >= 0) db.settings[idx].value = value;
-  else db.settings.push({ key, value });
-  writeDB(db);
+  writeSetting(pairedKey(userId, scope), JSON.stringify(unique));
   return unique;
 }
 

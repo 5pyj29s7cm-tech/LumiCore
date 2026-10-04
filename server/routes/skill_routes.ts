@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { Router, Request, Response, NextFunction } from "express";
 import fs from "fs";
 import path from "path";
@@ -129,20 +130,7 @@ function stripStartupFailureNote(description: string | undefined, fallback: stri
 export function mountSkillRoutes(
   router: Router,
   jwtSecret: string,
-  llmGetters: {
-    getDeepSeek: () => any;
-    getGemini: () => any;
-    getOpenAI?: () => any;
-    getAnthropic?: () => any;
-    getQwen?: () => any;
-    getOllama?: () => any;
-    getLmStudio?: () => any;
-    getArk?: () => any;
-    getXiaomi?: () => any;
-    getKimi?: () => any;
-    getGlm?: () => any;
-    getRelay?: () => any;
-  },
+  llmGetters: SharedProviderGetters,
   io: { emit: (event: string, data: any) => void },
 ) {
   const activateOrRollback = async (name: string) => {
@@ -267,9 +255,7 @@ export function mountSkillRoutes(
           ...(model ? { model } : {}),
           userId: req.user!.uid,
         },
-        llmGetters.getDeepSeek, llmGetters.getGemini, llmGetters.getOpenAI, llmGetters.getAnthropic, llmGetters.getQwen,
-        llmGetters.getOllama, llmGetters.getLmStudio, llmGetters.getArk, llmGetters.getXiaomi,
-        llmGetters.getKimi, llmGetters.getGlm, llmGetters.getRelay,
+        ...providerGetterArguments(llmGetters),
       );
 
       if (result.success) {

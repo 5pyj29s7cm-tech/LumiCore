@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 /**
  * Autonomous Task Executor — processes the autonomous task queue.
  * Executes tasks via runWithTools with tighter safety policy than user-initiated autonomous mode.
@@ -73,20 +74,7 @@ import {
   isLocalAdminAuthorizedSelfImprovementTask,
 } from '../self_extension/improvement_program';
 
-export interface LLMGetters {
-  getDeepSeek: () => any;
-  getGemini: () => any;
-  getOpenAI?: () => any;
-  getAnthropic?: () => any;
-  getQwen?: () => any;
-  getOllama?: () => any;
-  getLmStudio?: () => any;
-  getArk?: () => any;
-  getXiaomi?: () => any;
-  getKimi?: () => any;
-  getGlm?: () => any;
-  getRelay?: () => any;
-}
+export type LLMGetters = SharedProviderGetters;
 
 /** Tight tool policy for autonomous background work — more conservative than user-initiated mode */
 const AUTONOMOUS_POLICY = {

@@ -1,4 +1,5 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
+
 
 export const STATUTE_AUTHORITY_REFRESH_SETTING_KEY = 'legal_statute_authority_refresh_v1';
 
@@ -78,8 +79,7 @@ function normalizeState(raw: unknown): StatuteAuthorityRefreshState {
 
 export function loadStatuteAuthorityRefreshState(): StatuteAuthorityRefreshState {
   try {
-    const db = readDB();
-    const row = (db.settings || []).find((item: any) => item.key === STATUTE_AUTHORITY_REFRESH_SETTING_KEY);
+    const row = readSettingRecord(STATUTE_AUTHORITY_REFRESH_SETTING_KEY);
     if (!row?.value) return emptyState();
     return normalizeState(JSON.parse(row.value));
   } catch {
@@ -88,13 +88,7 @@ export function loadStatuteAuthorityRefreshState(): StatuteAuthorityRefreshState
 }
 
 export function saveStatuteAuthorityRefreshState(state: StatuteAuthorityRefreshState): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) db.settings = [];
-  const value = JSON.stringify(normalizeState(state));
-  const index = db.settings.findIndex((item: any) => item.key === STATUTE_AUTHORITY_REFRESH_SETTING_KEY);
-  if (index >= 0) db.settings[index].value = value;
-  else db.settings.push({ key: STATUTE_AUTHORITY_REFRESH_SETTING_KEY, value });
-  writeDB(db);
+  writeSetting(STATUTE_AUTHORITY_REFRESH_SETTING_KEY, JSON.stringify(normalizeState(state)));
 }
 
 export function getStatuteAuthorityCheck(title: string): StatuteAuthorityCheck | null {
@@ -105,8 +99,5 @@ export function getStatuteAuthorityCheck(title: string): StatuteAuthorityCheck |
 }
 
 export function resetStatuteAuthorityRefreshStateForTest(): void {
-  const db = readDB();
-  if (!Array.isArray(db.settings)) return;
-  db.settings = db.settings.filter((item: any) => item.key !== STATUTE_AUTHORITY_REFRESH_SETTING_KEY);
-  writeDB(db);
+  writeSetting(STATUTE_AUTHORITY_REFRESH_SETTING_KEY, undefined);
 }

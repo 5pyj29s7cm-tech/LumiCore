@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import {
   getRegisteredProviderDefaultModel,
@@ -158,9 +158,7 @@ function normalizeCloudFallback(value: unknown): CloudUserLLMProvider {
 
 function parsePrefsRow(key: string): any {
   try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === key);
-    if (setting?.value) return JSON.parse(setting.value);
+    return readSettingJson(key);
   } catch {}
   return null;
 }

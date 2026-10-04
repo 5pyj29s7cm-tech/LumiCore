@@ -1,10 +1,10 @@
+import { TurnAnalysis } from './turn_analysis';
 import type { LumiExecutionDecision } from './execution_decision';
 import { isExternalCliRequest, classifyExternalCliIntent } from './external_cli_intent';
 import type { ToolPolicy } from '../personality/types';
 import type { LumiTurnDispatch } from './turn_dispatch';
-import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
+import { skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
-  buildActionContract,
   isBrowserSessionInspection,
   extractExplicitArtifactTextRequirements,
   formatActionContractPrompt,
@@ -47,6 +47,7 @@ export type LumiCapabilityLane =
   | 'blocked_no_tools';
 
 export interface LumiCapabilitySelectionInput {
+  analysis?: TurnAnalysis;
   dispatch: LumiTurnDispatch;
   execution: LumiExecutionDecision;
   text: string;
@@ -370,14 +371,14 @@ function asksForDesktopAiRequest(text: string): boolean {
     || /(?:AI|模型|agent|智能体)[\s\S]{0,80}(?:回答|结果|总结|对比|汇总)/iu.test(text);
 }
 
-function selectLane(input: LumiCapabilitySelectionInput): Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'reasons'> {
+function selectLane(input: LumiCapabilitySelectionInput, analysis: TurnAnalysis): Pick<LumiCapabilitySelection, 'lane' | 'primary' | 'reasons'> {
   const flow = input.dispatch.flow;
   const text = compact(input.text || flow.routeText);
   const reasons: string[] = [
     `turn boundary=${input.dispatch.boundary}`,
     `channel=${input.dispatch.channel}`,
   ];
-  const actionContract = buildActionContract(text);
+  const actionContract = analysis.contract(text);
 
   if (input.execution.allowToolUse && isExternalCliRequest(text) && routeHasTool(input, /^external_cli_/)) {
     return { lane: 'external_tool', primary: 'external CLI task delegation', reasons: [...reasons, 'the named CLI returns structured progress and receipts to the existing Lumi task'] };
@@ -578,6 +579,7 @@ function laneRule(
   text = '',
   preferredTools: readonly string[] = [],
   currentAppEditTarget = '',
+  analysis = new TurnAnalysis(),
 ): string {
   switch (selection.lane) {
     case 'conversation':
@@ -623,7 +625,7 @@ function laneRule(
       return 'Use screen/window state as evidence. Move through visible UI deliberately and verify the app/result before claiming completion.';
     case 'web_or_account':
       if (isBrowserSessionInspection(text)) {
-        return buildActionContract(text).nextStep;
+        return analysis.contract(text).nextStep;
       }
       return 'Treat this as browser/account execution. First inspect saved login profiles or existing sessions; for known legal/account sites, create or reuse the matching authorized profile only when allowed, then run web_login_run visibly and verify the logged-in or target result page. Do not rely on raw iframe JavaScript hacks as the main plan. Stop with the exact blocker at missing credentials, QR/captcha/2FA/passkey/account switching, access limits, payment, irreversible publish, or missing target-result evidence.';
     case 'external_tool':
@@ -631,7 +633,7 @@ function laneRule(
         if (classifyExternalCliIntent(text) === 'inspect') return 'Use only external_cli_status to check the named local CLI. This is an availability question, not permission to delegate a task. Report the returned installation/login/configuration facts; do not request a project directory or claim model quota was checked.';
         return 'Use external_cli_status and external_cli_run for the named Codex/Claude CLI. Keep the existing Lumi task as owner. Pass necessary task context and an explicit project directory; resume only the Lumi runId in its receipt. Use the same CLI for follow-ups, preserve progress and cancellation, and verify its output before claiming success. Do not open a desktop AI chat window or create another task pipeline.';
       }
-      if (buildActionContract(text).kind === 'external_ai_history') {
+      if (analysis.contract(text).kind === 'external_ai_history') {
         return 'Use only external_ai_history_* tools. Reuse an exact confirmed source, enforce its conversation/content/attachment scopes, persist every page cursor and source receipt, and query the local synchronized archive. Never submit a new prompt. If only desktop-visible access exists, prefer a healthy local vision model, capture the current viewport without scrolling, and report partial_visible completeness.';
       }
       if (asksForDesktopAiRequest(text)) {
@@ -645,9 +647,10 @@ function laneRule(
 }
 
 export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput): LumiCapabilitySelection {
-  const selected = selectLane(input);
+  const analysis = input.analysis || new TurnAnalysis();
+  const selected = selectLane(input, analysis);
   const routeText = input.text || input.dispatch.flow.routeText || '';
-  const actionContract = buildActionContract(routeText);
+  const actionContract = analysis.contract(routeText);
   const visibleAutoCad = selected.lane === 'design_cad' && requiresVisibleAutoCadExecution(routeText);
   const recoveredCurrentAppEdit = Boolean(input.dispatch.flow.currentAppEditTarget);
   const modelPolicy = buildModelCapabilityPolicy(input.execution);
@@ -662,7 +665,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     .filter(isHardAuthorized);
   const basePreferredTools = unique([
     ...(executionBeforeWorkflowSave(routeText) ? contractPreferredTools : []),
-    ...skillAuthoringTools(classifySkillAuthoringIntent(routeText)).filter(isHardAuthorized),
+    ...skillAuthoringTools(analysis.authoring(routeText)).filter(isHardAuthorized),
     ...essentialToolsForLane(selected.lane).filter(isHardAuthorized),
     ...contractPreferredTools,
     ...desktopObservationTools,
@@ -717,10 +720,10 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     readOnlyPattern
       ? `Verified read-only history hint: ${readOnlyPattern.toolNames.join(' -> ')} (confidence=${readOnlyPattern.confidence.toFixed(2)}, action=${readOnlyPattern.action}). This hint may only reorder the current authorized read tools; it does not authorize or execute anything.`
       : '',
-    laneRule(selected, routeText, preferredTools, input.dispatch.flow.currentAppEditTarget),
+    laneRule(selected, routeText, preferredTools, input.dispatch.flow.currentAppEditTarget, analysis),
     executionBeforeWorkflowSave(routeText)
       ? 'The user requested a current task AND saving its workflow. First execute and verify the current task. Pass the complete reader result as code_execution input; parsing and calculation must both be executable JavaScript, never model-retyped rows or model arithmetic. Pass the calculation output to the writer unchanged. Then capture_recent_workflow can reuse those exact verified steps and bind fresh inputs without rewriting code. If a dataflow gap remains, use save_workflow to author that missing step. Do not replace the file task with generating a new Skill. Publishing remains a separate reviewed action.'
-      : classifySkillAuthoringIntent(routeText) !== 'none'
+      : analysis.authoring(routeText) !== 'none'
       ? 'The user explicitly requested skill/workflow authoring. Call the relevant authoring tool rather than repeatedly searching unrelated external capabilities. Generate only pure input-dependent computation as a reviewed draft; preserve the requested display name. For a saved process, every transformation must be an executable step with runtime inputs or verified prior-step output references. A read receipt alone cannot reproduce subsequent model arithmetic. Never capture a failed/discovery-only trace as a working skill. Review the exact draft hash before publish_workflow or install_skill; then verify registration and run with new inputs before claiming reuse.'
       : '',
     formatActionContractPrompt(actionContract),

@@ -1,3 +1,4 @@
+import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { Router } from "express";
 import { personalityRegistry } from "../personality";
 import { evolvePersonality } from "../personality/evolution";
@@ -27,11 +28,7 @@ function canMutateScopedPersonality(scope: { orgId?: string; orgRole?: string })
   return !scope.orgId || scope.orgRole === 'owner' || scope.orgRole === 'admin';
 }
 
-export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: {
-  getDeepSeek: any; getGemini: any; getOpenAI: any; getAnthropic: any; getQwen: any;
-  getOllama?: any; getLmStudio?: any; getArk?: any; getXiaomi?: any;
-  getKimi?: any; getGlm?: any; getRelay?: any;
-}) {
+export function mountPersonalityRoutes(router: Router, _jwtSecret: string, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>) {
   const asyncHandler = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
     (req: any, res: any, next: any) => Promise.resolve(fn(req, res, next)).catch(next);
 

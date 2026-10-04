@@ -1,3 +1,4 @@
+import type { ActionIntentAnalysis } from './normalized_action_intent';
 import { withoutNegatedLookupClauses, isStoredMemoryRecallQuestion } from './normalized_action_intent';
 import { withoutLocationLiterals } from './location_literals';
 import {
@@ -348,10 +349,10 @@ function hasExplicitActionRequest(text: string): boolean {
  * or corrections, not fresh commands. Keep this narrow so real diagnostics
  * such as "为什么打不开 AutoCAD" can still use observation tools.
  */
-export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
+export function isUserCorrectionOrExplanationQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').trim();
   if (!normalized) return false;
-  if (normalizeActionIntent(normalized).kind === 'correction_explanation') return true;
+  if (normalizeActionIntent(normalized, analysis).kind === 'correction_explanation') return true;
   if (PRIOR_CLIENT_DIAGNOSTIC_INQUIRY_RE.test(normalized)) return true;
   // A negated authorization is feedback about the preceding action, never a
   // fresh command. Keep this semantic and verb-based so corrections do not
@@ -401,15 +402,15 @@ export function isUserCorrectionOrExplanationQuestion(text: string): boolean {
   ].some(pattern => pattern.test(normalized));
 }
 
-export function isInformationOnlyQuestion(text: string): boolean {
+export function isInformationOnlyQuestion(text: string, analysis?: ActionIntentAnalysis): boolean {
   if (isStoredMemoryRecallQuestion(text)) return true;
   if (isExternalAiHistoryCapabilityQuestion(text)) return true;
   if (isExternalAiHistoryActionRequest(text)) return false;
   // i18n-allow: Chinese input-recognition patterns; not user-visible copy.
   if (/(?:我问你)?(?:刚刚|刚才|之前|上一轮|上一次).{0,80}(?:干了什么|做了什么|操作了什么|打开.{0,24}干了什么|为什么.{0,40}(?:打开|操作|执行|回复))/u.test(text)) return true;
   if (/^(?:为什么|为何|怎么).{0,80}(?:没有|没|未能|不能).{0,40}(?:打开|启动|运行|执行|发送)/u.test(text)) return true; // i18n-allow: input recognition
-  if (isUserCorrectionOrExplanationQuestion(text)) return true;
-  if (isDiagnosticOrRepairRequest(text)) return false;
+  if (isUserCorrectionOrExplanationQuestion(text, analysis)) return true;
+  if (isDiagnosticOrRepairRequest(text, analysis)) return false;
   if (hasExplicitActionRequest(text)) return false;
   if (
     CLIENT_NAVIGATION_VERBS.test(text) &&
@@ -475,7 +476,7 @@ function hasExternalDesktopExecutionIntent(text: string): boolean {
   return EXTERNAL_DESKTOP_OBSERVATION_REQUEST.test(text);
 }
 
-export function hasExplicitToolIntent(text: string): boolean {
+export function hasExplicitToolIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
@@ -483,31 +484,31 @@ export function hasExplicitToolIntent(text: string): boolean {
   if (isExternalCliRequest(normalized)) return true;
   if (isVideoPlaybackRequest(normalized)) return true;
   if (isExternalAiHistoryActionRequest(normalized)) return true;
-  const canonical = normalizeActionIntent(normalized);
-  if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized);
+  const canonical = normalizeActionIntent(normalized, analysis);
+  if (canonical.kind === 'external_ai_history') return !isInformationOnlyQuestion(normalized, analysis);
   if (canonical.kind === 'messaging_read' || canonical.kind === 'messaging_send') return true;
   if (canonical.kind === 'work_task') return true;
   if (canonical.kind === 'media_generation') return true;
   if (canonical.kind === 'correction_explanation' || canonical.kind === 'status_query') return false;
-  if (isInformationOnlyQuestion(normalized)) return false;
+  if (isInformationOnlyQuestion(normalized, analysis)) return false;
   if (matchesIntentGrammar(normalized, STRUCTURED_TOOL_INTENT_RULES)) return true;
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function hasClientActionIntent(text: string): boolean {
+export function hasClientActionIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
   if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
-  const canonical = normalizeActionIntent(normalized);
+  const canonical = normalizeActionIntent(normalized, analysis);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   // Once the shared normalizer has identified a concrete non-client action,
   // broad legacy surface words must not steal the turn.  This matters for
   // payloads such as "Open WPS and type: Lumi ...": the word Lumi describes
   // document content, not a request to navigate the Lumi client.
   if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
-  if (isInformationOnlyQuestion(normalized)) return false;
+  if (isInformationOnlyQuestion(normalized, analysis)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (detectRequestedOperationMode(normalized)) return true;
   if (hasExternalDesktopExecutionIntent(normalized)) return false;
@@ -516,16 +517,16 @@ export function hasClientActionIntent(text: string): boolean {
   return CLIENT_ACTION_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function hasClientActionOnlyIntent(text: string): boolean {
+export function hasClientActionOnlyIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
   if (!normalized) return false;
   if (hasExplicitNoToolInstruction(normalized)) return false;
   if (isExternalAiHistoryActionRequest(normalized)) return false;
   if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
-  const canonical = normalizeActionIntent(normalized);
+  const canonical = normalizeActionIntent(normalized, analysis);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
   if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
-  if (isInformationOnlyQuestion(normalized)) return false;
+  if (isInformationOnlyQuestion(normalized, analysis)) return false;
   if (isDesktopMusicControlRequest(normalized)) return false;
   if (hasExternalDesktopExecutionIntent(normalized)) return false;
   const requestedMode = detectRequestedOperationMode(normalized);
@@ -535,14 +536,14 @@ export function hasClientActionOnlyIntent(text: string): boolean {
   return CLIENT_ACTION_ONLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function isDiagnosticOrRepairRequest(text: string): boolean {
+export function isDiagnosticOrRepairRequest(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
   // File and directory names are data, not instructions. A deliverable such as
   // `C:\\...\\repair-retest.txt` must stay on the artifact lane merely because
   // its path happens to contain a diagnostic keyword.
   const diagnosticText = normalized.replace(/\b[A-Za-z]:[\\/][^\s，。；;！？!?]+/gu, ' ');
-  if (isUserCorrectionOrExplanationQuestion(normalized)) return false;
+  if (isUserCorrectionOrExplanationQuestion(normalized, analysis)) return false;
   // A requested learning check is an evidence-only self inspection. Route it
   // through the diagnostic lane so Lumi must read the learning ledger and
   // client health instead of merely promising to perform a check later. i18n-allow: Reviewed input recognition.
@@ -556,20 +557,20 @@ export function isDiagnosticOrRepairRequest(text: string): boolean {
   return DIAGNOSTIC_OR_REPAIR_PATTERNS.some((pattern) => pattern.test(diagnosticText));
 }
 
-export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string): boolean {
+export function shouldAllowToolUseForTurn(text: string, source?: string, operationMode?: string, analysis?: ActionIntentAnalysis): boolean {
   if (hasExplicitNoToolInstruction(text)) return false;
   const mode = normalizeOperationMode(operationMode);
-  if (isDiagnosticOrRepairRequest(text)) return true;
-  if (mode === 'meeting') return hasClientActionIntent(text);
+  if (isDiagnosticOrRepairRequest(text, analysis)) return true;
+  if (mode === 'meeting') return hasClientActionIntent(text, analysis);
   if (hasVisionIntent(text)) return true;
   if (AUTONOMOUS_TASK_PATTERNS.some((pattern) => pattern.test(text.trim()))) return true;
-  if (hasExplicitToolIntent(text)) return true;
+  if (hasExplicitToolIntent(text, analysis)) return true;
   return false;
 }
 
-export function traceToolIntentDecision(text: string, source?: string, operationMode?: string): ToolIntentDecisionTrace {
+export function traceToolIntentDecision(text: string, source?: string, operationMode?: string, analysis?: ActionIntentAnalysis): ToolIntentDecisionTrace {
   const normalized = withoutNegatedLookupClauses(text).trim();
-  const canonical = normalizeActionIntent(normalized);
+  const canonical = normalizeActionIntent(normalized, analysis);
   const mode = normalizeOperationMode(operationMode);
   const requestedMode = normalized ? detectRequestedOperationMode(normalized) : null;
   const matchedRules: ToolIntentMatchedRule[] = [];
@@ -580,12 +581,12 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
   const externalAiHistoryAction = normalized ? isExternalAiHistoryActionRequest(normalized) : false;
   const correctionOrExplanation = normalized
-    ? canonical.kind === 'correction_explanation' || isUserCorrectionOrExplanationQuestion(normalized)
+    ? canonical.kind === 'correction_explanation' || isUserCorrectionOrExplanationQuestion(normalized, analysis)
     : false;
   const informationOnlyQuestion = normalized
     ? correctionOrExplanation
       || canonical.kind === 'status_query'
-      || (isInformationOnlyQuestion(normalized) && !clientStateInspectionRequest && !externalAiHistoryAction)
+      || (isInformationOnlyQuestion(normalized, analysis) && !clientStateInspectionRequest && !externalAiHistoryAction)
     : false;
   const externalDesktopExecution = normalized
     ? (
@@ -595,7 +596,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     : false;
   const desktopMusicControl = normalized ? isDesktopMusicControlRequest(normalized) : false;
   const diagnosticOrRepair = normalized && !informationOnlyQuestion
-    ? isDiagnosticOrRepairRequest(normalized)
+    ? isDiagnosticOrRepairRequest(normalized, analysis)
     : false;
   const diagnosticRules = diagnosticOrRepair
     ? matchPatternRuleNames(normalized, DIAGNOSTIC_OR_REPAIR_PATTERNS, 'diagnostic-pattern')
@@ -732,14 +733,14 @@ export function traceToolIntentDecision(text: string, source?: string, operation
  * from task corrections (for example "do not open Chrome; open WPS") so an
  * exact server-bound continuation can still execute the corrected task.
  */
-export function isConversationalProductFeedback(text: string): boolean {
+export function isConversationalProductFeedback(text: string, analysis?: ActionIntentAnalysis): boolean {
   const normalized = String(text || '').replace(/[^\S\n]+/g, ' ').trim();
   if (!normalized) return false;
   // A media brief describes the requested artifact, not Lumi's chat UI.
   // Words such as "bubble", "natural" and "do not" must not cancel the
   // explicit creation operation. Current-turn tool/mutation vetoes remain
   // enforced separately by the execution pipeline.
-  if (normalizeActionIntent(normalized).kind === 'media_generation') return false;
+  if (normalizeActionIntent(normalized, analysis).kind === 'media_generation') return false;
   // A correction in one sentence must not consume a fresh inspection in the
   // next. The execution pipeline independently preserves the no-mutation veto.
   if (hasVisionIntent(withoutNegatedLookupClauses(normalized))) return false;

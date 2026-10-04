@@ -1,7 +1,7 @@
 // Voice provider preference — shared by STT + TTS adapters.
 // Persisted per-instance in db.settings. No user-id granularity needed
 // since this is a system-level config.
-import { readDB } from '../../db_layer';
+import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from '../llm/model_preference_revision';
 import {
   LUMI_OFFICIAL_DEFAULT_MODELS,
@@ -59,9 +59,8 @@ function normalizePreference(pref: Partial<VoicePreference>): VoicePreference {
 
 export function getVoicePreference(): VoicePreference {
   try {
-    const db = readDB();
-    const setting = (db.settings || []).find((s: any) => s.key === 'voice_preference');
-    if (setting) return normalizePreference({ ...DEFAULT, ...JSON.parse(setting.value) });
+    const preference = readSettingJson('voice_preference');
+    if (preference) return normalizePreference({ ...DEFAULT, ...preference });
   } catch {}
   return { ...DEFAULT };
 }

@@ -1,3 +1,4 @@
+import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 import fs from 'fs';
 import path from 'path';
 import { PersonalityConfig, PersonalityContext, PersonalityEvolutionAudit } from './types';
@@ -5,7 +6,7 @@ import { generateSystemPrompt, initVectorFromStyle, vectorToTone, vectorToVerbos
 import { Memory } from '../memory/types';
 import { EmotionalState } from './state';
 import { EvolutionStep, EvolutionConfig, DEFAULT_EVOLUTION_CONFIG } from './evolution';
-import { readDB, writeDB } from '../../db_layer';
+
 import { getDataPath } from '../config/data_path';
 
 interface UserPersonalityState {
@@ -143,8 +144,7 @@ class PersonalityRegistry {
   private loadUserState(personalityId: string, userId: string, orgId?: string): UserPersonalityState | null {
     if (!userId) return null;
     try {
-      const db = readDB();
-      const row = (db.settings || []).find((item: any) => item.key === this.userStateKey(personalityId, userId, orgId));
+      const row = readSettingRecord(this.userStateKey(personalityId, userId, orgId));
       if (!row?.value) return null;
       const parsed = JSON.parse(row.value);
       return parsed?.schemaVersion === 1 ? parsed : null;
@@ -166,14 +166,7 @@ class PersonalityRegistry {
       evolutionAudit: cloneConfig(config.evolutionAudit || []),
       evolutionFrozenAt: config.evolutionFrozenAt,
     };
-    const db = readDB();
-    if (!db.settings) db.settings = [];
-    const key = this.userStateKey(personalityId, userId, orgId);
-    const row = db.settings.find((item: any) => item.key === key);
-    const value = JSON.stringify(state);
-    if (row) row.value = value;
-    else db.settings.push({ key, value });
-    writeDB(db);
+    writeSetting(this.userStateKey(personalityId, userId, orgId), JSON.stringify(state));
   }
 
   getForUser(personalityId: string, userId?: string, orgId?: string): PersonalityConfig | undefined {
