@@ -3,7 +3,6 @@ import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_g
 import { Server } from "socket.io";
 import { decodeUserSessionToken } from '../middleware/auth';
 import { registerChatHandler } from "../socket/chat";
-import { registerTaskHandler } from "../socket/task";
 import { registerVoiceHandlers } from "../socket/voice";
 import { registerDeviceHandlers } from "../socket/device";
 import { registerPerceptionHandlers } from "../socket/perception";
@@ -271,7 +270,6 @@ export function initSocketRuntime({ io, jwtSecret, llm }: SocketContext) {
       return getSensory(requestedUid, undefined, scope);
     };
     registerChatHandler(socket, llmGetters, scopedSensory, getUserId, io);
-    registerTaskHandler(socket, llmGetters, scopedSensory, getUserId, io);
     registerVoiceHandlers(socket, llmGetters, scopedSensory, getUserId, io);
   });
 }

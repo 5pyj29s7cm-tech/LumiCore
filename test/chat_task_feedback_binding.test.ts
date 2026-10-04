@@ -3,7 +3,6 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
-const task = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
 
 describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {
@@ -38,13 +37,6 @@ describe('chat task feedback binding integration', () => {
       'chatExecutionQueue.cancelRequest(sessionKey, cancellationTargetRequestId)',
     );
     expect(chat).not.toContain("reason: 'missing_control_target'");
-    expect(task).toContain(
-      'if (controlTargetRequestId && controlTargetRequestId !== runningTask.requestId)',
-    );
-    expect(task).toContain(
-      'const cancellationTargetRequestId = controlTargetRequestId || previous.requestId',
-    );
-    expect(task).not.toContain("reason: 'missing_control_target'");
   });
 
   // Cancellation is exercised through real Socket handlers in

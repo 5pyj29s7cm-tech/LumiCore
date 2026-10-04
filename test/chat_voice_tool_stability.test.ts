@@ -9,10 +9,9 @@ describe('chat and voice tool-call stability', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
     const pipeline = readFileSync(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
 
-    for (const source of [chat, voice, task]) {
+    for (const source of [chat, voice]) {
       expect(source).toContain('buildLumiExecutionPipeline');
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
@@ -28,7 +27,6 @@ describe('chat and voice tool-call stability', () => {
   it('treats the shared pipeline policy and projection as immutable entry outputs', () => {
     const root = process.cwd();
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
     const rest = readFileSync(path.join(root, 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(voice).toContain('const routedToolPolicy = executionPipeline.authorizationPolicy');
@@ -38,20 +36,13 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
     expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
     expect(voice).toContain('|| executionPipeline.trustedActionContinuation');
-    expect(task).toContain('const modelToolPolicy = executionPipeline.authorizationPolicy');
-    expect(task).toContain('const modelToolProjection = executionPipeline.modelToolProjection');
-    expect(task).toContain('const toolSessionActive = executionPipeline.executionRequested');
-    expect(task).toContain('continuationContext: taskContinuationContext');
-    expect(task).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
-    expect(task).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
-    expect(task).toContain('forceResume: Boolean(pendingConfirmation || executionPipeline.trustedActionContinuation)');
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
     expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
     expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
     expect(rest).toContain('currentTurnExecutionRequested: restExecutionPipeline.executionRequested');
     expect(rest).toContain('trustedActionContinuation: restExecutionPipeline.trustedActionContinuation');
 
-    for (const source of [voice, task, rest]) {
+    for (const source of [voice, rest]) {
       expect(source).not.toContain('buildModelCapabilityPolicy');
       expect(source).not.toContain('buildModelToolProjection');
       expect(source).not.toMatch(/(?:executionDecision|restExecutionDecision)\.(?:baseToolPolicy|toolPolicy|maxIterations|toolRoute)\s*=/);
@@ -179,9 +170,8 @@ describe('chat and voice tool-call stability', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
-    for (const source of [chat, voice, task]) {
+    for (const source of [chat, voice]) {
       expect(source).toContain('createTurnConfirmation({');
       expect(source).not.toContain('canAutoApproveAction(toolName, args,');
       expect(source).not.toContain("socket.emit('agent:confirm_tool'");
@@ -192,9 +182,8 @@ describe('chat and voice tool-call stability', () => {
   it('returns consumed confirmation receipts to the shared model loop in both text execution surfaces', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
-    for (const source of [chat, task]) {
+    for (const source of [chat]) {
       expect(source).toContain('buildConfirmedStepContinuationMessages');
       expect(source).toMatch(/priorToolRecords:\s*(?:taskAwareRecords\()?\[(?:confirmedRecord|confirmationRecord)\]/);
       expect(source).toContain('confirmedStepNeedsContinuation(');

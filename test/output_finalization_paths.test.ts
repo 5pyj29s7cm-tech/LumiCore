@@ -57,21 +57,6 @@ function expectFinalizationMetadataOnEveryAgentResponse(relativePath: string): v
 }
 
 describe('finalized output paths', () => {
-  it('buffers task model text and finalizes against actual tool records', () => {
-    const task = source('server/socket/task.ts');
-
-    expect(task).toContain('shouldDeferModelOutputUntilFinalized');
-    expect(task).toContain('createPreFinalizationTextGate');
-    expect(task).toContain('const taskTextGate = createPreFinalizationTextGate()');
-    expect(task).toContain('if (!authority.isCancelled() && !deferTaskModelOutput)');
-    expect(task).toContain('const safeText = taskTextGate.push(chunk)');
-    expect(task).toContain('taskTextGate.finish()');
-    expect(task).toMatch(/(?:const|let) finalTaskToolRecords = attachDesktopReceipt\(result\.toolCalls\)/);
-    expect(task).toContain('toolRecords: taskAwareRecords(finalTaskToolRecords)');
-    expect(task).toContain('finalized: true');
-    expect(task).toContain('blocked: finalTaskResponse.blocked');
-  });
-
   it('keeps ordinary REST streaming but buffers action output until the final SSE event', () => {
     const rest = source('server/routes/chat_routes.ts');
 
@@ -124,14 +109,12 @@ describe('finalized output paths', () => {
   it('marks every socket response with finalization metadata', () => {
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/chat.ts');
     expectFinalizationMetadataOnEveryAgentResponse('server/socket/voice.ts');
-    expectFinalizationMetadataOnEveryAgentResponse('server/socket/task.ts');
   });
 
   it('persists a request-fenced blocked disposition from every foreground socket', () => {
     for (const relativePath of [
       'server/socket/chat.ts',
       'server/socket/voice.ts',
-      'server/socket/task.ts',
     ]) {
       const code = source(relativePath);
       expect(code).toContain('terminalTaskDisposition');

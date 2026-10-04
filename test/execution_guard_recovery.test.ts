@@ -451,7 +451,7 @@ describe('execution guard recovery', () => {
   });
 
   it('routes every socket notification event through the shared sanitizer', () => {
-    for (const file of ['chat.ts', 'task.ts', 'voice.ts']) {
+    for (const file of ['chat.ts', 'voice.ts']) {
       const source = readFileSync(path.resolve('server/socket', file), 'utf8');
       expect(source).toContain("event === 'agent:notification'");
       expect(source).toContain('sanitizeExecutionNotificationForDelivery');
@@ -1147,10 +1147,9 @@ describe('execution guard recovery', () => {
   it('wires the shared one-shot recovery into chat, task and voice terminal paths', () => {
     const root = process.cwd();
     const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const taskSource = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
 
-    for (const source of [chatSource, taskSource, voiceSource]) {
+    for (const source of [chatSource, voiceSource]) {
       expect(source).toContain('await recoverBlockedExecutionOnce({');
       expect(source).toContain('pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn)');
       expect(source).toContain('requiresFreshConfirmation: correctionRequiresFreshConfirmation');
@@ -1162,13 +1161,10 @@ describe('execution guard recovery', () => {
     expect(chatSource).toContain('...toolSecurityContext,');
     expect(chatSource).toContain('executionBoundary');
     expect(chatSource).not.toContain('const guardRecovery = decideExecutionGuardRecovery');
-    expect(taskSource).toContain("source: 'task_guard_recovery'");
-    expect(taskSource).toContain('normalizeTaskHistory(recentMsgs)');
-    expect(taskSource).toContain('isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn)');
     expect(voiceSource).toContain("source: 'voice_guard_recovery'");
     expect(voiceSource).toContain('isAborted: () => !isCurrentTurn()');
 
-    for (const source of [chatSource, taskSource, voiceSource]) {
+    for (const source of [chatSource, voiceSource]) {
       expect(source).toContain('createTurnConfirmation({');
       expect(source).toContain('correctionRequiresFreshConfirmation,');
       expect(source).not.toContain('!pendingConfirmationMatchesExactProposal(');
@@ -1183,9 +1179,7 @@ describe('execution guard recovery', () => {
     const cases = [{
       source: readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
       cancellationCheck: 'isAborted: isChatCancelled',
-    }, {
-      source: readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
-      cancellationCheck: 'isAborted: () => authority.isCancelled()',
+
     }, {
       source: readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
       cancellationCheck: 'isAborted: () => !isCurrentTurn()',

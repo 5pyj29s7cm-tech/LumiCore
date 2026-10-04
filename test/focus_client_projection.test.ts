@@ -23,7 +23,7 @@ describe('focus thread client projection', () => {
   });
 
   it('binds explicit task channels to durable focus without prebuilding Chat tasks', () => {
-    for (const file of ['server/socket/task.ts', 'server/socket/voice.ts']) {
+    for (const file of ['server/socket/voice.ts']) {
       const contents = source(file);
       expect(contents).toContain('updateConversationActionFocus({');
     }

@@ -109,7 +109,6 @@ describe('customer-visible execution event projection', () => {
 describe('socket channel projection contract', () => {
   it.each([
     ['server/socket/chat.ts', 'visibleUserText'],
-    ['server/socket/task.ts', 'data.text'],
     ['server/socket/voice.ts', 'actionIntentText'],
   ])('projects every normalized event at the %s boundary', (relativePath, taskExpression) => {
     const code = source(relativePath);

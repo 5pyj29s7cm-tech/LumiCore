@@ -175,8 +175,7 @@ describe('desktop execution stability policy', () => {
     const root = process.cwd();
     const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const taskSource = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
-    const sources = [chatSource, voiceSource, taskSource];
+    const sources = [chatSource, voiceSource];
 
     for (const source of sources) {
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
@@ -185,6 +184,5 @@ describe('desktop execution stability policy', () => {
     }
     expect(chatSource).toMatch(/source:\s*'chat',[\s\S]{0,160}taskId:\s*durableTaskId,[\s\S]{0,80}requestId/);
     expect(voiceSource).toMatch(/source:\s*'voice',[\s\S]{0,160}taskId:\s*actionTaskExecution\.state\?\.taskId,[\s\S]{0,80}requestId/);
-    expect(taskSource).toMatch(/source:\s*'task',[\s\S]{0,160}taskId:\s*actionTaskExecution\.state\?\.taskId,[\s\S]{0,80}requestId/);
   });
 });

@@ -5,25 +5,6 @@ import { describe, expect, it } from 'vitest';
 const source = (relativePath: string) => readFileSync(path.join(process.cwd(), relativePath), 'utf8');
 
 describe('cross-channel action turn ownership wiring', () => {
-  it('persists and binds the exact task socket transcript before action preparation', () => {
-    const task = source('server/socket/task.ts');
-    const admission = task.indexOf('const taskAdmission = await admitAcceptedUserTurnDurably({');
-    const persisted = task.indexOf('persistAcceptedUserTurn: () => addMessageIdempotent({', admission);
-    const flushed = task.indexOf('flush: flushDBOrThrow', persisted);
-    const accepted = task.indexOf('const taskUserMessageId = taskAdmission.persisted;', flushed);
-    const prepared = task.indexOf('const actionTaskExecution = prepareConversationActionExecution({', accepted);
-    const rejected = task.indexOf("if ('bindingFailure' in actionTaskExecution)", prepared);
-
-    expect(admission).toBeGreaterThan(-1);
-    expect(persisted).toBeGreaterThan(-1);
-    expect(flushed).toBeGreaterThan(persisted);
-    expect(accepted).toBeGreaterThan(flushed);
-    expect(task.slice(persisted, prepared)).toContain('deferActionPreparation: true');
-    expect(task).toContain('.filter(message => message.id !== taskUserMessageId)');
-    expect(task.slice(prepared, rejected)).toContain('userMessageId: taskUserMessageId');
-    expect(rejected).toBeGreaterThan(prepared);
-  });
-
   it('persists and binds the exact voice transcript before action preparation', () => {
     const voice = source('server/socket/voice.ts');
     const persisted = voice.indexOf('voiceUserMessageId = addMessageIdempotent({');
@@ -63,11 +44,10 @@ describe('cross-channel action turn ownership wiring', () => {
 
   it('carries durable receipts through every single-core recovery path', () => {
     const chat = source('server/socket/chat.ts');
-    const task = source('server/socket/task.ts');
     const voice = source('server/socket/voice.ts');
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
-    for (const code of [chat, task, voice]) {
+    for (const code of [chat, voice]) {
       expect(code).toContain('attempt: async ({ instruction, priorToolRecords, recordTool })');
       expect(code).toContain('priorToolRecords,');
     }
@@ -83,14 +63,6 @@ describe('cross-channel action turn ownership wiring', () => {
         prepare: 'const actionTaskExecution = acceptedRuntimeCleanupOffer',
         heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
         abort: 'abortController,',
-        stop: 'actionLeaseHeartbeat?.stop();',
-      },
-      {
-        name: 'task',
-        code: source('server/socket/task.ts'),
-        prepare: 'const actionTaskExecution = prepareConversationActionExecution({',
-        heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
-        abort: 'abortController: taskAbortController,',
         stop: 'actionLeaseHeartbeat?.stop();',
       },
       {
@@ -124,8 +96,7 @@ describe('cross-channel action turn ownership wiring', () => {
 
     expect(channels[0].code).toContain('recordChatExecutionPersistenceUnknownDurably(');
     expect(channels[1].code).toContain('recordChatExecutionPersistenceUnknownDurably(');
-    expect(channels[2].code).toContain('recordChatExecutionPersistenceUnknownDurably(');
-    expect(channels[3].code).toContain('signal: actionAbortController.signal');
-    expect(channels[3].code).toContain('isCancelled: actionWasCancelled');
+    expect(channels[2].code).toContain('signal: actionAbortController.signal');
+    expect(channels[2].code).toContain('isCancelled: actionWasCancelled');
   });
 });

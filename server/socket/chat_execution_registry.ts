@@ -32,6 +32,8 @@ export type ChatExecutionEvent = {
 export type ChatExecutionSnapshot = {
   requestId: string;
   source: string;
+  /** Server-owned conversation identity, including requests recovered without a client conversation id. */
+  conversationId?: string;
   /** Sidecar requests have durable receipts but never own the foreground slot. */
   sidecar?: boolean;
   /** Reserved behind another foreground turn; exact-id resumable, never active. */
@@ -397,6 +399,9 @@ function copySnapshot(record?: StoredExecution): ChatExecutionSnapshot | null {
   } = record;
   return {
     ...snapshot,
+    ...(record.scopeKey.length > record.recoveryScopeKey.length + 1
+      ? { conversationId: record.scopeKey.slice(record.recoveryScopeKey.length + 1) }
+      : {}),
     lastEvent: snapshot.lastEvent
       ? { event: snapshot.lastEvent.event, payload: { ...snapshot.lastEvent.payload } }
       : undefined,

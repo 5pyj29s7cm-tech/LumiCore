@@ -288,13 +288,10 @@ describe('voice reconnect and perception continuity', () => {
     const root = process.cwd();
     const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const task = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
 
     expect(chat).toContain('const chatAdmission = await admitAcceptedUserTurnDurably({');
     expect(chat).toContain('() => beginChatExecutionDurably(executionScope, requestId');
     expect(voice).toContain('const voiceAdmission = await admitAcceptedUserTurnDurably({');
     expect(voice).toContain('() => beginChatExecutionDurably(');
-    expect(task).toContain('const taskAdmission = await admitAcceptedUserTurnDurably({');
-    expect(task).toContain('() => beginChatExecutionDurably(');
   });
 });

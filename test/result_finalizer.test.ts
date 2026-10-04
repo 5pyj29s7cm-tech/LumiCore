@@ -3276,8 +3276,7 @@ describe('Lumi result finalizer', () => {
     const root = process.cwd();
     const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const taskSource = readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8');
-    const socketSources = [chatSource, voiceSource, taskSource];
+    const socketSources = [chatSource, voiceSource];
 
     for (const source of socketSources) {
       expect(source).toContain('finalizeLumiResponse');
@@ -3287,6 +3286,5 @@ describe('Lumi result finalizer', () => {
     expect(chatSource).not.toContain('responseText: completionCandidate');
     expect(chatSource).not.toContain('const completionText = finalizedBackground.text;');
     expect(voiceSource).toContain('responseText = finalResponse.text;');
-    expect(taskSource).toContain('finalTaskText = finalTaskResponse.text;');
   });
 });

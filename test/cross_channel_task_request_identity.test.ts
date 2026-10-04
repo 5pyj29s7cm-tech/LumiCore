@@ -28,7 +28,6 @@ describe('foreground task and request identity wiring', () => {
   it('never substitutes a transport request id for a prepared task id in Chat, Task, or Voice', () => {
     for (const relativePath of [
       'server/socket/chat.ts',
-      'server/socket/task.ts',
       'server/socket/voice.ts',
     ]) {
       const code = source(relativePath);
@@ -40,7 +39,7 @@ describe('foreground task and request identity wiring', () => {
   });
 
   it('binds Task and Voice desktop relays to their prepared durable task', () => {
-    for (const relativePath of ['server/socket/task.ts', 'server/socket/voice.ts']) {
+    for (const relativePath of ['server/socket/voice.ts']) {
       const code = source(relativePath);
       const prepare = code.indexOf('prepareConversationActionExecution({');
       const relay = code.indexOf('const desktopRelay = createDesktopRelay({', prepare);

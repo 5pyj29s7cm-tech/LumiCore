@@ -318,7 +318,6 @@ describe('encrypted pending confirmation repository', () => {
     const productionFiles = [
       'server/socket/chat.ts',
       'server/socket/voice.ts',
-      'server/socket/task.ts',
       'server/regions/packs/cn/messaging_routes.ts',
     ];
     for (const file of productionFiles) {

@@ -122,14 +122,13 @@ import { flushDBOrThrow, initDatabase, readDB, writeDB } from '../db_layer';
 import {
   addMessageIdempotent,
   getOrCreateActiveConversation,
+  startIsolatedConversation,
+  convergeForegroundRequestBeforeRelease,
   getMessages,
   prepareConversationActionExecution,
 } from '../server/conversation/manager';
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
-import {
-  convergeTaskForegroundRequestBeforeRelease,
-  registerTaskHandler,
-} from '../server/socket/task';
+import { registerChatHandler } from '../server/socket/chat';
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from '../server/regions/packs/cn/voice_fast_path_messages';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
@@ -172,7 +171,8 @@ describe('task foreground release manager convergence', () => {
 
   it('blocks and quarantines a non-aborted Task executor before release', async () => {
     const identity = prepareTaskRequest('blocked');
-    const result = await convergeTaskForegroundRequestBeforeRelease({
+    const result = await convergeForegroundRequestBeforeRelease({
+      channel: 'Chat',
       identity,
       aborted: false,
       reason: 'Task executor left without an assistant terminal.',
@@ -197,7 +197,8 @@ describe('task foreground release manager convergence', () => {
 
   it('cancels only the exact aborted Task request before release', async () => {
     const identity = prepareTaskRequest('cancelled');
-    const result = await convergeTaskForegroundRequestBeforeRelease({
+    const result = await convergeForegroundRequestBeforeRelease({
+      channel: 'Chat',
       identity,
       aborted: true,
       reason: 'Exact Task request was aborted.',
@@ -227,7 +228,7 @@ describe('task foreground release manager convergence', () => {
       domain: 'personal',
       source: 'test',
       channel: 'task',
-      cognitiveIntent: 'task_execution_failed',
+      cognitiveIntent: 'chat_execution_failed',
       llmWasCalled: false,
     });
     // Recreate the durable split-brain this release fence must repair: the
@@ -241,7 +242,8 @@ describe('task foreground release manager convergence', () => {
     splitBrainTask.activeRequestId = identity.requestId;
     writeDB(splitBrainDb);
 
-    const result = await convergeTaskForegroundRequestBeforeRelease({
+    const result = await convergeForegroundRequestBeforeRelease({
+      channel: 'Chat',
       identity,
       aborted: false,
     });
@@ -268,16 +270,16 @@ describe('task foreground release manager convergence', () => {
   });
 
   it('keeps pre-binding paths identity-free and orders convergence before resource release', () => {
-    const source = readFileSync('server/socket/task.ts', 'utf8');
-    const releaseStart = source.indexOf('const taskReleaseGate = createDurableForegroundReleaseGate({');
-    const convergeAt = source.indexOf('convergeTaskForegroundRequestBeforeRelease({', releaseStart);
+    const source = readFileSync('server/socket/chat.ts', 'utf8');
+    const releaseStart = source.indexOf('const chatReleaseGate = createDurableForegroundReleaseGate({');
+    const convergeAt = source.indexOf('convergeChatForegroundRequestBeforeRelease({', releaseStart);
     const durableSuccessAt = source.indexOf('if (!releaseResult.converged)', convergeAt);
-    const transportReleaseAt = source.indexOf('releaseResources: releaseTaskTransportResources', durableSuccessAt);
-    const transportHelperStart = source.indexOf('const releaseTaskTransportResources = (): void => {');
+    const transportReleaseAt = source.indexOf('releaseResources: releaseChatTransportResources', durableSuccessAt);
+    const transportHelperStart = source.indexOf('const releaseChatTransportResources = (): void => {');
     const desktopReleaseAt = source.indexOf('releaseDesktopControlLease?.();', transportHelperStart);
-    const serialReleaseAt = source.indexOf('taskLease.release();', transportHelperStart);
-    const bindAt = source.indexOf('const actionTaskExecution = prepareConversationActionExecution({');
-    const identityAt = source.indexOf('taskForegroundRequestIdentity = Object.freeze({', bindAt);
+    const serialReleaseAt = source.indexOf('sessionLease.release();', transportHelperStart);
+    const identityAt = source.indexOf('foregroundRequestIdentity = Object.freeze({');
+    const bindAt = source.lastIndexOf('prepareConversationActionExecution({', identityAt);
     expect(releaseStart).toBeGreaterThan(-1);
     expect(convergeAt).toBeGreaterThan(releaseStart);
     expect(durableSuccessAt).toBeGreaterThan(convergeAt);
@@ -286,9 +288,9 @@ describe('task foreground release manager convergence', () => {
     expect(desktopReleaseAt).toBeGreaterThan(transportHelperStart);
     expect(serialReleaseAt).toBeGreaterThan(desktopReleaseAt);
     expect(identityAt).toBeGreaterThan(bindAt);
-    expect(source.slice(releaseStart, bindAt)).not.toContain('taskForegroundRequestIdentity = Object.freeze({');
+    expect(source.slice(releaseStart, bindAt)).not.toContain('foregroundRequestIdentity = Object.freeze({');
 
-    const ordinaryFailureStart = source.indexOf('console.error("[Agent Task Error]:", err);');
+    const ordinaryFailureStart = source.indexOf('console.error("[Socket Agent Error]:", error);');
     const ordinaryFailureEnd = source.indexOf('} finally {', ordinaryFailureStart);
     const ordinaryFailure = source.slice(ordinaryFailureStart, ordinaryFailureEnd);
     expect(ordinaryFailure).toContain('CN_VOICE_WORK_MESSAGES.processingFailed');
@@ -297,8 +299,8 @@ describe('task foreground release manager convergence', () => {
     expect(ordinaryFailure).not.toContain("event: 'agent:error'");
 
     const cancellationHandler = source.slice(
-      source.indexOf("socket.on('agent:task_cancel'"),
-      source.indexOf('socket.on("agent:task"'),
+      source.indexOf('socket.on("agent:abort_chat"'),
+      source.indexOf('socket.on("agent:chat"'),
     );
     expect(cancellationHandler).toContain("status: 'cancelling'");
     expect(cancellationHandler).not.toContain('cancelConversationActionExecution(');
@@ -326,7 +328,7 @@ describe('task foreground Socket terminal integration', () => {
       serverSocket.data.lumiDesktopDomain = 'personal';
       serverSocket.data.lumiDesktopOrgId = '';
       serverSocket.join(`user:${userId}:personal`);
-      registerTaskHandler(
+      registerChatHandler(
         serverSocket,
         {
           getDeepSeek: () => ({}),
@@ -336,6 +338,8 @@ describe('task foreground Socket terminal integration', () => {
           getQwen: () => ({}),
           getOllama: () => ({}),
           getLmStudio: () => ({}),
+          isOllamaAvailable: () => false,
+          isLmStudioAvailable: () => false,
           getArk: () => ({}),
           getXiaomi: () => ({}),
           getKimi: () => ({}),
@@ -389,7 +393,7 @@ describe('task foreground Socket terminal integration', () => {
     mocks.loopError = new Error('Fixture writer ends after the status read');
     const writerResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', writerId);
     try {
-      expect(await client.timeout(5000).emitWithAck('agent:task', {
+      expect(await client.timeout(5000).emitWithAck('agent:chat', { source: 'task',
         text: '读取 D:/synthetic/receipt.txt 并告诉我内容。', requestId: writerId, conversationId,
       })).toMatchObject({ ok: true, requestId: writerId });
       await started;
@@ -397,13 +401,13 @@ describe('task foreground Socket terminal integration', () => {
       expect(writerTask).toBeDefined();
       const before = { id: writerTask!.id, revision: writerTask!.revision, status: writerTask!.status, activeRequestId: writerId };
       const queryResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', queryId, 2000);
-      expect(await client.timeout(5000).emitWithAck('agent:task', {
+      expect(await client.timeout(5000).emitWithAck('agent:chat', { source: 'task',
         text: '后台正在执行什么任务？', requestId: queryId, conversationId,
       })).toMatchObject({ ok: true, requestId: queryId });
       expect(await queryResponse).toMatchObject({ reason: 'runtime_work_status', blocked: false, finalized: true, sidecar: true });
       expect((readDB().conversationActionTasks || []).find((row: any) => row.id === before.id)).toMatchObject(before);
       const replayResponse = waitForRequestEvent<Record<string, any>>(client, 'agent:response', queryId, 2000);
-      expect(await client.timeout(5000).emitWithAck('agent:task', {
+      expect(await client.timeout(5000).emitWithAck('agent:chat', { source: 'task',
         text: '后台正在执行什么任务？', requestId: queryId, conversationId,
       })).toMatchObject({ ok: true, requestId: queryId });
       expect(await replayResponse).toMatchObject({ replayed: true, reason: 'runtime_work_status', blocked: false });
@@ -428,7 +432,7 @@ describe('task foreground Socket terminal integration', () => {
     const requestId = 'task-runtime-denied-' + suffix;
     try {
       const response = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
-      expect(await client.timeout(5000).emitWithAck('agent:task', {
+      expect(await client.timeout(5000).emitWithAck('agent:chat', { source: 'task',
         text: '你现在有在执行的任务吗', requestId, conversationId,
       })).toMatchObject({ ok: true, requestId });
       expect(await response).toMatchObject({ reason: 'runtime_work_status', blocked: true, sidecar: true });
@@ -448,8 +452,8 @@ describe('task foreground Socket terminal integration', () => {
     client.on('agent:error', onAgentError);
     mocks.loopError = new Error('private Task failure detail');
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
-    const ack = await client.timeout(5_000).emitWithAck('agent:task', {
-      text: '请打开当前前台窗口并告诉我窗口标题。',
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
+      text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
       history: [],
       personalityId: 'lumi',
       domain: 'personal',
@@ -460,11 +464,11 @@ describe('task foreground Socket terminal integration', () => {
 
     const response = await responsePromise;
     client.off('agent:error', onAgentError);
-    expect(response).toMatchObject({
+    expect(response, JSON.stringify(response)).toMatchObject({
       requestId,
       finalized: true,
       blocked: true,
-      reason: 'task_execution_failed',
+      reason: 'chat_execution_failed',
     });
     expect(response.text).toBe(CN_VOICE_WORK_MESSAGES.processingFailed);
     expect(JSON.stringify(response)).not.toContain('private Task failure detail');
@@ -479,7 +483,7 @@ describe('task foreground Socket terminal integration', () => {
     ));
     expect(assistant).toMatchObject({
       message: CN_VOICE_WORK_MESSAGES.processingFailed,
-      cognitiveIntent: 'task_execution_failed',
+      cognitiveIntent: 'chat_execution_failed',
     });
     const actionTurn = (db.conversationActionTurns || []).find((row: any) => (
       row.userId === userId
@@ -499,10 +503,10 @@ describe('task foreground Socket terminal integration', () => {
     mocks.budgetStates = [];
     for (let index = 0; index < 2; index++) {
       const requestId = `task-budget-${index}-${suffix}`;
-      const conversationId = getOrCreateActiveConversation(userId, `budget-${index}`, 'personal', '').id;
+      const conversationId = startIsolatedConversation(userId, 'lumi', 'personal', '').id;
       mocks.budgetProbe = true;
       const responsePromise = waitForRequestEvent(client, 'agent:response', requestId);
-      await client.timeout(5_000).emitWithAck('agent:task', {
+      await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
         text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
         history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
       });
@@ -515,19 +519,19 @@ describe('task foreground Socket terminal integration', () => {
   });
 
   it.each(['error', 'cancel', 'cancel_return'] as const)('retains completed tool receipts when the task loop ends with %s', async failure => {
-    const conversationId = getOrCreateActiveConversation(userId, `receipt-fixture-${failure}`, 'personal', '').id;
+    const conversationId = startIsolatedConversation(userId, 'lumi', 'personal', '').id;
     const requestId = `task-receipt-${failure}-${suffix}`;
     mocks.loopFailure = failure;
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
     const toolPromise = waitForRequestEvent<Record<string, any>>(client, 'agent:tool_call', requestId);
-    const ack = await client.timeout(5_000).emitWithAck('agent:task', {
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
       text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
       history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
     });
     expect(ack).toMatchObject({ ok: true, requestId });
     await toolPromise;
     if (failure !== 'error') {
-      const cancelAck = await client.timeout(5_000).emitWithAck('agent:task_cancel', { requestId, domain: 'personal' });
+      const cancelAck = await client.timeout(5_000).emitWithAck('agent:abort_chat', { source: 'task', requestId, domain: 'personal' });
       expect(cancelAck).toMatchObject({ ok: true, status: 'cancelling' });
     }
     const response = await responsePromise;
@@ -550,16 +554,16 @@ describe('task foreground Socket terminal integration', () => {
   });
 
   it('archives the canonical tool result after the socket request has already ended cancelled', async () => {
-    const conversationId = getOrCreateActiveConversation(userId, 'late-receipt-fixture', 'personal', '').id;
+    const conversationId = startIsolatedConversation(userId, 'lumi', 'personal', '').id;
     const requestId = `task-late-receipt-${suffix}`;
     mocks.loopFailure = 'late_cancel';
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
-    await client.timeout(5_000).emitWithAck('agent:task', {
+    await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
       text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
       history: [], personalityId: 'lumi', domain: 'personal', requestId, conversationId,
     });
     await vi.waitFor(() => expect(mocks.lateRelease).toBeTypeOf('function'));
-    await client.timeout(5_000).emitWithAck('agent:task_cancel', { requestId, domain: 'personal' });
+    await client.timeout(5_000).emitWithAck('agent:abort_chat', { source: 'task', requestId, domain: 'personal' });
     await responsePromise;
     const db = readDB();
     const turn = db.conversationActionTurns.find((row: any) => row.requestId === requestId)!;
@@ -580,8 +584,8 @@ describe('task foreground Socket terminal integration', () => {
     const requestId = `task-post-binding-failure-${suffix}`;
     mocks.heartbeatError = new Error('private heartbeat setup detail');
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
-    const ack = await client.timeout(5_000).emitWithAck('agent:task', {
-      text: '请打开当前前台窗口并告诉我窗口标题。',
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
+      text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
       history: [],
       personalityId: 'lumi',
       domain: 'personal',
@@ -596,7 +600,7 @@ describe('task foreground Socket terminal integration', () => {
       text: CN_VOICE_WORK_MESSAGES.processingFailed,
       finalized: true,
       blocked: true,
-      reason: 'task_execution_failed',
+      reason: 'chat_execution_failed',
     });
     expect(JSON.stringify(response)).not.toContain('private heartbeat setup detail');
     const db = readDB();
@@ -613,7 +617,7 @@ describe('task foreground Socket terminal integration', () => {
     ));
     expect(assistant).toMatchObject({
       message: CN_VOICE_WORK_MESSAGES.processingFailed,
-      cognitiveIntent: 'task_execution_failed',
+      cognitiveIntent: 'chat_execution_failed',
     });
     expect(actionTurn).toMatchObject({
       status: 'terminal',
@@ -628,8 +632,8 @@ describe('task foreground Socket terminal integration', () => {
     const requestId = `task-cancelled-${suffix}`;
     mocks.loopDelayMs = 150;
     const responsePromise = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
-    const ack = await client.timeout(5_000).emitWithAck('agent:task', {
-      text: '请打开当前前台窗口并告诉我窗口标题。',
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', { source: 'task',
+      text: '请读取 D:/synthetic/completed-read.txt 并总结内容。',
       history: [],
       personalityId: 'lumi',
       domain: 'personal',
@@ -637,7 +641,8 @@ describe('task foreground Socket terminal integration', () => {
       conversationId,
     });
     expect(ack).toMatchObject({ ok: true, requestId });
-    const cancelAck = await client.timeout(5_000).emitWithAck('agent:task_cancel', {
+    await vi.waitFor(() => expect(mocks.loopRequests).toContain(requestId));
+    const cancelAck = await client.timeout(5_000).emitWithAck('agent:abort_chat', { source: 'task',
       requestId,
       domain: 'personal',
     });

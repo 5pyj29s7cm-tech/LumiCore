@@ -614,18 +614,14 @@ describe('reasoning model switching stability', () => {
 
   it('contains no channel-level model substitution rules', async () => {
     const fs = await import('node:fs/promises');
-    const [chat, voice, task] = await Promise.all([
+    const [chat, voice] = await Promise.all([
       fs.readFile('server/socket/chat.ts', 'utf8'),
       fs.readFile('server/socket/voice.ts', 'utf8'),
-      fs.readFile('server/socket/task.ts', 'utf8'),
     ]);
     expect(chat).not.toMatch(/activeModel\s*=\s*isComplex/);
     expect(voice).not.toMatch(/effectiveModel\s*=\s*isComplex/);
     expect(voice).not.toContain("provider === 'deepseek' ? 'deepseek-v4-pro'");
-    expect(task).toContain('let activeModel = userLLMPrefs.model');
-    expect(task).not.toMatch(/activeModel\s*=\s*isComplex/);
-    expect(task).not.toContain('Model auto-selected');
-    for (const source of [chat, voice, task]) {
+    for (const source of [chat, voice]) {
       expect(source).toContain('const reasoningRoutePolicy = {');
       expect(source).toContain('selectionMode: userLLMPrefs.selectionMode');
       expect(source).toContain('fallbackCandidates: userLLMPrefs.fallbackCandidates');

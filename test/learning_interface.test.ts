@@ -230,7 +230,6 @@ describe('Lumi learning interface', () => {
   it('keeps model-owned chat and voice terminal paths wired into post-turn learning', () => {
     const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
-    const taskSource = readFileSync(path.join(process.cwd(), 'server/socket/task.ts'), 'utf8');
     const postTurnSource = readFileSync(path.join(process.cwd(), 'server/cognition/post_turn_learning.ts'), 'utf8');
 
     expect(postTurnSource).toContain('export function persistLumiPostTurnLearning');
@@ -253,12 +252,5 @@ describe('Lumi learning interface', () => {
     expect(voiceSource).not.toContain('voice music shortcut');
     expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(7);
 
-    expect(taskSource).toContain('const persistTaskLearning');
-    expect(taskSource).toContain('persistLumiPostTurnLearning');
-    expect(taskSource).toContain('task confirmation');
-    expect(taskSource).not.toContain('task direct cognition');
-    expect(taskSource).toContain('task cancelled');
-    expect(taskSource).toContain("logLabel: 'task'");
-    expect(taskSource.match(/persistTaskLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(3);
   });
 });

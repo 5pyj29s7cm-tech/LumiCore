@@ -366,7 +366,6 @@ describe('whole model-request context budget', () => {
   it('wires one compact prompt selector and one total budget into all ordinary text channels', () => {
     const sources = [
       'server/socket/chat.ts',
-      'server/socket/task.ts',
       'server/regions/packs/cn/messaging_routes.ts',
     ].map(file => fs.readFileSync(path.join(process.cwd(), file), 'utf8'));
     for (const source of sources) {

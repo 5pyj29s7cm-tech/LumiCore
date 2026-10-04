@@ -12,7 +12,6 @@ import * as OrgDB from '../server/org/db';
 // Only unrelated execution/model boundaries are replaced. Real auth, rooms,
 // device registration, memory handlers, notifications and SQLite remain active.
 vi.mock('../server/socket/chat', () => ({ registerChatHandler: vi.fn() }));
-vi.mock('../server/socket/task', () => ({ registerTaskHandler: vi.fn() }));
 vi.mock('../server/socket/voice', () => ({ registerVoiceHandlers: vi.fn() }));
 vi.mock('../server/socket/perception', () => ({ registerPerceptionHandlers: vi.fn() }));
 vi.mock('../server/socket/ambient', () => ({ registerAmbientHandlers: vi.fn() }));

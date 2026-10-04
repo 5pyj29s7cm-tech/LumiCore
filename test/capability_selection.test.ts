@@ -622,7 +622,6 @@ describe('Lumi capability selection', () => {
     const sources = [
       readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
       readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/task.ts'), 'utf8'),
     ];
 
     for (const source of sources) {

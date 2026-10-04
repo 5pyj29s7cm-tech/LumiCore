@@ -11,7 +11,6 @@ describe('core capability boundaries', () => {
     const coreSources = [
       'server/socket/chat.ts',
       'server/socket/voice.ts',
-      'server/socket/task.ts',
       'server/cognition/turn_flow.ts',
       'server/cognition/turn_dispatch.ts',
       'server/cognition/capability_selection.ts',

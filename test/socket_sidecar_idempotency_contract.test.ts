@@ -7,7 +7,7 @@ function source(relativePath: string): string {
 }
 
 describe('socket sidecar idempotency integration', () => {
-  for (const relativePath of ['server/socket/chat.ts', 'server/socket/task.ts']) {
+  for (const relativePath of ['server/socket/chat.ts']) {
     it(`${relativePath} durably fences cancel sidecars before queue cancellation`, () => {
       const code = source(relativePath);
       const durableBarrier = code.indexOf('await persistChatSidecarCancellationIntent(executionScope, requestId,');

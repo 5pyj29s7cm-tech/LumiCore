@@ -59,7 +59,6 @@
     "server/socket/chat_execution_registry.ts",
     "server/socket/proactive_reminder_delivery.ts",
     "server/socket/scene.ts",
-    "server/socket/task.ts",
     "server/tools/definitions/data_tools.ts",
     "server/tools/definitions/knowledge_tools.ts",
     "server/tools/definitions/model_configuration_tools.ts",
