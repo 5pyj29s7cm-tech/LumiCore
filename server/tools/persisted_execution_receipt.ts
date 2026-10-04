@@ -7,6 +7,8 @@ export interface PersistedToolExecutionReceiptLike {
   taskId?: unknown;
   turnId?: unknown;
   requestId?: unknown;
+  turnRowId?: unknown;
+  externalMessageId?: unknown;
   idempotencyKey?: unknown;
   toolName?: unknown;
   targetIdentity?: unknown;
@@ -19,6 +21,8 @@ export interface PersistedToolExecutionReceiptExpectation {
   envelopeTaskId?: string;
   turnId?: string;
   requestId?: string;
+  turnRowId?: string;
+  externalMessageId?: string;
   toolName?: string;
   outcome?: ToolExecutionEnvelopeStatus;
 }
@@ -135,6 +139,13 @@ export function inspectPersistedToolExecutionReceipt(
   }
   if (rowRequestId !== expectedRequestId || envelopeRequestId !== expectedRequestId) {
     return invalid('request_identity_mismatch');
+  }
+  for (const field of ['turnRowId', 'externalMessageId'] as const) {
+    const rowIdentity = text(row[field]);
+    const envelopeIdentity = text(envelope[field]);
+    if (rowIdentity !== envelopeIdentity || (expected[field] && rowIdentity !== expected[field])) {
+      return invalid(field === 'turnRowId' ? 'turn_row_identity_mismatch' : 'external_message_identity_mismatch');
+    }
   }
   if (rowToolName !== expectedToolName || envelopeToolName !== expectedToolName) {
     return invalid('tool_identity_mismatch');

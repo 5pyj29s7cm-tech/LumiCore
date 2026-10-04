@@ -2637,7 +2637,7 @@ async function processWithPersonalityAdmitted(
         forceTask: executionPlan.capabilityPlan.taskLedgerRequired
           || (isOrganizationBound && requestsOrganizationScope(requestText)),
       })
-    : { state: null, kind: 'conversation' as const };
+    : { state: null, kind: 'conversation' as const, turnRowId: undefined };
   if ('bindingFailure' in actionTaskExecution) {
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
@@ -2652,7 +2652,8 @@ async function processWithPersonalityAdmitted(
   const receiptObserver = conversation && actionTaskExecution.state?.taskId
     ? createConversationReceiptObserver({
         userId: effectiveUserId, conversationId: conversation.id,
-        taskId: actionTaskExecution.state.taskId, requestId, domain, orgId,
+        taskId: actionTaskExecution.state.taskId, requestId, turnRowId: actionTaskExecution.turnRowId,
+        externalMessageId: msg.messageId, domain, orgId,
       // Closing ingress stops new execution, not evidence for work already begun.
       }, () => isAcceptedMessagingAuthorizationCurrent(msg))
     : undefined;
@@ -3038,6 +3039,8 @@ async function processWithPersonalityAdmitted(
           taskId: actionTaskExecution.state?.taskId,
           conversationId: conversation?.id,
           turnId: msg.messageId,
+          turnRowId: actionTaskExecution.turnRowId,
+          externalMessageId: msg.messageId,
           resolutionId: executionPlan.resolution.id,
           requestId,
           domain,
@@ -3126,6 +3129,8 @@ async function processWithPersonalityAdmitted(
           id: `${requestId}:organization-command`,
           taskId: actionTaskExecution.state?.taskId,
           turnId: msg.messageId,
+          turnRowId: actionTaskExecution.turnRowId,
+          externalMessageId: msg.messageId,
           resolutionId: executionPlan.resolution.id,
           requestId,
           idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
@@ -3151,8 +3156,11 @@ async function processWithPersonalityAdmitted(
             version: 1,
             status: 'verified_success',
             toolName: 'organization_business_command',
+            resolutionId: executionPlan.resolution.id,
             taskId: actionTaskExecution.state?.taskId || '',
             turnId: msg.messageId,
+            turnRowId: actionTaskExecution.turnRowId,
+            externalMessageId: msg.messageId,
             requestId,
             idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
             targetIdentity: orgId,
@@ -3193,6 +3201,8 @@ async function processWithPersonalityAdmitted(
         taskId: actionTaskExecution.state?.taskId,
         conversationId: conversation?.id,
         turnId: msg.messageId,
+        turnRowId: actionTaskExecution.turnRowId,
+        externalMessageId: msg.messageId,
           resolutionId: executionPlan.resolution.id,
         requestId,
         domain,

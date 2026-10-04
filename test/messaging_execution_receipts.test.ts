@@ -68,6 +68,13 @@ describe('remote channel execution evidence', () => {
     expect(model.run).toHaveBeenCalledOnce();
     await flushDBOrThrow();
     expect(f.receipts()).toHaveLength(1);
+    const requestId = platform + "_bot:" + f.id;
+    const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === requestId);
+    const identity = { requestId, externalMessageId: f.id, turnRowId: turn.id };
+    expect(f.context()).toMatchObject(identity);
+    expect(await f.execution()).toMatchObject({ ...identity, resolutionId: f.context().resolutionId });
+    expect(f.receipts()[0]).toMatchObject(identity);
+    expect(JSON.parse(f.receipts()[0].envelope)).toMatchObject({ ...identity, resolutionId: f.context().resolutionId });
     const task = f.task();
     expect(task.status).toBe('blocked');
     const assistant = getMessages(task.conversationId).find(row => row.role === 'assistant');

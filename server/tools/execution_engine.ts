@@ -1,3 +1,4 @@
+import { toolExecutionIdentity } from './execution_identity';
 import { createHash, createHmac } from 'crypto';
 import { preservedSourceWriteBlockReason, requestedArtifactFormatBlockReason } from '../cognition/artifact_write_scope';
 import { getJwtSecret } from '../config/local_identity';
@@ -342,11 +343,8 @@ export async function executeAttachedExternalCommitReconciliation(
     limitations: ['This observation can prove a commit; absence or ambiguous evidence remains unknown and never authorizes replay.'],
   };
   const record: ToolExecutionRecord = {
-    ...(input.context?.resolutionId ? {resolutionId:input.context.resolutionId} : {}),
+    ...toolExecutionIdentity(input.context),
     id: input.reconciliationRecordId,
-    taskId: input.context.taskId,
-    turnId: input.context.turnId,
-    requestId: input.context.requestId,
     name,
     arguments: sanitizeReceiptValue(input.originalArguments) as Record<string, any>,
     result: '',
@@ -478,9 +476,6 @@ export async function executeAttachedExternalCommitReconciliation(
   }
 
   record.envelope = buildToolExecutionEnvelope(record, {
-    taskId: input.context.taskId,
-    turnId: input.context.turnId,
-    requestId: input.context.requestId,
     startedAt,
     completedAt: new Date().toISOString(),
     durationMs: Math.max(0, Date.now() - startedMs),
@@ -605,9 +600,7 @@ export async function executeToolCall(
   const evidenceBuilder = (input.registry as any)?.buildEvidenceRecord;
   const record: ToolExecutionRecord = {
     id: input.context?.resolveToolIdempotencyKey ? resolvedIdempotencyKey : input.id,
-    taskId: input.context?.taskId,
-    turnId: input.context?.turnId,
-    requestId: input.context?.requestId,
+    ...toolExecutionIdentity(input.context),
     executionOrigin: input.executionOrigin,
     name: input.name,
     arguments: receiptArguments,
@@ -630,9 +623,6 @@ export async function executeToolCall(
   record.idempotencyKey = resolvedIdempotencyKey || toolRecordIdempotencyKey(record);
   const finalizeRecord = (): ToolExecutionRecord => {
     record.envelope = buildToolExecutionEnvelope(record, {
-      taskId: input.context?.taskId,
-      turnId: input.context?.turnId,
-      requestId: input.context?.requestId,
       startedAt,
       completedAt: new Date().toISOString(),
       durationMs: Math.max(0, Date.now() - startedMs),

@@ -2953,7 +2953,7 @@ async function processVoiceInput(
 
   const receiptObserver = createConversationReceiptObserver({
     userId: session.userId, conversationId: conversationTurn.conversation.id,
-    taskId: actionTaskExecution.state?.taskId, requestId, ...voiceScope,
+    taskId: actionTaskExecution.state?.taskId, requestId, turnRowId: actionTaskExecution.turnRowId, ...voiceScope,
   }, turnAuthorization.isCurrent);
   const desktopRelay = createDesktopRelay({
     io,
@@ -3059,6 +3059,7 @@ async function processVoiceInput(
     taskId: actionTaskExecution.state?.taskId,
     conversationId: conversationTurn.conversation.id,
     turnId: requestId,
+    turnRowId: actionTaskExecution.turnRowId,
     requestId,
     domain: voiceScope.domain,
     orgId: voiceScope.orgId,

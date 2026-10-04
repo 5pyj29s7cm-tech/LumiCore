@@ -9,6 +9,8 @@ interface ReceiptOwner {
   conversationId: string;
   taskId?: string;
   requestId: string;
+  turnRowId?: string;
+  externalMessageId?: string;
   domain?: string;
   orgId?: string;
 }
@@ -27,11 +29,15 @@ export function createConversationReceiptObserver(identity: ReceiptOwner, isAuth
     const turn = (db.conversationActionTurns || []).find((row: any) => row.requestId === owner.requestId
       && row.taskId === owner.taskId && row.userId === owner.userId && row.conversationId === owner.conversationId
       && (row.domain || 'personal') === owner.domain && (row.orgId || '') === owner.orgId);
-    if (!conversation || !task || !turn) return;
+    if (!conversation || !task || !turn
+      || (owner.turnRowId && owner.turnRowId !== turn.id)
+      || (record.turnRowId && record.turnRowId !== turn.id)
+      || (owner.externalMessageId && record.externalMessageId && owner.externalMessageId !== record.externalMessageId)) return;
     const records = sanitizeToolRecordsForPersistence([record]) as ToolExecutionRecord[];
     // This append-only path deliberately bypasses live task projection. Even an
     // on-time tool result is only one step, not proof the whole task is complete.
-    const appended = appendConversationActionReceipts(db, { task, records, turnId: owner.requestId, requestId: owner.requestId });
+    const appended = appendConversationActionReceipts(db, { task, records, turnId: owner.requestId, requestId: owner.requestId,
+      turnRowId: turn.id, externalMessageId: owner.externalMessageId });
     if (appended.length) writeDB(db);
     // Flush duplicate deliveries too: an earlier attempt may have staged the
     // row in memory but failed to persist it. Native ACKs must await durability.
@@ -43,6 +49,7 @@ export function createConversationReceiptObserver(identity: ReceiptOwner, isAuth
       await persist({
         id: event.correlationId, idempotencyKey: event.correlationId,
         taskId: owner.taskId, requestId: owner.requestId, turnId: owner.requestId,
+        turnRowId: owner.turnRowId, externalMessageId: owner.externalMessageId,
         name: event.name, arguments: event.arguments, result: event.result || '',
         error: event.error || 'outcome_unknown: Native substep returned after the enclosing tool ended; reconciliation is required.',
         // A physical substep is not the canonical result of its enclosing tool.

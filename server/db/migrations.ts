@@ -182,6 +182,9 @@ export function migrateSchema(database: sqlite3.Database): Promise<void> {
     database.run("ALTER TABLE conversations ADD COLUMN lastSummaryMessageCount INTEGER DEFAULT -1", onAlter);
     database.run("ALTER TABLE conversations ADD COLUMN actionContinuationState TEXT DEFAULT '{}'", onAlter);
     database.run("ALTER TABLE conversation_action_tasks ADD COLUMN context TEXT NOT NULL DEFAULT '{}'", onAlter);
+    // Add explicit identities without guessing ambiguous legacy turnId values.
+    database.run("ALTER TABLE conversation_action_receipts ADD COLUMN turnRowId TEXT NOT NULL DEFAULT ''", onAlter);
+    database.run("ALTER TABLE conversation_action_receipts ADD COLUMN externalMessageId TEXT NOT NULL DEFAULT ''", onAlter);
     // Preserve the immutable tool-selection provenance across backend restarts.
     // Never reconstruct this binding from requestId: one request may own both
     // a preflight route and the actual tool-planning route.

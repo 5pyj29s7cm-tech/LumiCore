@@ -200,7 +200,21 @@ export interface CapabilityManifestEntry {
   parameterNames: string[];
 }
 
-export interface ToolContext {
+/** Distinct server-owned identities; none may substitute for another. */
+export interface ToolExecutionIdentity {
+  /** Immutable semantic snapshot, not an action or task identity. */
+  resolutionId?: string;
+  taskId?: string;
+  requestId?: string;
+  /** Exact conversation_action_turns primary key, when durably admitted. */
+  turnRowId?: string;
+  /** Transport message identity, independent of the server request. */
+  externalMessageId?: string;
+  /** @deprecated Legacy compatibility; never infer requestId or turnRowId. */
+  turnId?: string;
+}
+
+export interface ToolContext extends ToolExecutionIdentity {
   getCurrentToolRecords?: () => ToolExecutionRecord[];
   industryWorkflowRequiredToolReceipts?: string[];
   industryWorkflowSourceInput?: string;
@@ -261,8 +275,6 @@ export interface ToolContext {
   /** Owning Lumi conversation/personality for durable work. */
   conversationAgentId?: string;
   personalityId?: string;
-  turnId?: string;
-  requestId?: string;
   /** Exact reasoning route inherited by a durable LumiCore task. */
   modelRouting?: {
     provider?: string;
@@ -313,8 +325,6 @@ export interface ToolContext {
    * manifest was visible to it.
    */
   currentTurnExecutionRequested?: boolean;
-  /** Immutable server semantic snapshot shared by planning, prompts and tools. */
-  resolutionId?: string;
   /** Exact durable continuation proof produced by the shared execution pipeline. */
   trustedActionContinuation?: boolean;
   /**
@@ -528,13 +538,8 @@ export interface NormalizedLLMResponse {
   };
 }
 
-export interface ToolExecutionRecord {
-  /** Server-owned semantic snapshot; never an action, message, or task identity. */
-  resolutionId?: string;
+export interface ToolExecutionRecord extends ToolExecutionIdentity {
   id?: string;
-  taskId?: string;
-  turnId?: string;
-  requestId?: string;
   /** Exact persisted model call whose output selected this tool invocation. */
   modelRoutingReceiptId?: string;
   /** Runtime-owned decision boundary that selected this exact invocation. */
@@ -597,8 +602,7 @@ export type ToolExecutionEnvelopeStatus =
   | 'target_mismatch';
 
 /** Canonical result projected from every legacy/new tool record. */
-export interface ToolExecutionEnvelope<T = unknown> {
-  resolutionId?: string;
+export interface ToolExecutionEnvelope<T = unknown> extends ToolExecutionIdentity {
   version: 1;
   status: ToolExecutionEnvelopeStatus;
   toolName: string;

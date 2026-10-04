@@ -1,3 +1,4 @@
+import { toolExecutionIdentity } from './execution_identity';
 import crypto from 'node:crypto';
 import { isConfirmationBlockedToolRecord } from './confirmation_block';
 import type { ToolExecutionEnvelope, ToolExecutionRecord } from './types';
@@ -123,6 +124,8 @@ export function buildToolExecutionEnvelope(
     taskId?: string;
     turnId?: string;
     requestId?: string;
+    turnRowId?: string;
+    externalMessageId?: string;
     startedAt?: string;
     completedAt?: string;
     durationMs?: number;
@@ -169,7 +172,7 @@ export function buildToolExecutionEnvelope(
     version: 1,
     status,
     toolName: record.name,
-    ...(record.resolutionId ? {resolutionId:record.resolutionId} : {}),
+    ...toolExecutionIdentity({ ...correlation, ...toolExecutionIdentity(record) }),
     taskId: String(record.taskId || correlation.taskId || ''),
     turnId: String(record.turnId || correlation.turnId || ''),
     requestId: String(record.requestId || correlation.requestId || ''),

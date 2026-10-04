@@ -1463,7 +1463,7 @@ export type RejectedConversationActionExecution = {
 };
 
 export type ConversationActionExecutionPreparation =
-  | PreparedConversationActionExecution
+  | (PreparedConversationActionExecution & { turnRowId?: string })
   | RejectedConversationActionExecution;
 
 function rejectedConversationActionExecution(
@@ -1817,7 +1817,7 @@ export function prepareConversationActionExecution(input: {
     }
     // The ledger may retain the previous task for status/history, but a plain
     // turn never receives that task id for plan/receipt binding.
-    return { state: null, kind: 'conversation' };
+    return { state: null, kind: 'conversation', turnRowId: persistedTurn?.id };
   }
   if (prepared.state !== conversation.actionContinuationState) {
     if (prepared.state) conversation.actionContinuationState = prepared.state;
@@ -1841,7 +1841,7 @@ export function prepareConversationActionExecution(input: {
     }
     writeDB(db);
   }
-  return prepared;
+  return { ...prepared, turnRowId: persistedTurn?.id };
 }
 
 export function persistConversationExecutionPlan(input: {

@@ -2,7 +2,8 @@ import { toolRecordSucceeded } from '../tools/receipt_payload';
 export { toolRecordSucceeded } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 import type { ToolPolicy } from '../personality/types';
-import type { ToolExecutionRecord } from '../tools/types';
+import type { ToolExecutionIdentity, ToolExecutionRecord } from '../tools/types';
+import { EXECUTION_IDENTITY_FIELDS, toolExecutionIdentity } from '../tools/execution_identity';
 import { isArtifactReaderRecord } from '../tools/artifact_evidence';
 import {
   buildActionEvidenceContract,
@@ -105,11 +106,8 @@ export interface ConversationTaskPolicySnapshot {
   maxIterations: number;
 }
 
-export interface ConversationTaskReceipt {
+export interface ConversationTaskReceipt extends ToolExecutionIdentity {
   id: string;
-  taskId?: string;
-  turnId?: string;
-  requestId?: string;
   /** Preserve the exact archive deduplication identity across task hydration. */
   idempotencyKey?: string;
   /** Preserve conflicting source fences instead of laundering them on hydration. */
@@ -296,11 +294,9 @@ export function normalizeConversationTaskReceipt(value: unknown): ConversationTa
   };
 }
 
-function receiptScope(value: Record<string, any>): {
-  taskId?: string; turnId?: string; requestId?: string; scopeConflict?: true;
-} {
-  const scope: { taskId?: string; turnId?: string; requestId?: string; scopeConflict?: true } = {};
-  for (const field of ['taskId', 'turnId', 'requestId'] as const) {
+function receiptScope(value: Record<string, any>): ToolExecutionIdentity & { scopeConflict?: true } {
+  const scope: ToolExecutionIdentity & { scopeConflict?: true } = {};
+  for (const field of EXECUTION_IDENTITY_FIELDS) {
     const values = [value[field], value.envelope?.[field]]
       .filter(candidate => typeof candidate === 'string' && candidate.trim())
       .map(candidate => candidate.trim());
@@ -537,9 +533,7 @@ export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []):
     if (!receipt) return null;
     return {
     id: receipt.id,
-    ...(receipt.taskId ? { taskId: receipt.taskId } : {}),
-    ...(receipt.turnId ? { turnId: receipt.turnId } : {}),
-    ...(receipt.requestId ? { requestId: receipt.requestId } : {}),
+    ...toolExecutionIdentity(receipt),
     ...(receipt.idempotencyKey ? { idempotencyKey: receipt.idempotencyKey } : {}),
     ...(receipt.scopeConflict ? { receiptScopeConflict: true } : {}),
     name: receipt.name,

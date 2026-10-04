@@ -98,12 +98,16 @@ describe.sequential('conversation action receipt restart provenance', () => {
     expect(await receiptColumns()).toEqual(expect.arrayContaining([
       'modelRoutingReceiptId',
       'executionOrigin',
+      'turnRowId',
+      'externalMessageId',
     ]));
     expect(readDB().conversationActionReceipts).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'legacy-receipt',
         modelRoutingReceiptId: '',
         executionOrigin: '',
+        turnRowId: '',
+        externalMessageId: '',
       }),
     ]));
   });
@@ -119,6 +123,8 @@ describe.sequential('conversation action receipt restart provenance', () => {
       conversationId: `conversation-${nonce}`,
       turnId: `turn-${nonce}`,
       requestId: `request-${nonce}`,
+      turnRowId: `action-turn-${nonce}`,
+      externalMessageId: `remote-message-${nonce}`,
       modelRoutingReceiptId: routingReceiptId,
       executionOrigin: 'model_selected',
       idempotencyKey: `idempotency-${nonce}`,
@@ -138,11 +144,15 @@ describe.sequential('conversation action receipt restart provenance', () => {
       expect.objectContaining({
         id: receiptId,
         modelRoutingReceiptId: routingReceiptId,
+        turnRowId: `action-turn-${nonce}`,
+        externalMessageId: `remote-message-${nonce}`,
         executionOrigin: 'model_selected',
       }),
     ]));
     await expect(persistedReceipt(receiptId)).resolves.toMatchObject({
       modelRoutingReceiptId: routingReceiptId,
+      turnRowId: `action-turn-${nonce}`,
+      externalMessageId: `remote-message-${nonce}`,
       executionOrigin: 'model_selected',
     });
   });

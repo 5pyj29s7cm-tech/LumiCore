@@ -202,6 +202,7 @@ export function createLumiMcpServer(llmGetters?: {
         const modelTurnState = createModelTurnState();
         const explicitMemory = !isWorkViewer && isExplicitMemoryRequest(message);
         let taskId: string | undefined;
+        let turnRowId: string | undefined;
         let receiptObserver: ReturnType<typeof createConversationReceiptObserver> | undefined;
         const controller = new AbortController();
         let pipeline: ReturnType<typeof buildLumiExecutionPipeline>;
@@ -270,7 +271,8 @@ export function createLumiMcpServer(llmGetters?: {
             domain: scope.domain,
             orgId: scope.orgId,
             toolPolicy: pipeline.authorizationPolicy,
-            requestId, conversationId, taskId, turnId: requestId,
+            requestId, conversationId, taskId, turnRowId, turnId: requestId,
+             resolutionId: pipeline.resolution.id,
             currentTurnExecutionRequested: pipeline.executionRequested,
             modelToolProjection: pipeline.modelToolProjection,
             onToolRecord: record => receiptObserver?.onToolRecord(record),
@@ -432,7 +434,8 @@ export function createLumiMcpServer(llmGetters?: {
             toolPolicy: pipeline.authorizationPolicy, forceTask: pipeline.executionRequested, followupIntent: pipeline.actionFollowupIntent });
           if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
           taskId = prepared.state?.taskId;
-          receiptObserver = createConversationReceiptObserver({ ...identity, taskId }, authorization.isCurrent);
+          turnRowId = prepared.turnRowId;
+          receiptObserver = createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent);
           await flushDBOrThrow();
           const stopWatch = authorization.watch(controller);
           const heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });

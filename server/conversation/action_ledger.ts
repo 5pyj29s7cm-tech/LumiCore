@@ -56,6 +56,8 @@ export interface ConversationActionReceiptRow {
   conversationId: string;
   turnId: string;
   requestId: string;
+  turnRowId?: string;
+  externalMessageId?: string;
   modelRoutingReceiptId?: string;
   executionOrigin?: ToolExecutionRecord['executionOrigin'];
   idempotencyKey: string;
@@ -1099,6 +1101,8 @@ export function appendConversationActionReceipts(
     records: ToolExecutionRecord[];
     turnId?: string;
     requestId?: string;
+    turnRowId?: string;
+    externalMessageId?: string;
     now?: string;
   },
 ): ConversationActionReceiptRow[] {
@@ -1112,8 +1116,20 @@ export function appendConversationActionReceipts(
       taskId: rawRecord.taskId || input.task.id,
       turnId: rawRecord.turnId || input.turnId,
       requestId: rawRecord.requestId || input.requestId,
+      turnRowId: rawRecord.turnRowId || input.turnRowId,
+      externalMessageId: rawRecord.externalMessageId || input.externalMessageId,
       idempotencyKey: rawRecord.idempotencyKey || toolRecordIdempotencyKey(rawRecord),
     };
+    // Bind only to the exact persisted row in this task's ownership scope.
+    // Legacy turnId values can be message/request/plan IDs and are never joined.
+    const turns = (db.conversationActionTurns || []).filter((turn: any) => (
+      record.taskId === input.task.id && turn.requestId === record.requestId && turn.taskId === input.task.id
+      && turn.userId === input.task.userId && turn.conversationId === input.task.conversationId
+      && (turn.domain || 'personal') === (input.task.domain || 'personal')
+      && (turn.orgId || '') === (input.task.orgId || '')
+    ));
+    if (record.turnRowId && (turns.length !== 1 || turns[0].id !== record.turnRowId)) return;
+    if (turns.length === 1) record.turnRowId = turns[0].id;
     const envelope = buildToolExecutionEnvelope(record, {
       taskId: input.task.id,
       turnId: input.turnId,
@@ -1149,6 +1165,8 @@ export function appendConversationActionReceipts(
       conversationId: input.task.conversationId,
       turnId: envelope.turnId,
       requestId: envelope.requestId,
+      ...(envelope.turnRowId ? { turnRowId: envelope.turnRowId } : {}),
+      ...(envelope.externalMessageId ? { externalMessageId: envelope.externalMessageId } : {}),
       ...(record.modelRoutingReceiptId
         ? { modelRoutingReceiptId: String(record.modelRoutingReceiptId).trim().slice(0, 180) }
         : {}),

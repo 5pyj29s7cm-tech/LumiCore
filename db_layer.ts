@@ -706,6 +706,8 @@ function createTables(): Promise<void> {
         conversationId TEXT NOT NULL,
         turnId TEXT DEFAULT '',
         requestId TEXT DEFAULT '',
+        turnRowId TEXT NOT NULL DEFAULT '',
+        externalMessageId TEXT NOT NULL DEFAULT '',
         modelRoutingReceiptId TEXT NOT NULL DEFAULT '',
         executionOrigin TEXT NOT NULL DEFAULT '',
         idempotencyKey TEXT NOT NULL,
@@ -2072,9 +2074,9 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
     },
     {
       name: 'conversation_action_receipts',
-      insertSQL: `INSERT INTO conversation_action_receipts (id, taskId, conversationId, turnId, requestId, modelRoutingReceiptId, executionOrigin, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      insertSQL: `INSERT INTO conversation_action_receipts (id, taskId, conversationId, turnId, requestId, turnRowId, externalMessageId, modelRoutingReceiptId, executionOrigin, idempotencyKey, toolName, targetIdentity, inputDigest, envelope, outcome, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       source: 'conversationActionReceipts',
-      *rows(items = memoryDB.conversationActionReceipts || []) { for (const r of items) { yield [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.modelRoutingReceiptId || '', r.executionOrigin || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]; } },
+      *rows(items = memoryDB.conversationActionReceipts || []) { for (const r of items) { yield [r.id, r.taskId, r.conversationId, r.turnId || '', r.requestId || '', r.turnRowId || '', r.externalMessageId || '', r.modelRoutingReceiptId || '', r.executionOrigin || '', r.idempotencyKey || '', r.toolName || '', r.targetIdentity || '', r.inputDigest || '', typeof r.envelope === 'string' ? r.envelope : JSON.stringify(r.envelope || {}), r.outcome || 'failed', r.createdAt]; } },
     },
     {
       name: 'model_routing_receipts',

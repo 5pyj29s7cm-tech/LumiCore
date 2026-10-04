@@ -3401,7 +3401,7 @@ export function registerChatHandler(
                 followupIntent: actionFollowupIntent,
                 forceTask: true,
               })
-            : { state: null, kind: 'conversation' as const };
+            : { state: null, kind: 'conversation' as const, turnRowId: undefined };
       if ('bindingFailure' in actionTaskExecution) {
         const staleText = actionTaskExecution.bindingFailure === 'busy'
           ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
@@ -3444,7 +3444,7 @@ export function registerChatHandler(
       requestTaskId = durableTaskId;
       receiptObserver = createConversationReceiptObserver({
         userId: uid, conversationId: conversation.id, taskId: durableTaskId,
-        requestId, domain: resolvedDomain, orgId: resolvedOrgId,
+        requestId, turnRowId: actionTaskExecution.turnRowId, domain: resolvedDomain, orgId: resolvedOrgId,
       }, turnAuthorization.isCurrent);
       if (structuredMediaRequest && actionTaskExecution.state?.taskId) {
         const structuredMediaRecoveryCall = buildStructuredMediaDeterministicToolRecoveryCall(
@@ -3618,6 +3618,7 @@ export function registerChatHandler(
             taskId: durableTaskId,
             conversationId: conversation.id,
             turnId: requestId,
+            turnRowId: actionTaskExecution.turnRowId,
             requestId,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
@@ -3869,6 +3870,7 @@ export function registerChatHandler(
             taskId: durableTaskId,
             conversationId: conversation.id,
             turnId: requestId,
+            turnRowId: actionTaskExecution.turnRowId,
             requestId,
             domain: resolvedDomain,
             orgId: resolvedOrgId,
@@ -3986,6 +3988,7 @@ export function registerChatHandler(
               taskId: durableTaskId,
               conversationId: conversation.id,
               turnId: requestId,
+              turnRowId: actionTaskExecution.turnRowId,
               requestId,
               domain: resolvedDomain,
               orgId: resolvedOrgId,
@@ -4398,6 +4401,7 @@ export function registerChatHandler(
               taskId: durableTaskId,
               conversationId: conversation.id,
               turnId: requestId,
+              turnRowId: actionTaskExecution.turnRowId,
               requestId,
               domain: resolvedDomain,
               orgId: resolvedOrgId,
@@ -4593,6 +4597,7 @@ export function registerChatHandler(
               taskId: durableTaskId,
               conversationId: conversation.id,
               turnId: requestId,
+              turnRowId: actionTaskExecution.turnRowId,
               requestId,
               domain: resolvedDomain,
               orgId: resolvedOrgId,

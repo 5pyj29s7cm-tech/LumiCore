@@ -11,19 +11,24 @@ export function projectConversationReceiptHistory<T extends {
   const owners = new Set(messages.filter(message => message.role === 'assistant').map(ownerKey));
   if (!owners.size) return messages;
   const tasks = new Map<string, any>((db.conversationActionTasks || []).map((task: any) => [task.id, task]));
-  const turns = new Set((db.conversationActionTurns || []).map((turn: any) => JSON.stringify([ownerKey(turn), turn.taskId])));
+  const turns = new Map<string, any>((db.conversationActionTurns || []).map((turn: any) => [JSON.stringify([ownerKey(turn), turn.taskId]), turn]));
   const archived = new Map<string, ToolExecutionRecord[]>();
   for (const row of db.conversationActionReceipts || []) {
     const task = tasks.get(row.taskId);
     if (!task || row.conversationId !== task.conversationId || !row.requestId) continue;
     const key = ownerKey({ ...task, requestId: row.requestId });
-    if (!owners.has(key) || !turns.has(JSON.stringify([key, task.id]))) continue;
-    const inspection = inspectPersistedToolExecutionReceipt(row, { rowTaskId: task.id, envelopeTaskId: task.id, requestId: row.requestId });
+    const turn = turns.get(JSON.stringify([key, task.id]));
+    if (!owners.has(key) || !turn) continue;
+    const inspection = inspectPersistedToolExecutionReceipt(row, { rowTaskId: task.id, envelopeTaskId: task.id,
+      requestId: row.requestId, ...(row.turnRowId ? { turnRowId: turn.id } : {}) });
     if (!inspection.valid) continue;
     const envelope = inspection.envelope!;
     const record: ToolExecutionRecord = {
       id: row.id, idempotencyKey: row.idempotencyKey, name: row.toolName,
       taskId: task.id, requestId: row.requestId, turnId: row.turnId,
+      ...(envelope.turnRowId ? { turnRowId: envelope.turnRowId } : {}),
+      ...(envelope.externalMessageId ? { externalMessageId: envelope.externalMessageId } : {}),
+      ...(envelope.resolutionId ? { resolutionId: envelope.resolutionId } : {}),
       arguments: row.targetIdentity ? { target: row.targetIdentity } : {},
       result: typeof envelope.result === 'string' ? envelope.result : JSON.stringify(envelope.result ?? ''),
       error: envelope.error, envelope,

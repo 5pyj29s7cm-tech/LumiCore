@@ -1368,7 +1368,7 @@ export function registerTaskHandler(
     ];
     receiptObserver = createConversationReceiptObserver({
       userId: uid, conversationId: convForHistory.id, taskId: actionTaskExecution.state?.taskId,
-      requestId, domain: taskScope.domain, orgId: taskScope.orgId,
+      requestId, turnRowId: actionTaskExecution.turnRowId, domain: taskScope.domain, orgId: taskScope.orgId,
     }, authority.isAuthorized);
     const desktopRelay = createDesktopRelay({
       io,
@@ -1561,6 +1561,7 @@ export function registerTaskHandler(
           taskId: actionTaskExecution.state?.taskId,
           conversationId: convForHistory.id,
           turnId: requestId,
+          turnRowId: actionTaskExecution.turnRowId,
           requestId,
           domain: taskScope.domain,
           orgId: taskScope.orgId,
@@ -1793,7 +1794,7 @@ export function registerTaskHandler(
             }
           }
         },
-        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => authority.isCancelled(), llmGetters, source: 'task', supervisedExternalCommits: true },
+        { ...toolSecurityContext, ...pipelineToolContext, userId: uid, taskId: actionTaskExecution.state?.taskId, taskRevision: actionTaskExecution.state?.revision, conversationId: convForHistory.id, turnId: requestId, turnRowId: actionTaskExecution.turnRowId, requestId, domain: taskScope.domain, orgId: taskScope.orgId, desktopRelay, requestConfirmation, actionIntent: data.text, routedTaskText, ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}), toolPolicy: modelToolPolicy, modelToolProjection, desktopExecutionTracker, executionSignal: taskLease.signal, isCancelled: () => authority.isCancelled(), llmGetters, source: 'task', supervisedExternalCommits: true },
         llmGetters.getOllama,
         llmGetters.getLmStudio,
         llmGetters.getArk,
@@ -1948,6 +1949,7 @@ export function registerTaskHandler(
               taskId: actionTaskExecution.state?.taskId,
               conversationId: convForHistory.id,
               turnId: requestId,
+              turnRowId: actionTaskExecution.turnRowId,
               requestId,
               domain: taskScope.domain,
               orgId: taskScope.orgId,
