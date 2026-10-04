@@ -57,9 +57,12 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     const owned = seed(uid, 'banana personal fixture');
     seed(`${uid}-other`, 'banana other-user fixture');
     seed(uid, 'banana work fixture', 1, { domain: 'work', orgId: 'synthetic-org' });
-    seed(uid, 'banana avatar fixture', 1, { agentId: 'memory_avatar_synthetic' });
+    const avatar = seed(uid, 'banana avatar fixture', 1, { agentId: 'memory_avatar_synthetic' });
     expect((await recall(uid)).map(item => item.id)).toEqual([owned.id]);
     expect((await request(`${uid}-other`, owned.id, 'DELETE')).status).toBe(404);
+    expect((await request(uid, avatar.id, 'PUT', { content: 'Cannot edit frozen lane' })).status).toBe(404);
+    expect((await request(uid, avatar.id, 'DELETE')).status).toBe(404);
+    expect(readDB().memories.some(row => row.id === avatar.id)).toBe(true);
   });
 
   it('reindexes an edited memory for the new topic after its durable REST update', async () => {
@@ -128,6 +131,7 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
 
   it('uses keyword fallback while the new embedding is pending and rejects a late old embedding', async () => {
     const uid = 'index-late'; configure(uid);
+    const current = () => readDB().memories.find(item => item.userId === uid);
     let oldDone!: (value: any) => void;
     let newDone!: (value: any) => void;
     vi.mocked(generateConfiguredEmbedding)
@@ -136,13 +140,15 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     const memory = addMemory({ userId: uid, type: 'fact', content: 'banana old pending', keywords: ['banana'], confidence: 1, sourceInteractionId: 'synthetic-index-fixture' }, { deduplicate: false });
     expect(oldDone).toBeDefined();
     expect((await request(uid, memory.id, 'PUT', { content: 'football new pending', keywords: ['football'] })).status).toBe(200);
-    expect(memory.embedding).toBeUndefined();
+    expect(current()?.embedding).toBeUndefined();
+    expect(memory.content).toBe('banana old pending');
+    expect(current()?.content).toBe('football new pending');
     expect((await recall(uid, 'football')).map(item => item.id)).toEqual([memory.id]);
     newDone({ provider: 'openai', model: 'synthetic-embedding', vector: [0, 1] });
-    await vi.waitFor(() => expect(memory.embedding).toEqual([0, 1]));
+    await vi.waitFor(() => expect(current()?.embedding).toEqual([0, 1]));
     oldDone({ provider: 'openai', model: 'synthetic-embedding', vector: [1, 0] });
     await Promise.resolve(); await Promise.resolve();
-    expect(memory.embedding).toEqual([0, 1]);
+    expect(current()?.embedding).toEqual([0, 1]);
   });
 
   it('never reattaches a pending embedding after its memory is deleted', async () => {
@@ -176,7 +182,11 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     expect((await request(uid, memory.id, 'PUT', { content: 'football backfill new', keywords: ['football'] })).status).toBe(200);
     done({ provider: 'openai', model: 'synthetic-embedding', vector: [1, 0] });
     expect(await pending).toBe(0);
-    expect(memory.embedding).toEqual([0, 1]);
+    const current = readDB().memories.find(item => item.id === memory.id);
+    expect(current?.embedding).toEqual([0, 1]);
+    expect(current?.content).toBe('football backfill new');
+    await flushDBOrThrow();
+    expect((await querySQL<{ content: string }>('SELECT content FROM memories WHERE id=?', [memory.id]))[0].content).toBe('football backfill new');
   });
 
   it('advances across bounded backfill batches when the gateway returns a canonical alias', async () => {

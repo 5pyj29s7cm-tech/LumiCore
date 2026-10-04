@@ -1,5 +1,5 @@
 import { Memory, MemoryTree } from './types';
-import { readDB, writeDB } from '../../db_layer';
+import { listMemoryRows, updateMemoryRow, insertMemoryRow, type MemoryOwnerScope } from './repository';
 
 /** Build a nested tree from a flat list of memories */
 export function buildTree(memories: Memory[]): MemoryTree[] {
@@ -38,54 +38,14 @@ export function buildTree(memories: Memory[]): MemoryTree[] {
   return roots;
 }
 
-/** Move a node to a new parent. Validates no circular references. */
-export function moveNode(
-  id: string,
-  newParentId: string | null,
-  scope?: { userId?: string; domain?: string; orgId?: string },
-): boolean {
-  const db = readDB();
-  if (!db.memories) return false;
-
-  const memory = db.memories.find((m: Memory) => m.id === id);
-  if (!memory) return false;
-  if (scope?.userId && memory.userId !== scope.userId) return false;
-  if (scope?.domain && (memory.domain || 'personal') !== scope.domain) return false;
-  if (scope?.orgId !== undefined && (memory.orgId || '') !== scope.orgId) return false;
-
-  // Prevent circular: if newParentId is set, ensure it's not a descendant of id
-  if (newParentId) {
-    const descendants = getAllDescendantIds(id, db.memories);
-    if (descendants.has(newParentId)) return false;
-    // Parent must exist
-    const parent = db.memories.find((m: Memory) => m.id === newParentId);
-    if (!parent) return false;
-    if (parent.userId !== memory.userId) return false;
-    if ((parent.domain || 'personal') !== (memory.domain || 'personal')) return false;
-    if ((parent.orgId || '') !== (memory.orgId || '')) return false;
-  }
-
-  memory.parentId = newParentId;
-  memory.updatedAt = new Date().toISOString();
-  writeDB(db);
-  return true;
-}
-
-/** Get all descendant IDs (children, grandchildren, etc.) */
-export function getAllDescendantIds(id: string, memories?: Memory[]): Set<string> {
-  const store = memories || readDB().memories || [];
-  const result = new Set<string>();
-  const queue = [id];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const m of store) {
-      if (m.parentId === current && !result.has(m.id)) {
-        result.add(m.id);
-        queue.push(m.id);
-      }
-    }
-  }
-  return result;
+/** Moves share the same parent/owner/cycle validation as ordinary memory edits. */
+export function moveNode(id: string, newParentId: string | null, scope: MemoryOwnerScope): boolean {
+  try {
+    return Boolean(updateMemoryRow(scope, id, memory => {
+      memory.parentId = newParentId;
+      memory.updatedAt = new Date().toISOString();
+    }));
+  } catch (error) { if (error instanceof RangeError) return false; throw error; }
 }
 
 /** Find or create a branch node with the given title */
@@ -94,23 +54,15 @@ export function ensureBranch(
   title: string,
   agentId: string = '',
   parentId: string | null = null,
-  scope: { domain?: string; orgId?: string } = {},
+  scope: { domain?: 'personal' | 'work'; orgId?: string } = {},
 ): Memory {
-  const db = readDB();
-  if (!db.memories) db.memories = [];
   const domain = scope.domain || 'personal';
   const orgId = scope.orgId || '';
+  const owner = { userId, domain, orgId, agentId };
 
   // Check if branch already exists
-  const existing = db.memories.find(
-    (m: Memory) =>
-      m.userId === userId &&
-      m.nodeType === 'branch' &&
-      m.content === title &&
-      m.parentId === parentId &&
-      (m.domain || 'personal') === domain &&
-      (m.orgId || '') === orgId,
-  );
+  const existing = listMemoryRows(owner).find(memory => memory.nodeType === 'branch'
+    && memory.content === title && memory.parentId === parentId);
   if (existing) return existing;
 
   const id = 'mem_' + crypto.randomUUID();
@@ -136,7 +88,5 @@ export function ensureBranch(
     domain,
     orgId,
   };
-  db.memories.push(branch);
-  writeDB(db);
-  return branch;
+  return insertMemoryRow(owner, branch);
 }

@@ -177,3 +177,8 @@ export interface ExtractedMemory {
   keywords: string[];
   confidence: number;
 }
+
+/** Memory Avatar memories are kept in a frozen, private lane. */
+export function isMemoryAvatarAgentId(agentId: unknown): boolean {
+  return String(agentId || '').trim().startsWith('memory_avatar_');
+}

@@ -16,7 +16,7 @@ export interface ProviderGetters {
 }
 
 type Getter = () => any;
-type ProviderArguments = readonly [Getter, Getter, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?];
+export type ProviderArguments = readonly [Getter, Getter, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?, Getter?];
 
 /** Preserve the public provider call order without evaluating clients; callers retain their existing missing-client behavior. */
 export function providerGetterArguments(getters: ProviderGetters, fallback?: 'optional'): ProviderArguments;

@@ -2,7 +2,8 @@ import { type ProviderGetters as SharedProviderGetters, providerGetterArguments 
 import { Router } from "express";
 import { serializedScopeRoute, sendDurableMutation } from "./durable_mutation";
 import { readScopedDeletionReceipt, recordScopedDeletionReceipt } from "../persistence/durable_scope_mutation";
-import { readDB, writeDB } from "../../db_layer";
+import { getMemoryRow, listReminderRows, updateReminderRow, removeReminderRow } from "../memory/repository";
+import { organizeMemories, MemoryOrganizationPlanError } from "../memory/auto_organize";
 import {
   queryMemories,
   addMemory,
@@ -10,21 +11,19 @@ import {
   updateMemoryLifecycle,
   resolveMemoryConflict,
   addReminder,
-  fireReminder,
   runBehavioralAnalysis,
   broadcastMemoryChange,
   getUnconsolidatedEpisodic,
 } from "../memory";
-import { buildTree, moveNode, ensureBranch } from "../memory/tree";
+import { buildTree, moveNode } from "../memory/tree";
 import { consolidateEpisodic, selfReflect, ConsolidationContext } from "../memory/consolidator";
 import { buildNarrativeChain } from "../memory/narrative";
 import { makeLLMCall } from "../llm/providers";
 import { getMemoryFirewallPolicy } from "../memory/firewall";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { requireAuth, resolveDomain } from "../middleware/auth";
-import { refreshMemoryEmbedding, backfillEmbeddings } from '../memory/store';
+import { updateScopedMemory, backfillEmbeddings } from '../memory/store';
 import { requireAdmin, requireLocalRequest } from '../middleware/auth';
-import { memoryEmbeddingInputHash } from '../memory/embedding_identity';
 
 type MemoryScope = { domain: 'personal' | 'work'; orgId: string };
 
@@ -113,32 +112,12 @@ export function mountMemoryRoutes(
       const { content, keywords, confidence, type, parentId, nodeType } = req.body;
       const scope = getMemoryScope(req);
 
-      const all = readDB().memories || [];
-      const idx = all.findIndex((m: any) => (
-        m.id === id
-        && m.userId === decoded.uid
-        && String(m.domain || 'personal') === scope.domain
-        && String(m.orgId || '') === scope.orgId
-      ));
-      if (idx === -1) return res.status(404).json({ error: "Memory not found" });
-
-      const existing = all[idx];
-      const previousInput = memoryEmbeddingInputHash(existing);
-      if (content !== undefined) existing.content = content;
-      if (keywords !== undefined) existing.keywords = keywords;
-      if (confidence !== undefined) existing.confidence = confidence;
-      if (type !== undefined) existing.type = type;
-      if (parentId !== undefined) existing.parentId = parentId;
-      if (nodeType !== undefined) existing.nodeType = nodeType;
-      existing.updatedAt = new Date().toISOString();
-      if (memoryEmbeddingInputHash(existing) !== previousInput) refreshMemoryEmbedding(existing);
-
-      const db = readDB();
-      db.memories = all;
-      writeDB(db);
+      const existing = updateScopedMemory({ userId: decoded.uid, ...scope }, id,
+        { content, keywords, confidence, type, parentId, nodeType });
+      if (!existing) return res.status(404).json({ error: "Memory not found" });
       return sendDurableMutation(req, res, existing, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', existing.id));
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(e instanceof RangeError ? 400 : 500).json({ error: e.message });
     }
   }));
 
@@ -153,16 +132,9 @@ export function mountMemoryRoutes(
         return sendDurableMutation(req, res, previousDeletion, () => broadcastMemoryChange(ownerScope, 'deleted', id));
       }
 
-      const all = readDB().memories || [];
-      const idx = all.findIndex((m: any) => (
-        m.id === id
-        && m.userId === decoded.uid
-        && String(m.domain || 'personal') === scope.domain
-        && String(m.orgId || '') === scope.orgId
-      ));
-      if (idx === -1) return res.status(404).json({ error: "Memory not found" });
-
-      const memoryId = all[idx].id;
+      const memory = getMemoryRow(ownerScope, id);
+      if (!memory) return res.status(404).json({ error: "Memory not found" });
+      const memoryId = memory.id;
       removeMemory(memoryId);
       recordScopedDeletionReceipt(ownerScope, 'memory', memoryId, { success: true });
       return sendDurableMutation(req, res, { success: true }, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'deleted', memoryId));
@@ -187,12 +159,7 @@ export function mountMemoryRoutes(
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
-      const db = readDB();
-      const reminders = (db.reminders || []).filter((r: any) =>
-        r.userId === decoded.uid &&
-        (r.domain || 'personal') === scope.domain &&
-        (r.orgId || '') === scope.orgId
-      );
+      const reminders = listReminderRows({ userId: decoded.uid, ...scope });
       res.json(reminders);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -225,29 +192,16 @@ export function mountMemoryRoutes(
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
-      const db = readDB();
-      const reminders = db.reminders || [];
-      const reminder = reminders.find((r: any) =>
-        r.id === req.params.id &&
-        r.userId === decoded.uid &&
-        (r.domain || 'personal') === scope.domain &&
-        (r.orgId || '') === scope.orgId
-      );
-      if (!reminder) return res.status(404).json({ error: "Reminder not found" });
-
       const { content, dueAt, status } = req.body || {};
-      if (content !== undefined) reminder.content = String(content).trim();
-      if (dueAt !== undefined) reminder.dueAt = dueAt || null;
-      if (status === "fired" && reminder.status !== "fired") {
-        fireReminder(reminder.id);
-        return await sendDurableMutation(req, res, { ...reminder, status: "fired", firedAt: new Date().toISOString() });
-      }
-      if (status === "pending") {
-        reminder.status = "pending";
-        reminder.firedAt = null;
-      }
-      db.reminders = reminders;
-      writeDB(db);
+      const reminder = updateReminderRow({ userId: decoded.uid, ...scope }, req.params.id, draft => {
+        if (content !== undefined) draft.content = String(content).trim();
+        if (dueAt !== undefined) draft.dueAt = dueAt || null;
+        if (status === "fired" && draft.status !== "fired") {
+          draft.status = "fired";
+          draft.firedAt = new Date().toISOString();
+        } else if (status === "pending") { draft.status = "pending"; draft.firedAt = null; }
+      });
+      if (!reminder) return res.status(404).json({ error: "Reminder not found" });
       return await sendDurableMutation(req, res, reminder);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -258,18 +212,9 @@ export function mountMemoryRoutes(
     try {
       const decoded = req.user!;
       const scope = getMemoryScope(req);
-      const db = readDB();
-      const reminders = db.reminders || [];
-      const idx = reminders.findIndex((r: any) =>
-        r.id === req.params.id &&
-        r.userId === decoded.uid &&
-        (r.domain || 'personal') === scope.domain &&
-        (r.orgId || '') === scope.orgId
-      );
-      if (idx === -1) return res.status(404).json({ error: "Reminder not found" });
-      reminders.splice(idx, 1);
-      db.reminders = reminders;
-      writeDB(db);
+      if (!removeReminderRow({ userId: decoded.uid, ...scope }, req.params.id)) {
+        return res.status(404).json({ error: "Reminder not found" });
+      }
       return await sendDurableMutation(req, res, { success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -430,108 +375,41 @@ export function mountMemoryRoutes(
       const decoded = req.user!;
       const { parentId } = req.body;
       const scope = getMemoryScope(req);
-      const db = readDB();
-      const mem = (db.memories || []).find((m: any) =>
-        m.id === req.params.id &&
-        m.userId === decoded.uid &&
-        (m.domain || 'personal') === scope.domain &&
-        (m.orgId || '') === scope.orgId
-      );
+      const owner = { userId: decoded.uid, ...scope };
+      const mem = getMemoryRow(owner, req.params.id);
       if (!mem) return res.status(404).json({ error: "Memory not found" });
       const ok = moveNode(req.params.id, parentId ?? null, { userId: decoded.uid, domain: scope.domain, orgId: scope.orgId });
       if (!ok) return res.status(400).json({ error: "Cannot move: circular reference or parent not found" });
-      return sendDurableMutation(req, res, { success: true, memory: mem }, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', mem.id));
+      return sendDurableMutation(req, res, { success: true, memory: getMemoryRow(owner, mem.id) }, () => broadcastMemoryChange({ userId: decoded.uid, ...scope }, 'updated', mem.id));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   }));
 
-  // LLM auto-organize — group unorganized leaf memories into topic branches
   router.post("/memory/auto-organize", requireAuth, serializedScopeRoute("memory", async (req, res) => {
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', onClose);
     try {
-      const decoded = req.user!;
-      const userId = decoded.uid;
-      const scope = getMemoryScope(req);
-      const db = readDB();
-      const allMemories: any[] = db.memories || [];
-
-      // Find unorganized leaf memories (no parent, not branches)
-      const orphans = allMemories.filter(
-        (m: any) =>
-          m.userId === userId &&
-          m.nodeType !== 'branch' &&
-          !m.parentId &&
-          (m.domain || 'personal') === scope.domain &&
-          (m.orgId || '') === scope.orgId,
-      );
-
-      if (orphans.length < 3) {
-        return res.json({ success: false, reason: 'Need at least 3 unorganized memories', count: orphans.length });
+      const scope = { userId: req.user!.uid, ...getMemoryScope(req) };
+      const result = await organizeMemories(scope, async (prompt, signal) => {
+        const reply = await makeLLMCall([{ role: 'user', content: prompt }], [],
+          { ...getUserPreferredLLMConfig(scope.userId, scope), signal }, ...providerGetterArguments(llmGetters));
+        let authorized = false;
+        requireAuth(req, res, () => { authorized = true; });
+        if (!authorized) controller.abort(new DOMException('Memory request authorization revoked', 'AbortError'));
+        signal.throwIfAborted();
+        return reply.text || '';
+      }, controller.signal);
+      if (result.considered < 3) return res.json({ success: false, reason: 'Need at least 3 unorganized memories', count: result.considered });
+      return await sendDurableMutation(req, res, { success: true, branchesCreated: result.branches, memoriesAssigned: result.assigned },
+        () => broadcastMemoryChange(scope, 'updated', 'auto-organize'));
+    } catch (error: any) {
+      if (!controller.signal.aborted && !res.headersSent) {
+        if (error instanceof MemoryOrganizationPlanError) res.json({ success: false, reason: error.message });
+        else res.status(500).json({ error: error.message });
       }
-
-      const tree = buildTree(allMemories.filter((m: any) =>
-        m.userId === userId &&
-        (m.domain || 'personal') === scope.domain &&
-        (m.orgId || '') === scope.orgId,
-      ));
-      const treeSummary = tree.map(t => `- ${t.node.content} [${t.node.nodeType}] (${t.children.length} children)`).join('\n');
-
-      const prompt = `You are organizing a memory tree. Below is the current tree structure and a list of unorganized memories.
-
-CURRENT TREE:
-${treeSummary || '(empty)'}
-
-UNORGANIZED MEMORIES:
-${orphans.map((m: any) => `- [${m.id}] ${m.content}`).join('\n')}
-
-Group these unorganized memories into 3-8 topic branches. For each memory, decide which topic it belongs to.
-Return JSON:
-{
-  "branches": [
-    {
-      "title": "Topic name (short, 2-4 words)",
-      "memoryIds": ["mem_xxx", "mem_yyy"]
-    }
-  ]
-}
-
-Rules:
-- Every unorganized memory MUST be assigned to exactly one branch
-- Branch titles should be meaningful topic names
-- Create as few branches as necessary (merge similar topics)
-- Return ONLY valid JSON, no markdown`;
-
-      const llmResult = await makeLLMCall(
-        [{ role: 'user', content: prompt }],
-        [],
-        getUserPreferredLLMConfig(userId, { domain: scope.domain, orgId: scope.orgId }),
-        ...providerGetterArguments(llmGetters),
-      );
-
-      let plan: { branches: { title: string; memoryIds: string[] }[] };
-      try {
-        const json = (llmResult.text || '').replace(/```json|```/g, '').trim();
-        plan = JSON.parse(json);
-      } catch {
-        return res.json({ success: false, reason: 'LLM returned invalid JSON' });
-      }
-
-      let branchCount = 0;
-      let assignedCount = 0;
-      for (const branch of plan.branches) {
-        if (!branch.title || !Array.isArray(branch.memoryIds)) continue;
-        const branchNode = ensureBranch(userId, branch.title, '', null, { domain: scope.domain, orgId: scope.orgId });
-        branchCount++;
-        for (const memId of branch.memoryIds) {
-          const ok = moveNode(memId, branchNode.id, { userId, domain: scope.domain, orgId: scope.orgId });
-          if (ok) assignedCount++;
-        }
-      }
-
-      return sendDurableMutation(req, res, { success: true, branchesCreated: branchCount, memoriesAssigned: assignedCount }, () => broadcastMemoryChange({ userId, ...scope }, 'updated', 'auto-organize'));
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
+    } finally { res.off('close', onClose); }
   }));
 
   // Toggle core identity protection

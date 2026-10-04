@@ -1,3 +1,4 @@
+import { type ProviderArguments } from "./provider_getters";
 import { ParsedToolCall, NormalizedLLMResponse } from '../tools/types';
 import { rememberFailedModelCandidates, type ModelTurnState } from './model_turn_state';
 import { withCloudResilience } from '../cloud/resilience';
@@ -494,20 +495,8 @@ function pinnedFailoverDispatchPreference(config: LLMCallConfig) {
   };
 }
 
-function autoDispatchGetters(
-  getDeepSeek: () => any,
-  getGemini: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
-) {
+function autoDispatchGetters(...getters: ProviderArguments) {
+  const [getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay] = getters;
   return {
     getDeepSeek,
     getGemini,
@@ -1233,22 +1222,83 @@ function resolvedSelectionMode(config: LLMCallConfig): UserLLMSelectionMode {
   return 'pinned';
 }
 
-export async function makeLLMCall(
+async function prepareCompatibleModelRequest(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
   config: LLMCallConfig,
-  getDeepSeek: () => any,
-  getGemini: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
+  maxTokens: number | undefined,
+  getters: ProviderArguments,
+  extensionProvider: boolean,
+  streaming: boolean,
+) {
+  const [getDeepSeek, , getOpenAI, , getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay] = getters;
+  const supervisedLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
+  const isLocal = supervisedLocal || (extensionProvider && isRegisteredProviderLocal(config.provider, config.userId));
+  if (supervisedLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
+  if (extensionProvider) {
+    assertRegisteredProviderModel(config.provider, config.model, {
+      userId: config.userId,
+      needsVision: messagesNeedVision(messages),
+      needsTools: toolDeclarations.length > 0,
+      needsJson: config.responseFormat === 'json_object',
+      ...(streaming ? { needsStreaming: true } : {}),
+    });
+  }
+  const client = extensionProvider ? getRegisteredOpenAIClient(config.provider, config.userId)
+    : config.provider === 'deepseek' ? getDeepSeek()
+    : config.provider === 'openai' ? getOpenAI?.()
+    : config.provider === 'qwen' ? getQwen?.()
+    : config.provider === 'ark' ? getArk?.()
+    : config.provider === 'lmstudio' ? getLmStudio?.()
+    : config.provider === 'xiaomi' ? getXiaomi?.()
+    : config.provider === 'kimi' ? getKimi?.()
+    : config.provider === 'glm' ? getGlm?.()
+    : config.provider === 'relay' ? getRelay?.()
+    : getOllama?.();
+  if (!client) throw new Error(config.provider === 'openai' && !streaming
+    ? 'OpenAI not configured (OPENAI_API_KEY missing)' : `${config.provider} not configured`);
+
+  const fmt = config.provider === 'qwen'
+    ? formatQwenRequest
+    : config.provider === 'deepseek'
+      ? formatDeepSeekRequest
+      : formatOpenAIRequest;
+  const localRequest = isLocal
+    ? prepareLocalModelRequest({
+        messages,
+        toolDeclarations,
+        maxTokens,
+        compactToolDeclarations: true,
+        requiredToolNames: config.localRequiredToolNames,
+        contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
+      })
+    : null;
+  const params: any = fmt({
+    model: config.model,
+    messages: localRequest?.messages || messages,
+    toolDeclarations: localRequest?.toolDeclarations || toolDeclarations,
+    maxTokens: localRequest?.maxTokens || maxTokens,
+    responseFormat: config.responseFormat,
+    ...(isLocal ? {} : { userId: config.userId }),
+  });
+  if (config.provider === 'xiaomi' || (config.provider === 'openai' && isReasoningModel(config.model))) {
+    if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
+    delete params.max_tokens;
+  }
+  if (config.thinkingMode === 'disabled' && (config.provider === 'deepseek'
+    || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model)))) {
+    params.thinking = { type: 'disabled' };
+  }
+
+  return { client, supervisedLocal, localRequest, params };
+}
+
+async function callRoutedModel(
+  messages: NormalizedMessage[],
+  toolDeclarations: ToolDeclaration[],
+  config: LLMCallConfig,
+  getters: ProviderArguments,
+  stream?: { onChunk: StreamCallback },
 ): Promise<NormalizedLLMResponse> {
   const startedAt = Date.now();
   const selectionMode = resolvedSelectionMode(config);
@@ -1258,51 +1308,29 @@ export async function makeLLMCall(
   try {
     let result: NormalizedLLMResponse;
     if (selectionMode === 'auto' || selectionMode === 'ordered_fallback' || pinnedFailover) {
-      const { dispatchLLMCall } = await import('./dispatch');
+      const dispatch = await import('./dispatch');
       const dispatchConfig = selectionMode === 'auto'
         ? autoDispatchPreference({ ...config, selectionMode })
-        : pinnedFailover
-          ? pinnedFailover
-        : {
+        : pinnedFailover || {
             ...config,
             selectionMode,
             requestedProvider: config.provider,
             requestedModel: config.model,
             allowCloudFallback: config.allowCloudFallback !== false && !isStrictPrivacy(),
           };
-      result = await dispatchLLMCall(
-        messages,
-        toolDeclarations,
-        dispatchConfig,
-        autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
-      );
+      const clients = autoDispatchGetters(...getters);
+      result = stream
+        ? await dispatch.dispatchLLMCallStreaming(messages, toolDeclarations, dispatchConfig, stream.onChunk, clients)
+        : await dispatch.dispatchLLMCall(messages, toolDeclarations, dispatchConfig, clients);
     } else {
-      result = await makeLLMCallDirect(
-        messages,
-        toolDeclarations,
-        { ...config, selectionMode: 'pinned' },
-        getDeepSeek,
-        getGemini,
-        getOpenAI,
-        getAnthropic,
-        getQwen,
-        getOllama,
-        getLmStudio,
-        getArk,
-        getXiaomi,
-        getKimi,
-        getGlm,
-        getRelay,
-      );
+      const directConfig = { ...config, selectionMode: 'pinned' as const };
+      result = stream
+        ? await makeLLMCallStreamingDirect(messages, toolDeclarations, directConfig, stream.onChunk, ...getters)
+        : await makeLLMCallDirect(messages, toolDeclarations, directConfig, ...getters);
     }
-    const outboundMessagesEvidence = providerOutboundEvidenceFrom(result);
     const trace = result.routing || directRoutingTrace(config, 'succeeded');
     const routingReceiptId = persistRoutingTrace(
-      config,
-      trace,
-      'succeeded',
-      startedAt,
-      outboundMessagesEvidence,
+      config, trace, 'succeeded', startedAt, providerOutboundEvidenceFrom(result),
     );
     return {
       ...withoutPrivateProviderOutboundEvidence(result),
@@ -1312,34 +1340,27 @@ export async function makeLLMCall(
   } catch (error) {
     const trace = (error as any)?.routing as ModelRoutingTrace | undefined
       || directRoutingTrace(config, 'failed', error);
-    persistRoutingTrace(
-      config,
-      trace,
-      'failed',
-      startedAt,
-      providerOutboundEvidenceFrom(error),
-    );
+    persistRoutingTrace(config, trace, 'failed', startedAt, providerOutboundEvidenceFrom(error));
     throw error;
   }
+}
+
+export function makeLLMCall(
+  messages: NormalizedMessage[],
+  toolDeclarations: ToolDeclaration[],
+  config: LLMCallConfig,
+  ...getters: ProviderArguments
+): Promise<NormalizedLLMResponse> {
+  return callRoutedModel(messages, toolDeclarations, config, getters);
 }
 
 export async function makeLLMCallDirect(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
   config: LLMCallConfig,
-  getDeepSeek: () => any,
-  getGemini: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
+  ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
+  const [, getGemini, , getAnthropic] = getters;
   const preparedContext = prepareModelRequestContext({
     messages,
     toolDeclarations,
@@ -1362,62 +1383,10 @@ export async function makeLLMCallDirect(
 
   // OpenAI-compatible path: DeepSeek, Qwen, Ark, Ollama, LM Studio
   const extensionProvider = extensionProviderForCall(config);
-  if (extensionProvider || config.provider === 'deepseek' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const supervisedLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
-    const isLocal = supervisedLocal || (extensionProvider && isRegisteredProviderLocal(config.provider, config.userId));
-    if (supervisedLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
-    if (extensionProvider) {
-      assertRegisteredProviderModel(config.provider, config.model, {
-        userId: config.userId,
-        needsVision: messagesNeedVision(messages),
-        needsTools: toolDeclarations.length > 0,
-        needsJson: config.responseFormat === 'json_object',
-      });
-    }
-    const client = extensionProvider ? getRegisteredOpenAIClient(config.provider, config.userId)
-      : config.provider === 'deepseek' ? getDeepSeek()
-      : config.provider === 'qwen' ? getQwen?.()
-      : config.provider === 'ark' ? getArk?.()
-      : config.provider === 'lmstudio' ? getLmStudio?.()
-      : config.provider === 'xiaomi' ? getXiaomi?.()
-      : config.provider === 'kimi' ? getKimi?.()
-      : config.provider === 'glm' ? getGlm?.()
-      : config.provider === 'relay' ? getRelay?.()
-      : getOllama?.();
-    if (!client) throw new Error(`${config.provider} not configured`);
-
-    const fmt = config.provider === 'qwen'
-      ? formatQwenRequest
-      : config.provider === 'deepseek'
-        ? formatDeepSeekRequest
-        : formatOpenAIRequest;
-    const localRequest = isLocal
-      ? prepareLocalModelRequest({
-          messages,
-          toolDeclarations,
-          maxTokens,
-          compactToolDeclarations: true,
-          requiredToolNames: config.localRequiredToolNames,
-          contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
-        })
-      : null;
-    const params: any = fmt({
-      model: config.model,
-      messages: localRequest?.messages || messages,
-      toolDeclarations: localRequest?.toolDeclarations || toolDeclarations,
-      maxTokens: localRequest?.maxTokens || maxTokens,
-      responseFormat: config.responseFormat,
-      ...(isLocal ? {} : { userId: config.userId }),
-    });
-    if (config.provider === 'xiaomi') {
-      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
-      delete params.max_tokens;
-    }
-    if (config.thinkingMode === 'disabled' && (config.provider === 'deepseek'
-      || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model)))) {
-      params.thinking = { type: 'disabled' };
-    }
-
+  if (extensionProvider || config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
+    const { client, supervisedLocal, localRequest, params } = await prepareCompatibleModelRequest(
+      messages, toolDeclarations, config, maxTokens, getters, extensionProvider, false,
+    );
     const outboundSourceSlot = providerSourceUserSlot(params.messages);
     const outboundEvidence = buildProviderOutboundMessagesEvidence({
       provider: config.provider,
@@ -1461,7 +1430,7 @@ export async function makeLLMCallDirect(
         if (extensionProvider) throw extensionProviderFailure(config.provider, error);
         throw error;
       }
-      return parseOpenAICompatibleResponse(response, toolDeclarations);
+      return config.provider === 'openai' ? parseOpenAIResponse(response) : parseOpenAICompatibleResponse(response, toolDeclarations);
     }, preparedContext, (localRequest?.toolDeclarations || toolDeclarations)
       .map(declaration => declaration.function.name));
   }
@@ -1498,56 +1467,13 @@ export async function makeLLMCallDirect(
         ),
         {
           provider: 'gemini',
+          maxRetries: 0,
           model: config.model,
           signal: config.signal,
           timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
         },
       );
       return parseGeminiResponse(result);
-    }, preparedContext);
-  }
-
-  if (config.provider === 'openai') {
-    const client = getOpenAI?.();
-    if (!client) throw new Error('OpenAI not configured (OPENAI_API_KEY missing)');
-
-    const params: any = formatOpenAIRequest({
-      model: config.model,
-      messages,
-      toolDeclarations,
-      maxTokens: maxTokens,
-      userId: config.userId,
-      responseFormat: config.responseFormat,
-    });
-    if (isReasoningModel(config.model)) {
-      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
-      delete params.max_tokens;
-    }
-
-    const outboundSourceSlot = providerSourceUserSlot(params.messages);
-    const outboundEvidence = buildProviderOutboundMessagesEvidence({
-      provider: config.provider,
-      model: config.model,
-      requestFormat: 'openai_compatible',
-      messages: params.messages,
-      toolDeclarations: params.tools || [],
-      ...outboundSourceSlot,
-    });
-
-    return executeWithProviderOutboundEvidence(outboundEvidence, async () => {
-      const response = await withCloudResilience(
-        operationSignal => client.chat.completions.create(
-          params,
-          operationSignal ? { signal: operationSignal } : undefined,
-        ),
-        {
-          provider: 'openai',
-          model: config.model,
-          signal: config.signal,
-          timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
-        },
-      );
-      return parseOpenAIResponse(response);
     }, preparedContext);
   }
 
@@ -1581,6 +1507,7 @@ export async function makeLLMCallDirect(
         ),
         {
           provider: 'anthropic',
+          maxRetries: 0,
           model: config.model,
           signal: config.signal,
           timeoutMs: resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
@@ -1760,97 +1687,14 @@ function isRelayNonRetryableStreamingError(error: unknown): boolean {
   return /(?:unauthori[sz]ed|forbidden|invalid\s+(?:api\s*)?key|quota|insufficient\s+balance|overdue|payment\s+required|access\s+denied)/i.test(values.join(' | '));
 }
 
-export async function makeLLMCallStreaming(
+export function makeLLMCallStreaming(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
   config: LLMCallConfig,
   onChunk: StreamCallback,
-  getDeepSeek: () => any,
-  getGemini: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
+  ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
-  const startedAt = Date.now();
-  const selectionMode = resolvedSelectionMode(config);
-  const pinnedFailover = selectionMode === 'pinned'
-    ? pinnedFailoverDispatchPreference(config)
-    : null;
-  try {
-    let result: NormalizedLLMResponse;
-    if (selectionMode === 'auto' || selectionMode === 'ordered_fallback' || pinnedFailover) {
-      const { dispatchLLMCallStreaming } = await import('./dispatch');
-      const dispatchConfig = selectionMode === 'auto'
-        ? autoDispatchPreference({ ...config, selectionMode })
-        : pinnedFailover
-          ? pinnedFailover
-        : {
-            ...config,
-            selectionMode,
-            requestedProvider: config.provider,
-            requestedModel: config.model,
-            allowCloudFallback: config.allowCloudFallback !== false && !isStrictPrivacy(),
-          };
-      result = await dispatchLLMCallStreaming(
-        messages,
-        toolDeclarations,
-        dispatchConfig,
-        onChunk,
-        autoDispatchGetters(getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen, getOllama, getLmStudio, getArk, getXiaomi, getKimi, getGlm, getRelay),
-      );
-    } else {
-      result = await makeLLMCallStreamingDirect(
-        messages,
-        toolDeclarations,
-        { ...config, selectionMode: 'pinned' },
-        onChunk,
-        getDeepSeek,
-        getGemini,
-        getOpenAI,
-        getAnthropic,
-        getQwen,
-        getOllama,
-        getLmStudio,
-        getArk,
-        getXiaomi,
-        getKimi,
-        getGlm,
-        getRelay,
-      );
-    }
-    const outboundMessagesEvidence = providerOutboundEvidenceFrom(result);
-    const trace = result.routing || directRoutingTrace(config, 'succeeded');
-    const routingReceiptId = persistRoutingTrace(
-      config,
-      trace,
-      'succeeded',
-      startedAt,
-      outboundMessagesEvidence,
-    );
-    return {
-      ...withoutPrivateProviderOutboundEvidence(result),
-      routing: trace,
-      ...(routingReceiptId ? { routingReceiptId } : {}),
-    };
-  } catch (error) {
-    const trace = (error as any)?.routing as ModelRoutingTrace | undefined
-      || directRoutingTrace(config, 'failed', error);
-    persistRoutingTrace(
-      config,
-      trace,
-      'failed',
-      startedAt,
-      providerOutboundEvidenceFrom(error),
-    );
-    throw error;
-  }
+  return callRoutedModel(messages, toolDeclarations, config, getters, { onChunk });
 }
 
 export async function makeLLMCallStreamingDirect(
@@ -1858,19 +1702,9 @@ export async function makeLLMCallStreamingDirect(
   toolDeclarations: ToolDeclaration[],
   config: LLMCallConfig,
   onChunk: StreamCallback,
-  getDeepSeek: () => any,
-  getGemini: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
+  ...getters: ProviderArguments
 ): Promise<NormalizedLLMResponse> {
+  const [, getGemini, , getAnthropic] = getters;
   const preparedContext = prepareModelRequestContext({
     messages,
     toolDeclarations,
@@ -1895,62 +1729,9 @@ export async function makeLLMCallStreamingDirect(
   // ── DeepSeek / OpenAI / Qwen / Ark / Ollama / LM Studio (OpenAI-compatible streaming) ──
   const extensionProvider = extensionProviderForCall(config);
   if (extensionProvider || config.provider === 'deepseek' || config.provider === 'openai' || config.provider === 'qwen' || config.provider === 'ark' || config.provider === 'ollama' || config.provider === 'lmstudio' || config.provider === 'xiaomi' || config.provider === 'kimi' || config.provider === 'glm' || config.provider === 'relay') {
-    const supervisedLocal = config.provider === 'ollama' || config.provider === 'lmstudio';
-    const isLocal = supervisedLocal || (extensionProvider && isRegisteredProviderLocal(config.provider, config.userId));
-    if (supervisedLocal) await ensureLocalModelReady(config.provider as LocalModelProvider, config.model, { timeoutMs: 8_000 });
-    if (extensionProvider) {
-      assertRegisteredProviderModel(config.provider, config.model, {
-        userId: config.userId,
-        needsVision: messagesNeedVision(messages),
-        needsTools: toolDeclarations.length > 0,
-        needsJson: config.responseFormat === 'json_object',
-        needsStreaming: true,
-      });
-    }
-    const client = extensionProvider ? getRegisteredOpenAIClient(config.provider, config.userId)
-      : config.provider === 'deepseek' ? getDeepSeek()
-      : config.provider === 'openai' ? getOpenAI?.()
-      : config.provider === 'qwen' ? getQwen?.()
-      : config.provider === 'ark' ? getArk?.()
-      : config.provider === 'lmstudio' ? getLmStudio?.()
-      : config.provider === 'xiaomi' ? getXiaomi?.()
-      : config.provider === 'kimi' ? getKimi?.()
-      : config.provider === 'glm' ? getGlm?.()
-      : config.provider === 'relay' ? getRelay?.()
-      : getOllama?.();
-    if (!client) throw new Error(`${config.provider} not configured`);
-
-    const fmt = config.provider === 'qwen'
-      ? formatQwenRequest
-      : config.provider === 'deepseek'
-        ? formatDeepSeekRequest
-        : formatOpenAIRequest;
-    const localRequest = isLocal
-      ? prepareLocalModelRequest({
-          messages,
-          toolDeclarations,
-          maxTokens,
-          compactToolDeclarations: true,
-          requiredToolNames: config.localRequiredToolNames,
-          contextTokens: await loadedLocalContextTokens(config.provider, client, config.model, config.signal),
-        })
-      : null;
-    const params: any = fmt({
-      model: config.model,
-      messages: localRequest?.messages || messages,
-      toolDeclarations: localRequest?.toolDeclarations || toolDeclarations,
-      maxTokens: localRequest?.maxTokens || maxTokens,
-      responseFormat: config.responseFormat,
-      ...(isLocal ? {} : { userId: config.userId }),
-    });
-    if (config.provider === 'xiaomi' || (config.provider === 'openai' && isReasoningModel(config.model))) {
-      if (params.max_tokens !== undefined) params.max_completion_tokens = params.max_tokens;
-      delete params.max_tokens;
-    }
-    if (config.thinkingMode === 'disabled' && (config.provider === 'deepseek'
-      || (config.provider === 'relay' && /(?:^|\/)deepseek-/i.test(config.model)))) {
-      params.thinking = { type: 'disabled' };
-    }
+    const { client, supervisedLocal, localRequest, params } = await prepareCompatibleModelRequest(
+      messages, toolDeclarations, config, maxTokens, getters, extensionProvider, true,
+    );
     // The official relay currently fails its SSE endpoint after an empty
     // handshake frame.  Use the reliable JSON response by default; callers
     // may explicitly opt in after verifying a relay deployment's streaming

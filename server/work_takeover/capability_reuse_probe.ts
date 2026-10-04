@@ -13,6 +13,7 @@ import {
   getWorkTakeoverTask,
   listWorkTakeoverTasks,
   updateWorkTakeoverTask,
+  recordWorkTakeoverStepExecution,
   type WorkTakeoverStatus,
   type WorkTakeoverTask,
 } from './tasks';
@@ -233,53 +234,6 @@ function buildCapabilityReuseAudit(
   return { items, summary: summarizeAudit(items) };
 }
 
-function executionHistory(task: WorkTakeoverTask, execution: WorkTakeoverStepExecutionResult): any[] {
-  const current = task?.metadata?.workTakeoverExecution?.history;
-  return [...(Array.isArray(current) ? current.slice(-20) : []), execution];
-}
-
-function recordStepExecution(
-  userId: string,
-  task: WorkTakeoverTask,
-  plan: WorkTakeoverExecutionPlan,
-  execution: WorkTakeoverStepExecutionResult,
-): WorkTakeoverTask {
-  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
-    status: execution.status === 'blocked'
-      ? 'blocked'
-      : execution.status === 'waiting_confirmation'
-      ? 'waiting_confirmation'
-      : 'in_progress',
-    allowedNow: uniqueStrings([...task.allowedNow, ...plan.safeActions]),
-    confirmationRequired: uniqueStrings([...task.confirmationRequired, ...execution.confirmationRequired]),
-    blockedBy: execution.blockers.length ? uniqueStrings([...task.blockedBy, ...execution.blockers]) : undefined,
-    result: execution.nextInstruction,
-    metadata: {
-      workTakeoverExecution: {
-        lastPlan: plan,
-        lastExecution: execution,
-        history: executionHistory(task, execution),
-        updatedAt: execution.executedAt,
-      },
-    },
-    note: execution.summary,
-  } as any) || task;
-
-  for (const artifact of execution.artifacts) {
-    updatedTask = updateWorkTakeoverTask(userId, updatedTask.id, {
-      artifact,
-    } as any) || updatedTask;
-  }
-
-  if (execution.draftReply && !updatedTask.drafts.some(draft => draft.text === execution.draftReply)) {
-    updatedTask = updateWorkTakeoverTask(userId, updatedTask.id, {
-      draftReply: execution.draftReply,
-    } as any) || updatedTask;
-  }
-
-  return updatedTask;
-}
-
 function recordPacket(
   userId: string,
   task: WorkTakeoverTask,
@@ -458,7 +412,7 @@ export async function runWorkTakeoverCapabilityReuseProbe(
         stepId: progress.nextStep?.id,
       });
       executions.push(execution);
-      if (shouldRecord) currentTask = recordStepExecution(userId, currentTask, plan, execution);
+      if (shouldRecord) currentTask = recordWorkTakeoverStepExecution(userId, currentTask, plan, execution);
       if (execution.status === 'blocked') break;
       if (stopOnConfirmation && execution.status === 'waiting_confirmation') break;
     }

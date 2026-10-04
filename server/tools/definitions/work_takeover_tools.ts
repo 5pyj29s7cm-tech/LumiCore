@@ -16,6 +16,7 @@ import {
   registerWorkTakeoverExecutor,
   listWorkTakeoverTasks,
   updateWorkTakeoverTask,
+  recordWorkTakeoverStepExecution,
   type WorkTakeoverStatus,
 } from '../../work_takeover/tasks';
 import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
@@ -84,11 +85,6 @@ function planNextActions(plan: ReturnType<typeof planWorkTakeoverExecution>): st
   return plan.steps.map(step => `${step.title}：${step.goal}`).slice(0, 12);
 }
 
-function executionHistory(task: any, execution: ReturnType<typeof executeWorkTakeoverPlanStep>): any[] {
-  const current = task?.metadata?.workTakeoverExecution?.history;
-  return [...(Array.isArray(current) ? current.slice(-20) : []), execution];
-}
-
 function toolRunHistory(task: any, run: any): any[] {
   const current = task?.metadata?.workTakeoverToolRuns;
   return [...(Array.isArray(current) ? current.slice(-30) : []), run];
@@ -138,43 +134,6 @@ function taskStateEvidence(id: string, operation: Exclude<CapabilityOperation, '
     subjectArgument,
     limitations: ['This receipt proves the task state transition only; external completion requires domain-tool evidence.'],
   });
-}
-
-function recordStepExecution(userId: string, task: any, plan: any, execution: ReturnType<typeof executeWorkTakeoverPlanStep>): any {
-  let updatedTask = updateWorkTakeoverTask(userId, task.id, {
-    status: execution.status === 'blocked'
-      ? 'blocked'
-      : execution.status === 'waiting_confirmation'
-      ? 'waiting_confirmation'
-      : 'in_progress',
-    allowedNow: uniqueStrings([...task.allowedNow, ...plan.safeActions]),
-    confirmationRequired: uniqueStrings([...task.confirmationRequired, ...execution.confirmationRequired]),
-    blockedBy: execution.blockers.length ? uniqueStrings([...task.blockedBy, ...execution.blockers]) : undefined,
-    result: execution.nextInstruction,
-    metadata: {
-      workTakeoverExecution: {
-        lastPlan: plan,
-        lastExecution: execution,
-        history: executionHistory(task, execution),
-        updatedAt: execution.executedAt,
-      },
-    },
-    note: execution.summary,
-  } as any) || task;
-
-  for (const artifact of execution.artifacts) {
-    updatedTask = updateWorkTakeoverTask(userId, task.id, {
-      artifact,
-    } as any) || updatedTask;
-  }
-
-  if (execution.draftReply && !task.drafts.some((draft: any) => draft.text === execution.draftReply)) {
-    updatedTask = updateWorkTakeoverTask(userId, task.id, {
-      draftReply: execution.draftReply,
-    } as any) || updatedTask;
-  }
-
-  return updatedTask;
 }
 
 function recordPacket(userId: string, task: any, plan: any, packet: ReturnType<typeof exportWorkTakeoverPacket>, extraMetadata: Record<string, any> = {}): any {
@@ -622,7 +581,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       let updatedTask = task;
 
       if (shouldRecord) {
-        updatedTask = recordStepExecution(userId, task, plan, execution);
+        updatedTask = recordWorkTakeoverStepExecution(userId, task, plan, execution);
         updatedTask = requirePersistedTask(userId, updatedTask);
       }
 
@@ -719,7 +678,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const execution = executeWorkTakeoverPlanStep(task, plan, {
         stepId: progress.nextStep?.id,
       });
-      let updatedTask = shouldRecord ? recordStepExecution(userId, task, plan, execution) : task;
+      let updatedTask = shouldRecord ? recordWorkTakeoverStepExecution(userId, task, plan, execution) : task;
       if (shouldRecord) updatedTask = requirePersistedTask(userId, updatedTask);
       const status = execution.status === 'blocked'
         ? 'blocked'
@@ -1055,7 +1014,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         executions.push(execution);
 
         if (shouldRecord) {
-          currentTask = recordStepExecution(userId, currentTask, plan, execution);
+          currentTask = recordWorkTakeoverStepExecution(userId, currentTask, plan, execution);
         }
 
         if (execution.status === 'blocked') {

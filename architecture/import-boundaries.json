@@ -3,7 +3,8 @@
   "policy": "Existing global database imports are migration debt. New importers require a reviewed scoped repository; update this allow-list explicitly with its scope justification.",
   "approvedScopedImporters": {
     "server/org/durable_routes.ts": "Organization-scoped snapshots, serialized writes and row-version compensation.",
-    "server/persistence/settings_repository.ts": "Settings-table value access only; declared-key transactions are staged before writeDB accepts them. Durable writes restore only a still-current failed value."
+    "server/persistence/settings_repository.ts": "Settings-table value access only; declared-key transactions are staged before writeDB accepts them. Durable writes restore only a still-current failed value.",
+    "server/memory/repository.ts": "Owned memory/reminder row values only; detached reads, staged single-row updates, immutable ownership, and same-lane parent validation before write acceptance."
   },
   "allowedDatabaseImporters": [
     "server/agents/external_ai_history_sync.ts",
@@ -41,12 +42,10 @@
     "server/llm/token_tracker.ts",
     "server/marketplace/registry.ts",
     "server/mcp/lumi_server.ts",
-    "server/memory/auto_organize.ts",
     "server/memory/behavioral.ts",
     "server/memory/consolidator.ts",
     "server/memory/provenance.ts",
     "server/memory/store.ts",
-    "server/memory/tree.ts",
     "server/memory/turn_memory.ts",
     "server/memory_avatar/lifecycle.ts",
     "server/memory_avatar/live_history.ts",
@@ -67,7 +66,6 @@
     "server/routes/durable_mutation.ts",
     "server/routes/industry_workflow_routes.ts",
     "server/routes/interactions_routes.ts",
-    "server/routes/memory_routes.ts",
     "server/routes/misc_routes.ts",
     "server/routes/notifications.ts",
     "server/routes/personality_routes.ts",

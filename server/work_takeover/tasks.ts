@@ -1,3 +1,4 @@
+import type { WorkTakeoverExecutionPlan, WorkTakeoverStepExecutionResult } from './execution_planner';
 import { readSettingRecord, writeSetting } from "../persistence/settings_repository";
 
 import type { WechatIntakeResult, WechatUrgency, WechatWorkCategory } from './wechat_intake';
@@ -115,6 +116,7 @@ export interface WorkTakeoverUpdateInput {
   currentActionIndex?: number;
   draftReply?: string;
   artifact?: Partial<WorkTakeoverArtifact> & { label: string };
+  artifacts?: Array<Partial<WorkTakeoverArtifact> & { label: string }>;
   allowedNow?: string[];
   confirmationRequired?: string[];
   blockedBy?: string[];
@@ -369,19 +371,20 @@ export function updateWorkTakeoverTask(userId: string, taskId: string, input: Wo
     task.events.push(event('draft_added', 'Draft reply added.'));
   }
 
-  if (input.artifact?.label) {
+  for (const artifact of [...(input.artifact ? [input.artifact] : []), ...(input.artifacts || [])]) {
+    if (!artifact.label) continue;
     const artifactTimestamp = nowIso();
     task.artifacts.push({
-      id: input.artifact.id || id('wt_artifact'),
-      type: input.artifact.type || 'other',
-      label: String(input.artifact.label).slice(0, 160),
-      path: input.artifact.path,
-      content: input.artifact.content,
-      status: input.artifact.status || 'planned',
-      createdAt: input.artifact.createdAt || artifactTimestamp,
+      id: artifact.id || id('wt_artifact'),
+      type: artifact.type || 'other',
+      label: String(artifact.label).slice(0, 160),
+      path: artifact.path,
+      content: artifact.content,
+      status: artifact.status || 'planned',
+      createdAt: artifact.createdAt || artifactTimestamp,
       updatedAt: artifactTimestamp,
     });
-    task.events.push(event('artifact_added', `Artifact added: ${input.artifact.label}`));
+    task.events.push(event('artifact_added', `Artifact added: ${artifact.label}`));
   }
 
   if (input.status && input.status !== task.status) {
@@ -449,4 +452,42 @@ export function removeWorkTakeoverTaskArtifacts(
   tasks[index] = task;
   writeStoredTasks(tasks);
   return task;
+}
+
+export function recordWorkTakeoverStepExecution(
+  userId: string,
+  task: WorkTakeoverTask,
+  plan: WorkTakeoverExecutionPlan,
+  execution: WorkTakeoverStepExecutionResult,
+): WorkTakeoverTask {
+  const current = getWorkTakeoverTask(userId, task.id);
+  if (!current || current.domain !== task.domain || current.orgId !== task.orgId
+    || execution.taskId !== task.id || plan.taskId !== task.id || execution.planId !== plan.planId) {
+    throw new Error('Work takeover execution is not bound to a current owned task');
+  }
+  const unique = (values: string[]) => Array.from(new Set(values.map(value => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean)));
+  const history = current.metadata?.workTakeoverExecution?.history;
+  return updateWorkTakeoverTask(userId, task.id, {
+    status: execution.status === 'blocked'
+      ? 'blocked'
+      : execution.status === 'waiting_confirmation'
+      ? 'waiting_confirmation'
+      : 'in_progress',
+    allowedNow: unique([...current.allowedNow, ...plan.safeActions]),
+    confirmationRequired: unique([...current.confirmationRequired, ...execution.confirmationRequired]),
+    blockedBy: execution.blockers.length ? unique([...current.blockedBy, ...execution.blockers]) : undefined,
+    result: execution.nextInstruction,
+    metadata: {
+      workTakeoverExecution: {
+        lastPlan: plan,
+        lastExecution: execution,
+        history: [...(Array.isArray(history) ? history.slice(-20) : []), execution],
+        updatedAt: execution.executedAt,
+      },
+    },
+    note: execution.summary,
+    expectedRevision: current.revision || 0,
+    artifacts: execution.artifacts,
+    draftReply: execution.draftReply && !current.drafts.some(draft => draft.text === execution.draftReply) ? execution.draftReply : undefined,
+  })!;
 }

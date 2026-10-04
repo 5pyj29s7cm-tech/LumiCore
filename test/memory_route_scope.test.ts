@@ -181,4 +181,13 @@ describe('memory route scope and stable evidence identity', () => {
       relatedMemoryIds: [],
     });
   });
+  it('validates foreign and circular parents through both ordinary edits and tree moves', async () => {
+    for (const path of ['/memories/'+personalId, '/memory/'+personalId+'/move']) {
+      for (const parentId of [workId, personalId]) {
+        const response = await fetch(baseUrl+'/api'+path, { method: 'PUT', headers: headers(false), body: JSON.stringify({ parentId }) });
+        expect(response.status).toBe(400);
+      }
+    }
+    expect(queryMemories({ userId, domain: 'personal', orgId: '', minConfidence: 0, limit: 20 }).find(row => row.id === personalId)?.parentId).toBeNull();
+  });
 });

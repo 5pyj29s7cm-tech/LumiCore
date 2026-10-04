@@ -1,11 +1,13 @@
+import { updateMemoryRow, type MemoryOwnerScope } from './repository';
 import { readDB, writeDB } from '../../db_layer';
 import {
   Memory,
   MemoryEvidenceClass,
   MemoryQuery,
   MemoryTier,
+  isMemoryAvatarAgentId,
 } from './types';
-export { CONVERSATIONAL_MEMORY_EVIDENCE } from './types';
+export { CONVERSATIONAL_MEMORY_EVIDENCE, isMemoryAvatarAgentId } from './types';
 import { applyMemoryFirewallMetadata, evaluateMemoryFirewall } from './firewall';
 import { generateConfiguredEmbedding, getEmbeddingRoute, type EmbeddingResult } from '../llm/embedding_provider';
 import { getRerankSelection, rerankConfiguredDocuments } from '../llm/rerank_provider';
@@ -368,11 +370,6 @@ function matchesMemoryScope(memory: Memory, domain?: string, orgId?: string, age
   return true;
 }
 
-/** Memory Avatar memories are kept in a frozen, private lane. */
-export function isMemoryAvatarAgentId(agentId: unknown): boolean {
-  return String(agentId || '').trim().startsWith('memory_avatar_');
-}
-
 export function isMemoryAvatarScoped(memory: Pick<Memory, 'agentId'>): boolean {
   return isMemoryAvatarAgentId(memory.agentId);
 }
@@ -380,11 +377,14 @@ export function isMemoryAvatarScoped(memory: Pick<Memory, 'agentId'>): boolean {
 // ── Dedup index (lazy, invalidated on write) ──
 
 let dedupIndex: Map<string, Map<string, Memory[]>> | null = null;
+let dedupSource: Memory[] | null = null;
 
 function getDedupIndex(): Map<string, Map<string, Memory[]>> {
-  if (dedupIndex) return dedupIndex;
+  const rows = getMemoryStore();
+  if (dedupIndex && dedupSource === rows) return dedupIndex;
+  dedupSource = rows;
   dedupIndex = new Map();
-  for (const m of getMemoryStore()) {
+  for (const m of rows) {
     if (!dedupIndex.has(m.userId)) dedupIndex.set(m.userId, new Map());
     const typeMap = dedupIndex.get(m.userId)!;
     if (!typeMap.has(m.type)) typeMap.set(m.type, []);
@@ -949,6 +949,25 @@ export function addMemory(
   if (overrides?.generateEmbedding !== false) attachEmbedding(newMemory).catch(() => {});
 
   return newMemory;
+}
+
+export function updateScopedMemory(
+  scope: MemoryOwnerScope,
+  id: string,
+  patch: Partial<Pick<Memory, 'content' | 'keywords' | 'confidence' | 'type' | 'parentId' | 'nodeType'>>,
+): Memory | undefined {
+  let reindex = false;
+  const memory = updateMemoryRow(scope, id, draft => {
+    const previous = memoryEmbeddingInputHash(draft);
+    for (const key of ['content', 'keywords', 'confidence', 'type', 'parentId', 'nodeType'] as const) {
+      if (patch[key] !== undefined) (draft as any)[key] = patch[key];
+    }
+    draft.updatedAt = new Date().toISOString();
+    reindex = memoryEmbeddingInputHash(draft) !== previous;
+    if (reindex) invalidateMemoryEmbedding(draft);
+  });
+  if (memory && reindex) refreshMemoryEmbedding(memory);
+  return memory;
 }
 
 export function removeMemory(id: string): boolean {
