@@ -70,6 +70,8 @@ describe('chat public terminal errors', () => {
       chat.indexOf('const emitConversationUpdated'),
     );
     expect(terminalBoundary.indexOf('normalizeAgentPayload(terminalEvent, input.payload)'))
-      .toBeLessThan(terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably('));
+      .toBeLessThan(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt('));
+    const receipt = chat.slice(chat.indexOf('const persistAuthorizedTerminalReceipt'), chat.indexOf('const commitDeterministicTerminal'));
+    expect(receipt).toContain('recordChatExecutionTerminalEventDurably(executionScope, requestId, event, payload, unknownPayload');
   });
 });

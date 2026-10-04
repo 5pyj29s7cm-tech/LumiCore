@@ -291,7 +291,7 @@ describe('chat terminal durability boundary', () => {
     const boundary = source.slice(start, source.indexOf('const actionFollowupIntent', start));
     expect(boundary).toContain('=> commitChatTerminalBoundary({');
     const markers = ['persistTerminalState:', 'persistAssistantMessage:', 'flush: flushDBOrThrow',
-      'persistTerminalReceipt:', 'recordChatExecutionTerminalEventDurably(', 'publishCommitted:',
+      'persistTerminalReceipt:', 'persistAuthorizedTerminalReceipt(', 'publishCommitted:',
       "publishRecordedAgent('agent:response'", 'publishDurableTaskRelation()', 'emitConversationUpdated('];
     let position = -1;
     for (const marker of markers) {
@@ -299,6 +299,10 @@ describe('chat terminal durability boundary', () => {
       expect(next, marker).toBeGreaterThan(position);
       position = next;
     }
+    const receiptStart = source.indexOf('const persistAuthorizedTerminalReceipt');
+    const receipt = source.slice(receiptStart, source.indexOf('const commitDeterministicTerminal', receiptStart));
+    expect(receipt).toContain('recordChatExecutionTerminalEventDurably(');
+    expect(receipt).toContain('refreshTerminal: async () =>');
     expect(boundary).toContain('recordChatExecutionPersistenceUnknownDurably(');
     expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:notification'/);
     expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:task_execution_writeback'/);
