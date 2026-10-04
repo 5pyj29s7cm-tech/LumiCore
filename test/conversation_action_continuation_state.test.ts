@@ -1538,7 +1538,10 @@ describe('conversation action continuation state', () => {
       toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 },
     });
 
-    expect(plain).toEqual({ state: null, kind: 'conversation' });
+    const plainTurn = (readDB().conversationActionTurns || []).find((row: any) =>
+      row.conversationId === conversation.id && row.userId === userId && row.requestId === 'request-new-model-question');
+    expect(plainTurn).toMatchObject({ taskId: '' });
+    expect(plain).toEqual({ state: null, kind: 'conversation', turnRowId: plainTurn.id });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toBeUndefined();
     expect((readDB().conversationActionTasks || []).find((row: any) => row.id === oldTask.state?.taskId))
@@ -1581,7 +1584,10 @@ describe('conversation action continuation state', () => {
       }),
       toolPolicy: { allowedTools: [], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 },
     });
-    expect(plain).toEqual({ state: null, kind: 'conversation' });
+    const plainTurn = (readDB().conversationActionTurns || []).find((row: any) =>
+      row.conversationId === conversation.id && row.userId === userId && row.requestId === 'request-format-feedback');
+    expect(plainTurn).toMatchObject({ taskId: '' });
+    expect(plain).toEqual({ state: null, kind: 'conversation', turnRowId: plainTurn.id });
     expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').actionContinuationState)
       .toBeUndefined();
     settleConversationActionExecutionRequest(conversation.id, userId, 'request-format-feedback');
