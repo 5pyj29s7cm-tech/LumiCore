@@ -6,7 +6,7 @@ import ts from 'typescript';
 const modules: Record<string, string[]> = {
   "server/socket/voice.ts": ["server/socket/voice_transport_runtime.ts","server/socket/voice_turn_policy.ts","server/socket/voice_side_response.ts","server/socket/voice_conversation_turn.ts","server/socket/voice_input_pipeline.ts","server/socket/voice.ts"],
   "server/regions/packs/cn/messaging_routes.ts": ["server/regions/packs/cn/messaging_persistence.ts","server/regions/packs/cn/messaging_routes.ts","server/regions/packs/cn/messaging_finalization.ts","server/regions/packs/cn/remote_org_commands.ts","server/regions/packs/cn/remote_materials.ts","server/regions/packs/cn/messaging_ingress_runtime.ts"],
-  'src/components/DesktopUI.tsx': ['src/components/DesktopUI.tsx', 'src/components/desktop/useMeetingTranscript.ts', 'src/components/desktop/useMeetingWorkflow.ts', 'src/components/desktop/DesktopShellView.tsx', 'src/components/desktop/surface_components.tsx'],
+  'src/components/DesktopUI.tsx': ['src/components/DesktopUI.tsx', 'src/components/desktop/useMeetingTranscript.ts', 'src/components/desktop/useMeetingWorkflow.ts', 'src/components/desktop/useClientSurfaceActions.ts', 'src/components/desktop/DesktopShellView.tsx', 'src/components/desktop/surface_components.tsx'],
   'src/components/AgentChatPage.tsx': ['src/components/AgentChatPage.tsx', 'src/components/agent_chat/useConversationTransitions.ts', 'src/components/agent_chat/AgentChatView.tsx'],
   'src-tauri/src/lib.rs': ['src-tauri/src/lib.rs', ...['native_files', 'native_shell', 'native_apps', 'native_window_modes', 'native_processes', 'native_activity', 'native_display', 'native_input'].map(name => 'src-tauri/src/' + name + '.rs')],
 };

@@ -1,3 +1,4 @@
+import { useClientSurfaceActions, normalizeDesktopSurfaceTarget as normalizeTarget } from './desktop/useClientSurfaceActions';
 
 import { DesktopShellView } from "./desktop/DesktopShellView";
 import { useMeetingWorkflow } from "./desktop/useMeetingWorkflow";
@@ -31,7 +32,6 @@ import { useVoiceprint } from '../hooks/useVoiceprint';
 import { useFaceRecognition } from '../hooks/useFaceRecognition';
 import { usePresence } from '../hooks/usePresence';
 import { BACKGROUND_FACE_PRESENCE_CHANGED, BACKGROUND_FACE_PRESENCE_ENABLED_KEY, getSensorPermissionSnapshot, isBackgroundFacePresenceEnabled, isSensorEnabled, SENSOR_ACCESS_CHANGED, SENSOR_PERMISSIONS_CHANGED } from '@/services/sensorPermissionService';
-import { getLegalConsultationCaseId, setLegalConsultationCaseId } from '@/lib/legalCaseStore';
 
 import { systemService, type WallpaperPresentation, type WallpaperWorkspace } from '@/services/systemService';
 import { usePlatform } from '@/hooks/usePlatform';
@@ -39,14 +39,13 @@ import { apiFetch } from '@/services/apiClient';
 import { memoryAvatarService } from '@/services/memoryAvatarService';
 import { canUseExternalCapabilitiesForSurface, createExternalCapabilityExecutionCorrelation, executeExternalCapabilityAction, fetchExternalCapabilities, getDesktopExternalCapabilities, type ExternalCapabilityAction, type ExternalCapabilityExecutionCorrelation, type ExternalCapabilityProjection } from '@/services/externalCapabilities';
 import { canAccessOrganizationWorkspaceView, listOrganizationWorkspaceViewsForRole, normalizeOrganizationWorkspaceView, type OrganizationWorkspaceView } from '../../shared/org_workspace';
-import { CLIENT_SETTINGS_SECTIONS, PERSONAL_CLIENT_LAUNCHER_IDS, PERSONAL_CLIENT_SURFACES, PERSONAL_CLIENT_SURFACE_ACTIONS, getOpenPersonalClientSurfaceIds, getPersonalClientSurfaceByAction, isComputerAdaptationSettingsTarget, normalizeClientSettingsSection } from '../../shared/client_surfaces';
+import { CLIENT_SETTINGS_SECTIONS, PERSONAL_CLIENT_LAUNCHER_IDS, PERSONAL_CLIENT_SURFACES, PERSONAL_CLIENT_SURFACE_ACTIONS, getOpenPersonalClientSurfaceIds } from '../../shared/client_surfaces';
 import { queueOrganizationWorkspaceRoute } from '../lib/orgWorkspaceNavigation';
 import { formatUiMessage, uiMessage } from '../i18n/uiMessages';
 import { desktopWorkflowCopy } from '../i18n/locales/desktopWorkflows';
 import { externalCapabilityCopy } from '../i18n/locales/externalCapabilities';
 import { chatAttachmentRequestMatchesScope, type ChatAttachmentRequest } from '@/lib/chatAttachmentReferences';
 import { getDesktopDockPositionClassName, getDesktopChromeMetrics, getDesktopIconLayout, shouldUseCompactDesktopLayout } from '@/lib/desktopLayout';
-import { isClientSurfaceRendered, waitForClientSurfaceRendered } from '../lib/clientSurfaceCommit';
 
 const IDLE_AWAY_SECONDS = 5 * 60;
 const RETURN_IDLE_SECONDS = 30;
@@ -394,14 +393,27 @@ export function DesktopUI({
     if (chatOpen) setWallpaperWorkPromptVisible(false);
   }, [chatOpen]);
 
+  const dismissUtilitySurfaces = useCallback((keep?: 'command-center' | 'knowledge' | 'memory-avatar') => {
+    if (keep !== 'command-center') {
+      setChatOpen(false);
+      setChatPrefill(null);
+    }
+    if (keep !== 'knowledge') setKnowledgeOpen(false);
+    if (keep !== 'memory-avatar') {
+      memoryAvatarOpenGenerationRef.current++;
+      setMemoryLabOpen(false);
+      setSanctuaryOpen(false);
+      setSanctuaryAgent(null);
+    }
+  }, []);
+
   const openCommandCenter = useCallback((view: CommandCenterView = 'office') => {
     // Command Center is the canonical parent surface.  Opening it always
     // dismisses utility overlays and consumes any previous return context.
     surfaceReturnTargetRef.current = 'home';
-    setKnowledgeOpen(false);
-    setMemoryLabOpen(false);
-    setSanctuaryOpen(false);
-    setSanctuaryAgent(null);
+    dismissUtilitySurfaces('command-center');
+    setIsSearchOpen(false);
+    setViewMode('personal');
     setCommandCenterView(view);
     setOpenWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
     setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
@@ -422,7 +434,7 @@ export function DesktopUI({
         window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
       })();
     }, 80);
-  }, [isTauri, setActiveTab]);
+  }, [dismissUtilitySurfaces, isTauri, setActiveTab]);
 
   const inferSurfaceReturnTarget = useCallback((): SurfaceReturnTarget => {
     if (chatOpen || activeTab === 'command-center') return 'command-center';
@@ -448,18 +460,16 @@ export function DesktopUI({
 
   const openKnowledgeBase = useCallback((returnTarget?: SurfaceReturnTarget) => {
     surfaceReturnTargetRef.current = returnTarget || inferSurfaceReturnTarget();
-    // Only one full-screen surface owns focus at a time.
-    setChatOpen(false);
-    setChatPrefill(null);
-    setMemoryLabOpen(false);
-    setSanctuaryOpen(false);
-    setSanctuaryAgent(null);
+    dismissUtilitySurfaces('knowledge');
+    setIsSearchOpen(false);
+    setViewMode('personal');
     setKnowledgeLoaded(true);
     setKnowledgeOpen(true);
     setActiveTab('knowledge');
-  }, [inferSurfaceReturnTarget, setActiveTab]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, setActiveTab]);
 
   const closeKnowledgeBase = useCallback(() => {
+    memoryAvatarOpenGenerationRef.current++;
     setKnowledgeOpen(false);
     restoreSurfaceReturnTarget();
   }, [restoreSurfaceReturnTarget]);
@@ -506,16 +516,7 @@ export function DesktopUI({
   const openMemoryAvatar = useCallback(async (avatarId?: string, returnTarget?: SurfaceReturnTarget) => {
     const openGeneration = ++memoryAvatarOpenGenerationRef.current;
     try { sounds.playClick(); } catch {}
-    // The right rail invokes this while the Command Center is still open;
-    // direct desktop launches use the personal surface.  Avatar switching
-    // from an already-open Sanctuary intentionally preserves its origin.
-    if (returnTarget) {
-      surfaceReturnTargetRef.current = returnTarget;
-    } else if (chatOpen || activeTab === 'command-center') {
-      surfaceReturnTargetRef.current = 'command-center';
-    } else if (!sanctuaryOpen && !memoryLabOpen) {
-      surfaceReturnTargetRef.current = 'home';
-    }
+    const origin = returnTarget || inferSurfaceReturnTarget();
     const avatars = await loadMemoryAvatars();
     if (openGeneration !== memoryAvatarOpenGenerationRef.current) return;
     const selected = avatarId
@@ -525,38 +526,28 @@ export function DesktopUI({
     // transcript.  Keep the current surface in place and let the next open
     // refresh the list instead of falling back to avatars[0].
     if (avatarId && !selected) return;
-    // Memory Avatar is a separate fullscreen surface. Close the command
-    // center and any other utility before presenting it so two focus traps
-    // never stack.  The recorded origin is restored by closeMemoryAvatar.
-    setChatOpen(false);
-    setKnowledgeOpen(false);
-    setChatPrefill(null);
+    surfaceReturnTargetRef.current = origin;
+    dismissUtilitySurfaces('memory-avatar');
+    setIsSearchOpen(false);
+    setViewMode('personal');
     setActiveTab('home');
-    if (selected) {
-      setSanctuaryAgent(selected);
-      setSanctuaryLoaded(true);
-      setSanctuaryOpen(true);
-      setMemoryLabOpen(false);
-      return;
-    }
-    setMemoryLabOpen(true);
-  }, [activeTab, chatOpen, loadMemoryAvatars, memoryLabOpen, sanctuaryOpen, setActiveTab]);
+    setSanctuaryAgent(selected || null);
+    if (selected) setSanctuaryLoaded(true);
+    setSanctuaryOpen(Boolean(selected));
+    setMemoryLabOpen(!selected);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, loadMemoryAvatars, setActiveTab]);
 
   const openMemoryAvatarLab = useCallback((returnTarget?: SurfaceReturnTarget) => {
     memoryAvatarOpenGenerationRef.current++;
-    if (returnTarget) {
-      surfaceReturnTargetRef.current = returnTarget;
-    } else if (!sanctuaryOpen && !memoryLabOpen && !(chatOpen || activeTab === 'command-center')) {
-      surfaceReturnTargetRef.current = 'home';
-    }
-    setChatOpen(false);
-    setKnowledgeOpen(false);
-    setChatPrefill(null);
+    surfaceReturnTargetRef.current = returnTarget || inferSurfaceReturnTarget();
+    dismissUtilitySurfaces('memory-avatar');
+    setIsSearchOpen(false);
+    setViewMode('personal');
     setActiveTab('home');
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     setMemoryLabOpen(true);
-  }, [activeTab, chatOpen, memoryLabOpen, sanctuaryOpen, setActiveTab]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, setActiveTab]);
 
   const closeMemoryAvatar = useCallback(() => {
     memoryAvatarOpenGenerationRef.current++;
@@ -1926,67 +1917,51 @@ export function DesktopUI({
     toast.info(`${pet.name} ${t.avatarSetAsDesktop || 'set as desktop avatar'}`);
   };
 
-  const toggleWindow = useCallback((tab: string) => {
-    try { sounds.playClick(); } catch {}
-    if (tab === 'avatar-studio') {
-      setPersonalizationSection('appearance');
-      tab = 'personalization';
-    } else if (tab === 'sound') {
-      setPersonalizationSection('voice');
-      tab = 'personalization';
-    }
-    if (tab === 'home') {
-      surfaceReturnTargetRef.current = 'home';
-      setKnowledgeOpen(false);
-      setMemoryLabOpen(false);
-      setSanctuaryOpen(false);
-      setSanctuaryAgent(null);
+  const setNotificationSurface = useCallback((open?: boolean) => {
+    setIsNotificationPanelOpen(previous => open ?? !previous);
+    setOpenWindows(previous => previous.filter(id => id !== 'notifications'));
+    setMinimizedWindows(previous => previous.filter(id => id !== 'notifications'));
+    setFocusedWindow(previous => previous === 'notifications' ? null : previous);
+  }, []);
+
+  const openSurface = useCallback((value: string, returnTarget?: SurfaceReturnTarget) => {
+    if (value === 'avatar-studio') setPersonalizationSection('appearance');
+    if (value === 'sound') setPersonalizationSection('voice');
+    const windowId = normalizeTarget(value);
+    if (!windowId) throw new Error('Client action requires a target surface');
+    if (windowId === 'knowledge') { openKnowledgeBase(returnTarget); return; }
+    if (windowId === 'command-center') { openCommandCenter('office'); return; }
+    if (windowId === 'memory-avatar') { void openMemoryAvatar(undefined, returnTarget); return; }
+
+    const nexusOrigin = windowId === 'nexus' ? returnTarget || inferSurfaceReturnTarget() : 'home';
+    dismissUtilitySurfaces();
+    surfaceReturnTargetRef.current = 'home';
+    setIsSearchOpen(windowId === 'app-launcher');
+    setViewMode(windowId === 'nexus' ? 'world' : 'personal');
+    if (windowId === 'home') {
       setOpenWindows([]);
       setMinimizedWindows([]);
       setFocusedWindow(null);
+      setIsNotificationPanelOpen(false);
       setActiveTab('home');
       return;
     }
-    if (tab === 'org') {
-      surfaceReturnTargetRef.current = 'home';
-      setActiveTab('org');
-      return;
-    }
-    if (tab === 'memory') {
-      openKnowledgeBase();
-      return;
-    }
-    if (tab === 'sync') {
-      tab = 'devices';
-    }
-    if (tab === 'notifications') {
-      surfaceReturnTargetRef.current = 'home';
-      setIsNotificationPanelOpen(prev => !prev);
-      setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
-      setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
-      if (focusedWindow === 'notifications') setFocusedWindow(null);
-      return;
-    }
+    if (windowId === 'nexus') { setNexusReturnTarget(nexusOrigin); setActiveTab('home'); return; }
+    if (windowId === 'app-launcher') return;
+    if (windowId === 'org') { setActiveTab('org'); return; }
+    if (windowId === 'notifications') { setNotificationSurface(true); return; }
+    setOpenWindows(previous => [...previous.filter(id => id !== windowId), windowId]);
+    setMinimizedWindows(previous => previous.filter(id => id !== windowId));
+    setFocusedWindow(windowId);
+    setActiveTab(windowId);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab, setNotificationSurface]);
 
-    // Knowledge base and Chat open fullscreen, not as windows
-    if (tab === 'knowledge') {
-      if (knowledgeOpen) closeKnowledgeBase();
-      else openKnowledgeBase();
-      return;
-    }
-    if (tab === 'chat' || tab === 'command-center') {
-      openCommandCenter('office');
-      return;
-    }
-    if (tab === 'memory-avatar') {
-      void openMemoryAvatar();
-      return;
-    }
-    setOpenWindows(prev => [...prev.filter(w => w !== tab), tab]);
-    setMinimizedWindows(prev => prev.filter(w => w !== tab));
-    setFocusedWindow(tab);
-    setActiveTab(tab);
-  }, [closeKnowledgeBase, focusedWindow, knowledgeOpen, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab]);
+  const toggleWindow = useCallback((tab: string) => {
+    try { sounds.playClick(); } catch {}
+    if (tab === 'notifications') { setNotificationSurface(); return; }
+    if (tab === 'knowledge' && knowledgeOpen) { closeKnowledgeBase(); return; }
+    openSurface(tab);
+  }, [closeKnowledgeBase, knowledgeOpen, openSurface, setNotificationSurface]);
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
@@ -1999,6 +1974,47 @@ export function DesktopUI({
       if (!nextFocusedWindow) setActiveTab('home');
     }
   }, [focusedWindow, minimizedWindows, openWindows, setActiveTab]);
+
+  const closeSurface = useCallback((value: string) => {
+    const windowId = normalizeTarget(value);
+    if (!windowId) throw new Error('close_client_surface requires target');
+    if (windowId === 'knowledge') {
+      closeKnowledgeBase();
+      return;
+    }
+    if (windowId === 'command-center') {
+      surfaceReturnTargetRef.current = 'home';
+      dismissUtilitySurfaces();
+      setActiveTab('home');
+      return;
+    }
+    if (windowId === 'memory-avatar') {
+      closeMemoryAvatar();
+      return;
+    }
+    if (windowId === 'nexus') {
+      setNexusReturnTarget('home');
+      setViewMode('personal');
+      if (nexusReturnTarget === 'command-center') openCommandCenter('office');
+      return;
+    }
+    if (windowId === 'app-launcher') {
+      surfaceReturnTargetRef.current = 'home';
+      setIsSearchOpen(false);
+      return;
+    }
+    if (windowId === 'notifications') {
+      surfaceReturnTargetRef.current = 'home';
+      setIsNotificationPanelOpen(false);
+      return;
+    }
+    if (windowId === 'org' && activeTab === 'org') {
+      surfaceReturnTargetRef.current = 'home';
+      setActiveTab('home');
+      return;
+    }
+    closeWindow(windowId);
+  }, [activeTab, closeKnowledgeBase, closeMemoryAvatar, closeWindow, dismissUtilitySurfaces, nexusReturnTarget, openCommandCenter, setActiveTab]);
 
   const minimizeOsWindow = (tab: string) => {
     const remainingOrder = openWindows.filter(w => w !== tab && !minimizedWindows.includes(w));
@@ -2174,440 +2190,9 @@ export function DesktopUI({
     setIsDesktopWidgetMode(false);
   };
 
-  useEffect(() => {
-    const handler = async (event: Event) => {
-      const detail = (event as CustomEvent<any>).detail || {};
-      const action = String(detail.action || '');
-      const target = String(detail.target || '');
-      const mode = String(detail.mode || '');
-      const section = String(detail.section || '');
-      const confirmed = Boolean(detail.confirmed);
-      const respond = typeof detail.respond === 'function' ? detail.respond : () => {};
-      const reject = typeof detail.reject === 'function' ? detail.reject : () => {};
-
-      const normalizeTarget = (value: string) => {
-        if (value === 'memory') return 'knowledge';
-        if (value === 'files') return 'knowledge';
-        if (value === 'sync') return 'devices';
-        if (value === 'avatar-studio' || value === 'sound') return 'personalization';
-        if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
-        if (value === 'chat' || value === 'command-center') return 'command-center';
-        if (value === 'memory-avatar' || value === 'memory-avatars' || value === 'sanctuary') return 'memory-avatar';
-        return value;
-      };
-
-      const openSurface = (value: string) => {
-        if (value === 'avatar-studio') setPersonalizationSection('appearance');
-        if (value === 'sound') setPersonalizationSection('voice');
-        const windowId = normalizeTarget(value);
-        if (!windowId) throw new Error('Client action requires a target surface');
-        // Capture the origin before dismissing the current surface.  This is
-        // what lets utility overlays opened by a Command Center action return
-        // to that same office instead of the personal desktop.
-        const returnTarget = inferSurfaceReturnTarget();
-        if (isDesktopWidgetMode) {
-          void exitDesktopWidgetMode(windowId);
-          return;
-        }
-
-        if (windowId !== 'command-center') {
-          setChatOpen(false);
-          if (windowId !== 'knowledge') setKnowledgeOpen(false);
-          if (windowId !== 'app-launcher') setIsSearchOpen(false);
-          if (windowId !== 'nexus') setViewMode('personal');
-        }
-
-        if (windowId === 'home') {
-          surfaceReturnTargetRef.current = 'home';
-          setOpenWindows([]);
-          setMinimizedWindows([]);
-          setFocusedWindow(null);
-          setKnowledgeOpen(false);
-          setChatOpen(false);
-          setMemoryLabOpen(false);
-          setSanctuaryOpen(false);
-          setSanctuaryAgent(null);
-          setIsNotificationPanelOpen(false);
-          setIsSearchOpen(false);
-          setViewMode('personal');
-          setActiveTab('home');
-          return;
-        }
-        if (windowId === 'nexus') {
-          surfaceReturnTargetRef.current = 'home';
-          setNexusReturnTarget('home');
-          setViewMode('world');
-          setActiveTab('home');
-          return;
-        }
-        if (windowId === 'app-launcher') {
-          surfaceReturnTargetRef.current = 'home';
-          setIsSearchOpen(true);
-          return;
-        }
-        if (windowId === 'org') {
-          surfaceReturnTargetRef.current = 'home';
-          setActiveTab('org');
-          return;
-        }
-        if (windowId === 'knowledge') {
-          openKnowledgeBase(returnTarget);
-          return;
-        }
-        if (windowId === 'command-center') {
-          openCommandCenter('office');
-          return;
-        }
-        if (windowId === 'memory-avatar') {
-          void openMemoryAvatar(undefined, returnTarget);
-          return;
-        }
-        if (windowId === 'notifications') {
-          surfaceReturnTargetRef.current = 'home';
-          setIsNotificationPanelOpen(true);
-          setOpenWindows(prev => prev.filter(w => w !== 'notifications'));
-          setMinimizedWindows(prev => prev.filter(w => w !== 'notifications'));
-          if (focusedWindow === 'notifications') setFocusedWindow(null);
-          return;
-        }
-        surfaceReturnTargetRef.current = 'home';
-        setMinimizedWindows(prev => prev.filter(w => w !== windowId));
-        setFocusedWindow(windowId);
-        setOpenWindows(prev => [...prev.filter(w => w !== windowId), windowId]);
-        setActiveTab(windowId);
-      };
-
-        const getDemoTargetPoint = (value: string): { x: number; y: number } => {
-          const windowId = normalizeTarget(value);
-          const targetEl = Array.from(document.querySelectorAll<HTMLElement>('[data-lumi-target]'))
-            .find(el => el.dataset.lumiTarget === windowId);
-          if (targetEl) {
-            const rect = targetEl.getBoundingClientRect();
-            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-          }
-          const fallback: Record<string, { x: number; y: number }> = {
-            home: { x: 82, y: 24 },
-            org: { x: window.innerWidth / 2, y: 24 },
-            plans: { x: window.innerWidth * 0.72, y: window.innerHeight * 0.42 },
-          };
-          return fallback[windowId] || { x: window.innerWidth / 2, y: window.innerHeight * 0.82 };
-        };
-
-        const animateDemoCursor = async (value: string) => {
-          const point = getDemoTargetPoint(value);
-          window.dispatchEvent(new CustomEvent('cursor-glow:show'));
-          window.dispatchEvent(new CustomEvent('cursor-glow:update', { detail: point }));
-          await new Promise(resolve => window.setTimeout(resolve, 540));
-          window.dispatchEvent(new CustomEvent('cursor-glow:click', { detail: point }));
-          await new Promise(resolve => window.setTimeout(resolve, 220));
-        };
-
-      const closeSurface = (value: string) => {
-        const windowId = normalizeTarget(value);
-        if (!windowId) throw new Error('close_client_surface requires target');
-        if (windowId === 'knowledge') {
-          closeKnowledgeBase();
-          return;
-        }
-        if (windowId === 'command-center') {
-          surfaceReturnTargetRef.current = 'home';
-          setChatOpen(false);
-          setKnowledgeOpen(false);
-          setMemoryLabOpen(false);
-          setSanctuaryOpen(false);
-          setSanctuaryAgent(null);
-          setChatPrefill(null);
-          setActiveTab('home');
-          return;
-        }
-        if (windowId === 'memory-avatar') {
-          closeMemoryAvatar();
-          return;
-        }
-        if (windowId === 'nexus') {
-          setNexusReturnTarget('home');
-          setViewMode('personal');
-          return;
-        }
-        if (windowId === 'app-launcher') {
-          surfaceReturnTargetRef.current = 'home';
-          setIsSearchOpen(false);
-          return;
-        }
-        if (windowId === 'notifications') {
-          surfaceReturnTargetRef.current = 'home';
-          setIsNotificationPanelOpen(false);
-          return;
-        }
-        if (windowId === 'org' && activeTab === 'org') {
-          surfaceReturnTargetRef.current = 'home';
-          setActiveTab('home');
-          return;
-        }
-        closeWindow(windowId);
-      };
-
-      const setClientMode = (value: string) => {
-        const allowed = ['chat', 'meeting', 'assistant', 'autonomous'];
-        if (!allowed.includes(value)) throw new Error(`Unsupported mode: ${value}`);
-        if (value === 'meeting' && !confirmed) {
-          throw new Error(`${value} mode requires explicit user confirmation`);
-        }
-        setOperationMode(value as OperationMode);
-        if (value === 'meeting') {
-          setMeetingPaused(false);
-          setMeetingNotesOpen(true);
-        }
-      };
-
-      const openOrganizationSurface = async (
-        requestedView: OrganizationWorkspaceView,
-        requestedAction: string,
-      ) => {
-        if (orgConnection?.connected && !canAccessOrganizationWorkspaceView(orgConnection?.orgRole, requestedView)) {
-          respond({
-            ok: false,
-            action: requestedAction,
-            target: 'org',
-            section: requestedView,
-            reason: 'organization_role_not_allowed',
-          });
-          return;
-        }
-        queueOrganizationWorkspaceRoute(requestedView);
-        if (orgConnection?.connected && workDomain !== 'work') {
-          const switched = await switchDomain('work');
-          if (!switched.success) {
-            openSurface('org');
-            respond({
-              ok: false,
-              action: requestedAction,
-              target: 'org',
-              section: requestedView,
-              reason: switched.message || 'organization_domain_switch_failed',
-            });
-            return;
-          }
-        }
-        openSurface('org');
-        window.dispatchEvent(new CustomEvent('lumi:navigate', {
-          detail: { tab: 'org', sub: requestedView },
-        }));
-        respond({
-          ok: true,
-          action: requestedAction,
-          target: 'org',
-          section: requestedView,
-          domain: orgConnection?.connected ? 'work' : workDomain,
-        });
-      };
-
-      try {
-        if (action === 'refresh_model_configuration') {
-          const roles = Array.isArray(detail.payload?.roles) ? detail.payload.roles : [];
-          window.dispatchEvent(new CustomEvent('lumi:model-configuration-changed', {
-            detail: { roles },
-          }));
-          respond({ ok: true, action, roles });
-          return;
-        }
-        if (action === 'refresh_client_state') {
-          window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-          respond({
-            ok: true,
-            action,
-            mode: operationMode,
-            activeTab,
-            openWindows,
-            widgetMode: isDesktopWidgetMode,
-            renderedSurfaces: [
-              isClientSurfaceRendered('command-center') ? 'command-center' : null,
-              isClientSurfaceRendered('chat') ? 'chat' : null,
-            ].filter(Boolean),
-          });
-          return;
-        }
-        if (action === 'enter_widget_mode' || action === 'show_desktop_widget') {
-          void enterDesktopWidgetMode();
-          respond({ ok: true, action, widgetMode: true });
-          return;
-        }
-        if (action === 'exit_widget_mode' || action === 'expand_from_widget') {
-          void exitDesktopWidgetMode(target || undefined);
-          respond({ ok: true, action, widgetMode: false, target: target || undefined });
-          return;
-        }
-        if (action === 'demo_open_surface') {
-          const surface = normalizeTarget(target || detail.surface || '');
-          if (!surface) throw new Error('demo_open_surface requires target');
-          void (async () => {
-            try {
-              await animateDemoCursor(surface);
-              openSurface(surface);
-              respond({ ok: true, action, target: surface });
-            } catch (err: any) {
-              reject(err?.message || String(err));
-            }
-          })();
-          return;
-        }
-        if (action === 'close_client_surface') {
-          closeSurface(target);
-          respond({ ok: true, action, target });
-          return;
-        }
-        if (action === 'set_client_mode') {
-          setClientMode(mode);
-          respond({ ok: true, action, mode });
-          return;
-        }
-        if (action === 'open_personal_workspace') {
-          if (workDomain !== 'personal') {
-            const switched = await switchDomain('personal');
-            if (!switched.success) {
-              respond({
-                ok: false,
-                action,
-                target: 'home',
-                domain: workDomain,
-                reason: switched.message || 'personal_domain_switch_failed',
-              });
-              return;
-            }
-          }
-          openSurface('home');
-          respond({ ok: true, action, target: 'home', domain: 'personal' });
-          return;
-        }
-        if (action === 'open_settings') {
-          if (isComputerAdaptationSettingsTarget(section)) {
-            openSurface('kernel');
-            respond({ ok: true, action, target: 'kernel', section: 'computer' });
-            return;
-          }
-          const requestedSection = normalizeClientSettingsSection(section);
-          if (!requestedSection) throw new Error(`Unknown settings section: ${section}`);
-          setSettingsSection(requestedSection);
-          openSurface('settings');
-          respond({ ok: true, action, target: 'settings', section: requestedSection });
-          return;
-        }
-        if (action === 'close_nexus') {
-          setViewMode('personal');
-          respond({ ok: true, action, target: 'nexus', viewMode: 'personal' });
-          return;
-        }
-        if (action === 'start_meeting_mode') {
-          if (!confirmed) throw new Error('start_meeting_mode requires explicit user confirmation');
-          if (detail.resetNotes) resetMeetingCapture();
-          if (detail.legalCaseId) setLegalConsultationCaseId(String(detail.legalCaseId));
-          if (detail.legalCaseTitle) setLegalMeetingCaseTitle(String(detail.legalCaseTitle));
-          else if (!getLegalConsultationCaseId()) setLegalMeetingCaseTitle('');
-          setClientMode('meeting');
-          respond({ ok: true, action, mode: 'meeting' });
-          return;
-        }
-        if (action === 'end_meeting_mode') {
-          if (!confirmed) throw new Error('end_meeting_mode requires explicit user confirmation');
-          void endMeetingAndReport();
-          respond({ ok: true, action, status: 'ending_and_generating_report' });
-          return;
-        }
-        if (action === 'open_meeting_notes') {
-          setMeetingNotesOpen(true);
-          respond({ ok: true, action });
-          return;
-        }
-        if (action === 'open_organization_workspace') {
-          const requestedView = normalizeOrganizationWorkspaceView(section || (target !== 'org' ? target : '') || 'dashboard');
-          if (!requestedView) throw new Error(`Unknown organization workspace section: ${section || target}`);
-          await openOrganizationSurface(requestedView, action);
-          return;
-        }
-        if (action === 'set_wallpaper_mode') {
-          const enabled = Boolean(detail.enabled);
-          if (enabled && !confirmed) throw new Error('set_wallpaper_mode requires explicit user confirmation');
-          const state = await applyWallpaperMode(enabled, { presentation: 'workbench' });
-          respond({
-            ok: true,
-            action,
-            enabled: state.enabled,
-            presentation: state.presentation,
-            workspace: state.workspace,
-          });
-          return;
-        }
-        const registeredSurface = getPersonalClientSurfaceByAction(action);
-        if (registeredSurface?.organizationView) {
-          const requestedView = normalizeOrganizationWorkspaceView(
-            registeredSurface.organizationViewByAction?.[action]
-            || registeredSurface.organizationView,
-          );
-          if (!requestedView) throw new Error(`Unknown organization workspace section for action: ${action}`);
-          await openOrganizationSurface(requestedView, action);
-          return;
-        }
-        if (registeredSurface) {
-          if (registeredSurface.settingsSection) setSettingsSection(registeredSurface.settingsSection);
-          const requestedCommandView = registeredSurface.commandCenterViewByAction?.[action];
-          if (requestedCommandView) {
-            openCommandCenter(requestedCommandView);
-            const rendered = await waitForClientSurfaceRendered('command-center');
-            if (!rendered) {
-              reject('Lumi command center state changed, but the visible surface did not render.');
-              return;
-            }
-            window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-            respond({
-              ok: true,
-              action,
-              target: registeredSurface.target,
-              surface: registeredSurface.id,
-              view: requestedCommandView,
-              rendered: true,
-            });
-            return;
-          }
-          if (action === 'open_avatar_studio') setPersonalizationSection('appearance');
-          if (action === 'open_sound_studio') setPersonalizationSection('voice');
-          openSurface(registeredSurface.target);
-          const requiresWindowCommit = ![
-            'home',
-            'nexus',
-            'app-launcher',
-            'org',
-            'knowledge',
-            'command-center',
-            'notifications',
-            'memory-avatar',
-          ].includes(registeredSurface.target);
-          if (requiresWindowCommit) {
-            const rendered = await waitForClientSurfaceRendered(registeredSurface.target);
-            if (!rendered) {
-              reject(`Lumi client state changed, but ${registeredSurface.target} did not render visibly.`);
-              return;
-            }
-            window.dispatchEvent(new CustomEvent('lumi:client-state-refresh'));
-          }
-          respond({
-            ok: true,
-            action,
-            target: registeredSurface.target,
-            surface: registeredSurface.id,
-            section: registeredSurface.settingsSection || '',
-            rendered: requiresWindowCommit ? true : undefined,
-          });
-          return;
-        }
-        throw new Error(`Unsupported client action: ${action}`);
-      } catch (err: any) {
-        reject(err?.message || String(err));
-      }
-    };
-
-    window.addEventListener('lumi:client-action', handler);
-    return () => window.removeEventListener('lumi:client-action', handler);
-  }, [activeTab, applyWallpaperMode, closeKnowledgeBase, closeMemoryAvatar, closeWindow, endMeetingAndReport, enterDesktopWidgetMode, exitDesktopWidgetMode, focusedWindow, isDesktopWidgetMode, inferSurfaceReturnTarget, openKnowledgeBase, openMemoryAvatar, openCommandCenter, openWindows, operationMode, orgConnection?.connected, orgConnection?.orgRole, resetMeetingCapture, setActiveTab, setOperationMode, setViewMode, switchDomain, workDomain, wallpaperWorkspace, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle]);
+  useClientSurfaceActions({
+    activeTab, applyWallpaperMode, closeSurface, endMeetingAndReport, enterDesktopWidgetMode, exitDesktopWidgetMode, isDesktopWidgetMode, openCommandCenter, openSurface, openWindows, operationMode, orgConnection, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, setPersonalizationSection
+  });
 
   useEffect(() => {
     if (!socket) return;
@@ -2873,6 +2458,6 @@ export function DesktopUI({
       />
     );
   }
-  return <DesktopShellView {...{ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, setViewMode, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, surfaceReturnTargetRef, setChatOpen, setActiveTab, setKnowledgeOpen, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, setFocusedWindow, setOpenWindows, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, setNexusReturnTarget, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }} />;
+  return <DesktopShellView {...{ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, setFocusedWindow, setOpenWindows, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }} />;
 
 }

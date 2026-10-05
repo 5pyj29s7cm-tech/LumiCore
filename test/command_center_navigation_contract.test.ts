@@ -34,7 +34,7 @@ describe('command center navigation contract', () => {
 
   it('returns from an OS core opened by the command center back to the office', () => {
     const desktop = source('src/components/DesktopUI.tsx');
-    expect(desktop).toContain("setNexusReturnTarget('command-center')");
+    expect(desktop).toContain("openSurface('nexus', 'command-center')");
     expect(desktop).toContain("if (nexusReturnTarget === 'command-center') openCommandCenter('office')");
   });
 

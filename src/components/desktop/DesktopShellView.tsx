@@ -70,22 +70,20 @@ personalScale: import("motion/react").MotionValue<number>;
 personalOpacity: import("motion/react").MotionValue<number>;
 syncRate: number;
 t: any;
-setViewMode: React.Dispatch<React.SetStateAction<"personal" | "world">>;
 nexusReturnTarget: "command-center" | "home";
 openCommandCenter: (view?: CommandCenterView) => void;
 setSyncRate: React.Dispatch<React.SetStateAction<number>>;
 handleTopbarPointerDown: (event: React.PointerEvent<HTMLDivElement>) => Promise<void>;
 toggleWindow: (tab: string) => void;
+openSurface: (target: string, returnTarget?: SurfaceReturnTarget) => void;
+closeSurface: (target: string) => void;
 setShowOnboarding: React.Dispatch<React.SetStateAction<boolean>>;
 tutorialLabel: any;
 workDomain: "personal" | "work";
 switchDomain: ReturnType<typeof useApp>["switchDomain"];
 orgConnection: ReturnType<typeof useApp>["orgConnection"];
 activeTab: string;
-surfaceReturnTargetRef: React.RefObject<"home" | "command-center">;
-setChatOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setActiveTab: (tab: string) => void;
-setKnowledgeOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setMemoryLabOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setSanctuaryOpen: React.Dispatch<React.SetStateAction<boolean>>;
 setSanctuaryAgent: React.Dispatch<any>;
@@ -199,7 +197,6 @@ closeKnowledgeBase: () => void;
 chatLoaded: boolean;
 commandCenterView: CommandCenterView;
 setCommandCenterView: React.Dispatch<React.SetStateAction<CommandCenterView>>;
-setNexusReturnTarget: React.Dispatch<React.SetStateAction<"command-center" | "home">>;
 callError: string;
 chatPrefill: { text: string; source: string; };
 creationRequestId: string;
@@ -213,7 +210,7 @@ openMemoryAvatarLab: (returnTarget?: SurfaceReturnTarget) => void;
 setMemoryAvatars: React.Dispatch<React.SetStateAction<any[]>>;
 enterCreatedMemoryAvatar: (avatar: any) => void;
 };
-export function DesktopShellView({ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, setViewMode, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, surfaceReturnTargetRef, setChatOpen, setActiveTab, setKnowledgeOpen, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, setFocusedWindow, setOpenWindows, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, setNexusReturnTarget, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }: DesktopShellViewInput) {
+export function DesktopShellView({ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, setFocusedWindow, setOpenWindows, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }: DesktopShellViewInput) {
 
   return (
     <div
@@ -346,10 +343,7 @@ export function DesktopShellView({ resolvedAppearanceMode, viewMode, desktopChro
               </motion.div>
 
               <motion.button
-                onClick={() => {
-                  setViewMode('personal');
-                  if (nexusReturnTarget === 'command-center') openCommandCenter('office');
-                }}
+                onClick={() => closeSurface('nexus')}
                 className="lumi-ink-return-button group px-10 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-xs font-black text-white/60 tracking-[0.4em] uppercase transition-all backdrop-blur-2xl hover:text-white hover:border-white/20"
               >
                 {nexusReturnTarget === 'command-center'
@@ -404,24 +398,8 @@ export function DesktopShellView({ resolvedAppearanceMode, viewMode, desktopChro
               onSelectDomain={switchDomain}
               connected={orgConnection?.connected ?? false}
               organizationOpen={activeTab === 'org'}
-              onOpenOrganization={() => {
-                surfaceReturnTargetRef.current = 'home';
-                setChatOpen(false);
-                setActiveTab('org');
-              }}
-              onCloseOrganization={() => {
-                // The top-bar switch is the single way out of the full-screen
-                // command center. Returning to Personal closes its overlay;
-                // there is intentionally no second exit button in the chat.
-                surfaceReturnTargetRef.current = 'home';
-                setChatOpen(false);
-                setKnowledgeOpen(false);
-                setMemoryLabOpen(false);
-                setSanctuaryOpen(false);
-                setSanctuaryAgent(null);
-                setChatPrefill(null);
-                setActiveTab('home');
-              }}
+              onOpenOrganization={() => openSurface('org')}
+              onCloseOrganization={() => closeSurface('command-center')}
               commandCenterOpen={chatOpen || knowledgeOpen || memoryLabOpen || sanctuaryOpen}
               onOpenCommandCenter={() => openCommandCenter('office')}
             />
@@ -1379,21 +1357,11 @@ export function DesktopShellView({ resolvedAppearanceMode, viewMode, desktopChro
             t={t}
             user={user}
             isOpen={chatOpen}
-            onClose={() => {
-              surfaceReturnTargetRef.current = 'home';
-              setChatOpen(false);
-              setActiveTab('home');
-              setChatPrefill(null);
-            }}
+            onClose={() => closeSurface('command-center')}
             layout="command-center"
             commandCenterView={commandCenterView}
             onCommandCenterViewChange={setCommandCenterView}
-            onOpenNexus={() => {
-              setChatOpen(false);
-              setNexusReturnTarget('command-center');
-              setViewMode('world');
-              setActiveTab('home');
-            }}
+            onOpenNexus={() => openSurface('nexus', 'command-center')}
             onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}
             onOpenKnowledge={() => {
               openKnowledgeBase('command-center');

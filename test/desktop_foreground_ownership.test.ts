@@ -58,6 +58,10 @@ it('keeps one window order across reopen, minimize, close, and returning home', 
     ...state, setOpenWindows: set('openWindows'), setMinimizedWindows: set('minimizedWindows'), setFocusedWindow: set('focusedWindow'),
     setActiveTab: set('activeTab'), sounds: { playClick: noop }, surfaceReturnTargetRef: { current: 'home' },
     setKnowledgeOpen: noop, setMemoryLabOpen: noop, setSanctuaryOpen: noop, setSanctuaryAgent: noop,
+    setChatOpen: noop, setChatPrefill: noop, setViewMode: noop, setIsSearchOpen: noop, setIsNotificationPanelOpen: noop,
+    memoryAvatarOpenGenerationRef: { current: 0 }, inferSurfaceReturnTarget: () => 'home', normalizeTarget: (value: string) => value,
+    dismissUtilitySurfaces: (keep?: string) => invoke('dismissUtilitySurfaces', keep as string),
+    openSurface: (value: string) => invoke('openSurface', value),
   })(tab);
   const open = (tab: string) => invoke('toggleWindow', tab);
   open('settings'); open('terminal'); open('settings'); open('settings');
