@@ -244,13 +244,13 @@ describe('Lumi learning interface', () => {
 
     expect(voiceSource).toContain('const persistVoiceLearning');
     expect(voiceSource).toContain('persistLumiPostTurnLearning');
-    expect(voiceSource).toContain("channel: 'workflow'");
-    expect(voiceSource).toContain('voice quick command');
+    expect(voiceSource).not.toContain('executeSkillWorkflowAdapter');
+    expect(voiceSource).not.toContain('preMatchedQuickResult');
     expect(voiceSource).not.toContain('voice cognition direct');
     expect(voiceSource).toContain('voice confirmation');
     expect(voiceSource).not.toContain('voice music execution');
     expect(voiceSource).not.toContain('voice music shortcut');
-    expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBeGreaterThanOrEqual(7);
+    expect(voiceSource.match(/persistVoiceLearning\(/g)?.length || 0).toBe(5);
 
   });
 });

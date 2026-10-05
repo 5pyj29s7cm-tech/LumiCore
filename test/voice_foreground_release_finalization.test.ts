@@ -605,7 +605,7 @@ describe('voice foreground release convergence', () => {
     expect(await getPendingConfirmationDurably(identity.userId, confirmationScope)).toBeNull();
   });
 
-  it('keeps immutable identity and converges before fast-path, exception, cancel, and finally release', () => {
+  it('keeps immutable identity and converges before retained control, exception, cancel, and model finally release', () => {
     const source = readFileSync('server/socket/voice.ts', 'utf8');
 
     const identityAt = source.indexOf('const foregroundRequestIdentity: VoiceForegroundRequestIdentity = Object.freeze({');
@@ -648,7 +648,8 @@ describe('voice foreground release convergence', () => {
     expect(workLaneReleaseAt).toBeGreaterThan(desktopReleaseAt);
     expect(workHeartbeatReleaseAt).toBeGreaterThan(workLaneReleaseAt);
 
-    expect(source).toContain("completedReason: 'Voice quick-command fast path completed.'");
+    expect(source).not.toContain('preMatchedQuickResult');
+    expect(source).toContain("completedReason: 'Voice mode-switch fast path completed.'");
     expect(source).toContain('release: releaseVoiceTurnResources');
     expect(source).toContain("releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.')");
 
