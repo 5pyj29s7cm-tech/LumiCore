@@ -600,7 +600,7 @@ export function registerChatHandler(
     const persistAuthorizedTerminalReceipt = (
       event: 'agent:response' | 'agent:error', payload: Record<string, any>, unknownPayload: Record<string, any>,
     ) => persistAuthorizedReceipt({ scope: executionScope, requestId, event, payload, unknownPayload,
-      authorization: turnAuthorization, conversationIsCurrent: conversationAuthorization.isCurrent, channel: 'chat' });
+      authorization: turnAuthorization, conversationIsCurrent: conversationAuthorization.isCurrent, channel: 'chat', flush: flushDBOrThrow });
     const commitDeterministicTerminal = async (input: {
       event?: 'agent:response' | 'agent:error';
       payload: Record<string, any>;

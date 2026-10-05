@@ -6,7 +6,6 @@ import {
   runWithConversationTerminalDurabilityStage,
   type ConversationTerminalPersistenceUnknownProjection,
 } from '../conversation/manager';
-import { flushDBOrThrow } from '../../db_layer';
 import { conversationExists, type RequestAuthorization } from '../conversation/lifecycle';
 import { CN_TASK_EXECUTION_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
 import { recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
@@ -21,6 +20,7 @@ export function persistAuthorizedTerminalReceipt(input: {
   authorization: Pick<RequestAuthorization, 'isCurrent'>;
   conversationIsCurrent?: () => boolean;
   channel: 'chat' | 'voice';
+  flush: () => Promise<void>;
 }): Promise<boolean> {
   let revoked = false;
   return recordChatExecutionTerminalEventDurably(input.scope, input.requestId, input.event, input.payload, input.unknownPayload, {
@@ -40,7 +40,7 @@ export function persistAuthorizedTerminalReceipt(input: {
       // The publisher and resource finalizer must also observe the safer terminal, without old artifacts or task metadata.
       for (const key of Object.keys(input.payload)) delete input.payload[key];
       Object.assign(input.payload, payload);
-      await flushDBOrThrow();
+      await input.flush();
       return { event: 'agent:response', payload };
     },
   });

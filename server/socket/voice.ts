@@ -1801,7 +1801,7 @@ async function processVoiceInput(
       flush: flushDBOrThrow,
       persistTerminalReceipt: () => persistAuthorizedTerminalReceipt({ scope: executionScope, requestId,
         event: 'agent:response', payload: terminalPayload, unknownPayload: executionUnknownPayload,
-        authorization: turnAuthorization, channel: 'voice' }),
+        authorization: turnAuthorization, channel: 'voice', flush: flushDBOrThrow }),
       persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
         executionScope,
         requestId,
