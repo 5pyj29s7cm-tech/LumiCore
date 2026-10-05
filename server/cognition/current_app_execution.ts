@@ -51,10 +51,6 @@ export function isWpsCreateTask(text: string, appTarget = ''): boolean {
     && CREATE_INTENT_RE.test(primary);
 }
 
-export function isWpsCreateAndTypeTask(text: string, appTarget = ''): boolean {
-  return isWpsCreateTask(text, appTarget) && WRITE_INTENT_RE.test(primaryTurnText(text));
-}
-
 function recordFailed(record: ToolExecutionRecord): boolean {
   if (record.error || !String(record.result || '').trim()) return true;
   const payload = parseTaskTargetJson(record.result) as any;

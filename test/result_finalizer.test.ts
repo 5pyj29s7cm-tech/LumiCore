@@ -268,13 +268,8 @@ describe('Lumi result finalizer', () => {
   });
 
   it('allows a truthful explanation that a routed subset is not the tool inventory', async () => {
-    const { buildCapabilityMetaResponse } = await import('../server/cognition/capability_meta');
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
-    const responseText = buildCapabilityMetaResponse({
-      text: '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
-      operationMode: 'assistant',
-      source: 'command-center-chat',
-    })!;
+    const responseText = 'Lumi selects only the tools relevant to this turn. That subset is not the installed capability inventory and does not mean other tools are disabled.';
     const result = finalizeLumiResponse({
       taskText: '\u90a3\u8981\u600e\u4e48\u624d\u80fd\u8ba9\u4f60\u4f7f\u7528\u5176\u5b83\u5de5\u5177',
       responseText,

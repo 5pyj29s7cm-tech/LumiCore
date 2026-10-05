@@ -7,10 +7,6 @@ import http from "http";
 import { Server } from "socket.io";
 import { getJwtSecret } from "../config/local_identity";
 
-export const asyncHandler = (fn: (req: express.Request, res: express.Response, next?: express.NextFunction) => Promise<any>) =>
-  (req: express.Request, res: express.Response, next: express.NextFunction) =>
-    Promise.resolve(fn(req, res, next)).catch(next);
-
 export interface AppContext {
   app: express.Express;
   server: http.Server;

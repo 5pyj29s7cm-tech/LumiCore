@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
 import {
-  buildSelfIntroductionPlan,
   getSelfModelSnapshot,
   updateClientState,
 } from '../server/client/self_model';
@@ -53,58 +52,30 @@ describe('live Lumi self model snapshot', () => {
     expect(snapshot.runtime).toMatchObject({ refreshRequired: false, refreshAction: null });
   });
 
-  it('builds verbal and visible-demo introductions from the same snapshot', () => {
+  it('keeps the fact digest stable across adjacent reads of the same live snapshot', () => {
     const observedAt = Date.now();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(observedAt);
-    const verbal = buildSelfIntroductionPlan('self-snapshot-user');
-    clock.mockReturnValue(observedAt + 2_000);
-    const visible = buildSelfIntroductionPlan('self-snapshot-user', {}, { visibleDemo: true });
-    clock.mockRestore();
-
-    expect(verbal.mode).toBe('verbal');
-    expect(verbal.demoCandidates.every(candidate => !candidate.enabled)).toBe(true);
-    expect(visible.mode).toBe('visible_demo');
-    expect(visible.snapshotFactDigest).toBe(verbal.snapshotFactDigest);
-    expect(visible.refreshRequired).toBe(false);
-    expect(visible.demoCandidates.find(candidate => candidate.applicationId === 'lumi-client')?.enabled).toBe(true);
-    expect(visible.demoCandidates
-      .filter(candidate => candidate.applicationId !== 'lumi-client')
-      .every(candidate => !candidate.enabled)).toBe(true);
-    const explicitWps = buildSelfIntroductionPlan('self-snapshot-user', {}, {
-      visibleDemo: true,
-      requestText: 'Show a visible Lumi demo in WPS',
-    });
-    expect(explicitWps.demoCandidates.some(candidate => (
-      candidate.applicationId.startsWith('wps-') && candidate.enabled
-    ))).toBe(true);
-    expect(visible.documentText).toContain('索引不等于完全吸收');
-    expect(visible.statements.map(statement => statement.evidence)).toContain('live model role configuration');
-    expect(visible.statements[0].text).toContain(`${snapshotIdentityName(verbal)}，运行在 LumiCore 中`);
-    expect(visible.statements.every(statement => statement.observedAt === visible.snapshotGeneratedAt)).toBe(true);
-    expect(visible.statements.map(statement => statement.source)).toEqual(expect.arrayContaining([
-      'self_model.identity',
-      'self_model.configuredModels',
-      'self_model.connectedCapabilities',
-      'self_model.knowledgeCoverage',
-      'self_model.runtime',
-    ]));
+    try {
+      const first = getSelfModelSnapshot('self-snapshot-user');
+      clock.mockReturnValue(observedAt + 2_000);
+      const second = getSelfModelSnapshot('self-snapshot-user');
+      expect(second.factDigest).toBe(first.factDigest);
+      expect(second.identity).toEqual(first.identity);
+      expect(second.connectedCapabilities).toEqual(first.connectedCapabilities);
+      expect(second.runtime.sourceUpdatedAt).toBe(first.runtime.sourceUpdatedAt);
+      expect(second.runtime.refreshRequired).toBe(false);
+      expect(second.knowledgeCoverage.verifiedAbsorption).toBe(false);
+    } finally { clock.mockRestore(); }
   });
 
   it('keeps disconnected cross-channel facts qualified behind one refresh contract', () => {
-    const chat = buildSelfIntroductionPlan('self-missing-user');
-    const voice = buildSelfIntroductionPlan('self-missing-user');
+    const chat = getSelfModelSnapshot('self-missing-user');
+    const voice = getSelfModelSnapshot('self-missing-user');
 
-    expect(chat.snapshotFactDigest).toBe(voice.snapshotFactDigest);
-    expect(chat.statements.map(statement => statement.text)).toEqual(
-      voice.statements.map(statement => statement.text),
-    );
-    expect(chat.refreshRequired).toBe(true);
-    expect(chat.refreshActions).toEqual(['client_self_repair(refresh_client_state)']);
+    expect(chat.factDigest).toBe(voice.factDigest);
+    expect(chat.identity).toEqual(voice.identity);
+    expect(chat.runtime.refreshRequired).toBe(true);
+    expect(chat.runtime.refreshAction).toBe('client_self_repair(refresh_client_state)');
     expect(getSelfModelSnapshot('self-missing-user').runtime.awareness).toBe('missing');
   });
 });
-
-function snapshotIdentityName(plan: ReturnType<typeof buildSelfIntroductionPlan>): string {
-  const match = plan.statements[0].text.match(/^我是\s+([^，]+)/u);
-  return match?.[1] || '';
-}

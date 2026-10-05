@@ -41,7 +41,6 @@ import type { CapabilityLane, CapabilityManifestEntry } from '../tools/types';
 import { selectManifestCapabilities } from '../tools/capability_projection';
 import { getLumiModelConfiguration, LUMI_MODEL_ROLES } from '../llm/model_configuration';
 import { DESKTOP_APPLICATION_REGISTRY } from '../desktop/execution_plan';
-import { CN_SELF_INTRODUCTION_COPY } from '../regions/packs/cn/self_introduction';
 import { listRegisteredProviders } from '../extensions/registry';
 
 export type ClientMode = LumiClientMode;
@@ -337,29 +336,6 @@ export interface SelfModelSnapshot {
   };
   limitations: string[];
   generatedAt: string;
-}
-
-export interface SelfIntroductionPlan {
-  schemaVersion: 1;
-  snapshotGeneratedAt: string;
-  snapshotFactDigest: string;
-  refreshRequired: boolean;
-  refreshActions: string[];
-  mode: 'verbal' | 'visible_demo';
-  statements: Array<{
-    text: string;
-    evidence: string;
-    source: string;
-    observedAt: string;
-    qualified: boolean;
-  }>;
-  demoCandidates: Array<{
-    applicationId: string;
-    enabled: boolean;
-    reason: string;
-    requiresPreflight: boolean;
-  }>;
-  documentText: string;
 }
 
 const CLIENT_CAPABILITIES: ClientCapability[] = [
@@ -1715,91 +1691,6 @@ export function getSelfModelSnapshot(
   };
   const factDigest = crypto.createHash('sha256').update(JSON.stringify(digestCore)).digest('hex');
   return { ...snapshotCore, factDigest, generatedAt: new Date().toISOString() };
-}
-
-export function buildSelfIntroductionPlan(
-  userId: string,
-  scope: { domain?: 'personal' | 'work'; orgId?: string } = {},
-  options: { visibleDemo?: boolean; requestText?: string } = {},
-): SelfIntroductionPlan {
-  const snapshot = getSelfModelSnapshot(userId, scope);
-  const configuredModels = snapshot.configuredModels.filter(model => model.configured);
-  const statements: SelfIntroductionPlan['statements'] = [
-    {
-      text: CN_SELF_INTRODUCTION_COPY.identity(snapshot.identity),
-      evidence: 'identity and scope contract',
-      source: 'self_model.identity',
-      observedAt: snapshot.generatedAt,
-      qualified: false,
-    },
-    {
-      text: CN_SELF_INTRODUCTION_COPY.modelRoles(configuredModels.length, snapshot.configuredModels.length),
-      evidence: 'live model role configuration',
-      source: 'self_model.configuredModels',
-      observedAt: snapshot.generatedAt,
-      qualified: configuredModels.length !== snapshot.configuredModels.length,
-    },
-    {
-      text: CN_SELF_INTRODUCTION_COPY.capabilities(
-        snapshot.connectedCapabilities.tools,
-        snapshot.connectedCapabilities.skills,
-        snapshot.connectedCapabilities.mcp,
-      ),
-      evidence: 'runtime capability manifest',
-      source: 'self_model.connectedCapabilities',
-      observedAt: snapshot.generatedAt,
-      qualified: snapshot.connectedCapabilities.adaptersAttention > 0,
-    },
-    {
-      text: CN_SELF_INTRODUCTION_COPY.knowledgeCoverage(snapshot.knowledgeCoverage),
-      evidence: 'current scoped knowledge inventory',
-      source: 'self_model.knowledgeCoverage',
-      observedAt: snapshot.generatedAt,
-      qualified: snapshot.knowledgeCoverage.verification !== 'indexed_unverified',
-    },
-    {
-      text: CN_SELF_INTRODUCTION_COPY.runtime(snapshot.runtime.awareness, snapshot.runtime.health),
-      evidence: 'client health and execution constitution',
-      source: 'self_model.runtime',
-      observedAt: snapshot.generatedAt,
-      qualified: snapshot.runtime.awareness !== 'live' || snapshot.runtime.health !== 'ok',
-    },
-  ];
-  const explicitlyRequestedApplication = DESKTOP_APPLICATION_REGISTRY
-    .filter(application => application.id !== 'lumi-client')
-    .find(application => (
-    application.aliases.some(alias => String(options.requestText || '').toLowerCase().includes(alias.toLowerCase()))
-  ))?.id;
-  const demoCandidates = snapshot.desktopCapabilities.map(application => ({
-    applicationId: application.id,
-    enabled: options.visibleDemo === true && (
-      application.id === 'lumi-client'
-      || application.id === explicitlyRequestedApplication
-    ),
-    reason: application.id === 'lumi-client'
-      ? `client awareness is ${snapshot.runtime.awareness}`
-      : `${application.certification}; installed-process preflight is still required`,
-    requiresPreflight: application.id !== 'lumi-client',
-  }));
-  return {
-    schemaVersion: 1,
-    snapshotGeneratedAt: snapshot.generatedAt,
-    snapshotFactDigest: snapshot.factDigest,
-    refreshRequired: snapshot.runtime.refreshRequired,
-    refreshActions: snapshot.runtime.refreshAction ? [snapshot.runtime.refreshAction] : [],
-    mode: options.visibleDemo ? 'visible_demo' : 'verbal',
-    statements,
-    demoCandidates,
-    documentText: [
-      CN_SELF_INTRODUCTION_COPY.title,
-      '',
-      ...statements.map(statement => statement.text),
-      '',
-      CN_SELF_INTRODUCTION_COPY.capabilityBoundary,
-      ...snapshot.limitations.map(limitation => `- ${limitation}`),
-      CN_SELF_INTRODUCTION_COPY.snapshotTime(snapshot.generatedAt),
-    ].join('\n'),
-  };
 }
 
 function isConfirmationSensitiveClientAction(action: string, mode?: string): boolean {
