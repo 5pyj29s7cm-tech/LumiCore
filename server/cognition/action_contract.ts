@@ -33,6 +33,7 @@ import {
   CN_RESULT_GROUNDING_MESSAGES,
 } from '../regions/packs/cn/voice_fast_path_messages';
 import {
+  hasMixedStatusExecutionIntent,
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,
   normalizeActionIntent,
@@ -141,13 +142,15 @@ function compact(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function isNamedPersistentWorkTaskStatusQuery(text: string): boolean {
+export function isNamedPersistentWorkTaskStatusQuery(text: string): boolean {
   const value = compact(text);
   const namesExactTask = /(?:\u4efb\u52a1|task)\s*[\u201c"']([^\u201d"']{1,140})[\u201d"']/iu.test(value);
   const namesPersistentLedger = /(?:\u6301\u4e45\u72b6\u6001|\u4efb\u52a1\u8d26\u672c|\u6301\u4e45\u4efb\u52a1)|\b(?:persistent task|task ledger)\b/iu.test(value);
   const asksStatus = /(?:\u67e5\u8be2|\u67e5\u770b|\u72b6\u6001|\u8fdb\u5ea6)|\b(?:query|status|progress)\b/iu.test(value);
   const createsTask = /(?:\u521b\u5efa|\u65b0\u5efa|\u6dfb\u52a0).{0,12}(?:\u6301\u4e45)?\u4efb\u52a1|\b(?:create|add)\b.{0,20}\b(?:persistent\s+)?task\b/iu.test(value);
-  return namesExactTask && namesPersistentLedger && asksStatus && !createsTask;
+  const namesTaskId = /\bwt_task_[A-Za-z0-9_-]+\b/u.test(value);
+  return (namesExactTask || namesTaskId) && namesPersistentLedger && asksStatus
+    && !createsTask && !hasMixedStatusExecutionIntent(value);
 }
 
 function unique(values: string[]): string[] {
@@ -281,6 +284,11 @@ function currentAppMutationRequirements(input: string) {
 export function extractRequestedCurrentAppText(primary: string): string {
   const quoted = primary.match(/(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\b(?:write|type|paste)\b)[^“”"'`\r\n]{0,12}[“"'`]([^”"'`\r\n]{2,240})[”"'`]/iu)?.[1];
   if (quoted) return compact(quoted);
+  const multiline = primary.match(/(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\b(?:write|type|paste)\b)\s*(?:\u5185\u5bb9)?\s*[:\uff1a][^\S\r\n]*\r?\n([\s\S]+)/iu)?.[1];
+  if (multiline) {
+    // i18n-allow: Separate trailing delivery instructions from an explicit multiline payload.
+    return multiline.split(/\r?\n(?=(?:完成后|写入后|只根据|(?:after (?:writing|completion)|once complete)\b))/iu)[0].trim();
+  }
   const afterColon = primary.match(/(?:\u5199\u5165|\u8f93\u5165|\u7c98\u8d34|\b(?:write|type|paste)\b)\s*(?:\u5185\u5bb9)?\s*[:\uff1a]\s*([^\r\n]{2,240})/iu)?.[1];
   // Text after an explicit colon is payload, not sentence decoration. Preserve
   // terminal punctuation so the native application receives exactly what the

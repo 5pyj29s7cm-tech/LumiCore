@@ -35,6 +35,4 @@ export const CN_SELF_INTRODUCTION_COPY = {
   snapshotTime(generatedAt: string): string {
     return `快照时间：${generatedAt}`;
   },
-  demoFallback:
-    '刚才的可视化自我介绍没有完整跑完。你可以再明确说“Lumi，演示一下你自己”，我会根据当前实时能力重新规划演示。',
 } as const;

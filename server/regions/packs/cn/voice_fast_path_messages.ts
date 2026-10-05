@@ -96,15 +96,10 @@ export function formatCnClientActionTargetLabel(action: string, fallback = ''): 
 
 export const CN_VOICE_FAST_PATH_MESSAGES = {
   genericToolAction: '请求的操作',
-  audible: '能听见。你说。',
-  opening: (target: string) => `正在打开${target}。`,
   opened: (target: string) => `已打开${target}。`,
   partialOpen: (target: string) => `已打开${target}，但后续操作还没有验证成功。`,
   postOpenObservationIncomplete: '后续窗口焦点核验没有完成，但这不影响已经完成的打开动作。',
   partialArtifact: (path: string) => `文件已生成：${path}。但没有在目标应用中完成对应操作。`,
-  openFailed: (target: string, error: string) => `这次没能打开${target}：${formatCnToolFailureDetail(error)}`,
-  openReceiptMissing: (target: string) => `这次没有拿到${target}的启动回执。`,
-  openConfirmedByUser: '好，已经打开了。',
   interruptedActivity: (task: string) => `刚才在处理“${task}”，被你打断后还没有完成。`,
   idleActivity: '现在没有正在执行的任务，我在听你说。',
   confirmationExecuted: '已执行你刚刚确认的操作。',
@@ -127,40 +122,6 @@ export const CN_VOICE_FAST_PATH_MESSAGES = {
     };
     return `已切到${labels[mode] || labels.assistant}。`;
   },
-  knowledgeStats: (raw: string, error?: string) => {
-    if (error) return `这次没能读取知识库统计：${formatCnToolFailureDetail(error)}`;
-    try {
-      const stats = JSON.parse(String(raw || '{}'));
-      const total = Number(stats.totalFiles || 0);
-      const indexed = Number(stats.indexedFiles || 0);
-      const partial = Number(stats.partialFiles || 0);
-      const failed = Number(stats.failedFiles || 0);
-      const files = Array.isArray(stats.files) ? stats.files : [];
-      const pending = files.filter((file: any) => String(file?.status || '') === 'pending').length;
-      const names = files
-        .map((file: any) => String(file?.name || '').trim())
-        .filter(Boolean)
-        .slice(0, 5);
-      const blocked = files
-        .filter((file: any) => Array.isArray(file?.blockers) && file.blockers.length > 0)
-        .slice(0, 3)
-        .map((file: any) => `${String(file?.name || '未命名文件')}：${file.blockers.join('、')}`);
-      const status = total > 0
-        ? `，其中已索引${indexed}个${pending ? `、待索引${pending}个` : ''}${partial ? `、部分索引${partial}个` : ''}${failed ? `、异常${failed}个` : ''}`
-        : '';
-      const availability = total === 0
-        ? '当前知识库为空'
-        : indexed === total && failed === 0 && blocked.length === 0
-          ? '当前知识库可用'
-          : indexed > 0
-            ? '当前知识库部分可用'
-            : '当前知识库尚不可用';
-      return `${availability}，共有${total}个文件${status}${names.length ? `。文件包括：${names.join('、')}` : '。'}${blocked.length ? `。当前阻塞：${blocked.join('；')}` : '。当前没有文件级错误或阻塞记录。'}`;
-    } catch {
-      return '这次没有拿到可解析的知识库统计结果。';
-    }
-  },
-  readingKnowledgeStats: '正在读取知识库统计。',
 } as const;
 
 export const CN_VOICE_WORK_MESSAGES = {

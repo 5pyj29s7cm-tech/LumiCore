@@ -412,16 +412,14 @@ function selectLane(input: LumiCapabilitySelectionInput, analysis: TurnAnalysis)
     };
   }
 
-  if (input.dispatch.boundary === 'skill_workflow' || flow.workflowHint || flow.specialWorkflow) {
-    const workflow = flow.workflowHint || flow.specialWorkflow;
+  if (flow.workflowHint) {
+    const workflow = flow.workflowHint;
     return {
       lane: 'skill_workflow',
-      primary: workflow ? `${workflow.skillId}/${workflow.id}` : 'matched skill workflow',
+      primary: `${workflow.skillId}/${workflow.id}`,
       reasons: [
         ...reasons,
-        flow.workflowRouting === 'model_hint'
-          ? 'a learned workflow matched as an advisory capability candidate; the model still owns respond-versus-act'
-          : 'an isolated learned workflow adapter matched this turn',
+        'a learned workflow matched as an advisory capability candidate; the model still owns respond-versus-act',
       ],
     };
   }
@@ -669,7 +667,7 @@ export function buildLumiCapabilitySelection(input: LumiCapabilitySelectionInput
     ...essentialToolsForLane(selected.lane).filter(isHardAuthorized),
     ...contractPreferredTools,
     ...desktopObservationTools,
-    ...((input.dispatch.flow.workflowHint || input.dispatch.flow.specialWorkflow)?.requiredTools || [])
+    ...(input.dispatch.flow.workflowHint?.requiredTools || [])
       .filter(isHardAuthorized),
     ...availablePreferredTools(input, selected.lane),
   ]).filter(name => (

@@ -7,15 +7,15 @@ describe('chat and voice finalized delivery paths', () => {
   const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
   const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
 
-  it('keeps special workflow adapters out of main chat and isolated on voice', () => {
+  it('keeps workflow adapters out of both interactive transports', () => {
     expect(chat).not.toContain('executeSkillWorkflowAdapter');
     expect(chat).not.toContain('const finalizedWorkflow = finalizeLumiResponse({');
     expect(chat).not.toContain('estimateSkillWorkflowChatSpeechMs');
 
-    expect(voice).toContain('speak: async () => 0');
-    expect(voice).toContain('speechText: workflowSpeechText');
+    expect(voice).not.toContain('executeSkillWorkflowAdapter');
+    expect(voice).not.toContain('finalizedWorkflowSpeech');
     expect(voice).toContain('queueFinalizedSpeech(input.speechText!)');
-    expect(voice).toContain('source: specialWorkflow.source');
+    expect(voice).toContain('runToolSession({');
   });
 
   it('does not run named workflow regex shortcuts in main chat', () => {
@@ -58,11 +58,11 @@ describe('chat and voice finalized delivery paths', () => {
     }
   });
 
-  it('keeps ordinary voice replies complete and summarizes only the self-intro workflow', () => {
+  it('speaks the complete finalized reply without a second workflow summary', () => {
     expect(voice).not.toContain('maxCharacters: 280');
     expect(voice).not.toContain('maxSpokenCharacters');
-    expect(voice).toContain('workflowSpeechSummary');
-    expect(voice).toContain('finalizedWorkflowSpeech');
+    expect(voice).not.toContain('workflowSpeechSummary');
+    expect(voice).toContain('speechText: responseText');
   });
 
   it('answers receipt-backed status follow-ups deterministically in both chat and voice', () => {

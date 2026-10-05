@@ -64,7 +64,7 @@ export interface LumiIntentTrace {
     selfRepairTurn: boolean;
     autoPromoteToAssistant: boolean;
     workTakeover: boolean;
-    specialWorkflow: string | null;
+    workflowHint: string | null;
     completionEvidenceNeeded: boolean;
   };
   matchedRules: LumiIntentTraceRule[];
@@ -141,7 +141,7 @@ function buildReasons(input: {
   if (flow.selfRepairTurn) reasons.push('self-repair turn should inspect, repair once when safe, then verify');
   if (flow.autoPromoteToAssistant) reasons.push('work wording requested assistant execution');
   if (flow.workTakeover.shouldResumeTask) reasons.push('active work takeover context is being resumed');
-  if (flow.specialWorkflow) reasons.push(`skill workflow matched:${flow.specialWorkflow.id}`);
+  if (flow.workflowHint) reasons.push(`skill workflow matched:${flow.workflowHint.id}`);
   if (flow.completionEvidenceNeeded) reasons.push('completion evidence is needed before claiming done');
   if (flow.executionGovernance.verificationIntent !== 'none') {
     reasons.push(`verification:${flow.executionGovernance.verificationIntent}`);
@@ -179,7 +179,7 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput, analysis?
     flow.clientActionOnlyTurn ? { layer: 'turn_flow', name: 'client-action-only-turn' } : null,
     flow.selfRepairTurn ? { layer: 'turn_flow', name: 'self-repair-turn' } : null,
     flow.workTakeover.shouldResumeTask ? { layer: 'turn_flow', name: 'work-takeover-resume' } : null,
-    flow.specialWorkflow ? { layer: 'turn_flow', name: `skill-workflow:${flow.specialWorkflow.id}` } : null,
+    flow.workflowHint ? { layer: 'turn_flow', name: `skill-workflow:${flow.workflowHint.id}` } : null,
     toolRoute ? { layer: 'tool_route', name: `categories:${toolRoute.categories.join(',') || 'fallback'}` } : null,
   ].filter(Boolean) as LumiIntentTraceRule[]);
 
@@ -211,7 +211,7 @@ export function buildLumiIntentTrace(input: BuildLumiIntentTraceInput, analysis?
       selfRepairTurn: flow.selfRepairTurn,
       autoPromoteToAssistant: flow.autoPromoteToAssistant,
       workTakeover: flow.workTakeover.shouldResumeTask,
-      specialWorkflow: flow.specialWorkflow?.id || null,
+      workflowHint: flow.workflowHint?.id || null,
       completionEvidenceNeeded: flow.completionEvidenceNeeded,
     },
     matchedRules,

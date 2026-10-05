@@ -435,7 +435,7 @@ const MIXED_STATUS_SIGNAL_RE =
   /(?:\u72b6\u6001|\u8fdb\u5ea6|\u7ed3\u679c|(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u597d)(?:\u4e86)?(?:\u5417|\u6ca1|\u4e86\u6ca1)|\u662f\u5426.{0,16}(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c)|\b(?:status|progress|result)\b|\b(?:is|was|has)\b.{0,24}\b(?:done|complete|completed|finished|successful)\b|\bwhether\b.{0,24}\b(?:done|complete|completed|finished)\b)/iu;
 
 const CN_MIXED_STATUS_EXECUTION_RE =
-  /(?:\u5982\u679c|\u82e5|\u8981\u662f|\u5047\u5982).{0,18}(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,12}(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|[\uff1f?\uff1b;\u3002]\s*(?:(?:\u8bf7|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u7136\u540e|\u90a3\u5c31|\u5c31)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?/u;
+  /(?:\u5982\u679c|\u82e5|\u8981\u662f|\u5047\u5982).{0,18}(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,18}(?:(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|(?:\u6ca1\u6709|\u6ca1|\u672a|\u5c1a\u672a)(?:\u5b8c\u6210|\u505a\u5b8c|\u6267\u884c\u5b8c|\u6210\u529f)[^\u3002\uff01\uff1f.!?\n]{0,12}(?:\u5c31|\u5219|\u90a3\u5c31|\u8bf7|\u9a6c\u4e0a|\u7acb\u5373|\u73b0\u5728)\s*(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)|[\uff1f?\uff1b;\u3002]\s*(?:(?:\u8bf7|\u73b0\u5728|\u9a6c\u4e0a|\u7acb\u5373|\u7136\u540e|\u90a3\u5c31|\u5c31)\s*)?(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210|\u505a\u5b8c)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?/u;
 
 const EN_MIXED_STATUS_EXECUTION_RE =
   /\bif\s+(?:(?:not|unfinished|incomplete)\b|(?:(?:it|this|that|the\s+task)\s+)?(?:is|was|has\s+been)?\s*(?:not|isn['\u2019]?t|wasn['\u2019]?t|hasn['\u2019]?t)\s+(?:done|complete|completed|finished|successful)\b)[^.!?;\n]{0,28}\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b|[?;.!]\s*(?:(?:if\s+(?:not|unfinished|incomplete)|then|please|now)\s*[,;:]?\s*)*(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)\b/iu;
@@ -506,7 +506,7 @@ export function isRecentActionReceiptQuery(text: string): boolean {
 }
 
 const CN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
-  /(?:[\uff1f?\uff1b;\uff0c,\u3002.!\u2026\n]\s*(?:(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)?|(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)(?!(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5|\u53ea|\u4ec5))(?:(?:\u8bf7|\u9a6c\u4e0a|\u7acb\u5373)\s*)?(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)/u;
+  /(?:[\uff1f?\uff1b;\uff0c,\u3002.!\u2026\n]\s*(?:(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)?|(?:\u7136\u540e|\u73b0\u5728|\u63a5\u7740|\u4e0b\u4e00\u6b65|\u53e6\u5916|\u5e76(?:\u4e14)?|\u518d)\s*)(?!(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u5fc5|\u53ea|\u4ec5))(?:(?:\u8bf7|\u9a6c\u4e0a|\u7acb\u5373)\s*)?(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u7eed\u63a5|\u5b8c\u6210|\u505a\u5b8c|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)|[:：]\s*(?:(?:请|现在)\s*)?(?:完成|执行|做完)(?:第[一二三四五六七八九十\d]+步|步骤)(?!\s*(?:了(?:吗|没)|(?:过)?吗|没有?|呢|[？?]))/u;
 
 const EN_INDEPENDENT_ACTION_AFTER_STATUS_RE =
   /(?:[?;.!,\u2026\n]\s*(?:(?:then|now|next|also|and|please)\s*[,;:]?\s*)*|\b(?:(?:and\s+)?(?:then|now|next|also)|and)\b\s*)(?!(?:do\s+not|don['\u2019]?t|never|only|just\s+(?:answer|report))\b)(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed|call|use|check|verify|inspect)\b/iu;
@@ -515,7 +515,7 @@ const EN_TRAILING_ACTION_QUESTION_RE =
   /\b(?:open|launch|start|create|save|write|send|close|delete|modify|update|export|upload|download|install|continue|resume|retry|re-?try|execute|run|finish|complete|proceed|call|use|check|verify|inspect)\b[^.!?;\n]{0,64}\?\s*$/iu;
 
 const CN_TRAILING_ACTION_QUESTION_RE =
-  /(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)[^\u3002\uff01!\uff1b;\n]{0,64}(?:(?:\u4e86|\u8fc7)?\u5417|\u4e86\u6ca1|\u6ca1\u6709?|\u5462|\u662f\u5426|\u662f\u4e0d\u662f)[\uff1f?]?\s*$/u;
+  /(?:\u6253\u5f00|\u542f\u52a8|\u65b0\u5efa|\u521b\u5efa|\u4fdd\u5b58|\u5199\u5165|\u53d1\u9001|\u5173\u95ed|\u5220\u9664|\u4fee\u6539|\u5bfc\u51fa|\u4e0a\u4f20|\u4e0b\u8f7d|\u5b89\u88c5|\u7ee7\u7eed|\u7eed\u63a5|\u5b8c\u6210|\u505a\u5b8c|\u6062\u590d|\u91cd\u8bd5|\u6267\u884c|\u5904\u7406|\u8c03\u7528|\u4f7f\u7528|\u68c0\u67e5|\u6838\u5b9e|\u6838\u9a8c)[^\u3002\uff01!\uff1b;\n]{0,64}(?:(?:\u4e86|\u8fc7)?\u5417|\u4e86\u6ca1|\u6ca1\u6709?|\u5462|\u662f\u5426|\u662f\u4e0d\u662f)[\uff1f?]?\s*$/u;
 
 /**
  * A status question is not status-only when the same turn also contains an
@@ -529,7 +529,8 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
   const hasTaskStatusSignal = MIXED_STATUS_SIGNAL_RE.test(text);
   const hasRecentActionStatusSignal = isRecentActionReceiptQuery(text);
   if (!hasTaskStatusSignal && !hasRecentActionStatusSignal) return false;
-  const chineseExecutionQuestion = /(?:\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210)?|\u63a5\u7740(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u505a)?|\u6062\u590d(?:\u6267\u884c|\u4efb\u52a1)?|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?(?:\u4e86)?(?:(?:\u5417|\u6ca1|\u6ca1\u6709|\u5462)[\uff1f?]?|[\uff1f?])\s*$/u.test(text);
+  const chineseExecutionQuestion = /(?:\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u5b8c\u6210)?|\u63a5\u7740(?:\u6267\u884c|\u5904\u7406|\u63a8\u8fdb|\u505a)?|\u6062\u590d(?:\u6267\u884c|\u4efb\u52a1)?|\u91cd\u8bd5|\u518d\u8bd5|\u91cd\u65b0\u6267\u884c|\u6267\u884c|\u5904\u7406|\u63a8\u8fdb)(?:\u5b83|\u8fd9\u4e2a|\u90a3\u4e2a|\u4efb\u52a1)?(?:\u4e86)?(?:(?:\u5417|\u6ca1|\u6ca1\u6709|\u5462)[\uff1f?]?|[\uff1f?])\s*$/u.test(text)
+    || CN_TRAILING_ACTION_QUESTION_RE.test(text);
   const englishExecutionQuestion = /\b(?:continue|resume|retry|re-?try|execute|run|finish|complete|proceed)(?:\s+(?:executing|execution|running|working\s+on|with)(?:\s+(?:it|this|that|the\s+task))?)?\s*\?\s*$/iu.test(text)
     || EN_TRAILING_ACTION_QUESTION_RE.test(text);
   const chineseIndependentAction = CN_INDEPENDENT_ACTION_AFTER_STATUS_RE.test(text)
@@ -538,7 +539,7 @@ export function hasMixedStatusExecutionIntent(value: string): boolean {
     && !EN_TRAILING_ACTION_QUESTION_RE.test(text);
   return (CN_MIXED_STATUS_EXECUTION_RE.test(text) && !chineseExecutionQuestion)
     || (EN_MIXED_STATUS_EXECUTION_RE.test(text) && !englishExecutionQuestion)
-    || (hasRecentActionStatusSignal && chineseIndependentAction)
+    || ((hasRecentActionStatusSignal || hasTaskStatusSignal) && chineseIndependentAction)
     || (hasRecentActionStatusSignal && englishIndependentAction);
 }
 

@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
 import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
-import { buildQuickCommandToolPolicy } from '../server/cognition/quick_commands';
 import { buildOperationModeToolPolicy } from '../server/cognition/operation_modes';
 import {
   shouldAllowToolUseForTurn,
@@ -33,8 +32,6 @@ describe('model-owned main chat architecture', () => {
     });
 
     expect(dispatch.flow.workflowHint?.id).toBe('self_intro_demo');
-    expect(dispatch.flow.workflowRouting).toBe('model_hint');
-    expect(dispatch.flow.specialWorkflow).toBeNull();
     expect(dispatch.boundary).not.toBe('skill_workflow');
     expect(dispatch.flow.promptOverlay).toContain('capability candidates');
   });
@@ -172,20 +169,11 @@ describe('model-owned main chat architecture', () => {
     });
   });
 
-  it('keeps quick-command matches fail-closed and wires the main model loop to the hard capability policy', () => {
-    const policy = {
-      allowedTools: ['client_get_state'],
-      forbiddenTools: ['desktop_run_command'],
-      requireConfirmation: [],
-      maxIterations: 4,
-    };
-    expect(buildQuickCommandToolPolicy(policy, 'browser_open_task')).toBe(policy);
+  it('wires the main model loop to the hard capability policy', () => {
 
     const chatSource = readFileSync(path.resolve(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chatSource).toContain('toolPolicy: modelCapabilityPolicy');
     expect(chatSource).toContain('// ── Model-owned natural-language dispatch');
-    expect(chatSource).not.toContain('buildDeterministicClientNavigationCommand');
-    expect(chatSource).not.toContain('buildQuickCommandToolPolicy');
     expect(chatSource).not.toContain('quickFinalized');
     expect(chatSource).not.toContain('const directlyAppliedMode');
     expect(chatSource).not.toContain('registerBackgroundTask');

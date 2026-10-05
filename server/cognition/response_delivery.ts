@@ -53,7 +53,7 @@ export interface FinalizedOutputGateInput {
     | 'clientActionOnlyTurn'
     | 'completionEvidenceNeeded'
     | 'routeText'
-    | 'specialWorkflow'
+    | 'workflowHint'
     | 'workSurfaceRoute'
     | 'workTakeover'
   >;
@@ -76,7 +76,7 @@ export function shouldDeferModelOutputUntilFinalized(
     || input.flow.allowToolUseForTurn
     || input.flow.selfRepairTurn
     || input.flow.clientActionOnlyTurn
-    || input.flow.specialWorkflow
+    || input.flow.workflowHint
     || input.flow.completionEvidenceNeeded
     || input.flow.workSurfaceRoute.directDesktop
     || input.flow.workSurfaceRoute.artifactFirst

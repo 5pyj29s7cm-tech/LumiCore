@@ -155,7 +155,6 @@ describe('Lumi turn flow', () => {
     expect(dispatch.flow.allowToolUseForTurn).toBe(false);
     expect(dispatch.flow.clientActionOnlyTurn).toBe(false);
     expect(dispatch.flow.selfRepairTurn).toBe(false);
-    expect(dispatch.flow.specialWorkflow).toBeNull();
     expect(dispatch.flow.routeText).not.toContain('active task');
     if (channel === 'chat') {
       expect(dispatch.promptOverlay).toContain('only text entry');

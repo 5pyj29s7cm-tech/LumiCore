@@ -95,9 +95,6 @@ export interface LumiTurnFlow {
   workTakeover: WorkTakeoverContinuityContext;
   /** Matched reusable workflow exposed to the model as a capability hint. */
   workflowHint?: SkillWorkflowDescriptor | null;
-  /** Chat keeps workflow matching advisory; isolated execution surfaces may opt into the adapter. */
-  workflowRouting?: 'none' | 'model_hint' | 'isolated_adapter';
-  specialWorkflow: SkillWorkflowDescriptor | null;
   executionGovernance: LumiExecutionGovernance;
   completionEvidenceNeeded: boolean;
   routeText: string;
@@ -153,8 +150,8 @@ export function buildTurnFlowPromptOverlay(flow: Omit<LumiTurnFlow, 'promptOverl
     ].filter(Boolean).join('\n');
   }
   const focus: string[] = [];
-  if (flow.workflowHint || flow.specialWorkflow) {
-    focus.push(`skill_workflow_hint=${(flow.workflowHint || flow.specialWorkflow)?.skillId}`);
+  if (flow.workflowHint) {
+    focus.push(`skill_workflow_hint=${flow.workflowHint.skillId}`);
   }
   if (!flow.conceptualCapabilityQuestion && flow.workTakeover.shouldResumeTask) focus.push(`active_task=${flow.workTakeover.latestTask?.id || 'unknown'}`);
   if (!flow.conceptualCapabilityQuestion && flow.workTakeover.strength === 'hint') focus.push(`task_hint=${flow.workTakeover.latestTask?.id || 'unknown'}`);
@@ -391,15 +388,18 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     orgId: input.orgId,
     surface,
   });
+  const currentActionContract = analysis.contract(input.text);
   const rawClientActionIntent = !conceptualCapabilityQuestion
     && !explicitNoToolInstruction
+    && !currentActionContract.components?.length
     && hasClientActionOnlyIntent(input.text, analysis);
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const continuationNamesExternalTarget = continuationMayDriveAction
     && /(?:desktop_|wechat_|browser_|mcp_|AutoCAD|\bCAD\b|微信|浏览器)/iu.test(continuationContext); // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   const clientActionIntent = rawClientActionIntent && !continuationNamesExternalTarget;
-  const currentActionContract = analysis.contract(input.text);
-  const readOnlyConversationTurn = isStoredMemoryRecallQuestion(input.text)
+  // i18n-allow: A standalone Chinese completed-action acknowledgement has no new instruction.
+  const completedActionAcknowledgement = /^(?:已经|已)?(?:打开|关闭|保存|发送|完成)(?:好)?了[。.!！\s]*$/u.test(input.text);
+  const readOnlyConversationTurn = completedActionAcknowledgement || isStoredMemoryRecallQuestion(input.text)
     || isConversationalProductFeedback(input.text, analysis)
     || (
       explicitNoMutationInstruction
@@ -464,16 +464,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const matchedWorkflow = immediateAssistantRestatement || conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
     ? null
     : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
-  // Main chat is open-ended natural language. A regex workflow match may enrich
-  // the capability prompt, but it cannot own dispatch, expand permissions, or
-  // produce a terminal answer before the model sees the manifest. Task/autonomy
-  // entry points remain the isolated deterministic adapter boundary.
-  const workflowRouting = !matchedWorkflow
-    ? 'none' as const
-    : isInteractiveTurnChannel(input.channel)
-      ? 'model_hint' as const
-      : 'isolated_adapter' as const;
-  const specialWorkflow = workflowRouting === 'isolated_adapter' ? matchedWorkflow : null;
   const derivedExecution = buildExecutionGovernance({
     text: routingText,
     flowInput: input,
@@ -530,8 +520,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     workSurfaceRoute,
     workTakeover,
     workflowHint: matchedWorkflow,
-    workflowRouting,
-    specialWorkflow,
     executionGovernance: execution.governance,
     completionEvidenceNeeded: execution.completionEvidenceNeeded,
     routeText: readOnlyConversationTurn

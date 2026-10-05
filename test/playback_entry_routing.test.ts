@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildDesktopExecutionPlan, resolveDesktopApplicationIdentity } from '../server/desktop/execution_plan';
 import { createDesktopExecutionTracker } from '../server/desktop/execution_runtime';
-import { buildDeterministicLocalDesktopNavigationCommand } from '../server/cognition/quick_commands';
-import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 
 describe('natural playback reaches the actual player and the full execution loop', () => {
   it.each([
@@ -30,18 +28,5 @@ describe('natural playback reaches the actual player and the full execution loop
     const ordinary = buildDesktopExecutionPlan({ text: '打开 WPS', lane: 'desktop_control' });
     expect(ordinary.application.id).toBe('wps-writer');
     expect(ordinary.expectedWindow.requestedTarget).toBe('打开 WPS');
-  });
-  it.each([
-    '打开爱奇艺并播放蜡笔小新第一集',
-    '打开爱奇艺，然后播放蜡笔小新第一集。',
-    'Open YouTube and play Shin Chan episode one',
-    '打开网易云并播放秋天不回来',
-  ])('does not let an open-only shortcut consume the complete playback goal: %s', async task => {
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(task), task)).toBeNull();
-  });
-  it('retains the existing quick command for an actual open-only request', async () => {
-    const task = '打开爱奇艺';
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(task), task)?.toolCall)
-      .toMatchObject({ name: 'desktop_open', arguments: { target: '爱奇艺' } });
   });
 });

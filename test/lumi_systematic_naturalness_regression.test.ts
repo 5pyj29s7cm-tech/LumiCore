@@ -17,7 +17,6 @@ import {
 import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
 import { resolveAcceptedTaskTarget } from '../server/conversation/task_target_anchor';
 import { registerAllTools } from '../server/tools/definitions';
-import { buildDeterministicLocalDesktopNavigationCommand } from '../server/cognition/quick_commands';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import {
@@ -124,16 +123,6 @@ describe('systematic naturalness regressions', () => {
     });
     expect(result.executionRequested).toBe(true);
     expect(result.modelToolProjection.toolNames).toContain('web_login_run');
-  });
-
-  it('does not collapse a compound workflow name into an application launch', () => {
-    for (const text of ['打开微信消息值守', '打开返现主页']) {
-      expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toBeNull();
-    }
-    const text = '打开网易云音乐';
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)?.toolCall).toEqual({
-      name: 'desktop_open', arguments: { target: '网易云音乐' },
-    });
   });
 
   it('uses one canonical wildcard policy for model visibility and execution', async () => {

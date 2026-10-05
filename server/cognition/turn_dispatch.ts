@@ -11,7 +11,6 @@ export type LumiTurnBoundary =
   | 'conversation'
   | 'client_action'
   | 'self_repair'
-  | 'skill_workflow'
   | 'work_takeover'
   | 'task_center'
   | 'tool_action';
@@ -34,7 +33,6 @@ function classifyBoundary(flow: LumiTurnFlow): LumiTurnBoundary {
   if (flow.conceptualCapabilityQuestion) return 'conversation';
   if (flow.clientActionOnlyTurn) return 'client_action';
   if (flow.selfRepairTurn) return 'self_repair';
-  if (flow.specialWorkflow) return 'skill_workflow';
   if (flow.workTakeover.shouldResumeTask) return 'work_takeover';
   if (flow.allowToolUseForTurn) return 'tool_action';
   return 'conversation';
@@ -46,8 +44,6 @@ function boundaryRule(boundary: LumiTurnBoundary): string {
       return 'This turn only changes or inspects Lumi client state. Keep it on the client surface and do not drift into external tools.';
     case 'self_repair':
       return 'This turn is about Lumi fixing or inspecting itself. Inspect state first, make one safe recovery when possible, then verify.';
-    case 'skill_workflow':
-      return 'This turn may use a learned skill workflow. Parameterize it from the user wording; do not behave like a fixed demo script.';
     case 'work_takeover':
       return 'This turn continues an existing task. Bind follow-ups to the task center, preserve blockers/artifacts, and verify before claiming completion.';
     case 'task_center':

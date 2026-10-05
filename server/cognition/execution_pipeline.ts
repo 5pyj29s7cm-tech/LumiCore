@@ -271,73 +271,6 @@ function hasTrustedActionContinuation(input: BuildLumiExecutionPipelineInput, re
     && isCurrentContinuationTask(input.dispatch.text, state));
 }
 
-function applySelectedWorkflowAdapterPolicy(
-  execution: LumiExecutionDecision,
-  turnIntent: LumiTurnDispatch,
-  registry: ToolRegistry,
-  personalityToolPolicy?: ToolPolicy,
-  isSanctuary?: boolean,
-  visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
-): LumiExecutionDecision {
-  const workflow = turnIntent.flow.specialWorkflow;
-  if (!workflow || isSanctuary) return execution;
-  const configuredAllowed = new Set(personalityToolPolicy?.allowedTools || []);
-  const configuredForbidden = new Set(personalityToolPolicy?.forbiddenTools || []);
-  const configuredWildcard = configuredAllowed.has('*');
-  const hasConfiguredBoundary = Boolean(personalityToolPolicy);
-  const executable = new Map(registry
-    .getCapabilityManifest(undefined, { executableOnly: true, context: visibilityContext })
-    .map(entry => [entry.toolName, entry]));
-  const requiredTools = workflow.requiredTools.filter(toolName => (
-    executable.has(toolName)
-    && (!hasConfiguredBoundary || configuredWildcard || configuredAllowed.has(toolName))
-    && !configuredForbidden.has('*')
-    && !configuredForbidden.has(toolName)
-  ));
-  if (requiredTools.length === 0) return execution;
-  const route = execution.toolRoute || {
-    toolNames: [],
-    categories: [],
-    reasons: [],
-    totalAvailable: registry.getToolDeclarations({ context: visibilityContext }).length,
-    maxTools: requiredTools.length,
-    truncated: false,
-  };
-  return {
-    ...execution,
-    allowToolUse: true,
-    toolRoute: {
-      ...route,
-      toolNames: Array.from(new Set([...route.toolNames, ...requiredTools])),
-      categories: Array.from(new Set([...route.categories, 'skill_workflow_adapter'])),
-      reasons: Array.from(new Set([
-        ...route.reasons,
-        `semantic plan selected workflow adapter ${workflow.skillId}/${workflow.id}`,
-      ])),
-      maxTools: Math.max(route.maxTools, route.toolNames.length + requiredTools.length),
-    },
-    toolPolicy: {
-      ...execution.toolPolicy,
-      allowedTools: Array.from(new Set([
-        ...(execution.toolPolicy.allowedTools || []).filter(name => name !== '*'),
-        ...requiredTools,
-      ])),
-      requireConfirmation: Array.from(new Set([
-        ...(execution.toolPolicy.requireConfirmation || []),
-        ...requiredTools.filter(name => executable.get(name)?.requiresConfirmation),
-      ])),
-      forbiddenTools: (execution.toolPolicy.forbiddenTools || [])
-        .filter(name => name !== '*' && !requiredTools.includes(name)),
-      maxIterations: Math.max(execution.toolPolicy.maxIterations || 0, requiredTools.length + 2),
-    },
-    maxIterations: Math.max(execution.maxIterations, requiredTools.length + 2),
-    promptOverlay: [
-      execution.promptOverlay,
-      `Selected workflow adapter is restricted to: ${requiredTools.join(', ')}.`,
-    ].filter(Boolean).join('\n'),
-  };
-}
-
 /**
  * One channel-independent planning path:
  * TurnIntent -> CapabilityPlan -> TaskLedger (owned by conversation manager)
@@ -473,14 +406,7 @@ export function buildLumiExecutionPipeline(
   const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
   const execution = applyAdditionalForbiddenTools(
     applyCurrentTurnNoMutationConstraint(
-      applySelectedWorkflowAdapterPolicy(
-        applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
-        turnIntent,
-        input.registry,
-        input.personalityToolPolicy,
-        input.isSanctuary,
-        visibilityContext,
-      ),
+      applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
       input.registry,
       constraintText,
       visibilityContext,
@@ -517,9 +443,7 @@ export function buildLumiExecutionPipeline(
     actionTaskState: input.actionTaskState,
     trustedActionContinuation,
   }, new Set(input.registry.getToolDeclarations({ context: visibilityContext }).map(declaration => declaration.function.name)));
-  const workflowRequiredTools = (
-    turnIntent.flow.workflowHint || turnIntent.flow.specialWorkflow
-  )?.requiredTools || [];
+  const workflowRequiredTools = turnIntent.flow.workflowHint?.requiredTools || [];
   const actionVerificationTools = analysis.contract(decisionText).verificationTools || [];
   const modelToolProjection = buildModelToolProjection(execution, {
     lane: selection.lane,

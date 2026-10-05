@@ -211,9 +211,7 @@ describe('Lumi capability selection', () => {
       targetIsLumi: true,
     });
     expect(demo.dispatch.boundary).not.toBe('skill_workflow');
-    expect(demo.dispatch.flow.specialWorkflow).toBeNull();
     expect(demo.dispatch.flow.workflowHint?.id).toBe('self_intro_demo');
-    expect(demo.dispatch.flow.workflowRouting).toBe('model_hint');
     expect(demo.selection.lane).toBe('skill_workflow');
     expect(demo.selection.primary).toContain('self_intro_demo');
     expect(demo.selection.promptOverlay).toContain('model owns the final respond-versus-act decision');
@@ -276,7 +274,6 @@ describe('Lumi capability selection', () => {
     });
 
     expect(dispatch.boundary).toBe('tool_action');
-    expect(dispatch.flow.specialWorkflow).toBeNull();
     expect(dispatch.flow.workSurfaceRoute.artifactFirst).toBe(true);
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(selection.lane).toBe('design_cad');
@@ -309,8 +306,6 @@ describe('Lumi capability selection', () => {
       text: 'Live AutoCAD acceptance test. Prepare operations for a 4000 by 3000 room, then draw visibly through AutoCAD MCP/COM and require the completion marker.',
       operationMode: 'assistant',
     });
-
-    expect(dispatch.flow.specialWorkflow).toBeNull();
     expect(dispatch.flow.workSurfaceRoute.directDesktop).toBe(true);
     expect(selection.lane).toBe('design_cad');
     expect(selection.preferredTools).toEqual(expect.arrayContaining([

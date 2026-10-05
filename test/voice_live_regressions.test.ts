@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuickCommandToolPolicy, buildDeterministicLocalDesktopNavigationCommand, buildDeterministicKnowledgeInspectionCommand } from '../server/cognition/quick_commands';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
@@ -54,14 +53,8 @@ describe('live voice regression cases', () => {
   });
 
   it('keeps combined WeChat inquiry out of the generic app-open quick path', async () => {
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开微信，问一下阿陆在干嘛。'), '打开微信，问一下阿陆在干嘛。')).toBeNull();
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开微信看下我有多少个联系人，把这些联系人的名字都记住。'), '打开微信看下我有多少个联系人，把这些联系人的名字都记住。')).toBeNull();
     expect(buildActionContract('打开微信，问一下阿陆在干嘛。').kind).toBe('messaging_send');
     expect(buildActionContract('我没有户型图发给你。').kind).toBe('none');
-  });
-
-  it('does not swallow a compound AutoCAD workflow as one app name', async () => {
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来'), '打开桌面上的阿陆文件夹，看一下里面的图和需求，在 AutoCAD 里面把这个需求画出来')).toBeNull();
   });
 
   it('treats criticism of client navigation as feedback, not another navigation command', () => {
@@ -80,36 +73,6 @@ describe('live voice regression cases', () => {
       },
     ];
     expect(buildRecentActionContinuationBridge('切换到联系人页面', history)).toBe('');
-  });
-
-  it('focuses an existing app without treating the rest of the sentence as its name', () => {
-    const text = '打开正在运行的微信，不要启动新的微信。';
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toMatchObject({
-      toolCall: { name: 'desktop_open', arguments: { target: '微信' } },
-    });
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent('打开了。'), '打开了。')).toBeNull();
-  });
-
-  it('never lets a deterministic quick hint widen the authorized route policy', () => {
-    const policy = buildQuickCommandToolPolicy({
-      allowedTools: ['client_get_state'],
-      forbiddenTools: ['desktop_run_command'],
-      requireConfirmation: [],
-      maxIterations: 4,
-    }, 'browser_open_task');
-    expect(policy?.allowedTools).toEqual(['client_get_state']);
-    expect(buildQuickCommandToolPolicy({ ...policy!, forbiddenTools: ['browser_open_task'] }, 'browser_open_task'))
-      .toMatchObject({ forbiddenTools: ['browser_open_task'] });
-  });
-
-  it('uses dedicated browser and knowledge tools for the exact spoken requests', () => {
-    const text = '打开中国裁判文书网。';
-    expect(buildDeterministicLocalDesktopNavigationCommand(normalizeActionIntent(text), text)).toMatchObject({
-      toolCall: { name: 'browser_open_task', arguments: { url: 'https://wenshu.court.gov.cn/', open: true } },
-    });
-    expect(buildDeterministicKnowledgeInspectionCommand('看一下现在知识库里有多少的文件内容。')).toMatchObject({
-      toolCall: { name: 'knowledge_file_stats' },
-    });
   });
 
   it('requires strong visible evidence before treating a searched chat as ready', () => {

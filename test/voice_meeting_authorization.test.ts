@@ -7,9 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({
-  stream: vi.fn(), model: vi.fn(), transcribe: vi.fn(), learning: vi.fn(),
+  errors: [] as string[], tools: vi.fn(), stream: vi.fn(), model: vi.fn(), transcribe: vi.fn(), learning: vi.fn(),
   summaries: vi.fn(), flushGate: vi.fn(), stt: [] as any[],
 }));
+vi.mock('../logger', () => ({ logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: (...args: any[]) => { mocks.errors.push(args.map(String).join(' ')); } } }));
 vi.mock('../server/stt/adapter', async original => ({
   ...await original<typeof import('../server/stt/adapter')>(),
   getActiveStreamingSTTProvider: () => 'ark',
@@ -43,7 +44,7 @@ vi.mock('../server/llm/providers', async original => ({
 }));
 vi.mock('../server/llm/adapter', async original => ({
   ...await original<typeof import('../server/llm/adapter')>(),
-  runWithTools: vi.fn(() => { throw new Error('Unexpected tool execution in voice audit'); }),
+  runWithTools: (...args: any[]) => mocks.tools(...args),
 }));
 vi.mock('../server/llm/embedding_provider', async original => ({
   ...await original<typeof import('../server/llm/embedding_provider')>(),
@@ -72,6 +73,8 @@ vi.mock('../server/cognition/post_turn_learning', async original => {
 
 import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
 import { registerVoiceHandlers } from '../server/socket/voice';
+import { toolRegistry } from '../server/tools/registry';
+import { registerAllTools } from '../server/tools/definitions';
 import { createOrg, addMember, removeMember, getMember, updateMemberRole } from '../server/org/db';
 import { addMessage, getMessages, getOrCreateActiveConversation } from '../server/conversation/manager';
 import { waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';
@@ -114,8 +117,10 @@ function fixture(organization = false) {
   return { socket, userId, org };
 }
 const start = (sessionId: string, transcriptionOnly = false) => ({ sessionId, captureSessionId: sessionId, audioInputKind: 'physical_microphone', transcriptionOnly });
-beforeAll(async () => { await initDatabase(); });
+beforeAll(async () => { await initDatabase(); registerAllTools(toolRegistry); });
 beforeEach(() => {
+  mocks.errors.length = 0;
+  mocks.tools.mockReset().mockImplementation(() => { throw new Error('Unexpected tool execution in voice audit'); });
   mocks.stream.mockReset(); mocks.model.mockReset(); mocks.transcribe.mockReset();
   mocks.learning.mockClear(); mocks.summaries.mockClear(); mocks.flushGate.mockReset().mockResolvedValue(undefined); mocks.stt.length = 0;
   mocks.model.mockResolvedValue({ text: JSON.stringify({ correctsIdentity: false }), toolCalls: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
@@ -446,4 +451,38 @@ describe('meeting capture ownership and complete paused recordings', () => {
     expect(fs.readdirSync(directory).filter(name => name.endsWith('.pcm'))).toEqual([path.basename(firstPath)]);
     expect(fs.readdirSync(directory).some(name => name.endsWith('.tmp'))).toBe(false);
   });
+});
+
+describe('natural voice commands use the shared model and tool loop', () => {
+  it.each(['打开聊天界面', '打开AutoCAD。', '看一下现在知识库里有多少的文件内容。',
+    '打开 WPS，然后新建文档，在正文写入：语音共享入口测试。'])(
+    'routes %s through the shared loop without a detached shortcut and releases after the durable terminal', async text => {
+      const { socket } = fixture();
+      socket.data.trustedLocalExecution = true;
+      mocks.tools.mockResolvedValue({ text: 'This synthetic attempt cannot complete the requested action.',
+        toolCalls: [], usageRecords: [], completionGuard: { blocked: true, text: 'This synthetic attempt cannot complete the requested action.',
+          reason: 'missing_execution_evidence' } });
+      await socket.receive('audio:start', start('shared-model-' + sequence));
+      await mocks.stt.at(-1).final(text);
+      await vi.waitFor(() => expect(mocks.tools, JSON.stringify({ errors: mocks.errors, outputs: socket.outputs.map(([event, data]) => ({ event, status: data?.status, reason: data?.reason, message: data?.message, text: data?.text })) })).toHaveBeenCalled(), { timeout: 5000 });
+      const acceptedText = socket.outputs.find(([event]) => event === 'audio:confirm')?.[1].text;
+      expect(mocks.tools.mock.calls[0][0].at(-1).content).toBe(acceptedText);
+      expect(mocks.tools.mock.calls[0][11].toolPolicy).toBeDefined();
+      await vi.waitFor(() => expect(socket.outputs.filter(([event, data]) => event === 'agent:response' && data.finalized)).toHaveLength(1));
+      await vi.waitFor(() => expect(socket.data.audioSession.isProcessing).toBe(false));
+      expect(mocks.tools.mock.calls.length).toBeLessThanOrEqual(2); // One shared, bounded evidence recovery is permitted.
+      for (const call of mocks.tools.mock.calls) {
+        expect(call[11].requestId).toBe(mocks.tools.mock.calls[0][11].requestId);
+        expect(call[11].toolPolicy).toBe(mocks.tools.mock.calls[0][11].toolPolicy);
+      }
+      expect(socket.outputs.some(([event]) => event === 'desktop:tool_call')).toBe(false);
+      const terminal = socket.outputs.filter(([event, data]) => event === 'agent:response' && data.finalized)[0][1];
+      expect(terminal.blocked).toBe(true);
+      await waitForChatExecutionPersistence();
+      expect(terminal.conversationId).toBeTruthy();
+      const saved = getMessages(terminal.conversationId, 20).filter(message => message.role === 'assistant');
+      expect(saved).toHaveLength(1);
+      expect(saved[0].message).toBe(terminal.text);
+    }, 15000,
+  );
 });

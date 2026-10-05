@@ -162,7 +162,7 @@ function activeTaskContext(input: LumiRuntimeCapabilityContextInput): string {
 
 function skillLines(flow: LumiTurnFlow): string[] {
   const workflows = listSkillWorkflows();
-  const matched = flow.specialWorkflow;
+  const matched = flow.workflowHint;
   const relevant = matched
     ? [matched, ...workflows.filter(workflow => workflow.id !== matched.id).slice(0, 3)]
     : workflows.slice(0, 5);

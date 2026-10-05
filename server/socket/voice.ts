@@ -62,11 +62,9 @@ import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { extractSentiment } from "../cognition/sentiment";
 import type { LLMGetters as LlmGetters } from '../llm/dispatch';
 import { retrieveChunks } from "../agents/rag";
-import { executeSkillWorkflowAdapter } from "../skills/workflow_registry";
 import { queryMemories, addMemory } from "../memory/store";
 import { CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory/types";
 import { searchKnowledgeBase } from "../org/kb";
-import { buildDeterministicClientNavigationCommand, buildDeterministicExternalCommitConfirmationCommand, buildDeterministicKnowledgeInspectionCommand, buildDeterministicLocalDesktopNavigationCommand, buildDeterministicWorkTaskCreateCommand, buildDeterministicWpsDocumentCommand, buildQuickCommandToolPolicy, type QuickCommandResult } from "../cognition/quick_commands";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { getScopedPreferredLLM, getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { detectRequestedOperationMode, isPureOperationModeSwitchRequest, type OperationMode } from "../cognition/operation_modes";
@@ -86,7 +84,7 @@ import { createVoiceExecutionReceiptCollector } from './voice_execution_receipts
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { recoverBlockedExecutionOnce, sanitizeExecutionResponseForDelivery, sanitizeExecutionNotificationForDelivery } from "../cognition/execution_guard_recovery";
 import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
-import { buildCapabilityMetaResponse, isCapabilityMetaQuestion } from "../cognition/capability_meta";
+import { isCapabilityMetaQuestion } from "../cognition/capability_meta";
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
@@ -1093,12 +1091,8 @@ async function processVoiceInput(
   }
   const routedUserText = [actionIntentText, actionContinuationBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
   session.activeRoutingText = actionIntentText;
-  let preMatchedQuickResult: QuickCommandResult | null =
-    transcriptExecutionGuard.action === 'clarify'
-      ? { matched: true, responseText: transcriptExecutionGuard.responseText }
-      : null;
   const requestedModeHint = detectRequestedOperationMode(userText);
-  const skipKnowledgeRetrieval = Boolean(preMatchedQuickResult)
+  const skipKnowledgeRetrieval = transcriptExecutionGuard.action === 'clarify'
     || Boolean(requestedModeHint)
     || isCapabilityMetaQuestion(userText)
     || hasClientActionOnlyIntent(userText)
@@ -1275,40 +1269,6 @@ async function processVoiceInput(
       orgId: voiceScope.orgId,
     },
   );
-  const capabilityMetaResponse = buildCapabilityMetaResponse({
-    text: actionIntentText,
-    operationMode: turnFlow.effectiveOperationMode,
-    source: 'voice',
-  });
-  if (!preMatchedQuickResult && capabilityMetaResponse) {
-    preMatchedQuickResult = { matched: true, responseText: capabilityMetaResponse };
-  }
-  if (!preMatchedQuickResult && clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicClientNavigationCommand(
-      executionPipeline.normalizedIntent,
-    );
-  }
-  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicExternalCommitConfirmationCommand(
-      executionPipeline.normalizedIntent,
-      userText,
-    );
-  }
-  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicKnowledgeInspectionCommand(userText);
-  }
-  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicWorkTaskCreateCommand(userText);
-  }
-  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicWpsDocumentCommand(userText, turnFlow.currentAppEditTarget);
-  }
-  if (!preMatchedQuickResult && !clientActionOnlyTurn) {
-    preMatchedQuickResult = buildDeterministicLocalDesktopNavigationCommand(
-      executionPipeline.normalizedIntent,
-      userText,
-    );
-  }
   session.isBackgroundWork = requestedToolSession;
   session.activeWorkStatus = requestedToolSession ? 'planning' : 'idle';
   if (requestedToolSession && !session.workHeartbeatTimer) {
@@ -2544,10 +2504,7 @@ async function processVoiceInput(
   });
 
   if (transcriptExecutionGuard.action === 'clarify') {
-    // Resolve uncertain STT before any deterministic confirmation, workflow,
-    // mode switch, or tool branch.  Setting the tool projection to hard-off is
-    // necessary but not sufficient because isolated workflows do not enter the
-    // model tool loop at all.
+    // Resolve uncertain STT before confirmation, meeting control, or tools.
     responseText = transcriptExecutionGuard.responseText;
     await commitVoiceTerminal({
       text: responseText,
@@ -2912,97 +2869,7 @@ async function processVoiceInput(
     return;
   }
 
-  const specialWorkflow = turnFlow.specialWorkflow;
-  if (specialWorkflow) {
-    let workflowSpeechSummary = '';
-    try {
-      const workflowResult = await executeSkillWorkflowAdapter({
-        workflow: specialWorkflow,
-        plan: executionPipeline.executionPlan,
-        registry: toolRegistry,
-        context: toolContext,
-        options: {
-          socket,
-          userText,
-          userId: session.userId,
-          desktopRelay,
-          // The workflow returns its narration as responseText. TTS is queued
-          // only after the shared finalizer has inspected all tool receipts.
-          speak: async () => 0,
-          voiceScope,
-          isCancelled: () => Boolean(pipelineAbort?.signal.aborted) || !session.isActive,
-        },
-      });
-      responseText = workflowResult.responseText;
-      toolResults = workflowResult.toolCalls;
-      workflowSpeechSummary = String(
-        (workflowResult as typeof workflowResult & { speechSummary?: string }).speechSummary || '',
-      );
-    } catch (err: any) {
-      logger.warn(`[Audio] ${specialWorkflow.logLabel} failed: ${err?.message || err}`);
-      responseText = specialWorkflow.fallbackText;
-    }
-
-    const finalizedWorkflow = finalizeLumiResponse({
-      taskText: actionIntentText,
-      responseText,
-      toolRecords: taskAwareRecords(toolResults),
-      source: specialWorkflow.source,
-      flow: turnFlow,
-      taskId: actionTaskExecution.state?.taskId,
-      requestId,
-    });
-    responseText = finalizedWorkflow.text;
-    const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary
-      ? finalizedWorkflow
-      : finalizeLumiResponse({
-          taskText: actionIntentText,
-          responseText: workflowSpeechSummary,
-          toolRecords: toolResults,
-          source: specialWorkflow.source,
-          flow: turnFlow,
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
-        });
-    // A blocked independent speech summary must never replace the already
-    // finalized primary response. If the primary was blocked, speak its guard.
-    const workflowSpeechText = finalizedWorkflowSpeech.blocked
-      ? responseText
-      : finalizedWorkflowSpeech.text;
-    await finishVoiceTerminal({
-      text: responseText,
-      source: specialWorkflow.source,
-      blocked: finalizedWorkflow.blocked,
-      reason: finalizedWorkflow.reason || '',
-      cognitiveIntent: finalizedWorkflow.blocked ? 'work_product_guard' : (specialWorkflow.id || 'skill_workflow'),
-      llmWasCalled: false,
-      toolCalls: toolResults,
-      speechText: workflowSpeechText,
-      notification: finalizedWorkflow.notification,
-      persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
-        toolRecords: toolResults,
-        source: specialWorkflow.source,
-        sourceInteractionId: `voice_workflow_${Date.now()}`,
-        finalizationBlocked: finalizedWorkflow.blocked,
-        assistantTextTrusted: !finalizedWorkflow.blocked,
-        finalizationReason: finalizedWorkflow.reason,
-      }),
-    }, {
-      completedReason: 'Voice special workflow fast path completed.',
-      interruptedReason: 'Voice special workflow was interrupted.',
-      onCommitted: () => {
-        persistVoiceLearning(responseText, {
-          channel: 'workflow',
-          toolRecords: toolResults,
-          sourceInteractionId: `voice_workflow_${Date.now()}`,
-          logLabel: specialWorkflow.source,
-        });
-      },
-    });
-    return;
-  }
-
-  // ── Quick Command Fast-Path: deterministic commands skip LLM entirely ──
+  // Explicit meeting control keeps its immediate client acknowledgement.
   const directlyAppliedMode: OperationMode | null = requestedMode === 'meeting' ? 'meeting' : null;
   if (directlyAppliedMode) {
     let modeSynced = true;
@@ -3083,130 +2950,6 @@ async function processVoiceInput(
 
   const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
   const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
-  try {
-    const quickResult = preMatchedQuickResult;
-    if (
-      !foregroundWeChatReadArgs
-      && !foregroundWeChatSendArgs
-      && quickResult?.matched
-      && (!quickResult.toolCall || toolSessionActive)
-    ) {
-      logger.info(`[Audio] Quick command: "${userText}" → "${quickResult.responseText.slice(0, 50)}"`);
-      let quickResponseText = quickResult.responseText;
-      let quickToolResult = '';
-      let quickToolError: string | undefined;
-      let quickToolRecord: ToolExecutionRecord | null = null;
-      const quickToolRecords: ToolExecutionRecord[] = [];
-      if (quickResult.toolCall && session.isActive) {
-        const correlationId = `qc-${Date.now()}`;
-        const shouldEmitQuickTool = !isDirectDesktopTool(quickResult.toolCall.name);
-        quickToolRecord = await executeToolCall({
-          registry: toolRegistry,
-          id: correlationId,
-          name: quickResult.toolCall.name,
-          arguments: quickResult.toolCall.arguments,
-          context: {
-            ...toolContext,
-            toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, quickResult.toolCall.name),
-          },
-        });
-        quickToolRecords.push(quickToolRecord);
-        quickToolResult = quickToolRecord.result || '';
-        quickToolError = quickToolRecord.error;
-        if (quickToolRecord.error && shouldEmitQuickTool) {
-          emitAgent("agent:tool_call", {
-            correlationId,
-            name: quickResult.toolCall.name,
-            arguments: quickResult.toolCall.arguments,
-            error: quickToolRecord.error,
-          });
-        } else if (shouldEmitQuickTool) {
-          emitAgent("agent:tool_call", {
-            correlationId,
-            name: quickResult.toolCall.name,
-            arguments: quickResult.toolCall.arguments,
-            result: quickToolRecord.result?.slice(0, 500) || '',
-          });
-        }
-        if (quickResult.formatToolResult) {
-          quickResponseText = quickResult.formatToolResult(quickToolResult, quickToolError);
-        } else if (quickToolError) {
-          quickResponseText = `\u8fd9\u6b21\u6ca1\u6709\u5b8c\u6210\uff1a${quickToolError}`;
-        }
-        if (!quickToolRecord.error && quickResult.followUpToolCalls?.length) {
-          for (const followUp of quickResult.followUpToolCalls) {
-            const followUpCorrelationId = `qc-verify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const followUpRecord = await executeToolCall({
-              registry: toolRegistry,
-              id: followUpCorrelationId,
-              name: followUp.name,
-              arguments: followUp.arguments,
-              context: {
-                ...toolContext,
-                source: 'voice_quick_command_verification',
-                toolPolicy: buildQuickCommandToolPolicy(routedToolPolicy, followUp.name),
-              },
-            });
-            quickToolRecords.push(followUpRecord);
-            if (!isDirectDesktopTool(followUp.name)) {
-              emitAgent("agent:tool_call", {
-                correlationId: followUpCorrelationId,
-                name: followUp.name,
-                arguments: followUp.arguments,
-                ...(followUpRecord.error
-                  ? { error: followUpRecord.error }
-                  : { result: formatToolResultForUi(followUpRecord.result) }),
-              });
-            }
-          }
-        }
-      }
-      const quickFinalized = finalizeLumiResponse({
-        taskText: actionIntentText,
-        responseText: quickResponseText,
-        toolRecords: quickToolRecords,
-        source: 'voice',
-        flow: turnFlow,
-        taskId: actionTaskExecution.state?.taskId,
-        requestId,
-      });
-      quickResponseText = quickFinalized.text;
-      await finishVoiceTerminal({
-        text: quickResponseText,
-        source: 'quick_command',
-        blocked: quickFinalized.blocked,
-        reason: quickFinalized.reason || '',
-        cognitiveIntent: quickFinalized.blocked ? 'work_product_guard' : 'quick_command',
-        llmWasCalled: false,
-        toolCalls: quickToolRecords.length ? quickToolRecords : undefined,
-        speechText: quickResponseText,
-        notification: quickFinalized.notification,
-        persistTerminalState: () => persistVoiceTakeoverExecution(quickResponseText, {
-          toolRecords: quickToolRecords,
-          source: 'voice_quick_command',
-          sourceInteractionId: `voice_quick_${Date.now()}`,
-          finalizationBlocked: quickFinalized.blocked,
-          assistantTextTrusted: !quickFinalized.blocked,
-          finalizationReason: quickFinalized.reason,
-        }),
-      }, {
-        completedReason: 'Voice quick-command fast path completed.',
-        interruptedReason: 'Voice quick command was interrupted.',
-        afterPlayback: () => { responseText = quickResponseText; },
-        onCommitted: () => {
-          persistVoiceLearning(responseText, {
-            toolRecords: quickToolRecords,
-            sourceInteractionId: `voice_quick_${Date.now()}`,
-            logLabel: 'voice quick command',
-          });
-        },
-      });
-      return;
-    }
-  } catch (qcErr: any) {
-    logger.warn(`[Audio] Quick command check failed, falling through to LLM: ${qcErr.message}`);
-  }
-
   // Read intent retains precedence: incoming messages must never enter a send capability.
   const foregroundMessagingAction = foregroundWeChatReadArgs ? 'read' : 'send';
   const foregroundMessagingArgs = foregroundWeChatReadArgs || foregroundWeChatSendArgs;

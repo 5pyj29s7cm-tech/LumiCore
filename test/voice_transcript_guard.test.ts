@@ -65,7 +65,7 @@ describe('voice transcript execution guard', () => {
 
     const directClarification = source.indexOf("source: 'voice_transcript_guard'");
     const deterministicResponse = source.indexOf('const deterministicConversationResponse =', directClarification);
-    const isolatedWorkflow = source.indexOf('const specialWorkflow =', directClarification);
+    const isolatedWorkflow = source.indexOf('const directlyAppliedMode:', directClarification);
     expect(directClarification).toBeGreaterThan(0);
     expect(deterministicResponse).toBeGreaterThan(directClarification);
     expect(isolatedWorkflow).toBeGreaterThan(directClarification);

@@ -644,14 +644,8 @@ describe('unified execution pipeline', () => {
     });
 
     expect(pipeline.turnIntent.boundary).not.toBe('skill_workflow');
-    expect(pipeline.turnIntent.flow.specialWorkflow).toBeNull();
     expect(pipeline.turnIntent.flow.workflowHint?.id).toBe('self_intro_demo');
-    expect(pipeline.turnIntent.flow.workflowRouting).toBe('model_hint');
-    expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({
-      type: 'skill',
-      executionRole: 'adapter',
-      capabilityId: 'desktop-automation/self_intro_demo',
-    }));
+    expect(pipeline.executionPlan.nodes.some(node => node.type === 'skill' && !node.toolName)).toBe(false);
     expect(pipeline.executionPlan.decisionAuthority).toBe('semantic_planner');
     expect(pipeline.executionPlan.nodes.filter(node => node.toolName).length).toBeGreaterThan(0);
     expect(pipeline.executionPlan.nodes).toContainEqual(expect.objectContaining({

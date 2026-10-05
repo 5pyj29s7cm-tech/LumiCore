@@ -1,3 +1,4 @@
+import { isNamedPersistentWorkTaskStatusQuery } from '../cognition/action_contract';
 import { buildRecentFailureExplanation, normalizeChatHistoryRecord } from "./chat/history";
 export { normalizeChatHistoryRecord } from "./chat/history";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "./chat/attachments";
@@ -86,7 +87,6 @@ import { buildRecentActionContinuationBridge, conversationActionRequiresFreshCon
 import { buildDurableTaskDeterministicToolRecoveryCall, buildStructuredMediaDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, taskReceiptsToRecords, toolRecordSucceeded } from "../cognition/task_execution_ledger";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
-import { buildDeterministicWorkTaskStatusCommand } from "../cognition/quick_commands";
 import { classifyRuntimeWorkIntent } from '../cognition/runtime_work_intent';
 import { recordTokenUsage } from "../llm/token_tracker";
 import { searchKnowledgeBase } from "../org/kb";
@@ -1117,7 +1117,7 @@ export function registerChatHandler(
     }
     if (
       existingSession
-      && !buildDeterministicWorkTaskStatusCommand(visibleUserText)
+      && !isNamedPersistentWorkTaskStatusQuery(visibleUserText)
       && resolvedTaskRelation.feedback === 'status'
     ) {
       if (!beginChatSidecarExecution(executionScope, requestId)) return;

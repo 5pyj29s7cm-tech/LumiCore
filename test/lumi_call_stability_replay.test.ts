@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
-import { buildDeterministicClientNavigationCommand } from '../server/cognition/quick_commands';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foreground_wechat_intent';
 import {
@@ -154,8 +153,6 @@ describe('Lumi field-call stability replay', () => {
       operation: 'navigate',
       clientAction: 'open_chat',
     });
-    const quick = buildDeterministicClientNavigationCommand(intent);
-    expect(quick?.toolCall).toEqual({ name: 'client_action', arguments: { action: 'open_chat' } });
   });
 
   it('classifies an angry correction as explanation-only and executes no quick tool', async () => {
@@ -167,7 +164,6 @@ describe('Lumi field-call stability replay', () => {
       relation: 'correction',
     });
     expect(buildActionContract(text)).toMatchObject({ applies: false, kind: 'none' });
-    expect(buildDeterministicClientNavigationCommand(normalizeActionIntent(text))).toBeNull();
   });
 
   it('keeps completed CAD receipts queryable after the legacy pointer disappears', () => {

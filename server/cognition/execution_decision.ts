@@ -157,47 +157,48 @@ export function buildSelfRepairToolPolicy(
   };
 }
 
+function intersectPersonalityToolPolicy(policy: ToolPolicy, personalityToolPolicy?: ToolPolicy): ToolPolicy {
+  if (!personalityToolPolicy) return policy;
+  const hardAllowed = new Set(policy.allowedTools || []);
+  const personalityAllowed = new Set(personalityToolPolicy.allowedTools || []);
+  const hardWildcard = hardAllowed.has('*');
+  const personalityWildcard = personalityAllowed.has('*');
+  const allowedTools = hardWildcard
+    ? [...personalityAllowed]
+    : personalityWildcard
+      ? [...hardAllowed]
+      : [...hardAllowed].filter(name => personalityAllowed.has(name));
+  const forbiddenTools = unique([
+    ...(policy.forbiddenTools || []),
+    ...(personalityToolPolicy.forbiddenTools || []),
+  ]);
+  const forbidden = new Set(forbiddenTools);
+  const allowed = allowedTools.filter(name => name === '*' || !forbidden.has(name));
+  const hardMax = policy.maxIterations ?? Number.MAX_SAFE_INTEGER;
+  const personalityMax = personalityToolPolicy.maxIterations ?? Number.MAX_SAFE_INTEGER;
+  return {
+    allowedTools: allowed,
+    forbiddenTools,
+    requireConfirmation: unique([
+      ...(policy.requireConfirmation || []),
+      ...(personalityToolPolicy.requireConfirmation || []),
+    ]).filter(name => !forbidden.has(name)),
+    securityOverrides: {
+      ...(policy.securityOverrides || {}),
+      ...(personalityToolPolicy.securityOverrides || {}),
+    },
+    maxIterations: Math.min(hardMax, personalityMax),
+  };
+}
+
 function fallbackPolicy(
   flow: LumiTurnFlow,
-  personalityToolPolicy?: ToolPolicy,
   registry?: ToolRegistry,
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolPolicy {
-  const opModePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry, visibilityContext);
-  if (isInteractiveTurnChannel(flow.channel) && flow.modelToolAccess === 'manifest') {
-    if (!personalityToolPolicy) return opModePolicy;
-    const hardAllowed = new Set(opModePolicy.allowedTools || []);
-    const personalityAllowed = new Set(personalityToolPolicy.allowedTools || []);
-    const hardWildcard = hardAllowed.has('*');
-    const personalityWildcard = personalityAllowed.has('*');
-    const allowedTools = hardWildcard
-      ? [...personalityAllowed]
-      : personalityWildcard
-        ? [...hardAllowed]
-        : [...hardAllowed].filter(name => personalityAllowed.has(name));
-    const forbiddenTools = unique([
-      ...(opModePolicy.forbiddenTools || []),
-      ...(personalityToolPolicy.forbiddenTools || []),
-    ]);
-    const forbidden = new Set(forbiddenTools);
-    const allowed = allowedTools.filter(name => name === '*' || !forbidden.has(name));
-    const hardMax = opModePolicy.maxIterations ?? Number.MAX_SAFE_INTEGER;
-    const personalityMax = personalityToolPolicy.maxIterations ?? Number.MAX_SAFE_INTEGER;
-    return {
-      allowedTools: allowed,
-      forbiddenTools,
-      requireConfirmation: unique([
-        ...(opModePolicy.requireConfirmation || []),
-        ...(personalityToolPolicy.requireConfirmation || []),
-      ]).filter(name => !forbidden.has(name)),
-      securityOverrides: {
-        ...(opModePolicy.securityOverrides || {}),
-        ...(personalityToolPolicy.securityOverrides || {}),
-      },
-      maxIterations: Math.min(hardMax, personalityMax),
-    };
-  }
-  return flow.workSurfaceRoute.toolPolicy || opModePolicy || personalityToolPolicy || NO_TOOLS_POLICY;
+  const modePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry, visibilityContext);
+  return isInteractiveTurnChannel(flow.channel) && flow.modelToolAccess === 'manifest'
+    ? modePolicy : flow.workSurfaceRoute.toolPolicy || modePolicy;
 }
 
 function shouldRouteTools(flow: LumiTurnFlow, isSanctuary?: boolean): boolean {
@@ -547,15 +548,16 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     && !statusOnlyContinuation
     ? CLIENT_ACTION_TOOL_POLICY
     : null;
-  const baseToolPolicy = input.isSanctuary || statusOnlyContinuation
+  const entryToolPolicy = input.isSanctuary || statusOnlyContinuation
     ? NO_TOOLS_POLICY
     : selfRepairToolPolicy
       ? selfRepairToolPolicy
       : clientActionToolPolicy
         ? clientActionToolPolicy
         : allowToolUse
-          ? fallbackPolicy(input.flow, input.personalityToolPolicy, input.toolRegistry, input.visibilityContext)
+          ? fallbackPolicy(input.flow, input.toolRegistry, input.visibilityContext)
           : NO_TOOLS_POLICY;
+  const baseToolPolicy = intersectPersonalityToolPolicy(entryToolPolicy, input.personalityToolPolicy);
   const rawToolRoute = reviewedExternalCapabilityMatches.length > 0 && allowToolUse && !input.isSanctuary
     ? {
         toolNames: reviewedExternalCapabilityMatches.map(tool => tool.name),

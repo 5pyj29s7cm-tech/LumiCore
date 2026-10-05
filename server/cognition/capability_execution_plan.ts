@@ -321,36 +321,6 @@ export function buildCapabilityExecutionPlan(
     selectionRank: index,
     };
   });
-  if (input.capabilityPlan.lane === 'skill_workflow') {
-    const workflowCapabilityId = input.capabilityPlan.primary;
-    const workflowGroup = `group_${digest({ workflowCapabilityId }).slice(0, 12)}`;
-    candidateNodes.unshift({
-      nodeId: `workflow_${digest(workflowCapabilityId).slice(0, 16)}`,
-      type: 'skill',
-      state: 'candidate',
-      capabilityId: workflowCapabilityId,
-      lane: 'agents',
-      operation: 'mutate',
-      risk: 'low',
-      sideEffects: [],
-      requiresConfirmation: false,
-      verification: {
-        strategy: 'terminal_receipt',
-        required: true,
-        requiredFields: ['status', 'verified'],
-        requiredArtifacts: [],
-        requiredArtifactCollections: [],
-        successStatuses: ['verified'],
-        failureStatuses: ['failed', 'blocked', 'unknown'],
-        successSignals: ['all selected adapter receipts verified'],
-        limitations: ['The workflow adapter cannot select intent, replace parameters, or declare completion.'],
-      },
-      provenance: { source: 'skill', provider: workflowCapabilityId, trust: 'official' },
-      executionRole: 'adapter',
-      selectionGroup: workflowGroup,
-      selectionRank: -1,
-    });
-  }
   const taskId = String(input.taskId || '').trim()
     || `task_${digest({ intent: input.intent, capabilityIds: input.capabilityPlan.capabilityIds }).slice(0, 24)}`;
   const planId = `plan_${digest({

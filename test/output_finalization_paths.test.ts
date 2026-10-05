@@ -238,11 +238,11 @@ describe('finalized output paths', () => {
     expect(chat).toContain("cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind");
     expect(chat).toContain('if (!finalResponse.blocked) {');
 
-    for (const finalized of ['finalizedRecentAction', 'finalizedWorkflow', 'finalizedMode', 'quickFinalized', 'confirmedFinal']) {
+    for (const finalized of ['finalizedRecentAction', 'finalizedMode', 'confirmedFinal']) {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
     }
     expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(1);
-    expect(voice.match(/await finishVoiceTerminal\(\{/g)).toHaveLength(6);
+    expect(voice.match(/await finishVoiceTerminal\(\{/g)).toHaveLength(4);
     expect(voice).toContain('commit: commitVoiceTerminal');
     const completion = source('server/socket/voice/terminal_completion.ts');
     expect(completion).toContain('if (committed && !input.blocked) options.onCommitted?.()');
@@ -260,18 +260,14 @@ describe('finalized output paths', () => {
     expect(chat).not.toContain('quickFinalized');
   });
 
-  it('falls back to the finalized primary workflow response when a speech summary is blocked', () => {
-    const voice = source('server/socket/voice.ts');
-    const workflowStart = voice.indexOf('const finalizedWorkflow = finalizeLumiResponse({');
-    const workflowEnd = voice.indexOf('return;', workflowStart);
-    const workflowPath = voice.slice(workflowStart, workflowEnd);
-
-    expect(workflowPath).toContain('const finalizedWorkflowSpeech = finalizedWorkflow.blocked || !workflowSpeechSummary');
-    expect(workflowPath).toContain('const workflowSpeechText = finalizedWorkflowSpeech.blocked');
-    expect(workflowPath).toContain('? responseText');
-    expect(workflowPath).toContain('await finishVoiceTerminal({');
-    expect(workflowPath).toContain('speechText: workflowSpeechText');
-    expect(workflowPath).not.toContain('queueFinalizedSpeech(');
+  it('keeps both interactive transports on model-owned natural-language execution', () => {
+    for (const file of ['server/socket/chat.ts', 'server/socket/voice.ts']) {
+      const entry = source(file);
+      expect(entry).not.toContain('executeSkillWorkflowAdapter');
+      expect(entry).not.toContain('preMatchedQuickResult');
+      expect(entry).not.toContain('quickFinalized');
+      expect(entry).toContain('runToolSession({');
+    }
   });
 
   it('keeps chat on one canonical route with the shared capability policy and finalizer', () => {
@@ -390,7 +386,7 @@ describe('finalized output paths', () => {
     const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
     const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
-    expect(voice.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBeGreaterThanOrEqual(12);
+    expect(voice.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBe(11);
     expect(terminalBoundary).toContain('persistVoiceAssistantMessage(');
     expect(terminalBoundary).toContain('recordChatExecutionTerminalEventDurably(');
     expect(terminalBoundary).toContain('publishCommitted:');
@@ -414,13 +410,12 @@ describe('finalized output paths', () => {
     expect(voice).toContain('if (currentToolRecords.length === 0) return null;');
     expect(chat.match(/persistChatTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(2);
     expect(chat).not.toContain('executeSkillWorkflowAdapter');
-    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBeGreaterThanOrEqual(5);
+    expect(voice.match(/persistVoiceTakeoverExecution\(/g)?.length || 0).toBe(3);
     expect(writeback).toContain('input.flow.workTakeover.shouldResumeTask');
 
     expect(chat).not.toContain('registerBackgroundTask');
     for (const marker of [
       "source: 'voice_mode'",
-      "source: 'voice_quick_command'",
       "source: 'voice_confirmation'",
     ]) {
       expect(voice).toContain(marker);
@@ -435,7 +430,7 @@ describe('finalized output paths', () => {
     expect(chatHistoryPath).not.toContain('agent:response');
     expect(chatHistoryPath).not.toContain('persistChatTakeoverExecution(');
     const voiceHistoryStart = voice.indexOf('if (recentActionExplanation) {');
-    const voiceHistoryEnd = voice.indexOf('const specialWorkflow =', voiceHistoryStart);
+    const voiceHistoryEnd = voice.indexOf('const directlyAppliedMode:', voiceHistoryStart);
     expect(voice.slice(voiceHistoryStart, voiceHistoryEnd)).not.toContain('persistVoiceTakeoverExecution(');
 
     expect(chat).not.toContain('const terminalBackgroundRecords: ToolExecutionRecord[] = backgroundToolRecords.length > 0');

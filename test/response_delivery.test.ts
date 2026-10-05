@@ -36,7 +36,7 @@ function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {
       strength: 'none',
       shouldResumeTask: false,
     } as LumiTurnFlow['workTakeover'],
-    specialWorkflow: null,
+    workflowHint: null,
     executionGovernance: {
       verificationIntent: 'none',
       verificationReason: '',
@@ -103,13 +103,13 @@ describe('finalized output delivery gate', () => {
     })).toBe(true);
   });
 
-  it('buffers special workflows until their tool ledger is finalized', () => {
+  it('buffers workflow hints until their tool ledger is finalized', () => {
     const taskText = 'Lumi, introduce yourself';
     expect(shouldDeferModelOutputUntilFinalized({
       taskText,
       flow: flow({
         routeText: taskText,
-        specialWorkflow: { id: 'self_intro_demo' } as LumiTurnFlow['specialWorkflow'],
+        workflowHint: { id: 'self_intro_demo' } as LumiTurnFlow['workflowHint'],
       }),
     })).toBe(true);
   });
