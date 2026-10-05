@@ -1,3 +1,6 @@
+import { createToolLifecycleCallbacks } from "../tool_lifecycle";
+import type { ToolContext } from "../../tools/types";
+import type { ChatMessageWriter } from "./message_writer";
 
 
 import { type ToolSessionOptions } from "../../llm/tool_session";
@@ -24,7 +27,7 @@ import { addMessageIdempotent as addMessageIdempotentUnbound, setConversationAct
 
 import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, toolRecordSucceeded } from "../../cognition/task_execution_ledger";
 
-import { recordTokenUsage } from "../../llm/token_tracker";
+import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
 import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../../regions/packs/cn/voice_fast_path_messages";
 
@@ -33,6 +36,7 @@ import { isDirectDesktopTool } from "../desktop_relay";
 import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 
 type executeConfirmedChatTurnInput = {
+toolContext: ToolContext;
 pendingConfirmation: import("../../tools/pending_confirmation").PendingToolConfirmation;
 visibleUserText: string;
 uid: string;
@@ -40,24 +44,14 @@ confirmationScope: import("../../tools/pending_confirmation").PendingConfirmatio
 emitAgent: (event: string, payload?: Record<string, any>) => boolean;
 personality: Record<string, any> | import("../../personality/types").PersonalityConfig;
 emitToolLifecycle: (payload: { correlationId: string; name: string; arguments: Record<string, any>; args?: Record<string, any>; result?: string; error?: string; artifactReceipt?: MediaArtifactReceipt; }) => void;
-toolSecurityContext: { onToolRecord: (record: ToolExecutionRecord) => void; authenticated?: boolean; authRole?: string; orgRole?: string; localExecution?: boolean; executionBoundary?: "trusted_local" | "remote_restricted" | "trusted_system"; };
 durableTaskId: string;
-conversation: import("../../conversation/manager").Conversation;
 requestId: string;
-actionTaskExecution: Exclude<import("../../conversation/manager").ConversationActionExecutionPreparation, { bindingFailure: unknown }>;
 resolvedDomain: import("../scope").RuntimeDomain;
 resolvedOrgId: string;
-desktopRelay: import("../desktop_relay").DesktopRelay;
-llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, "getOpenAI" | "getAnthropic" | "getQwen" | "getOllama" | "isOllamaAvailable" | "getLmStudio" | "isLmStudioAvailable">>;
-allowLocalFileWrites: boolean;
-localWriteIntentReason: string;
 abortController: AbortController;
 isChatCancelled: () => boolean;
-forwardToolProgress: (step: string) => void;
-executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
 turnFlow: import("../../cognition/turn_flow").LumiTurnFlow;
 modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
-modelToolProjection: { toolNames: string[]; requiredToolNames?: string[]; maxTools: number; allowDynamicDiscovery?: boolean; discoveryToolName?: string; droppedToolNames?: string[]; };
 rememberRequestToolRecord: (record: ToolExecutionRecord) => void;
 formatToolResultForUi: (value?: string) => string;
 formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
@@ -84,9 +78,7 @@ releaseChatSession: (reason?: string) => Promise<boolean>;
 commitRecordedTerminal: (input: { payload: Record<string, any>; unknownPayload: Record<string, any>; persistTerminalState: () => ReturnType<(assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult>; persistAssistantMessage: () => void; notification?: Record<string, any>; llmWasCalled?: boolean; repairUnknownAssistant?: boolean; updateSource?: string; errorContext: string; }) => Promise<boolean>;
 persistChatTakeoverExecution: (assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult;
 capabilitySelection: import("../../cognition/execution_pipeline").LumiCapabilityPlan;
-addMessageIdempotent: (message: Parameters<typeof addMessageIdempotentUnbound>[0]) => string;
-conversationAgentId: string;
-eventSource: string;
+addMessageIdempotent: ChatMessageWriter;
 refreshTerminalPayloadTaskRelation: (payload: Record<string, any>, exactTaskId?: string) => ActiveTaskMessageResolution;
 scheduleChatSummary: (targetConversationId: string) => void;
 persistChatLearning: (assistantText: string, options?: { channel?: "chat" | "workflow"; toolRecords?: ToolExecutionRecord[]; sourceInteractionId?: string; logLabel?: string; }) => void;
@@ -118,34 +110,11 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
           name: context.pendingConfirmation.toolName,
           arguments: confirmedArgs,
           context: {
-            ...context.toolSecurityContext,
-            userId: context.uid,
-            taskId: context.durableTaskId,
-            conversationId: context.conversation.id,
-            turnId: context.requestId,
-            turnRowId: context.actionTaskExecution.turnRowId,
-            requestId: context.requestId,
-            domain: context.resolvedDomain,
-            orgId: context.resolvedOrgId,
-            desktopRelay: context.desktopRelay,
-            llmGetters: context.llmGetters,
+            ...context.toolContext,
             source: 'chat_confirmation',
-            supervisedExternalCommits: true,
-            allowLocalFileWrites: context.allowLocalFileWrites,
-            localWriteIntentReason: context.localWriteIntentReason,
-            executionSignal: context.abortController.signal,
-            isCancelled: context.isChatCancelled,
-            onProgress: context.forwardToolProgress,
             userConfirmed: true,
             actionIntent: confirmedTask,
-            currentTurnExecutionRequested: context.executionPipeline.executionRequested,
-              resolutionId: context.executionPipeline.resolution.id,
-            trustedActionContinuation: context.executionPipeline.trustedActionContinuation,
             routedTaskText: confirmedTask,
-            acceptedTaskTarget: context.turnFlow.acceptedTaskTarget,
-            currentAppTarget: context.turnFlow.currentAppEditTarget,
-            toolPolicy: context.modelCapabilityPolicy,
-            modelToolProjection: context.modelToolProjection,
           },
           preflight: () => consumed
             ? { allowed: true, arguments: confirmedArgs }
@@ -216,64 +185,24 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
               signal: context.abortController.signal,
               ...context.reasoningRoutePolicy,
             },
-            onToolCall: record => {
-              context.rememberRequestToolRecord(record);
-              if (!record?.name || isDirectDesktopTool(record.name)) return;
-              context.emitToolLifecycle({
-                correlationId: record.id || `chat-confirmation-resume-${Date.now()}`,
-                name: record.name,
-                arguments: record.arguments || {},
-                result: record.error ? undefined : context.formatToolResultForUi(record.result),
-                error: record.error,
-                artifactReceipt: context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-              });
-            },
+            onToolCall: createToolLifecycleCallbacks({
+              emit: context.emitToolLifecycle, correlationPrefix: 'chat-confirmation-resume',
+              formatResult: context.formatToolResultForUi, onRecord: context.rememberRequestToolRecord,
+              artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
+            }).onToolCall,
             maxIterations: Math.max(1, context.modelCapabilityPolicy.maxIterations || 5),
             context: {
-              ...context.toolSecurityContext,
-              userId: context.uid,
-              taskId: context.durableTaskId,
-              conversationId: context.conversation.id,
-              turnId: context.requestId,
-              turnRowId: context.actionTaskExecution.turnRowId,
-              requestId: context.requestId,
-              domain: context.resolvedDomain,
-              orgId: context.resolvedOrgId,
-              desktopRelay: context.desktopRelay,
-              llmGetters: context.llmGetters,
+              ...context.toolContext,
               source: 'chat_confirmation_resume',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites: context.allowLocalFileWrites,
-              localWriteIntentReason: context.localWriteIntentReason,
-              executionSignal: context.abortController.signal,
-              isCancelled: context.isChatCancelled,
-              onProgress: context.forwardToolProgress,
               requestConfirmation: context.requestToolConfirmation,
               actionIntent: confirmedTask,
-              currentTurnExecutionRequested: context.executionPipeline.executionRequested,
-              resolutionId: context.executionPipeline.resolution.id,
-              trustedActionContinuation: context.executionPipeline.trustedActionContinuation,
               routedTaskText: confirmedTask,
-              acceptedTaskTarget: context.turnFlow.acceptedTaskTarget,
-            currentAppTarget: context.turnFlow.currentAppEditTarget,
-              toolPolicy: context.modelCapabilityPolicy,
-              modelToolProjection: context.modelToolProjection,
               priorToolRecords: context.taskAwareRecords([confirmedRecord]),
               desktopExecutionTracker: context.desktopExecutionTracker,
             },
           });
           if (context.isChatCancelled()) throw new DOMException('Chat confirmation continuation cancelled', 'AbortError');
-          for (const usage of continuation.usageRecords) {
-            recordTokenUsage(context.uid, usage.provider, usage.model, {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            }, context.interactionId);
-          }
-          const confirmationUsage = continuation.usageRecords.reduce(
-            (sum, usage) => sum + (usage.totalTokens || 0),
-            0,
-          );
+          const confirmationUsage = recordTokenUsageBatch(context.uid, continuation.usageRecords, context.interactionId);
           if (context.turnAuthorization.isCurrent()) context.socket.emit('token:usage_update', {
             userId: context.uid,
             provider: context.activeProvider,
@@ -312,7 +241,6 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
               taskId: context.durableTaskId,
               requestId: context.requestId,
             });
-        confirmedRecord.executionOrigin = 'confirmed_action_resume';
         const confirmationCompletionFeedback = buildForegroundTaskCompletionFeedback({
           taskId: context.durableTaskId!,
           taskLabel: confirmedTask,
@@ -373,20 +301,13 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
           persistAssistantMessage: () => {
             if (!context.conversationId) return;
             context.addMessageIdempotent({
-              userId: context.uid,
-              agentId: context.conversationAgentId,
               conversationId: context.conversationId,
               role: 'assistant',
               content: confirmationResponseText,
               personality: context.personality.id,
-              domain: context.resolvedDomain,
-              orgId: context.resolvedOrgId,
-              source: context.eventSource,
-              channel: 'chat',
               toolCalls: confirmationRecords,
               cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation',
               llmWasCalled: confirmationLlmWasCalled,
-              requestId: context.requestId,
               completionFeedback: confirmationCompletionFeedback,
               ...(finalized.blocked && context.durableTaskId ? {
                 terminalTaskDisposition: {

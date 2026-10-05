@@ -194,8 +194,9 @@ describe('model-owned main chat architecture', () => {
     // create only a durable task envelope before the model/tool relay so every
     // receipt has a stable taskId; preparation itself does not execute tools.
     expect(chatSource).toContain('const bindsExistingAction = Boolean(');
-    expect(chatSource).toContain('const preparesFreshAction = Boolean(');
-    expect(chatSource).toContain('executionPipeline.capabilityPlan.taskLedgerRequired || Boolean(pendingConfirmation)');
+    expect(chatSource).toContain('const preparation = acceptedRuntimeCleanupOffer && conversationId');
+    expect(chatSource).toContain('capabilitySelection.taskLedgerRequired || pendingConfirmation || structuredMediaRequest');
+    expect(chatSource.slice(chatSource.indexOf('const preparation = acceptedRuntimeCleanupOffer')).match(/prepareConversationActionExecution\(\{/g)).toHaveLength(1);
     expect(chatSource).toContain('prepareConversationActionExecution({');
     expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
     expect(chatSource).toContain('forceTask: true');

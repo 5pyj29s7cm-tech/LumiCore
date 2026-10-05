@@ -56,7 +56,7 @@ import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { runToolSession } from "../../../llm/tool_session";
 import { providerGetterArguments } from "../../../llm/provider_getters";
-import { recordTokenUsage } from '../../../llm/token_tracker';
+import { recordTokenUsage, recordTokenUsageBatch } from '../../../llm/token_tracker';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
 import { WeComAdapter, type WeComConfig } from '../../../messaging/wecom';
 import { type MessagingRouteOptions, type IncomingMessageTransport, flushMessagingStateOrThrow, isMessagingReplyDurabilityError, MessagingReplyDurabilityError, buildRemoteRuntimeEvidenceContext, type MessagingDesktopRelay, type MessagingDesktopLifecycle, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "./messaging_finalization";
@@ -1817,9 +1817,7 @@ async function processWithPersonalityAdmitted(
       const result = await runMessagingToolTurn(messages);
       responseText = result.text || '';
       toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || []);
-      for (const usage of result.usageRecords || []) {
-        recordTokenUsage(effectiveUserId, usage.provider, usage.model, usage, usageInteractionId, 'chat');
-      }
+      recordTokenUsageBatch(effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
     }
 
     toolRecords = withCurrentMessagingDesktopExecutionReceipt(
@@ -1898,16 +1896,7 @@ async function processWithPersonalityAdmitted(
           recordTool,
           `${source}_guard_recovery`,
         );
-        for (const usage of recovery.usageRecords || []) {
-          recordTokenUsage(
-            effectiveUserId,
-            usage.provider,
-            usage.model,
-            usage,
-            usageInteractionId,
-            'chat',
-          );
-        }
+        recordTokenUsageBatch(effectiveUserId, recovery.usageRecords || [], usageInteractionId, 'chat');
         return {
           text: recovery.text,
           toolRecords: withCurrentMessagingDesktopExecutionReceipt(

@@ -1,3 +1,4 @@
+import { createToolLifecycleCallbacks } from "./tool_lifecycle";
 import { Server, Socket } from "socket.io";
 import { type AudioSession, getVoiceStateKey, type VoiceInputTiming } from "./voice/session";
 import type { LLMGetters as LlmGetters } from '../llm/dispatch';
@@ -64,7 +65,7 @@ import { scheduleConversationSummary } from "../conversation/summary_scheduler";
 import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { isDirectDesktopTool, createDesktopRelay } from "./desktop_relay";
-import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
+
 import { buildDurableTaskDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { createPreFinalizationTextGate, shouldDeferModelOutputUntilFinalized, shouldForwardPreFinalizationProgress } from "../cognition/response_delivery";
@@ -81,7 +82,7 @@ import { resolveExactConversationCorrection } from "../conversation/exact_correc
 import { executeToolCall } from "../tools/execution_engine";
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../cognition/result_finalizer";
 import { runToolSession } from "../llm/tool_session";
-import { recordTokenUsage } from "../llm/token_tracker";
+import { recordTokenUsageBatch } from "../llm/token_tracker";
 import { collectRecentActionToolRecords, describeRecentActionsFromHistory } from "./voice_action_history";
 import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
@@ -89,7 +90,7 @@ import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../
 import { NormalizedMessage } from "../llm/providers";
 import { normalizeVoiceHistory } from './voice_history';
 import { runConversationTurn } from "../llm/conversation_turn";
-import { shouldBlockForDesktopControlPause } from '../cognition/desktop_control_pause';
+import { createTurnResponseFinalizer } from '../cognition/turn_response_finalizer';
 import { extractSentiment } from "../cognition/sentiment";
 import { himTick } from "../personality/him";
 import { shouldAllowVoiceLocalFileWriteForTurn, buildVoiceReplyStyleOverlay } from "./voice_turn_policy";
@@ -1283,7 +1284,6 @@ export async function processVoiceInput(
     signal: pipelineAbort.signal,
     leaseTimeoutMs: VOICE_DESKTOP_LEASE_WAIT_MS,
   });
-  const desktopPausePresentation = () => formatDesktopControlPausePresentation(routedUserText);
 
   const runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
     actionTaskExecution.state,
@@ -1358,6 +1358,10 @@ export async function processVoiceInput(
     modelToolProjection,
     desktopExecutionTracker,
   };
+  const observeVoiceTools = (onRecord?: (record: ToolExecutionRecord) => void) => createToolLifecycleCallbacks({
+    emit: emitToolLifecycle, correlationPrefix: 'voice-tool', formatResult: formatToolResultForUi,
+    isCurrent: isCurrentTurn, onStart: toolContext.onToolStart, onRecord,
+  });
   const turnEmotionState = (() => {
     try { return loadEmotionalState(voiceStateKey); } catch { return undefined; }
   })();
@@ -1426,7 +1430,6 @@ export async function processVoiceInput(
     });
     return executionWriteback;
   };
-  let sentenceIdx = 0;
   const ttsPromises: Promise<void>[] = [];
   const deferCompletionSpeech = shouldDeferModelOutputUntilFinalized({
     taskText: actionIntentText,
@@ -1660,7 +1663,6 @@ export async function processVoiceInput(
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
     const speech = ensureTurnSpeechController();
     if (!isCurrentTurn() || speech.controller.signal.aborted) return Promise.resolve(0);
-    sentenceIdx++;
     let resolvePlayback: (value: number) => void = () => {};
     const playbackDone = new Promise<number>(resolve => { resolvePlayback = resolve; });
     // Serialize TTS to avoid 429 rate limits
@@ -1857,530 +1859,491 @@ export async function processVoiceInput(
     commit: commitVoiceTerminal,
     drainSpeech: () => Promise.allSettled(ttsPromises),
     isCurrent: isCurrentTurn,
-    release: releaseVoiceTurnResources,
   });
 
-  if (transcriptExecutionGuard.action === 'clarify') {
-    // Resolve uncertain STT before confirmation, meeting control, or tools.
-    responseText = transcriptExecutionGuard.responseText;
-    await commitVoiceTerminal({
-      text: responseText,
-      source: 'voice_transcript_guard',
-      blocked: false,
-      reason: transcriptExecutionGuard.reason,
-      cognitiveIntent: 'voice_transcript_clarification',
-      llmWasCalled: false,
-      speechText: responseText,
-    });
-    await Promise.allSettled(ttsPromises);
-    await releaseVoiceTurnResources('Voice transcript clarification completed without tool admission.');
-    return;
-  }
-
-  if (!session.agentId?.startsWith('memory_avatar_') && isExplicitMemoryRequest(userText)) {
-    try {
-      const receipt = await persistTurnMemory({ userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId,
-        userText, channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
-        agentId: session.agentId, authorization: turnAuthorization, signal: pipelineAbort.signal, llmGetters });
-      responseText = receipt.text;
-      await commitVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
-        blocked: receipt.status === 'failed', reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved',
-        cognitiveIntent: 'memory', llmWasCalled: true, toolCalls: [] });
+  try {
+    if (transcriptExecutionGuard.action === 'clarify') {
+      // Resolve uncertain STT before confirmation, meeting control, or tools.
+      responseText = transcriptExecutionGuard.responseText;
+      await commitVoiceTerminal({
+        text: responseText,
+        source: 'voice_transcript_guard',
+        blocked: false,
+        reason: transcriptExecutionGuard.reason,
+        cognitiveIntent: 'voice_transcript_clarification',
+        llmWasCalled: false,
+        speechText: responseText,
+      });
       await Promise.allSettled(ttsPromises);
-    } finally { await releaseVoiceTurnResources('Explicit voice memory turn completed.'); }
-    return;
-  }
-
-  const deterministicConversationResponse = (() => {
-    if (userObservedCompletion) return null;
-    if (isConversationExecutionFactQuestion(actionIntentText)) {
-      return {
-        text: formatConversationExecutionFactAnswer(getConversationExecutionFacts({
-          conversationId: conversationTurn.conversation.id,
-          userId: session.userId,
-          domain: voiceScope.domain,
-          orgId: voiceScope.orgId,
-          currentRequestId: requestId,
-          taskId: actionTaskExecution.state?.taskId
-            || conversationTurn.conversation.actionContinuationState?.taskId
-            || undefined,
-        }), actionIntentText),
-        intent: 'execution_facts',
-        source: 'voice_conversation_execution_facts',
-      };
+      return;
     }
-    const corrected = resolveExactConversationCorrection(actionIntentText, recentVoiceHistory);
-    return corrected
-      ? { text: corrected, intent: 'exact_correction', source: 'voice_exact_correction' }
-      : null;
-  })();
-  if (deterministicConversationResponse) {
-    responseText = deterministicConversationResponse.text;
-    await commitVoiceTerminal({
-      text: responseText,
-      source: deterministicConversationResponse.source,
-      blocked: false,
-      reason: deterministicConversationResponse.intent,
-      cognitiveIntent: deterministicConversationResponse.intent,
-      llmWasCalled: false,
-      speechText: responseText,
-    });
-    await Promise.allSettled(ttsPromises);
-    await releaseVoiceTurnResources('Deterministic voice response completed.');
-    return;
-  }
 
-  if (userObservedCompletion) {
-    const conversation = conversationTurn.conversation;
-    const observedTask = userObservedCompletionTask!;
-    await clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({
-      domain: voiceScope.domain, orgId: voiceScope.orgId,
-      conversationId: conversation.id, taskId: observedTask.taskId,
-    }));
-    pendingConfirmation = null;
-    pendingConfirmationPrompt = '';
-    responseText = formatConversationActionTaskStatus({
-      ...observedTask, status: 'completed', unfinished: false,
-      latestBlocker: '', completionSource: 'user_observation',
-    });
-    await commitVoiceTerminal({
-      text: responseText,
-      source: 'voice_task_user_observation',
-      blocked: false,
-      reason: '',
-      cognitiveIntent: 'task_user_observation',
-      llmWasCalled: false,
-      speechText: responseText,
-      persistTerminalState: () => {
-        const completed = completeConversationActionFromUserObservation(
-          conversation.id, session.userId, userText,
-          { taskId: observedTask.taskId!, requestId, userMessageId: voiceUserMessageId },
-        );
-        if (!completed) throw new Error('User observation no longer owns the pending task');
-        return completed;
-      },
-    });
-    await Promise.allSettled(ttsPromises);
-    await releaseVoiceTurnResources('Voice task observation response completed.');
-    return;
-  }
+    if (!session.agentId?.startsWith('memory_avatar_') && isExplicitMemoryRequest(userText)) {
+        const receipt = await persistTurnMemory({ userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId,
+          userText, channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
+          agentId: session.agentId, authorization: turnAuthorization, signal: pipelineAbort.signal, llmGetters });
+        responseText = receipt.text;
+        await commitVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
+          blocked: receipt.status === 'failed', reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved',
+          cognitiveIntent: 'memory', llmWasCalled: true, toolCalls: [] });
+        await Promise.allSettled(ttsPromises);
+      return;
+    }
 
-  if (actionFollowupIntent === 'status') {
-    responseText = getConversationActionStatus(
-      conversationTurn.conversation.id,
-      session.userId,
-      actionIntentText,
-      conversationTurn.conversation.actionContinuationState,
-    );
-    await commitVoiceTerminal({
-      text: responseText,
-      source: 'voice_task_status',
-      blocked: false,
-      reason: '',
-      cognitiveIntent: 'task_status',
-      llmWasCalled: false,
-      speechText: responseText,
-    });
-    await Promise.allSettled(ttsPromises);
-    await releaseVoiceTurnResources('Voice task status response completed.');
-    return;
-  }
+    const deterministicConversationResponse = (() => {
+      if (userObservedCompletion) return null;
+      if (isConversationExecutionFactQuestion(actionIntentText)) {
+        return {
+          text: formatConversationExecutionFactAnswer(getConversationExecutionFacts({
+            conversationId: conversationTurn.conversation.id,
+            userId: session.userId,
+            domain: voiceScope.domain,
+            orgId: voiceScope.orgId,
+            currentRequestId: requestId,
+            taskId: actionTaskExecution.state?.taskId
+              || conversationTurn.conversation.actionContinuationState?.taskId
+              || undefined,
+          }), actionIntentText),
+          intent: 'execution_facts',
+          source: 'voice_conversation_execution_facts',
+        };
+      }
+      const corrected = resolveExactConversationCorrection(actionIntentText, recentVoiceHistory);
+      return corrected
+        ? { text: corrected, intent: 'exact_correction', source: 'voice_exact_correction' }
+        : null;
+    })();
+    if (deterministicConversationResponse) {
+      responseText = deterministicConversationResponse.text;
+      await commitVoiceTerminal({
+        text: responseText,
+        source: deterministicConversationResponse.source,
+        blocked: false,
+        reason: deterministicConversationResponse.intent,
+        cognitiveIntent: deterministicConversationResponse.intent,
+        llmWasCalled: false,
+        speechText: responseText,
+      });
+      await Promise.allSettled(ttsPromises);
+      return;
+    }
 
-  // A short confirmation utterance is a continuation of the exact pending
-  // action, not a fresh chat turn. Execute the stored tool/arguments directly
-  // so the model cannot forget, rewrite, or merely print the tool protocol.
-  if (pendingConfirmation) {
-    const confirmedTask = pendingConfirmation.actionIntent || actionIntentText;
-    const confirmedArgs = pendingConfirmation.exactArgs || {};
-    const confirmationConsumed = await consumePendingConfirmationDurably(
-      session.userId,
-      pendingConfirmation.id,
-      pendingConfirmation.toolName,
-      confirmedArgs,
-      confirmationScope,
-    );
-    const confirmationRecordId =
-      `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    session.isBackgroundWork = true;
-    session.activeWorkStatus = 'executing';
-    session.activeWorkStep = `Running ${pendingConfirmation.toolName}`;
-    if (!isDirectDesktopTool(pendingConfirmation.toolName)) {
-      emitToolLifecycle({
-        correlationId: confirmationRecordId,
+    if (userObservedCompletion) {
+      const conversation = conversationTurn.conversation;
+      const observedTask = userObservedCompletionTask!;
+      await clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({
+        domain: voiceScope.domain, orgId: voiceScope.orgId,
+        conversationId: conversation.id, taskId: observedTask.taskId,
+      }));
+      pendingConfirmation = null;
+      pendingConfirmationPrompt = '';
+      responseText = formatConversationActionTaskStatus({
+        ...observedTask, status: 'completed', unfinished: false,
+        latestBlocker: '', completionSource: 'user_observation',
+      });
+      await commitVoiceTerminal({
+        text: responseText,
+        source: 'voice_task_user_observation',
+        blocked: false,
+        reason: '',
+        cognitiveIntent: 'task_user_observation',
+        llmWasCalled: false,
+        speechText: responseText,
+        persistTerminalState: () => {
+          const completed = completeConversationActionFromUserObservation(
+            conversation.id, session.userId, userText,
+            { taskId: observedTask.taskId!, requestId, userMessageId: voiceUserMessageId },
+          );
+          if (!completed) throw new Error('User observation no longer owns the pending task');
+          return completed;
+        },
+      });
+      await Promise.allSettled(ttsPromises);
+      return;
+    }
+
+    if (actionFollowupIntent === 'status') {
+      responseText = getConversationActionStatus(
+        conversationTurn.conversation.id,
+        session.userId,
+        actionIntentText,
+        conversationTurn.conversation.actionContinuationState,
+      );
+      await commitVoiceTerminal({
+        text: responseText,
+        source: 'voice_task_status',
+        blocked: false,
+        reason: '',
+        cognitiveIntent: 'task_status',
+        llmWasCalled: false,
+        speechText: responseText,
+      });
+      await Promise.allSettled(ttsPromises);
+      return;
+    }
+
+    // A short confirmation utterance is a continuation of the exact pending
+    // action, not a fresh chat turn. Execute the stored tool/arguments directly
+    // so the model cannot forget, rewrite, or merely print the tool protocol.
+    if (pendingConfirmation) {
+      const confirmedTask = pendingConfirmation.actionIntent || actionIntentText;
+      const confirmedArgs = pendingConfirmation.exactArgs || {};
+      const confirmationConsumed = await consumePendingConfirmationDurably(
+        session.userId,
+        pendingConfirmation.id,
+        pendingConfirmation.toolName,
+        confirmedArgs,
+        confirmationScope,
+      );
+      const confirmationRecordId =
+        `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      session.isBackgroundWork = true;
+      session.activeWorkStatus = 'executing';
+      session.activeWorkStep = `Running ${pendingConfirmation.toolName}`;
+      if (!isDirectDesktopTool(pendingConfirmation.toolName)) {
+        emitToolLifecycle({
+          correlationId: confirmationRecordId,
+          name: pendingConfirmation.toolName,
+          arguments: confirmedArgs,
+        });
+      }
+      const confirmationRecord = await executeToolCall({
+        registry: toolRegistry,
+        id: confirmationRecordId,
         name: pendingConfirmation.toolName,
         arguments: confirmedArgs,
-      });
-    }
-    const confirmationRecord = await executeToolCall({
-      registry: toolRegistry,
-      id: confirmationRecordId,
-      name: pendingConfirmation.toolName,
-      arguments: confirmedArgs,
-      context: {
-        ...toolContext,
-        toolPolicy: routedToolPolicy,
-        userConfirmed: true,
-        requestConfirmation: undefined,
-        actionIntent: confirmedTask,
-        routedTaskText: confirmedTask,
-      },
-      preflight: () => confirmationConsumed
-        ? { allowed: true, arguments: confirmedArgs }
-        : {
-            allowed: false,
-            arguments: confirmedArgs,
-            reason: 'The one-time confirmation expired before execution.',
-          },
-    });
-    if (!isCurrentTurn()) {
-      await releaseVoiceTurnResources('Voice confirmation execution was interrupted.');
-      return;
-    }
-    if (!isDirectDesktopTool(confirmationRecord.name)) {
-      if (confirmationRecord.error) {
-        emitToolLifecycle({
-          correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
-          name: confirmationRecord.name,
-          arguments: confirmedArgs,
-          error: confirmationRecord.error,
-        });
-      } else {
-        emitToolLifecycle({
-          correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
-          name: confirmationRecord.name,
-          arguments: confirmedArgs,
-          result: formatToolResultForUi(confirmationRecord.result),
-        });
-      }
-    }
-    const confirmationSucceeded = toolRecordSucceeded(confirmationRecord);
-    confirmationRecord.executionOrigin = 'confirmed_action_resume';
-    let confirmationRecords: ToolExecutionRecord[] = [confirmationRecord];
-    let confirmationLlmWasCalled = false;
-    const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
-      taskText: confirmedTask,
-      responseText: '',
-      toolRecords: taskAwareRecords([confirmationRecord]),
-      source: 'voice_confirmation',
-      flow: { ...turnFlow, routeText: confirmedTask },
-      taskId: actionTaskExecution.state?.taskId,
-      requestId,
-    });
-    let confirmationCandidate = completedConfirmedAction?.text || (confirmationSucceeded
-      ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
-      : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
-          recordsToTaskReceipts([confirmationRecord])[0]?.error
-            || confirmationRecord.error
-            || confirmationRecord.result,
-        ));
-
-    if (!completedConfirmedAction && confirmedStepNeedsContinuation(confirmedTask, taskAwareRecords([confirmationRecord])) && isCurrentTurn()) {
-      // Confirmation is a boundary inside the same task, not the end of the
-      // task. Continue the remaining plan immediately with the exact confirmed
-      // receipt in context; a later hard boundary will stop once again.
-      turnAuthorization.assertCurrent();
-      const continuation = await runToolSession({
-        messages: [
-          { role: 'system', content: voiceSystemPrompt },
-          ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {
-            messageId: voiceUserMessageId,
-            text: userText,
-          }),
-        ],
-        registry: toolRegistry,
-        config: {
-          provider,
-          model: voiceModel,
-          modelTurnState,
-          userId: session.userId,
-          domain: voiceScope.domain,
-          orgId: voiceScope.orgId,
-          signal: pipelineAbort.signal,
-          inputTokenBudget: voiceInputTokenBudget,
-          ...reasoningRoutePolicy,
-        },
-        onToolCall: record => {
-          if (!record?.name) return;
-          if (!isDirectDesktopTool(record.name)) {
-            emitToolLifecycle({
-              correlationId: record.id || `voice-confirmation-resume-${Date.now()}`,
-              name: record.name,
-              arguments: record.arguments || {},
-              result: record.error ? undefined : formatToolResultForUi(record.result),
-              error: record.error,
-            });
-          }
-        },
-        maxIterations: Math.max(1, routedToolPolicy.maxIterations || 5),
         context: {
           ...toolContext,
+          toolPolicy: routedToolPolicy,
+          userConfirmed: true,
+          requestConfirmation: undefined,
           actionIntent: confirmedTask,
           routedTaskText: confirmedTask,
-          toolPolicy: routedToolPolicy,
-          priorToolRecords: taskAwareRecords([confirmationRecord]),
         },
-        getters: llmGetters,
+        preflight: () => confirmationConsumed
+          ? { allowed: true, arguments: confirmedArgs }
+          : {
+              allowed: false,
+              arguments: confirmedArgs,
+              reason: 'The one-time confirmation expired before execution.',
+            },
       });
       if (!isCurrentTurn()) {
-        await releaseVoiceTurnResources('Voice confirmation continuation was interrupted.');
         return;
       }
-      confirmationRecords = coalesceToolExecutionRecords([confirmationRecord, ...(continuation.toolCalls || [])]);
-      confirmationLlmWasCalled = continuation.usageRecords.length > 0;
-      for (const usage of continuation.usageRecords) {
-        recordTokenUsage(session.userId, usage.provider, usage.model, {
-          promptTokens: usage.promptTokens,
-          completionTokens: usage.completionTokens,
-          totalTokens: usage.totalTokens,
-        }, requestId, 'voice');
-      }
-      completionGuard = continuation.completionGuard;
-      confirmationCandidate = pendingConfirmationCreatedThisTurn
-        ? trustedVoiceConfirmationText!
-        : continuation.text || confirmationCandidate;
-    }
-    confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
-    const confirmedFinal = pendingConfirmationCreatedThisTurn
-      ? {
-          text: trustedVoiceConfirmationText!,
-          blocked: false,
-          reason: 'waiting_confirmation',
-          notification: undefined,
+      if (!isDirectDesktopTool(confirmationRecord.name)) {
+        if (confirmationRecord.error) {
+          emitToolLifecycle({
+            correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
+            name: confirmationRecord.name,
+            arguments: confirmedArgs,
+            error: confirmationRecord.error,
+          });
+        } else {
+          emitToolLifecycle({
+            correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
+            name: confirmationRecord.name,
+            arguments: confirmedArgs,
+            result: formatToolResultForUi(confirmationRecord.result),
+          });
         }
-      : finalizeLumiResponse({
-          taskText: confirmedTask,
-          responseText: confirmationCandidate,
-          completionGuard,
-          toolRecords: taskAwareRecords(confirmationRecords),
-          source: 'voice_confirmation',
-          flow: { ...turnFlow, routeText: confirmedTask },
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
-        });
-    confirmationRecord.executionOrigin = 'confirmed_action_resume';
-    responseText = confirmedFinal.text;
-    await finishVoiceTerminal({
-      text: responseText,
-      source: 'voice_confirmation',
-      blocked: confirmedFinal.blocked,
-      reason: confirmedFinal.reason || '',
-      cognitiveIntent: confirmedFinal.blocked ? 'work_product_guard' : 'confirmation',
-      llmWasCalled: confirmationLlmWasCalled,
-      toolCalls: confirmationRecords,
-      speechText: responseText,
-      notification: confirmedFinal.notification,
-    }, {
-      completedReason: 'Voice confirmation fast path completed.',
-      interruptedReason: 'Voice confirmation terminal delivery was interrupted.',
-      onCommitted: () => {
-        persistVoiceLearning(responseText, {
-          toolRecords: confirmationRecords,
-          sourceInteractionId: `voice_confirmation_${Date.now()}`,
-          logLabel: 'voice confirmation',
-        });
-      },
-    });
-    return;
-  }
-
-  let recentActionExplanation: string | null = interruptedActivityResponse;
-  let recentActionEvidence: ToolExecutionRecord[] = [];
-  try {
-    const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-    const recentActionHistory = recentVoiceHistory.length > 0
-      ? recentVoiceHistory
-      : getMessages(conversation.id, 30);
-    recentActionEvidence = collectRecentActionToolRecords(recentActionHistory);
-    if (!recentActionExplanation) {
-      recentActionExplanation = describeRecentActionsFromHistory(userText, recentActionHistory);
-    }
-  } catch {}
-  if (recentActionExplanation) {
-    const finalizedRecentAction = finalizeLumiResponse({
-      taskText: actionIntentText,
-      responseText: recentActionExplanation,
-      toolRecords: recentActionEvidence,
-      source: 'voice_action_history',
-      flow: turnFlow,
-    });
-    responseText = finalizedRecentAction.text;
-    await finishVoiceTerminal({
-      text: responseText,
-      source: 'voice_action_history',
-      blocked: finalizedRecentAction.blocked,
-      reason: finalizedRecentAction.reason || '',
-      cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : 'action_history',
-      llmWasCalled: false,
-      speechText: responseText,
-      notification: finalizedRecentAction.notification,
-    }, {
-      completedReason: 'Voice action-history fast path completed.',
-      interruptedReason: 'Voice action-history response was interrupted.',
-      onCommitted: () => {
-        persistVoiceLearning(responseText, {
-          sourceInteractionId: `voice_action_history_${Date.now()}`,
-          logLabel: 'voice action history explanation',
-        });
-      },
-    });
-    return;
-  }
-
-  // Explicit meeting control keeps its immediate client acknowledgement.
-  const directlyAppliedMode: OperationMode | null = requestedMode === 'meeting' ? 'meeting' : null;
-  if (directlyAppliedMode) {
-    let modeSynced = true;
-    const modeToolRecord: ToolExecutionRecord = {
-      id: `voice-mode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: 'client_action',
-      arguments: {
-        action: 'start_meeting_mode',
-        mode: directlyAppliedMode,
-        confirmed: true,
-      },
-      result: '',
-    };
-    try {
-      modeToolRecord.result = await desktopRelay('client_action', modeToolRecord.arguments)
-        || JSON.stringify({ ok: true, mode: directlyAppliedMode });
-    } catch (err: any) {
-      modeSynced = false;
-      modeToolRecord.error = err?.message || String(err);
-      emitAgent('agent:notification', {
-        type: 'client_action',
-        level: 'warning',
-        message: `Mode switch did not reach the client: ${err?.message || err}`,
-      });
-    }
-    if (!isCurrentTurn()) {
-      await releaseVoiceTurnResources('Voice mode switch was interrupted before terminal delivery.');
-      return;
-    }
-    if (modeSynced) {
-      saveStoredOperationMode(session.userId, directlyAppliedMode);
-    }
-
-    if (isPureOperationModeSwitchRequest(userText, requestedMode)) {
-      responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, userText);
-      const finalizedMode = finalizeLumiResponse({
-        taskText: actionIntentText,
-        responseText,
-        toolRecords: [modeToolRecord],
-        source: 'voice',
-        flow: turnFlow,
+      }
+      const confirmationSucceeded = toolRecordSucceeded(confirmationRecord);
+      confirmationRecord.executionOrigin = 'confirmed_action_resume';
+      let confirmationRecords: ToolExecutionRecord[] = [confirmationRecord];
+      let confirmationLlmWasCalled = false;
+      const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
+        taskText: confirmedTask,
+        responseText: '',
+        toolRecords: taskAwareRecords([confirmationRecord]),
+        source: 'voice_confirmation',
+        flow: { ...turnFlow, routeText: confirmedTask },
         taskId: actionTaskExecution.state?.taskId,
         requestId,
       });
-      responseText = finalizedMode.text;
+      let confirmationCandidate = completedConfirmedAction?.text || (confirmationSucceeded
+        ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
+        : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
+            recordsToTaskReceipts([confirmationRecord])[0]?.error
+              || confirmationRecord.error
+              || confirmationRecord.result,
+          ));
+
+      if (!completedConfirmedAction && confirmedStepNeedsContinuation(confirmedTask, taskAwareRecords([confirmationRecord])) && isCurrentTurn()) {
+        // Confirmation is a boundary inside the same task, not the end of the
+        // task. Continue the remaining plan immediately with the exact confirmed
+        // receipt in context; a later hard boundary will stop once again.
+        turnAuthorization.assertCurrent();
+        const continuation = await runToolSession({
+          messages: [
+            { role: 'system', content: voiceSystemPrompt },
+            ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {
+              messageId: voiceUserMessageId,
+              text: userText,
+            }),
+          ],
+          registry: toolRegistry,
+          config: {
+            provider,
+            model: voiceModel,
+            modelTurnState,
+            userId: session.userId,
+            domain: voiceScope.domain,
+            orgId: voiceScope.orgId,
+            signal: pipelineAbort.signal,
+            inputTokenBudget: voiceInputTokenBudget,
+            ...reasoningRoutePolicy,
+          },
+          onToolCall: observeVoiceTools().onToolCall,
+          maxIterations: Math.max(1, routedToolPolicy.maxIterations || 5),
+          context: {
+            ...toolContext,
+            actionIntent: confirmedTask,
+            routedTaskText: confirmedTask,
+            toolPolicy: routedToolPolicy,
+            priorToolRecords: taskAwareRecords([confirmationRecord]),
+          },
+          getters: llmGetters,
+        });
+        if (!isCurrentTurn()) {
+          return;
+        }
+        confirmationRecords = coalesceToolExecutionRecords([confirmationRecord, ...(continuation.toolCalls || [])]);
+        confirmationLlmWasCalled = continuation.usageRecords.length > 0;
+        recordTokenUsageBatch(session.userId, continuation.usageRecords, requestId, 'voice');
+        completionGuard = continuation.completionGuard;
+        confirmationCandidate = pendingConfirmationCreatedThisTurn
+          ? trustedVoiceConfirmationText!
+          : continuation.text || confirmationCandidate;
+      }
+      confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
+      const confirmedFinal = pendingConfirmationCreatedThisTurn
+        ? {
+            text: trustedVoiceConfirmationText!,
+            blocked: false,
+            reason: 'waiting_confirmation',
+            notification: undefined,
+          }
+        : finalizeLumiResponse({
+            taskText: confirmedTask,
+            responseText: confirmationCandidate,
+            completionGuard,
+            toolRecords: taskAwareRecords(confirmationRecords),
+            source: 'voice_confirmation',
+            flow: { ...turnFlow, routeText: confirmedTask },
+            taskId: actionTaskExecution.state?.taskId,
+            requestId,
+          });
+      responseText = confirmedFinal.text;
       await finishVoiceTerminal({
         text: responseText,
-        source: "voice_mode",
-        blocked: finalizedMode.blocked,
-        reason: finalizedMode.reason || '',
-        cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : 'operation_mode',
-        llmWasCalled: false,
-        toolCalls: [modeToolRecord],
+        source: 'voice_confirmation',
+        blocked: confirmedFinal.blocked,
+        reason: confirmedFinal.reason || '',
+        cognitiveIntent: confirmedFinal.blocked ? 'work_product_guard' : 'confirmation',
+        llmWasCalled: confirmationLlmWasCalled,
+        toolCalls: confirmationRecords,
         speechText: responseText,
-        notification: finalizedMode.notification,
-        persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
-          toolRecords: [modeToolRecord],
-          source: 'voice_mode',
-          sourceInteractionId: `voice_mode_${Date.now()}`,
-          finalizationBlocked: finalizedMode.blocked,
-          assistantTextTrusted: !finalizedMode.blocked,
-          finalizationReason: finalizedMode.reason,
-        }),
+        notification: confirmedFinal.notification,
       }, {
-        completedReason: 'Voice mode-switch fast path completed.',
-        interruptedReason: 'Voice mode switch terminal delivery was interrupted.',
         onCommitted: () => {
           persistVoiceLearning(responseText, {
-            toolRecords: [modeToolRecord],
-            sourceInteractionId: `voice_mode_${Date.now()}`,
-            logLabel: 'voice mode switch',
+            toolRecords: confirmationRecords,
+            sourceInteractionId: `voice_confirmation_${Date.now()}`,
+            logLabel: 'voice confirmation',
           });
         },
       });
       return;
     }
-  }
 
-  const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
-  const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
-  // Read intent retains precedence: incoming messages must never enter a send capability.
-  const foregroundMessagingAction = foregroundWeChatReadArgs ? 'read' : 'send';
-  const foregroundMessagingArgs = foregroundWeChatReadArgs || foregroundWeChatSendArgs;
-  if (foregroundMessagingArgs && toolSessionActive && !clientActionOnlyTurn && !selfRepairTurn) {
-    const reading = foregroundMessagingAction === 'read';
-    const source = reading ? 'voice_foreground_messaging_read' : 'voice_foreground_messaging';
-    const correlationId = `voice-wechat-${foregroundMessagingAction}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let toolRecord: ToolExecutionRecord = { id: correlationId,
-      name: reading ? 'wechat_read_recent_chat' : 'wechat_send_message', arguments: foregroundMessagingArgs, result: '' };
+    let recentActionExplanation: string | null = interruptedActivityResponse;
+    let recentActionEvidence: ToolExecutionRecord[] = [];
     try {
-      const foregroundExecution = await executeForegroundMessagingAction({
-        action: foregroundMessagingAction, normalizedIntent: executionPipeline.normalizedIntent,
-        executionPlan: executionPipeline.executionPlan, registry: toolRegistry, correlationId,
-        arguments: foregroundMessagingArgs, context: toolContext,
-        onLifecycle: event => emitToolLifecycle({ correlationId: event.correlationId,
-          name: event.name, arguments: event.arguments,
-          ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
-          ...(event.error ? { error: event.error } : {}),
-        }),
+      const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+      const recentActionHistory = recentVoiceHistory.length > 0
+        ? recentVoiceHistory
+        : getMessages(conversation.id, 30);
+      recentActionEvidence = collectRecentActionToolRecords(recentActionHistory);
+      if (!recentActionExplanation) {
+        recentActionExplanation = describeRecentActionsFromHistory(userText, recentActionHistory);
+      }
+    } catch {}
+    if (recentActionExplanation) {
+      const finalizedRecentAction = finalizeLumiResponse({
+        taskText: actionIntentText,
+        responseText: recentActionExplanation,
+        toolRecords: recentActionEvidence,
+        source: 'voice_action_history',
+        flow: turnFlow,
       });
-      toolRecord = foregroundExecution.record;
-      if (toolRecord.error) throw new Error(toolRecord.error);
-      if (!isCurrentTurn()) {
-        await releaseVoiceTurnResources(`Voice foreground messaging ${foregroundMessagingAction} was interrupted.`);
-        return;
-      }
-      const parsed = foregroundExecution.parsed;
-      const contact = String(foregroundMessagingArgs.contact || '').trim();
-      if (reading) {
-        const summary = String(parsed.contentSummary || '').trim();
-        const evidence = String(parsed.uiSnapshotPreview || '').slice(0, 1200);
-        responseText = parsed.read && summary
-          ? contact
-            ? `我已经定位到你和${contact}的微信聊天。可见最近内容如下：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
-            : `我已经读到当前微信聊天的可见最近内容：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
-          : parsed.read
-            ? contact
-              ? `我已经定位到你和${contact}的微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
-              : `我已经定位到当前微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
-            : `这次还没完成。卡住的位置：微信前台聊天读取。${String(parsed.visionError || parsed.note || '没有拿到可读的聊天内容证据。')}`; // i18n-allow: reviewed Chinese messaging-read blocker.
-      } else {
-        responseText = formatCnVoiceWeChatSendResult(contact, String(foregroundMessagingArgs.message || '').trim(),
-          parsed.sent === true && parsed.verificationStatus === 'verified');
-      }
-    } catch (error: any) {
-      toolRecord.error = error?.message || String(error);
-      if (!isCurrentTurn()) {
-        await releaseVoiceTurnResources(`Voice foreground messaging ${foregroundMessagingAction} failed after interruption.`);
-        return;
-      }
-      responseText = reading
-        ? `这次还没完成。卡住的位置：微信前台聊天读取：${toolRecord.error}。我不会把只打开或聚焦微信说成已读到聊天内容。` // i18n-allow: reviewed Chinese messaging-read failure receipt.
-        : formatCnVoiceWeChatSendError(toolRecord.error);
+      responseText = finalizedRecentAction.text;
+      await finishVoiceTerminal({
+        text: responseText,
+        source: 'voice_action_history',
+        blocked: finalizedRecentAction.blocked,
+        reason: finalizedRecentAction.reason || '',
+        cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : 'action_history',
+        llmWasCalled: false,
+        speechText: responseText,
+        notification: finalizedRecentAction.notification,
+      }, {
+        onCommitted: () => {
+          persistVoiceLearning(responseText, {
+            sourceInteractionId: `voice_action_history_${Date.now()}`,
+            logLabel: 'voice action history explanation',
+          });
+        },
+      });
+      return;
     }
-    const directFinal = finalizeLumiResponse({ taskText: actionIntentText, responseText, toolRecords: [toolRecord],
-      source: 'voice', flow: turnFlow, taskId: actionTaskExecution.state?.taskId, requestId });
-    responseText = directFinal.text;
-    const interactionId = () => `voice_wechat_${foregroundMessagingAction}_${Date.now()}`;
-    await finishVoiceTerminal({ text: responseText, source, blocked: directFinal.blocked,
-      reason: directFinal.reason || '', cognitiveIntent: directFinal.blocked ? 'work_product_guard' : reading ? 'messaging_read' : 'messaging',
-      llmWasCalled: false, toolCalls: [toolRecord], speechText: responseText, notification: directFinal.notification,
-      persistTerminalState: () => persistVoiceTakeoverExecution(responseText, { toolRecords: [toolRecord], source,
-        sourceInteractionId: interactionId(), finalizationBlocked: directFinal.blocked,
-        assistantTextTrusted: !directFinal.blocked, finalizationReason: directFinal.reason }),
-    }, {
-      completedReason: `Voice foreground messaging-${foregroundMessagingAction} fast path completed.`,
-      interruptedReason: reading ? 'Voice foreground messaging read was interrupted.' : 'Voice foreground messaging terminal delivery was interrupted.',
-      onCommitted: () => persistVoiceLearning(responseText, { toolRecords: [toolRecord], sourceInteractionId: interactionId(),
-        logLabel: reading ? 'voice foreground messaging read' : 'voice foreground messaging' }),
-    });
-    return;
-  }
 
-  try {
+    // Explicit meeting control keeps its immediate client acknowledgement.
+    const directlyAppliedMode: OperationMode | null = requestedMode === 'meeting' ? 'meeting' : null;
+    if (directlyAppliedMode) {
+      const modeToolRecord: ToolExecutionRecord = {
+        id: `voice-mode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: 'client_action',
+        arguments: {
+          action: 'start_meeting_mode',
+          mode: directlyAppliedMode,
+          confirmed: true,
+        },
+        result: '',
+      };
+      try {
+        modeToolRecord.result = await desktopRelay('client_action', modeToolRecord.arguments)
+          || JSON.stringify({ ok: false, error: 'Client returned no mode-switch receipt' });
+      } catch (err: any) {
+        modeToolRecord.error = err?.message || String(err);
+        emitAgent('agent:notification', {
+          type: 'client_action',
+          level: 'warning',
+          message: `Mode switch did not reach the client: ${err?.message || err}`,
+        });
+      }
+      if (!isCurrentTurn()) {
+        return;
+      }
+      const modeSynced = toolRecordSucceeded(modeToolRecord);
+      if (modeSynced) {
+        saveStoredOperationMode(session.userId, directlyAppliedMode);
+      }
+
+      if (isPureOperationModeSwitchRequest(userText, requestedMode)) {
+        responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, userText);
+        const finalizedMode = finalizeLumiResponse({
+          taskText: actionIntentText,
+          responseText,
+          toolRecords: [modeToolRecord],
+          source: 'voice',
+          flow: turnFlow,
+          taskId: actionTaskExecution.state?.taskId,
+          requestId,
+        });
+        responseText = finalizedMode.text;
+        await finishVoiceTerminal({
+          text: responseText,
+          source: "voice_mode",
+          blocked: finalizedMode.blocked,
+          reason: finalizedMode.reason || '',
+          cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : 'operation_mode',
+          llmWasCalled: false,
+          toolCalls: [modeToolRecord],
+          speechText: responseText,
+          notification: finalizedMode.notification,
+          persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+            toolRecords: [modeToolRecord],
+            source: 'voice_mode',
+            sourceInteractionId: `voice_mode_${Date.now()}`,
+            finalizationBlocked: finalizedMode.blocked,
+            assistantTextTrusted: !finalizedMode.blocked,
+            finalizationReason: finalizedMode.reason,
+          }),
+        }, {
+          onCommitted: () => {
+            persistVoiceLearning(responseText, {
+              toolRecords: [modeToolRecord],
+              sourceInteractionId: `voice_mode_${Date.now()}`,
+              logLabel: 'voice mode switch',
+            });
+          },
+        });
+        return;
+      }
+    }
+
+    const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
+    const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
+    // Read intent retains precedence: incoming messages must never enter a send capability.
+    const foregroundMessagingAction = foregroundWeChatReadArgs ? 'read' : 'send';
+    const foregroundMessagingArgs = foregroundWeChatReadArgs || foregroundWeChatSendArgs;
+    if (foregroundMessagingArgs && toolSessionActive && !clientActionOnlyTurn && !selfRepairTurn) {
+      const reading = foregroundMessagingAction === 'read';
+      const source = reading ? 'voice_foreground_messaging_read' : 'voice_foreground_messaging';
+      const correlationId = `voice-wechat-${foregroundMessagingAction}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      let toolRecord: ToolExecutionRecord = { id: correlationId,
+        name: reading ? 'wechat_read_recent_chat' : 'wechat_send_message', arguments: foregroundMessagingArgs, result: '' };
+      try {
+        const foregroundExecution = await executeForegroundMessagingAction({
+          action: foregroundMessagingAction, normalizedIntent: executionPipeline.normalizedIntent,
+          executionPlan: executionPipeline.executionPlan, registry: toolRegistry, correlationId,
+          arguments: foregroundMessagingArgs, context: toolContext,
+          onLifecycle: event => emitToolLifecycle({ correlationId: event.correlationId,
+            name: event.name, arguments: event.arguments,
+            ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+            ...(event.error ? { error: event.error } : {}),
+          }),
+        });
+        toolRecord = foregroundExecution.record;
+        if (toolRecord.error) throw new Error(toolRecord.error);
+        if (!isCurrentTurn()) {
+          return;
+        }
+        const parsed = foregroundExecution.parsed;
+        const contact = String(foregroundMessagingArgs.contact || '').trim();
+        if (reading) {
+          const summary = String(parsed.contentSummary || '').trim();
+          const evidence = String(parsed.uiSnapshotPreview || '').slice(0, 1200);
+          responseText = parsed.read && summary
+            ? contact
+              ? `我已经定位到你和${contact}的微信聊天。可见最近内容如下：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
+              : `我已经读到当前微信聊天的可见最近内容：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
+            : parsed.read
+              ? contact
+                ? `我已经定位到你和${contact}的微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
+                : `我已经定位到当前微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
+              : `这次还没完成。卡住的位置：微信前台聊天读取。${String(parsed.visionError || parsed.note || '没有拿到可读的聊天内容证据。')}`; // i18n-allow: reviewed Chinese messaging-read blocker.
+        } else {
+          responseText = formatCnVoiceWeChatSendResult(contact, String(foregroundMessagingArgs.message || '').trim(),
+            parsed.sent === true && parsed.verificationStatus === 'verified');
+        }
+      } catch (error: any) {
+        toolRecord.error = error?.message || String(error);
+        if (!isCurrentTurn()) {
+          return;
+        }
+        responseText = reading
+          ? `这次还没完成。卡住的位置：微信前台聊天读取：${toolRecord.error}。我不会把只打开或聚焦微信说成已读到聊天内容。` // i18n-allow: reviewed Chinese messaging-read failure receipt.
+          : formatCnVoiceWeChatSendError(toolRecord.error);
+      }
+      const directFinal = finalizeLumiResponse({ taskText: actionIntentText, responseText, toolRecords: [toolRecord],
+        source: 'voice', flow: turnFlow, taskId: actionTaskExecution.state?.taskId, requestId });
+      responseText = directFinal.text;
+      const interactionId = () => `voice_wechat_${foregroundMessagingAction}_${Date.now()}`;
+      await finishVoiceTerminal({ text: responseText, source, blocked: directFinal.blocked,
+        reason: directFinal.reason || '', cognitiveIntent: directFinal.blocked ? 'work_product_guard' : reading ? 'messaging_read' : 'messaging',
+        llmWasCalled: false, toolCalls: [toolRecord], speechText: responseText, notification: directFinal.notification,
+        persistTerminalState: () => persistVoiceTakeoverExecution(responseText, { toolRecords: [toolRecord], source,
+          sourceInteractionId: interactionId(), finalizationBlocked: directFinal.blocked,
+          assistantTextTrusted: !directFinal.blocked, finalizationReason: directFinal.reason }),
+      }, {
+        onCommitted: () => persistVoiceLearning(responseText, { toolRecords: [toolRecord], sourceInteractionId: interactionId(),
+          logLabel: reading ? 'voice foreground messaging read' : 'voice foreground messaging' }),
+      });
+      return;
+    }
+
     if (!isCurrentTurn()) return;
 
     // Reuse the configured model and the shared execution decision.
@@ -2434,37 +2397,20 @@ export async function processVoiceInput(
     // Voice owns recognition, speech and presentation; it cannot independently
     // decide to repeat a tool, end an unfinished task or discard a receipt.
     markVoiceLatencyMilestone(requestId, 'firstModelRequestAt');
+    const toolLifecycle = observeVoiceTools(record => toolResults.push(record));
     const result = toolSessionActive
       ? await runToolSession({
         messages: messages,
         registry: toolRegistry,
         config: modelConfig,
-        onToolCall: record => {
-            toolResults.push(record);
-            if (!isCurrentTurn() || isDirectDesktopTool(record.name)) return;
-            emitToolLifecycle({
-              correlationId: record.id || 'voice-tool-' + Date.now(),
-              name: record.name,
-              arguments: record.arguments || {},
-              result: record.error ? undefined : formatToolResultForUi(record.result),
-              error: record.error,
-            });
-          },
+        onToolCall: toolLifecycle.onToolCall,
         maxIterations: maxIterations,
         onStreamChunk: onChunk,
         context: {
             ...toolContext,
             ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
             priorToolRecords: taskAwareRecords(toolResults),
-            onToolStart: call => {
-              toolContext.onToolStart(call);
-              if (!isCurrentTurn() || isDirectDesktopTool(call.name)) return;
-              emitToolLifecycle({
-                correlationId: call.id || 'voice-tool-' + Date.now(),
-                name: call.name,
-                arguments: call.arguments || {},
-              });
-            },
+            onToolStart: toolLifecycle.onToolStart,
           },
         getters: llmGetters,
       })
@@ -2480,13 +2426,7 @@ export async function processVoiceInput(
     if (!isCurrentTurn()) return;
     responseText = result.text || '';
     completionGuard = result.completionGuard;
-    for (const usage of result.usageRecords) {
-      recordTokenUsage(session.userId, usage.provider, usage.model, {
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
-      }, requestId, 'voice');
-    }
+    recordTokenUsageBatch(session.userId, result.usageRecords, requestId, 'voice');
 
     if (!isCurrentTurn()) return;
 
@@ -2499,41 +2439,15 @@ export async function processVoiceInput(
     if (finalizedDesktopRecords.length > toolResults.length) {
       toolResults.push(...finalizedDesktopRecords.slice(toolResults.length));
     }
-    let finalResponse: ReturnType<typeof finalizeLumiResponse> = pendingConfirmationCreatedThisTurn
-      ? {
-          text: trustedVoiceConfirmationText!,
-          blocked: false,
-          reason: 'waiting_confirmation',
-        }
-      : finalizeLumiResponse({
-          taskText: actionIntentText,
-          responseText,
-          completionGuard,
-          toolRecords: taskAwareRecords(toolResults),
-          source: 'voice',
-          flow: turnFlow,
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
-        });
-    const desktopPauseBlocksCurrentTask = (
-      records = taskAwareRecords(toolResults),
-    ) => {
-      return shouldBlockForDesktopControlPause({
-        pauseReason: desktopRelay.getControlPauseReason(),
-        waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-        taskText: actionIntentText,
-        toolRecords: records,
-      });
-    };
-    if (desktopPauseBlocksCurrentTask()) {
-      const pausePresentation = desktopPausePresentation();
-      finalResponse = {
-        ...finalResponse,
-        text: pausePresentation.text,
-        blocked: true,
-        reason: pausePresentation.reason,
-      };
-    }
+    const responseFinalizer = createTurnResponseFinalizer({
+      taskText: actionIntentText, flow: turnFlow, taskId: actionTaskExecution.state?.taskId, requestId,
+      pendingConfirmation: () => pendingConfirmationCreatedThisTurn,
+      controlPauseReason: () => desktopRelay.getControlPauseReason(), pauseTaskText: routedUserText,
+    });
+    const desktopPauseBlocksCurrentTask = (records = taskAwareRecords(toolResults)) => responseFinalizer.isDesktopPaused(records);
+    let finalResponse = responseFinalizer.finalize({
+      responseText, completionGuard, toolRecords: taskAwareRecords(toolResults), source: 'voice',
+    });
     const guardRecovery = await recoverBlockedExecutionOnce({
       task: routedUserText,
       responseText,
@@ -2550,6 +2464,7 @@ export async function processVoiceInput(
       attempt: async ({ instruction, priorToolRecords, recordTool }) => {
         logger.warn('[Audio] Recovering blocked execution internally.');
           turnAuthorization.assertCurrent();
+      const recoveryLifecycle = observeVoiceTools(recordTool);
       const recovery = await runToolSession({
         messages: [
               ...recoveryConversationMessages,
@@ -2568,17 +2483,7 @@ export async function processVoiceInput(
             inputTokenBudget: voiceInputTokenBudget,
             ...reasoningRoutePolicy,
           },
-        onToolCall: record => {
-            recordTool(record);
-            if (isDirectDesktopTool(record.name)) return;
-            emitToolLifecycle({
-              correlationId: record.id || `voice-guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              name: record.name,
-              arguments: record.arguments,
-              result: record.error ? undefined : formatToolResultForUi(record.result),
-              error: record.error,
-            });
-          },
+        onToolCall: recoveryLifecycle.onToolCall,
         maxIterations: Math.max(2, Math.min(12, routedToolPolicy.maxIterations || maxIterations || 8)),
         context: {
             ...toolContext,
@@ -2586,31 +2491,11 @@ export async function processVoiceInput(
             source: 'voice_guard_recovery',
             priorToolRecords,
             isCancelled: () => !isCurrentTurn(),
-            onToolStart: call => {
-              if (isDirectDesktopTool(call.name)) return;
-              emitToolLifecycle({
-                correlationId: call.id || `voice-guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: call.name,
-                arguments: call.arguments,
-              });
-            },
+            onToolStart: recoveryLifecycle.onToolStart,
           },
         getters: llmGetters,
       });
-        for (const usage of recovery.usageRecords) {
-          recordTokenUsage(
-            session.userId,
-            usage.provider,
-            usage.model,
-            {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            },
-            `voice_guard_recovery_${Date.now()}`,
-            'voice',
-          );
-        }
+        recordTokenUsageBatch(session.userId, recovery.usageRecords, () => `voice_guard_recovery_${Date.now()}`, 'voice');
         return {
           text: recovery.text,
           completionGuard: recovery.completionGuard,
@@ -2619,30 +2504,10 @@ export async function processVoiceInput(
       },
       finalize: (candidateText, records, recoveryCompletionGuard) => {
         const recoveredRecords = taskAwareRecords(records);
-        const candidate = pendingConfirmationCreatedThisTurn
-          ? {
-              text: trustedVoiceConfirmationText!,
-              blocked: false,
-              reason: 'waiting_confirmation',
-            }
-          : finalizeLumiResponse({
-              taskText: actionIntentText,
-              responseText: candidateText,
-              completionGuard: recoveryCompletionGuard,
-              toolRecords: recoveredRecords,
-              source: 'voice_guard_recovery',
-              flow: turnFlow,
-              taskId: actionTaskExecution.state?.taskId,
-              requestId,
-            });
-        if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
-        const pausePresentation = desktopPausePresentation();
-        return {
-          ...candidate,
-          text: pausePresentation.text,
-          blocked: true,
-          reason: pausePresentation.reason,
-        };
+        return responseFinalizer.finalize({
+          responseText: candidateText, completionGuard: recoveryCompletionGuard,
+          toolRecords: recoveredRecords, source: 'voice_guard_recovery',
+        });
       },
     });
     if (!isCurrentTurn()) return;

@@ -1,3 +1,4 @@
+import type { ChatMessageWriter } from "./message_writer";
 
 
 import { type TurnResolution } from "../../cognition/turn_resolution";
@@ -41,7 +42,7 @@ isChatCancelled: () => boolean;
 formatToolResultForUi: (value?: string) => string;
 commitDeterministicTerminal: (input: { event?: "agent:response" | "agent:error"; payload: Record<string, any>; persistAssistantMessage?: () => void; publishAfter?: () => void; errorContext?: string; }) => Promise<boolean>;
 conversationAgentId: string;
-addMessageIdempotent: (message: Parameters<typeof addMessageIdempotentUnbound>[0]) => string;
+addMessageIdempotent: ChatMessageWriter;
 emitConversationUpdated: (payload: Record<string, any>) => void;
 conversationTurn: import("../../conversation/manager").ConversationTurnResult;
 releaseChatSession: (reason?: string) => Promise<boolean>;
@@ -193,20 +194,14 @@ export async function answerPriorTaskStatus(context: answerPriorTaskStatusInput)
                 });
               }
               context.addMessageIdempotent({
-                userId: context.uid,
-                agentId: context.conversationAgentId,
                 conversationId: context.conversation.id,
                 role: 'assistant',
                 content: recheckText,
                 personality: personalityRegistry.get('lumi')?.id || 'lumi',
-                domain: context.resolvedDomain,
-                orgId: context.resolvedOrgId,
                 source: 'chat_runtime_cleanup_recheck',
-                channel: 'chat',
                 toolCalls: [recheckRecord],
                 cognitiveIntent: recheckReason,
                 llmWasCalled: false,
-                requestId: context.requestId,
                 completionFeedback: recheckCompletionFeedback,
               });
             },
@@ -266,18 +261,12 @@ export async function answerPriorTaskStatus(context: answerPriorTaskStatusInput)
             reason: responseIntent,
           },
           persistAssistantMessage: () => context.addMessageIdempotent({
-            userId: context.uid,
-            agentId: context.conversationAgentId,
             conversationId: context.conversation.id,
             role: 'assistant',
             content: statusText,
-            domain: context.resolvedDomain,
-            orgId: context.resolvedOrgId,
             source: executionFactQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
-            channel: 'chat',
             cognitiveIntent: responseIntent,
             llmWasCalled: false,
-            requestId: context.requestId,
             skipActionContinuation: true,
           }),
           publishAfter: () => {

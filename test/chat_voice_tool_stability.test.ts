@@ -191,7 +191,7 @@ describe('chat and voice tool-call stability', () => {
       expect(source).toContain('confirmedStepNeedsContinuation(');
     }
     expect(chat).toContain('llmWasCalled: confirmationLlmWasCalled');
-    expect(chat).toContain('for (const usage of continuation.usageRecords)');
+    expect(chat).toContain('recordTokenUsageBatch(uid, continuation.usageRecords, interactionId)');
   });
 
   it('keeps foreground WeChat parsing advisory while main chat remains model-owned', () => {

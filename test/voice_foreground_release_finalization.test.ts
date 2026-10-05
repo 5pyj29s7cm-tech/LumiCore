@@ -650,8 +650,9 @@ describe('voice foreground release convergence', () => {
     expect(workHeartbeatReleaseAt).toBeGreaterThan(workLaneReleaseAt);
 
     expect(source).not.toContain('preMatchedQuickResult');
-    expect(source).toContain("completedReason: 'Voice mode-switch fast path completed.'");
-    expect(source).toContain('release: releaseVoiceTurnResources');
+    const turnSource = readFileSync('server/socket/voice_conversation_turn.ts', 'utf8');
+    expect(turnSource.match(/releaseVoiceTurnResources\(/g)).toHaveLength(1);
+    expect(turnSource.indexOf("  try {\n    if (transcriptExecutionGuard.action === 'clarify')")).toBeLessThan(turnSource.indexOf('await persistTurnMemory('));
     expect(source).toContain("releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.')");
 
     const outerFailureStart = source.indexOf("logger.error('[Voice Error]:', err);");

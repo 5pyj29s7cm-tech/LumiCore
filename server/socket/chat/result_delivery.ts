@@ -1,3 +1,5 @@
+import type { ToolContext } from "../../tools/types";
+import type { ChatMessageWriter } from "./message_writer";
 
 
 import { type ToolSessionOptions } from "../../llm/tool_session";
@@ -25,7 +27,7 @@ import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptanc
 
 import { recoverBlockedExecutionOnce } from "../../cognition/execution_guard_recovery";
 
-import { shouldBlockForDesktopControlPause } from "../../cognition/desktop_control_pause";
+import { createTurnResponseFinalizer } from "../../cognition/turn_response_finalizer";
 
 import { formatPendingConfirmationRequest } from "../../tools/pending_confirmation";
 
@@ -37,15 +39,16 @@ import { RECONFIRMATION_REQUIRED_BLOCKER } from "../../cognition/action_continua
 
 import { summarizeToolRecordForPersistence } from "../../cognition/tool_record_status";
 
-import { recordTokenUsage } from "../../llm/token_tracker";
+import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
-import { formatDesktopControlPausePresentation } from "../../regions/packs/cn/desktop_control_messages";
 
-import { isDirectDesktopTool } from "../desktop_relay";
+
+import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
 import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 
 type completeChatTurnInput = {
+toolContext: ToolContext;
 pendingConfirmationCreatedThisTurn: import("../../tools/pending_confirmation").PendingToolConfirmation;
 executionTaskText: string;
 responseText: string;
@@ -76,15 +79,9 @@ formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, resu
 emitAgent: (event: string, payload?: Record<string, any>) => boolean;
 modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
 personality: Record<string, any> | import("../../personality/types").PersonalityConfig;
-toolSecurityContext: { onToolRecord: (record: ToolExecutionRecord) => void; authenticated?: boolean; authRole?: string; orgRole?: string; localExecution?: boolean; executionBoundary?: "trusted_local" | "remote_restricted" | "trusted_system"; };
-conversation: import("../../conversation/manager").Conversation;
 actionTaskExecution: Exclude<import("../../conversation/manager").ConversationActionExecutionPreparation, { bindingFailure: unknown }>;
 llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, "getOpenAI" | "getAnthropic" | "getQwen" | "getOllama" | "isOllamaAvailable" | "getLmStudio" | "isLmStudioAvailable">>;
-allowLocalFileWrites: boolean;
-localWriteIntentReason: string;
-forwardToolProgress: (step: string) => void;
 emitToolLifecycle: (payload: { correlationId: string; name: string; arguments: Record<string, any>; args?: Record<string, any>; result?: string; error?: string; artifactReceipt?: MediaArtifactReceipt; }) => void;
-modelToolProjection: { toolNames: string[]; requiredToolNames?: string[]; maxTools: number; allowDynamicDiscovery?: boolean; discoveryToolName?: string; droppedToolNames?: string[]; };
 visibleUserText: string;
 executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
 runtimeOwnedDeterministicRecoveryCall: { source: "durable_task_capsule"; taskId: string; taskRevision: number; requestId: string; name: "write_file"; arguments: { path: string; content: string; }; } | { source: "structured_media_request"; taskId: string; taskRevision: number; requestId: string; name: "generate_image" | "ai_edit_image" | "generate_video"; arguments: Record<string, unknown>; };
@@ -103,7 +100,7 @@ commitRecordedTerminal: (input: { payload: Record<string, any>; unknownPayload: 
 persistChatTakeoverExecution: (assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult;
 capabilitySelection: import("../../cognition/execution_pipeline").LumiCapabilityPlan;
 conversationAgentId: string;
-addMessageIdempotent: (message: Parameters<typeof addMessageIdempotentUnbound>[0]) => string;
+addMessageIdempotent: ChatMessageWriter;
 eventSource: string;
 refreshTerminalPayloadTaskRelation: (payload: Record<string, any>, exactTaskId?: string) => ActiveTaskMessageResolution;
 turnAuthorization: import("../../conversation/lifecycle").RequestAuthorization;
@@ -121,47 +118,16 @@ socket: Socket;
 };
 export async function completeChatTurn(context: completeChatTurnInput) {
 
-      // Waiting for an immutable one-time confirmation is a valid terminal
-      // state for this turn, not a failed completion attempt. The model/tool
-      // path must render the same confirmation receipt as the deterministic
-      // quick-command path and must not let the completion guard overwrite it
-      // with a generic "missing core evidence" failure.
-      let finalResponse: ReturnType<typeof finalizeLumiResponse> = context.pendingConfirmationCreatedThisTurn
-        ? {
-            text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
-            blocked: false,
-            reason: 'waiting_confirmation',
-            notification: undefined,
-          }
-        : finalizeLumiResponse({
-            taskText: context.executionTaskText,
-            responseText: context.responseText,
-            completionGuard: context.completionGuard,
-            toolRecords: context.finalTaskRecords,
-            source: 'chat',
-            flow: context.turnFlow,
-            taskId: context.durableTaskId,
-            requestId: context.requestId,
-          });
-      const desktopPauseBlocksCurrentTask = (
-        records = context.taskAwareRecords(context.allToolRecords),
-      ) => {
-        return shouldBlockForDesktopControlPause({
-          pauseReason: context.desktopRelay.getControlPauseReason(),
-          waitingForConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
-          taskText: context.executionTaskText,
-          toolRecords: records,
-        });
-      };
-      if (desktopPauseBlocksCurrentTask()) {
-        const pausePresentation = formatDesktopControlPausePresentation(context.executionTaskText);
-        finalResponse = {
-          ...finalResponse,
-          text: pausePresentation.text,
-          blocked: true,
-          reason: pausePresentation.reason,
-        };
-      }
+      const responseFinalizer = createTurnResponseFinalizer({
+        taskText: context.executionTaskText, flow: context.turnFlow, taskId: context.durableTaskId, requestId: context.requestId,
+        pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
+        controlPauseReason: () => context.desktopRelay.getControlPauseReason(),
+      });
+      const desktopPauseBlocksCurrentTask = (records = context.taskAwareRecords(context.allToolRecords)) => responseFinalizer.isDesktopPaused(records);
+      let finalResponse = responseFinalizer.finalize({
+        responseText: context.responseText, completionGuard: context.completionGuard,
+        toolRecords: context.finalTaskRecords, source: 'chat',
+      });
       const guardRecovery = await recoverBlockedExecutionOnce({
         task: context.executionTaskText,
         responseText: context.responseText,
@@ -179,6 +145,12 @@ export async function completeChatTurn(context: completeChatTurnInput) {
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
           console.warn('[ChatHandler] Recovering blocked execution internally.');
           context.llmWasCalled = true;
+          const toolLifecycle = createToolLifecycleCallbacks({
+            emit: context.emitToolLifecycle, correlationPrefix: 'guard-recovery',
+            formatResult: context.formatToolResultForUi, includeFailedResult: true,
+            onRecord: record => { context.rememberRequestToolRecord(record); recordTool(record); },
+            artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
+          });
           const recovery = await context.runAuthorizedTools({
             messages: [
               ...context.normalTurnMessages,
@@ -197,75 +169,20 @@ export async function completeChatTurn(context: completeChatTurnInput) {
               signal: context.abortController.signal,
               ...context.reasoningRoutePolicy,
             },
-            onToolCall: record => {
-              // Preserve terminal receipts independently from the provider
-              // result; a late provider error must not erase tool evidence.
-              context.rememberRequestToolRecord(record);
-              recordTool(record);
-              if (isDirectDesktopTool(record.name)) return;
-              const toolPayload = {
-                correlationId: record.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: record.name,
-                arguments: record.arguments,
-                args: record.arguments,
-                result: context.formatToolResultForUi(record.result),
-                error: record.error,
-                artifactReceipt: context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-              };
-              context.emitAgent('agent:tool_call', toolPayload);
-              context.emitAgent('agent:tool', toolPayload);
-            },
+            onToolCall: toolLifecycle.onToolCall,
             maxIterations: Math.max(2, Math.min(12, context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 8)),
             context: {
-              ...context.toolSecurityContext,
-              userId: context.uid,
-              taskId: context.durableTaskId,
-              conversationId: context.conversation.id,
-              turnId: context.requestId,
-              turnRowId: context.actionTaskExecution.turnRowId,
-              requestId: context.requestId,
-              domain: context.resolvedDomain,
-              orgId: context.resolvedOrgId,
-              desktopRelay: context.desktopRelay,
-              llmGetters: context.llmGetters,
+              ...context.toolContext,
               taskRevision: context.actionTaskExecution.state?.revision,
               source: 'chat_guard_recovery',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites: context.allowLocalFileWrites,
-              localWriteIntentReason: context.localWriteIntentReason,
-              executionSignal: context.abortController.signal,
-              isCancelled: context.isChatCancelled,
-              onProgress: context.forwardToolProgress,
-              onToolStart: call => {
-                if (isDirectDesktopTool(call.name)) return;
-                context.emitToolLifecycle({
-                  correlationId: call.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                  name: call.name,
-                  arguments: call.arguments,
-                });
-              },
-              toolPolicy: context.modelCapabilityPolicy,
-              modelToolProjection: context.modelToolProjection,
-              actionIntent: context.visibleUserText,
-              currentTurnExecutionRequested: context.executionPipeline.executionRequested,
-              resolutionId: context.executionPipeline.resolution.id,
-              trustedActionContinuation: context.executionPipeline.trustedActionContinuation,
-              routedTaskText: context.turnFlow.routeText,
-              acceptedTaskTarget: context.turnFlow.acceptedTaskTarget,
-            currentAppTarget: context.turnFlow.currentAppEditTarget,
+              onToolStart: toolLifecycle.onToolStart,
               ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
               priorToolRecords,
               desktopExecutionTracker: context.desktopExecutionTracker,
               requestConfirmation: context.requestToolConfirmation,
             },
               });
-          for (const usage of recovery.usageRecords) {
-            recordTokenUsage(context.uid, usage.provider, usage.model, {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            }, context.interactionId);
-          }
+          recordTokenUsageBatch(context.uid, recovery.usageRecords, context.interactionId);
           return {
             text: recovery.text,
             completionGuard: recovery.completionGuard,
@@ -277,31 +194,10 @@ export async function completeChatTurn(context: completeChatTurnInput) {
         },
         finalize: (candidateText, records, recoveryCompletionGuard) => {
           const recoveredRecords = withDesktopExecutionReceipt(records, context.desktopExecutionTracker);
-          const candidate = context.pendingConfirmationCreatedThisTurn
-            ? {
-                text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
-                blocked: false,
-                reason: 'waiting_confirmation',
-                notification: undefined,
-              }
-            : finalizeLumiResponse({
-                taskText: context.executionTaskText,
-                responseText: candidateText,
-                completionGuard: recoveryCompletionGuard,
-                toolRecords: recoveredRecords,
-                source: 'chat_guard_recovery',
-                flow: context.turnFlow,
-                taskId: context.durableTaskId,
-                requestId: context.requestId,
-              });
-          if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
-          const pausePresentation = formatDesktopControlPausePresentation(context.executionTaskText);
-          return {
-            ...candidate,
-            text: pausePresentation.text,
-            blocked: true,
-            reason: pausePresentation.reason,
-          };
+          return responseFinalizer.finalize({
+            responseText: candidateText, completionGuard: recoveryCompletionGuard,
+            toolRecords: recoveredRecords, source: 'chat_guard_recovery',
+          });
         },
       });
       for (const record of guardRecovery.toolRecords) {
@@ -426,20 +322,13 @@ export async function completeChatTurn(context: completeChatTurnInput) {
             addMessage({ userId: context.uid, agentId: context.conversationAgentId, conversationId: context.conversationId, role: 'tool', content: tcSummary, domain: context.resolvedDomain, orgId: context.resolvedOrgId });
           }
           context.addMessageIdempotent({
-            userId: context.uid,
-            agentId: context.conversationAgentId,
             conversationId: context.conversationId,
             role: 'assistant',
             content: context.responseText,
             personality: context.personality.id,
-            domain: context.resolvedDomain,
-            orgId: context.resolvedOrgId,
-            source: context.eventSource,
-            channel: 'chat',
             toolCalls: context.allToolRecords.length ? context.allToolRecords : undefined,
             cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : context.executionPipeline.normalizedIntent.kind,
             llmWasCalled: context.llmWasCalled,
-            requestId: context.requestId,
             completionFeedback: responseCompletionFeedback,
             ...(finalResponse.blocked && context.durableTaskId ? {
               terminalTaskDisposition: {
