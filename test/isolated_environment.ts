@@ -21,7 +21,8 @@ function cleanIsolatedRoot(): void {
 afterAll(async () => {
   try {
     const database = await import('../db_layer');
-    await database.closeDatabase?.();
+    const close = Object.getOwnPropertyDescriptor(database, 'closeDatabase')?.value;
+    if (typeof close === 'function') await close();
   } finally { cleanIsolatedRoot(); }
 });
 process.once('exit', cleanIsolatedRoot);
