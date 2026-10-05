@@ -73,6 +73,8 @@ describe('normalized/legacy routing shadow guard', () => {
 
   it('blocks every external tool when a read is misrouted as send', () => {
     const legacy = execution(['wechat_read_recent_chat', 'wechat_send_message']);
+    legacy.selfRepairToolPolicy = { ...legacy.baseToolPolicy };
+    legacy.clientActionToolPolicy = { ...legacy.baseToolPolicy };
     const comparison = compareLumiRoutingShadow({
       normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'),
       execution: legacy,
@@ -84,6 +86,12 @@ describe('normalized/legacy routing shadow guard', () => {
     expect(buildModelCapabilityPolicy(guarded).forbiddenTools).toContain('wechat_send_message');
     expect(buildModelCapabilityPolicy(guarded).allowedTools).not.toContain('wechat_send_message');
     expect(guarded.toolRoute?.toolNames).toEqual(['wechat_read_recent_chat']);
+    for (const policy of [guarded.toolPolicy, guarded.baseToolPolicy, guarded.selfRepairToolPolicy!, guarded.clientActionToolPolicy!]) {
+      expect(policy.forbiddenTools).toContain('wechat_send_message');
+      expect(policy.allowedTools).not.toContain('wechat_send_message');
+      expect(policy.requireConfirmation).not.toContain('wechat_send_message');
+    }
+    expect(guarded.toolRoute?.forbiddenToolNames).toContain('wechat_send_message');
   });
 
   it('allows an exact outbound route to proceed to strict confirmation', () => {

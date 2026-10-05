@@ -1,9 +1,50 @@
 import {
   commitConversationTerminalDurabilityStage,
+  cancelConversationActionExecution,
+  updateAssistantMessageTerminalPresentation,
   quarantineConversationTerminalDurabilityStage,
   runWithConversationTerminalDurabilityStage,
   type ConversationTerminalPersistenceUnknownProjection,
 } from '../conversation/manager';
+import { flushDBOrThrow } from '../../db_layer';
+import { conversationExists, type RequestAuthorization } from '../conversation/lifecycle';
+import { CN_TASK_EXECUTION_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import { recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
+
+/** Revoke unpublished success at the existing receipt fence, including during its SQLite write. */
+export function persistAuthorizedTerminalReceipt(input: {
+  scope: ChatExecutionScope;
+  requestId: string;
+  event: 'agent:response' | 'agent:error';
+  payload: Record<string, any>;
+  unknownPayload: Record<string, any>;
+  authorization: Pick<RequestAuthorization, 'isCurrent'>;
+  conversationIsCurrent?: () => boolean;
+  channel: 'chat' | 'voice';
+}): Promise<boolean> {
+  let revoked = false;
+  return recordChatExecutionTerminalEventDurably(input.scope, input.requestId, input.event, input.payload, input.unknownPayload, {
+    refreshTerminal: async () => {
+      if (revoked || input.authorization.isCurrent() || !(input.conversationIsCurrent?.()
+        ?? conversationExists(input.scope.conversationId || '', input.scope))) return null;
+      revoked = true;
+      const text = CN_TASK_EXECUTION_MESSAGES.cancelled;
+      const completionFeedback = { status: 'cancelled', incomplete: [text], nextSteps: [] };
+      const payload = { text, agentName: 'Lumi', agentId: input.payload.agentId,
+        source: input.scope.source, channel: input.channel, requestId: input.requestId,
+        conversationId: input.scope.conversationId, ...(input.payload.sidecar ? { sidecar: true } : {}),
+        finalized: true, blocked: input.channel === 'voice', reason: 'cancelled', completionFeedback };
+      cancelConversationActionExecution(input.scope.conversationId!, input.scope.userId, text, input.requestId);
+      updateAssistantMessageTerminalPresentation({ userId: input.scope.userId, conversationId: input.scope.conversationId!,
+        requestId: input.requestId, content: text, completionFeedback, source: input.payload.source || input.scope.source, channel: input.channel });
+      // The publisher and resource finalizer must also observe the safer terminal, without old artifacts or task metadata.
+      for (const key of Object.keys(input.payload)) delete input.payload[key];
+      Object.assign(input.payload, payload);
+      await flushDBOrThrow();
+      return { event: 'agent:response', payload };
+    },
+  });
+}
 
 /**
  * Commit the durable state owned by a terminal chat turn before publishing it.

@@ -8,8 +8,17 @@ import path from 'node:path';
 
 const mocks = vi.hoisted(() => ({
   errors: [] as string[], tools: vi.fn(), stream: vi.fn(), model: vi.fn(), transcribe: vi.fn(), learning: vi.fn(),
-  summaries: vi.fn(), flushGate: vi.fn(), stt: [] as any[],
+  summaries: vi.fn(), convergence: vi.fn(), flushGate: vi.fn(), receiptGate: vi.fn(), stt: [] as any[],
 }));
+vi.mock('../db_layer', async original => {
+  const actual = await original<typeof import('../db_layer')>();
+  return { ...actual, runSQL: async (...args: Parameters<typeof actual.runSQL>) => {
+    const result = await actual.runSQL(...args);
+    if (args[0].includes('INSERT INTO chat_execution_terminal_receipts') && args[1]?.[6] === 'completed')
+      await mocks.receiptGate();
+    return result;
+  } };
+});
 vi.mock('../logger', () => ({ logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: (...args: any[]) => { mocks.errors.push(args.map(String).join(' ')); } } }));
 vi.mock('../server/stt/adapter', async original => ({
   ...await original<typeof import('../server/stt/adapter')>(),
@@ -30,6 +39,13 @@ vi.mock('../server/socket/chat_terminal_boundary', async original => {
   return { ...actual, commitChatTerminalBoundary: (input: any) => actual.commitChatTerminalBoundary({ ...input, flush: async () => {
     await input.flush(); await mocks.flushGate();
   } }) };
+});
+vi.mock('../server/conversation/manager', async original => {
+  const actual = await original<typeof import('../server/conversation/manager')>();
+  return { ...actual, convergeForegroundRequestBeforeRelease: (...args: Parameters<typeof actual.convergeForegroundRequestBeforeRelease>) => {
+    mocks.convergence(...args);
+    return actual.convergeForegroundRequestBeforeRelease(...args);
+  } };
 });
 vi.mock('../server/stt/file_transcription', () => ({ transcribeAudioFile: (...args: any[]) => mocks.transcribe(...args) }));
 vi.mock('../server/tts/adapter', async original => ({
@@ -71,13 +87,13 @@ vi.mock('../server/cognition/post_turn_learning', async original => {
   } };
 });
 
-import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
+import { initDatabase, readDB, flushDBOrThrow, querySQL } from '../db_layer';
 import { registerVoiceHandlers } from '../server/socket/voice';
 import { toolRegistry } from '../server/tools/registry';
 import { registerAllTools } from '../server/tools/definitions';
 import { createOrg, addMember, removeMember, getMember, updateMemberRole } from '../server/org/db';
 import { addMessage, getMessages, getOrCreateActiveConversation } from '../server/conversation/manager';
-import { waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';
+import { getChatExecution, waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';
 
 const ORG_MARKER = 'SYNTHETIC_ORG_PLAN_ALPHA';
 const USER_TEXT = '我希望你以后回答自然顺畅，请解释我们之前记录的项目安排。';
@@ -122,7 +138,9 @@ beforeEach(() => {
   mocks.errors.length = 0;
   mocks.tools.mockReset().mockImplementation(() => { throw new Error('Unexpected tool execution in voice audit'); });
   mocks.stream.mockReset(); mocks.model.mockReset(); mocks.transcribe.mockReset();
-  mocks.learning.mockClear(); mocks.summaries.mockClear(); mocks.flushGate.mockReset().mockResolvedValue(undefined); mocks.stt.length = 0;
+  mocks.learning.mockClear(); mocks.summaries.mockClear(); mocks.flushGate.mockReset().mockResolvedValue(undefined);
+  mocks.receiptGate.mockReset().mockResolvedValue(undefined);
+  mocks.convergence.mockReset(); mocks.stt.length = 0;
   mocks.model.mockResolvedValue({ text: JSON.stringify({ correctsIdentity: false }), toolCalls: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
 });
 afterEach(async () => {
@@ -217,7 +235,7 @@ describe('voice organization authority through actual STT and model pipeline', (
     await flushDBOrThrow();
   }, 15000);
 
-  it('revocation during terminal flush replaces unpublished success with one safe cancellation and skips learning', async () => {
+  it.each(['flush', 'receipt'] as const)('revocation during terminal %s makes delivery, transcript and SQLite receipt agree on cancellation', async boundary => {
     const { socket, userId, org } = fixture(true);
     const entered = deferred(); const gate = deferred();
     mocks.stream.mockImplementation(async (_m: any, _t: any, _o: any, onChunk: any) => {
@@ -225,7 +243,7 @@ describe('voice organization authority through actual STT and model pipeline', (
       onChunk(MODEL_TEXT);
       return { text: MODEL_TEXT, toolCalls: [], usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
     });
-    mocks.flushGate.mockImplementationOnce(async () => { entered.resolve(); await gate.promise; });
+    mocks[boundary === 'flush' ? 'flushGate' : 'receiptGate'].mockImplementationOnce(async () => { entered.resolve(); await gate.promise; });
     await socket.receive('audio:start', start('terminal-authority'));
     await mocks.stt.at(-1).final(USER_TEXT);
     await entered.promise;
@@ -235,6 +253,19 @@ describe('voice organization authority through actual STT and model pipeline', (
     expect(socket.outputs.filter(([event, data]) => event === 'agent:response' && data.finalized)[0][1]).toMatchObject({ reason: 'cancelled' });
     expect(mocks.learning).not.toHaveBeenCalled();
     expect(mocks.summaries).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(socket.data.audioSession.isProcessing).toBe(false));
+    await waitForChatExecutionPersistence();
+    const terminal = socket.outputs.find(([event, data]) => event === 'agent:response' && data.finalized)![1];
+    const receipts = await querySQL<any>('SELECT status, payload FROM chat_execution_terminal_receipts WHERE userId = ? AND requestId = ?', [userId, terminal.requestId]);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].status).toBe('cancelled');
+    expect(JSON.parse(receipts[0].payload)).toMatchObject({ reason: 'cancelled', text: terminal.text });
+    expect(getChatExecution({ userId, domain: 'work', orgId: org!.id, source: 'voice', conversationId: terminal.conversationId }, terminal.requestId)).toMatchObject({ status: 'cancelled', terminal: true });
+    const assistants = getMessages(terminal.conversationId, 20).filter(message => message.role === 'assistant' && message.requestId === terminal.requestId);
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].message).toBe(terminal.text);
+    expect(assistants[0].completionFeedback?.status).toBe('cancelled');
+    expect(mocks.convergence.mock.calls.filter(([input]) => input.identity.requestId === terminal.requestId)).toHaveLength(1);
   });
 });
 

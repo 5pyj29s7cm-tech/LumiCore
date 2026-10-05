@@ -100,7 +100,7 @@ import { getIdleState } from "../context/activity_stream";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { isDirectDesktopTool, createDesktopRelay } from "./desktop_relay";
 import { resolveVoiceModelInputBudget, VOICE_CHAT_INPUT_BUDGET_TOKENS, VOICE_DESKTOP_LEASE_WAIT_MS } from './voice_runtime_policy';
-import { commitChatTerminalBoundary } from './chat_terminal_boundary';
+import { commitChatTerminalBoundary, persistAuthorizedTerminalReceipt } from './chat_terminal_boundary';
 import { beginChatExecutionDurably, getChatExecution, recordChatExecutionEvent, recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 import { sanitizeVoiceAgentErrorPayload, voiceDurabilityUnknownText } from './voice_durability';
 import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope, resolveSocketScope } from "./scope";
@@ -1013,7 +1013,7 @@ async function processVoiceInput(
     return;
   }
   voiceUserMessageId = voiceAdmission.persisted;
-  resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id},requestId,pipelineAbort.signal);
+  resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal);
   await resources.admission.waitForTurn();
   turnAuthorization.assertCurrent();
   conversationTurn.conversation = getConversationForScope(conversationTurn.conversation.id,session.userId,voiceScope.domain,voiceScope.orgId) || conversationTurn.conversation;
@@ -1799,16 +1799,9 @@ async function processVoiceInput(
         return assistantMessageId;
       },
       flush: flushDBOrThrow,
-      persistTerminalReceipt: async () => {
-        if (!turnAuthorization.isCurrent()) {
-          Object.assign(terminalPayload, { text: CN_TASK_EXECUTION_MESSAGES.cancelled, blocked: true, reason: 'cancelled' });
-          updateAssistantMessageTerminalPresentation({ userId: session.userId, conversationId: conversationTurn.conversation.id,
-            requestId, content: terminalPayload.text, channel: 'voice', completionFeedback: { status: 'cancelled', incomplete: [terminalPayload.text], nextSteps: [] } });
-          cancelConversationActionExecution(conversationTurn.conversation.id, session.userId, 'Organization access changed during voice terminal persistence.', requestId);
-          await flushDBOrThrow();
-        }
-        return recordChatExecutionTerminalEventDurably(executionScope, requestId, 'agent:response', terminalPayload, executionUnknownPayload);
-      },
+      persistTerminalReceipt: () => persistAuthorizedTerminalReceipt({ scope: executionScope, requestId,
+        event: 'agent:response', payload: terminalPayload, unknownPayload: executionUnknownPayload,
+        authorization: turnAuthorization, channel: 'voice' }),
       persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
         executionScope,
         requestId,
@@ -1853,20 +1846,11 @@ async function processVoiceInput(
         logger.error(`[Audio] ${input.source} terminal persistence failed:`, error);
       },
     });
-    if (committed && !input.blocked) scheduleTurnMemory({
+    if (committed && !terminalPayload.blocked && turnAuthorization.isCurrent()) scheduleTurnMemory({
       userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, userText,
       channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
       agentId: session.agentId, authorization: turnAuthorization, llmGetters,
     });
-    if (committed) {
-      enforceVoiceForegroundConvergenceBeforeRelease({
-        identity: foregroundRequestIdentity,
-        aborted: false,
-        reason: 'Voice terminal committed before execution resources were released.',
-        assistantState: input.text,
-      });
-      actionLeaseHeartbeat?.stop();
-    }
     return committed;
   };
 

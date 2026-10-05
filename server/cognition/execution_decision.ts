@@ -58,6 +58,36 @@ export interface LumiExecutionDecision {
   resumesPinnedTask?: boolean;
 }
 
+/** Every route veto narrows all policy views together; no fallback may restore a denied tool. */
+export function restrictLumiExecutionTools(execution: LumiExecutionDecision, tools: readonly string[] = [], prompt?: string): LumiExecutionDecision {
+  const additions = unique([...tools]);
+  if (!additions.length) return execution;
+  const forbidden = new Set([...(execution.toolPolicy.forbiddenTools || []), ...additions]);
+  const blockAll = forbidden.has('*');
+  const permitted = (name: string) => !blockAll && !forbidden.has(name);
+  const restrict = (policy: ToolPolicy | null): ToolPolicy | null => policy && ({ ...policy,
+    allowedTools: (policy.allowedTools || []).filter(permitted),
+    requireConfirmation: (policy.requireConfirmation || []).filter(permitted),
+    forbiddenTools: unique([...(policy.forbiddenTools || []), ...forbidden]),
+    maxIterations: blockAll ? 0 : policy.maxIterations,
+  });
+  const reason = prompt || 'the entry identity/role boundary removed forbidden tools';
+  return { ...execution,
+    allowToolUse: blockAll ? false : execution.allowToolUse,
+    baseToolPolicy: restrict(execution.baseToolPolicy)!,
+    selfRepairToolPolicy: restrict(execution.selfRepairToolPolicy),
+    clientActionToolPolicy: restrict(execution.clientActionToolPolicy),
+    toolPolicy: restrict(execution.toolPolicy)!,
+    toolRoute: execution.toolRoute && { ...execution.toolRoute,
+      toolNames: execution.toolRoute.toolNames.filter(permitted),
+      forbiddenToolNames: unique([...(execution.toolRoute.forbiddenToolNames || []), ...forbidden]),
+      reasons: unique([...execution.toolRoute.reasons, reason]),
+    },
+    maxIterations: blockAll ? 0 : execution.maxIterations,
+    promptOverlay: [execution.promptOverlay, prompt || `Entry authorization boundary forbids: ${additions.join(', ')}.`].filter(Boolean).join('\n'),
+  };
+}
+
 function alignToolRouteWithPolicy(route: ToolRoute, policy: ToolPolicy): ToolRoute {
   const allowed = new Set(policy.allowedTools || []);
   const wildcard = allowed.has('*');

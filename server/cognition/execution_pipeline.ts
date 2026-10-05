@@ -21,6 +21,7 @@ import {
 import { trustedContinuationEvidenceTools } from './tool_router';
 import {
   buildLumiExecutionDecision,
+  restrictLumiExecutionTools,
   type LumiExecutionDecision,
 } from './execution_decision';
 import {
@@ -117,54 +118,6 @@ export interface BuildLumiExecutionPipelineInput {
   persistedConversationHistory?: Parameters<typeof resolveAcceptedTaskTarget>[0]['persistedHistory'];
 }
 
-function applyAdditionalForbiddenTools(
-  execution: LumiExecutionDecision,
-  forbiddenTools: string[] | undefined,
-): LumiExecutionDecision {
-  const additions = Array.from(new Set((forbiddenTools || []).filter(Boolean)));
-  if (additions.length === 0) return execution;
-  const forbidden = new Set([...(execution.toolPolicy.forbiddenTools || []), ...additions]);
-  const blockAll = forbidden.has('*');
-  const restrictPolicy = (policy: ToolPolicy | null): ToolPolicy | null => policy && ({
-    ...policy,
-    allowedTools: blockAll
-      ? []
-      : (policy.allowedTools || []).filter(name => !forbidden.has(name)),
-    requireConfirmation: (policy.requireConfirmation || []).filter(name => !forbidden.has(name)),
-    forbiddenTools: Array.from(forbidden),
-    maxIterations: blockAll ? 0 : policy.maxIterations,
-  });
-  const toolPolicy = restrictPolicy(execution.toolPolicy)!;
-  const toolRoute = execution.toolRoute
-    ? {
-        ...execution.toolRoute,
-        toolNames: blockAll
-          ? []
-          : execution.toolRoute.toolNames.filter(name => !forbidden.has(name)),
-        reasons: Array.from(new Set([
-          ...execution.toolRoute.reasons,
-          'the entry identity/role boundary removed forbidden tools',
-        ])),
-      }
-    : null;
-  return {
-    ...execution,
-    allowToolUse: blockAll ? false : execution.allowToolUse,
-    baseToolPolicy: restrictPolicy(execution.baseToolPolicy)!,
-    selfRepairToolPolicy: restrictPolicy(execution.selfRepairToolPolicy),
-    clientActionToolPolicy: restrictPolicy(execution.clientActionToolPolicy),
-    toolRoute,
-    toolPolicy,
-    maxIterations: blockAll ? 0 : execution.maxIterations,
-    promptOverlay: [
-      execution.promptOverlay,
-      additions.length
-        ? `Entry authorization boundary forbids: ${additions.join(', ')}.`
-        : '',
-    ].filter(Boolean).join('\n'),
-  };
-}
-
 function applyCurrentTurnNoMutationConstraint(
   execution: LumiExecutionDecision,
   registry: ToolRegistry,
@@ -186,7 +139,7 @@ function applyCurrentTurnNoMutationConstraint(
     // i18n-allow: narrowly scoped workflow run creation prohibition.
     const withoutNewRunFence = text.replace(/(?:不要|不|别|禁止)\s*(?:再)?(?:创建|新建)\s*(?:新(?:的)?|另一个|另外的)运行/gu, ' ');
     if (withoutNewRunFence !== text) {
-      execution = applyAdditionalForbiddenTools(execution, ['run_workflow']);
+      execution = restrictLumiExecutionTools(execution, ['run_workflow']);
       text = withoutNewRunFence;
     }
   }
@@ -243,7 +196,7 @@ function applyCurrentTurnNoMutationConstraint(
       || entry.sideEffects.some(effect => effect.type !== 'local_read')
     ))
     .map(entry => entry.toolName);
-  const restricted = applyAdditionalForbiddenTools(execution, mutationTools);
+  const restricted = restrictLumiExecutionTools(execution, mutationTools);
   return {
     ...restricted,
     promptOverlay: [
@@ -382,7 +335,7 @@ export function buildLumiExecutionPipeline(
       || ['autonomy', 'scheduler'].includes(input.dispatch.channel),
     source: input.dispatch.source || input.dispatch.channel,
   };
-  const legacyExecution = buildLumiExecutionDecision({
+  const routedExecution = buildLumiExecutionDecision({
     flow: turnIntent.flow,
     analysis,
     text: decisionText,
@@ -397,16 +350,16 @@ export function buildLumiExecutionPipeline(
     isSanctuary: input.isSanctuary,
     visibilityContext,
   });
-  const unrestrictedManifest = input.registry.getCapabilityManifest(legacyExecution.toolPolicy, { context: visibilityContext });
+  const unrestrictedManifest = input.registry.getCapabilityManifest(routedExecution.toolPolicy, { context: visibilityContext });
   const shadowComparison = compareLumiRoutingShadow({
     normalizedIntent,
-    execution: legacyExecution,
+    execution: routedExecution,
     manifest: unrestrictedManifest,
   });
   const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
-  const execution = applyAdditionalForbiddenTools(
+  const execution = restrictLumiExecutionTools(
     applyCurrentTurnNoMutationConstraint(
-      applyLumiRoutingShadowGuard(legacyExecution, shadowComparison),
+      applyLumiRoutingShadowGuard(routedExecution, shadowComparison),
       input.registry,
       constraintText,
       visibilityContext,

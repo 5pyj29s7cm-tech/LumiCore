@@ -1,6 +1,5 @@
-import type { ToolPolicy } from '../personality/types';
 import type { CapabilityManifestEntry } from '../tools/types';
-import type { LumiExecutionDecision } from './execution_decision';
+import { restrictLumiExecutionTools, type LumiExecutionDecision } from './execution_decision';
 import type { NormalizedActionIntent, NormalizedSideEffectClass } from './normalized_action_intent';
 
 const EXTERNAL_SIDE_EFFECTS = new Set([
@@ -106,59 +105,15 @@ export function compareLumiRoutingShadow(input: {
   };
 }
 
-function blockPolicyExternalTools(
-  policy: ToolPolicy,
-  blockedTools: string[],
-): ToolPolicy {
-  const blocked = new Set(blockedTools);
-  return {
-    ...policy,
-    allowedTools: (policy.allowedTools || []).filter(name => name === '*' || !blocked.has(name)),
-    forbiddenTools: unique([...(policy.forbiddenTools || []), ...blockedTools]),
-    requireConfirmation: (policy.requireConfirmation || []).filter(name => !blocked.has(name)),
-  };
-}
-
 export function applyLumiRoutingShadowGuard(
   execution: LumiExecutionDecision,
   comparison: LumiRoutingShadowComparison,
 ): LumiExecutionDecision {
-  if (!comparison.blockedExternalTools.length) return execution;
-  const blocked = new Set(comparison.blockedExternalTools);
-  const toolPolicy = blockPolicyExternalTools(execution.toolPolicy, comparison.blockedExternalTools);
-  const baseToolPolicy = blockPolicyExternalTools(execution.baseToolPolicy, comparison.blockedExternalTools);
-  const toolRoute = execution.toolRoute
-    ? {
-        ...execution.toolRoute,
-        toolNames: execution.toolRoute.toolNames.filter(name => !blocked.has(name)),
-        forbiddenToolNames: unique([
-          ...(execution.toolRoute.forbiddenToolNames || []),
-          ...comparison.blockedExternalTools,
-        ]),
-        reasons: unique([
-          ...execution.toolRoute.reasons,
-          `shadow route restricted external tools: ${comparison.reason}`,
-        ]),
-      }
-    : execution.toolRoute;
-  return {
-    ...execution,
-    baseToolPolicy,
-    selfRepairToolPolicy: execution.selfRepairToolPolicy
-      ? blockPolicyExternalTools(execution.selfRepairToolPolicy, comparison.blockedExternalTools)
-      : null,
-    clientActionToolPolicy: execution.clientActionToolPolicy
-      ? blockPolicyExternalTools(execution.clientActionToolPolicy, comparison.blockedExternalTools)
-      : null,
-    toolPolicy,
-    toolRoute,
-    promptOverlay: [
-      execution.promptOverlay,
-      '## External Commit Shadow Gate',
-      comparison.externalCommitBlocked
-        ? `External commit tools are disabled for this turn because route comparison diverged: ${comparison.reason}.`
-        : 'Only the explicitly requested media generator is authorized among external tools. Unrelated external actions remain disabled.',
-      'Do not retry through a legacy, desktop, browser, or alternate-provider path.',
-    ].filter(Boolean).join('\n'),
-  };
+  return restrictLumiExecutionTools(execution, comparison.blockedExternalTools, [
+    '## External Commit Shadow Gate',
+    comparison.externalCommitBlocked
+      ? `External commit tools are disabled for this turn because route comparison diverged: ${comparison.reason}.`
+      : 'Only the explicitly requested media generator is authorized among external tools. Unrelated external actions remain disabled.',
+    'Do not retry through a legacy, desktop, browser, or alternate-provider path.',
+  ].join('\n'));
 }

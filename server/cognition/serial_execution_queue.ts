@@ -36,7 +36,6 @@ export interface SerialExecutionQueueOptions {
 
 type QueueState = {
   active?: SerialExecutionLease;
-  tail?: SerialExecutionLease;
   leases: Map<string, SerialExecutionLease>;
 };
 
@@ -60,6 +59,7 @@ export class SerialExecutionLease {
     readonly key: string,
     readonly requestId: string,
     readonly predecessor?: SerialExecutionLease,
+    readonly source?: string,
   ) {
     this.finished = new Promise<void>(resolve => {
       this.finish = resolve;
@@ -125,7 +125,7 @@ export class SerialExecutionLease {
 }
 
 /**
- * Serializes foreground executions by user/domain/source without coupling the
+ * Serializes foreground executions by the resource key; source only fences controls without coupling the
  * ordering contract to a particular Socket.IO transport.
  */
 export class SerialExecutionQueue {
@@ -146,43 +146,48 @@ export class SerialExecutionQueue {
     this.cancelTimeoutMs = cancelTimeoutMs;
   }
 
-  reserve(key: string, requestId: string): SerialExecutionLease {
+  private leaseId(requestId: string, source?: string): string {
+    return JSON.stringify([source ?? null, requestId]);
+  }
+
+  reserve(key: string, requestId: string, source?: string): SerialExecutionLease {
     const state = this.states.get(key) || { leases: new Map<string, SerialExecutionLease>() };
-    const existing = state.leases.get(requestId);
+    const existing = state.leases.get(this.leaseId(requestId, source));
     if (existing) return existing;
 
-    const lease = new SerialExecutionLease(this, key, requestId, state.tail);
-    state.tail = lease;
-    state.leases.set(requestId, lease);
+    const lease = new SerialExecutionLease(this, key, requestId, this.getTail(key), source);
+    state.leases.set(this.leaseId(requestId, source), lease);
     this.states.set(key, state);
     return lease;
   }
 
-  getActive(key: string): SerialExecutionLease | undefined {
-    return this.states.get(key)?.active;
+  getActive(key: string, source?: string): SerialExecutionLease | undefined {
+    const active = this.states.get(key)?.active;
+    return source === undefined || active?.source === source ? active : undefined;
   }
 
-  getTail(key: string): SerialExecutionLease | undefined {
-    return this.states.get(key)?.tail;
-  }
-
-  getByRequestId(key: string, requestId: string): SerialExecutionLease | undefined {
-    return this.states.get(key)?.leases.get(requestId);
-  }
-
-  getCurrent(key: string): SerialExecutionLease | undefined {
-    return this.getActive(key) || this.getTail(key);
-  }
-
-  cancelAll(key: string): Promise<void> {
+  getTail(key: string, source?: string): SerialExecutionLease | undefined {
     const leases = [...(this.states.get(key)?.leases.values() || [])];
+    return leases.reverse().find(lease => source === undefined || lease.source === source);
+  }
+
+  getByRequestId(key: string, requestId: string, source?: string): SerialExecutionLease | undefined {
+    return this.states.get(key)?.leases.get(this.leaseId(requestId, source));
+  }
+
+  getCurrent(key: string, source?: string): SerialExecutionLease | undefined {
+    return this.getActive(key, source) || this.getTail(key, source);
+  }
+
+  cancelAll(key: string, source?: string): Promise<void> {
+    const leases = [...(this.states.get(key)?.leases.values() || [])].filter(lease => source === undefined || lease.source === source);
     for (const lease of leases) lease.cancel();
     return Promise.all(leases.map(lease => lease.finished)).then(() => undefined);
   }
 
   /** Cancel only the request named by a durable control intent. */
-  cancelRequest(key: string, requestId: string): Promise<boolean> {
-    const lease = this.getByRequestId(key, requestId);
+  cancelRequest(key: string, requestId: string, source?: string): Promise<boolean> {
+    const lease = this.getByRequestId(key, requestId, source);
     if (!lease) return Promise.resolve(false);
     const wasQueued = lease.state === 'queued' || lease.state === 'cancelled';
     lease.cancel();
@@ -203,7 +208,7 @@ export class SerialExecutionQueue {
 
   activate(lease: SerialExecutionLease): void {
     const state = this.states.get(lease.key);
-    if (!state || state.leases.get(lease.requestId) !== lease) return;
+    if (!state || state.leases.get(this.leaseId(lease.requestId, lease.source)) !== lease) return;
     if (state.active && state.active !== lease) {
       throw new Error(
         `Serial execution invariant violated for ${lease.key}: ${state.active.requestId} is still active`,
@@ -216,8 +221,7 @@ export class SerialExecutionQueue {
     const state = this.states.get(lease.key);
     if (!state) return;
     if (state.active === lease) state.active = undefined;
-    if (state.leases.get(lease.requestId) === lease) state.leases.delete(lease.requestId);
-    if (state.tail === lease) state.tail = undefined;
+    if (state.leases.get(this.leaseId(lease.requestId, lease.source)) === lease) state.leases.delete(this.leaseId(lease.requestId, lease.source));
     if (state.leases.size === 0) this.states.delete(lease.key);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { conversationExecutionKey, reserveConversationExecution } from '../server/cognition/conversation_execution';
+import { conversationExecutionKey, reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution } from '../server/cognition/conversation_execution';
 const scope = { userId: 'resource-fixture', domain: 'personal' as const, conversationId: 'conversation' };
 describe('conversation execution resource', () => {
     it('serializes sources using the same user/domain/organization/conversation resource', async () => {
@@ -45,5 +45,33 @@ describe('conversation execution resource', () => {
         const first = reserveConversationExecution(scope, 'duplicate');
         expect(() => reserveConversationExecution(scope, 'duplicate')).toThrow(/already owns/);
         first.release();
+    });
+    it('source-fenced controls cannot cancel another transport in the shared FIFO', async () => {
+        const voiceScope = { ...scope, source: 'voice' }, chatScope = { ...scope, source: 'chat' };
+        const voice = reserveConversationExecution(voiceScope, 'voice-owner');
+        const chat = reserveConversationExecution(chatScope, 'chat-waiter');
+        await voice.waitForTurn();
+        expect(getConversationExecution(chatScope, 'voice-owner')).toBeUndefined();
+        expect(getCurrentConversationExecution(chatScope)?.requestId).toBe('chat-waiter');
+        expect(await cancelConversationExecution(chatScope, 'voice-owner')).toBe(false);
+        expect(voice.controller.signal.aborted).toBe(false);
+        expect(await cancelConversationExecution(chatScope, 'chat-waiter')).toBe(true);
+        expect(chat.controller.signal.aborted).toBe(true);
+        const rejected = chat.waitForTurn().catch(() => 'cancelled');
+        voice.release();
+        expect(await rejected).toBe('cancelled');
+        chat.release();
+    });
+    it('keeps equal client request ids in different sources distinct while serializing their execution', async () => {
+        const chatScope = { ...scope, source: 'chat' }, voiceScope = { ...scope, source: 'voice' };
+        const first = reserveConversationExecution(chatScope, 'equal-id');
+        const second = reserveConversationExecution(voiceScope, 'equal-id');
+        await first.waitForTurn();
+        expect(await cancelConversationExecution(voiceScope, 'equal-id')).toBe(true);
+        expect(first.controller.signal.aborted).toBe(false);
+        const waiting = second.waitForTurn().catch(() => 'cancelled');
+        first.release();
+        expect(await waiting).toBe('cancelled');
+        second.release();
     });
 });

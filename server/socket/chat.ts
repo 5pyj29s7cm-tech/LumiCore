@@ -9,7 +9,7 @@ import { runToolSession, type ToolSessionOptions } from "../llm/tool_session";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
-import { reserveConversationExecution, type ConversationExecutionAdmission } from '../cognition/conversation_execution';
+import { reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution } from '../cognition/conversation_execution';
 import { resolveUserTurn, type TurnResolution } from '../cognition/turn_resolution';
 import { revalidateAcceptedTaskRelation } from '../cognition/task_concurrency';
 import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
@@ -105,16 +105,14 @@ import { createConversationReceiptObserver } from '../conversation/execution_rec
 
 import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope, scopedEmotionalStateKey } from "./scope";
 import { beginChatExecutionDurably, beginQueuedChatExecution, beginChatSidecarExecution, getDurableChatCancellationForCurrentExecution, getChatExecution, getChatSidecarCancellationTarget, markChatExecutionCancelling, persistChatSidecarCancellationIntent, recordChatExecutionEvent, recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, waitForChatSidecarCancellationIntent, type ChatExecutionScope } from "./chat_execution_registry";
-import { commitChatTerminalBoundary } from "./chat_terminal_boundary";
+import { commitChatTerminalBoundary, persistAuthorizedTerminalReceipt as persistAuthorizedReceipt } from "./chat_terminal_boundary";
 import { chatPublicErrorCodeForException, sanitizeChatAgentErrorPayload } from "./chat_public_error";
 import { formatActiveTaskRelationContext, resolveActiveTaskMessageRelation, taskRelationFollowupIntent, bindPreparedTaskMessageRelation, type ActiveTaskMessageResolution } from "../cognition/task_concurrency";
-import { SerialExecutionQueue } from "../cognition/serial_execution_queue";
 
 
 // Foreground executions outlive an individual Socket.IO connection. Keeping the
 // queue at module scope lets a reconnected client query or cancel the same
 // execution instead of creating an orphan tied to the old socket instance.
-const chatExecutionQueue = new SerialExecutionQueue();
 
 export type {
   ForegroundRequestIdentity as ChatForegroundRequestIdentity,
@@ -230,8 +228,7 @@ export function registerChatHandler(
     }
 
     const targetConversationId = scope.conversationId || snapshot.conversationId || '';
-    const sessionKey = `${uid}:${scope.domain}:${scope.orgId || ''}:${scope.source}:${targetConversationId}`;
-    const session = chatExecutionQueue.getByRequestId(sessionKey, snapshot.requestId);
+    const session = getConversationExecution({ ...scope, conversationId: targetConversationId }, snapshot.requestId);
     if (!session || session.requestId !== snapshot.requestId) {
       try { ack?.({ ok: false, requestId: snapshot.requestId, error: 'Execution controller is unavailable' }); } catch {}
       return;
@@ -457,7 +454,7 @@ export function registerChatHandler(
     const confirmationCancellationRequested = isConfirmationCancellation(visibleUserText);
     let pendingConfirmationCleared = false;
     let correctionRequiresFreshConfirmation = false;
-    let executionScope: ChatExecutionScope = {
+    let executionScope: ChatExecutionScope & { conversationId: string } = {
       userId: uid,
       domain: resolvedDomain,
       orgId: resolvedOrgId,
@@ -466,7 +463,6 @@ export function registerChatHandler(
       requireConversation: true,
     };
     let executionRoom = chatExecutionRoom(executionScope);
-    let sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
     let resolvedTaskRelation: ActiveTaskMessageResolution | null = null;
     let acceptedTurnResolution: TurnResolution | undefined;
     const refreshResolvedTaskRelationFromLedger = (
@@ -601,30 +597,10 @@ export function registerChatHandler(
       publishRecordedAgent(event, normalizedPayload);
       return true;
     };
-    // Revalidate after both durable waits. A revoked result becomes a cancellation
-    // in the ledger, transcript and recovery receipt before anything is published.
     const persistAuthorizedTerminalReceipt = (
-      event: 'agent:response' | 'agent:error',
-      payload: Record<string, any>,
-      unknownPayload: Record<string, any>,
-    ) => {
-      let revokedTerminal = false;
-      return recordChatExecutionTerminalEventDurably(executionScope, requestId, event, payload, unknownPayload, {
-        refreshTerminal: async () => {
-          if (turnAuthorization.isCurrent() || revokedTerminal || !conversationAuthorization.isCurrent()) return null;
-          revokedTerminal = true;
-          const text = CN_TASK_EXECUTION_MESSAGES.cancelled;
-          const completionFeedback = { status: 'cancelled', incomplete: [text], nextSteps: [] };
-          cancelConversationActionExecution(selectedConversationId, uid, text, requestId);
-          updateAssistantMessageTerminalPresentation({ userId: uid, conversationId: selectedConversationId, requestId,
-            content: text, completionFeedback, source: eventSource, channel: 'chat' });
-          await flushDBOrThrow();
-          return { event: 'agent:response' as const, payload: normalizeAgentPayload('agent:response', {
-            text, agentName: 'Lumi', finalized: true, blocked: false, reason: 'cancelled', completionFeedback,
-          }) };
-        },
-      });
-    };
+      event: 'agent:response' | 'agent:error', payload: Record<string, any>, unknownPayload: Record<string, any>,
+    ) => persistAuthorizedReceipt({ scope: executionScope, requestId, event, payload, unknownPayload,
+      authorization: turnAuthorization, conversationIsCurrent: conversationAuthorization.isCurrent, channel: 'chat' });
     const commitDeterministicTerminal = async (input: {
       event?: 'agent:response' | 'agent:error';
       payload: Record<string, any>;
@@ -725,7 +701,7 @@ export function registerChatHandler(
         }
         existingExecution = getChatExecution(executionScope, requestId) || existingExecution;
         const durableTarget = getChatSidecarCancellationTarget(executionScope, requestId);
-        if (durableTarget && !chatExecutionQueue.getByRequestId(sessionKey, durableTarget)) {
+        if (durableTarget && !getConversationExecution(executionScope, durableTarget)) {
           // The process can restart after the durable fence but before the
           // side effect/terminal write. With no matching lease, converge the
           // tombstone to a terminal no-op; never replay cancellation onto a
@@ -800,7 +776,7 @@ export function registerChatHandler(
     // Reconnect/retry may resend a request that is already reserved but has
     // not reached beginChatExecution yet. Acknowledge the existing lease;
     // never attach a second handler to the same queued request.
-    const queuedDuplicate = chatExecutionQueue.getByRequestId(sessionKey, requestId);
+    const queuedDuplicate = getConversationExecution(executionScope, requestId);
     if (queuedDuplicate) {
       try {
         ack?.({
@@ -820,7 +796,7 @@ export function registerChatHandler(
 
     // A status question is a side conversation, not a replacement command.
     // Answer it without aborting/superseding the foreground executor.
-    const observedExistingSession = chatExecutionQueue.getCurrent(sessionKey);
+    const observedExistingSession = getCurrentConversationExecution(executionScope);
     // Socket delivery happens immediately after the terminal durability fence,
     // while queue-resource release finishes a few microtasks later. A fast
     // follow-up can therefore observe the old queue slot even though its
@@ -1181,7 +1157,7 @@ export function registerChatHandler(
     // A new utterance does not destroy an active task. Continuations and
     // independent work wait behind the current foreground lease; only an
     // explicit replacement aborts it.
-    const previousSession = chatExecutionQueue.getTail(sessionKey);
+    const previousSession = getCurrentConversationExecution(executionScope, 'tail');
     if (previousSession && previousSession.requestId !== existingSession?.requestId) {
       resolvedTaskRelation = resolveActiveTaskMessageRelation(
         visibleUserText,
@@ -1260,7 +1236,7 @@ export function registerChatHandler(
         });
         return;
       }
-      const currentTarget = chatExecutionQueue.getByRequestId(sessionKey, cancellationTargetRequestId);
+      const currentTarget = getConversationExecution(executionScope, cancellationTargetRequestId);
       if (!currentTarget) {
         await commitDeterministicTerminal({
           payload: {
@@ -1277,7 +1253,7 @@ export function registerChatHandler(
         return;
       }
       try {
-        await chatExecutionQueue.cancelRequest(sessionKey, cancellationTargetRequestId);
+        await cancelConversationExecution(executionScope, cancellationTargetRequestId);
       } catch (error: any) {
         const settlementTimedOut = error?.code === 'serial_execution_cancellation_timeout';
         const failureText = settlementTimedOut
@@ -1352,7 +1328,6 @@ export function registerChatHandler(
       });
       executionScope = { ...executionScope, conversationId: selectedConversationId };
       executionRoom = chatExecutionRoom(executionScope);
-      sessionKey = `${uid}:${resolvedDomain}:${resolvedOrgId || ''}:${eventSource}:${selectedConversationId}`;
       pendingConfirmation = null;
       pendingConfirmationPrompt = '';
     }
@@ -1428,10 +1403,10 @@ export function registerChatHandler(
     // allowing the later request to supersede the earlier queued request.
     const sessionLease = runAfterAcceptedUserTurnAdmission(chatAdmission, () => {
       if (previousSession && activeMessageRelation === 'replace' && turnAuthorization.isCurrent()) {
-        void chatExecutionQueue.cancelAll(sessionKey);
+        void cancelConversationExecution(executionScope);
       }
       beginQueuedChatExecution(executionScope, requestId);
-      return chatExecutionQueue.reserve(sessionKey, requestId);
+      return reserveConversationExecution(executionScope, requestId);
     });
     const abortController = sessionLease.controller;
     const markRequestCancellation = () => markChatExecutionCancelling(executionScope, requestId);
@@ -1446,7 +1421,6 @@ export function registerChatHandler(
     };
     const unregisterShutdownCancellation = runtimeShutdownCancellation.register(abortController);
     let releaseDesktopControlLease: (() => void) | null = null;
-    let conversationAdmission: ConversationExecutionAdmission | undefined;
     let foregroundRequestIdentity: ChatForegroundRequestIdentity | null = null;
     const releaseChatTransportResources = (): void => {
       stopAuthorizationWatch();
@@ -1455,7 +1429,6 @@ export function registerChatHandler(
       actionLeaseHeartbeat?.stop();
       releaseDesktopControlLease?.();
       releaseDesktopControlLease = null;
-      conversationAdmission?.release();
       sessionLease.release();
     };
     const chatReleaseGate = createDurableForegroundReleaseGate({
@@ -1519,7 +1492,7 @@ export function registerChatHandler(
       reason = 'Chat foreground request reached its release boundary.',
     ): Promise<boolean> => chatReleaseGate.release(reason);
 
-    if (previousSession) {
+    if (sessionLease.waitingForRequestId) {
       try {
         ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() });
         acknowledged = true;
@@ -1528,11 +1501,14 @@ export function registerChatHandler(
         status: activeMessageRelation === 'replace' ? 'replacing' : 'queued',
         source: eventSource,
         requestId,
-        waitingForRequestId: previousSession.requestId,
+        waitingForRequestId: sessionLease.waitingForRequestId,
         taskRelation: resolvedTaskRelation,
       });
     }
-    if (!await sessionLease.waitForTurn()) {
+    if (!await sessionLease.waitForTurn().then(() => true, error => {
+      if (!abortController.signal.aborted) throw error;
+      return false;
+    })) {
       const waitTimedOut = sessionLease.state === 'timed_out';
       const terminalText = waitTimedOut
         ? CN_TASK_EXECUTION_MESSAGES.queueWaitTimedOut
@@ -1590,10 +1566,6 @@ export function registerChatHandler(
     }
 
     try {
-      conversationAdmission = reserveConversationExecution({
-        userId:uid, domain:resolvedDomain, orgId:resolvedOrgId, conversationId:selectedConversationId,
-      }, requestId, abortController.signal);
-      await conversationAdmission.waitForTurn();
       // The turn may have waited behind one or more executions. Re-read the
       // durable conversation and resolve the user's feedback against that
       // exact revision. Never merge a receive-time task id/revision over a

@@ -67,6 +67,7 @@ vi.mock('../server/socket/chat_execution_registry', async original => {
   };
 });
 
+import { reserveConversationExecution } from '../server/cognition/conversation_execution';
 import { registerChatHandler } from '../server/socket/chat';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
@@ -383,5 +384,31 @@ it('answers a background-ledger query while another source owns the conversation
   await vi.waitFor(()=>expect(h.emitted.some(([event,payload])=>event==='agent:response'&&payload.requestId===query&&payload.reason==='runtime_work_status'&&payload.blocked===false)).toBe(true),{timeout:1500});
   expect(getChatExecution(h.scope,h.requestId)?.terminal).not.toBe(true);
   release.resolve();await h.completionFor(h.requestId).promise;
+  expect(h.errors).toEqual([]);
+},15000);
+
+it('admits both queued chat turns before a later transport without an outer source queue', async () => {
+  const h = await openChat(false);
+  const scope = { ...h.scope, conversationId: h.scope.conversationId! };
+  const prior = reserveConversationExecution({ ...scope, source: 'voice' }, 'held-voice-'+h.requestId);
+  unblock.push(() => prior.release());
+  await prior.waitForTurn();
+  const order: string[] = [];
+  fixture.model.mockImplementation(async (...args: any[]) => {
+    if (args[2]?.source === 'memory_turn') return outcome('{"changes":[]}');
+    order.push('chat'); return outcome('queued reply');
+  });
+  const second = 'queued-second-'+h.requestId;
+  await h.send(h.requestId, '解释第一条记录。');
+  await h.send(second, '解释第二条记录。');
+  expect(fixture.model.mock.calls).toHaveLength(0);
+  expect(h.emitted.filter(([event,payload])=>event==='agent:status'&&payload.status==='queued').map(([,payload])=>payload.requestId)).toEqual([h.requestId,second]);
+  const later = reserveConversationExecution({ ...scope, source: 'voice' }, 'later-voice-'+h.requestId);
+  unblock.push(() => later.release());
+  const waiting = later.waitForTurn().then(() => { order.push('later voice'); later.release(); });
+  prior.release();
+  await Promise.all([h.completionFor(h.requestId).promise,h.completionFor(second).promise,waiting]);
+  await h.drain();
+  expect(order).toEqual(['chat','chat','later voice']);
   expect(h.errors).toEqual([]);
 },15000);
