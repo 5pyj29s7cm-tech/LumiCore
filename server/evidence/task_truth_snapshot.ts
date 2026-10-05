@@ -1,7 +1,7 @@
 import { parseStoredObject as parseObject, parseStoredArray as parseArray } from '../tools/receipt_payload';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { createHash, randomUUID } from 'node:crypto';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import {
   buildTransportNeutralConfirmationScope,
   getPendingConfirmationDurably,
@@ -711,7 +711,7 @@ function cloneDb(value: any): any {
 export async function captureTaskTruthSnapshot(
   input: CaptureTaskTruthSnapshotInput,
 ): Promise<TaskTruthSnapshot> {
-  const db = cloneDb(readDB());
+  const db = cloneDb(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]));
   const task = exactRow<Record<string, any>>(
     db.conversationActionTasks,
     row => row.id === input.taskId

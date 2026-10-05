@@ -1,8 +1,9 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = (relativePath: string) => readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 
 describe('cross-channel action turn ownership wiring', () => {
   it('persists and binds the exact voice transcript before action preparation', () => {

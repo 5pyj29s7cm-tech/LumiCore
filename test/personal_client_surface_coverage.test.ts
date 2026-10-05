@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -19,7 +20,7 @@ import { registerClientSelfTools } from '../server/tools/definitions/client_self
 import { hasClientActionOnlyIntent } from '../server/cognition/tool_intent';
 
 function source(file: string) {
-  return fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), file), 'utf8');
 }
 
 function sourceBlock(text: string, start: string, end: string): string {

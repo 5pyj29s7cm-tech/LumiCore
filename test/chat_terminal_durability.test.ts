@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -276,7 +277,7 @@ describe('chat terminal durability boundary', () => {
   });
 
   it('wires cleanup, confirmation and model finalization through one strict receipt boundary', () => {
-    const source = readFileSync(
+    const source = readImplementationSource(
       path.join(process.cwd(), 'server/socket/chat.ts'),
       'utf8',
     );
@@ -302,7 +303,7 @@ describe('chat terminal durability boundary', () => {
     const receiptStart = source.indexOf('const persistAuthorizedTerminalReceipt');
     const receipt = source.slice(receiptStart, source.indexOf('const commitDeterministicTerminal', receiptStart));
     expect(receipt).toContain('persistAuthorizedReceipt({ scope: executionScope');
-    const shared = readFileSync(path.join(process.cwd(), 'server/socket/chat_terminal_boundary.ts'), 'utf8');
+    const shared = readImplementationSource(path.join(process.cwd(), 'server/socket/chat_terminal_boundary.ts'), 'utf8');
     expect(shared).toContain('recordChatExecutionTerminalEventDurably(');
     expect(shared).toContain('refreshTerminal: async () =>');
     expect(shared).toContain('await input.flush()');

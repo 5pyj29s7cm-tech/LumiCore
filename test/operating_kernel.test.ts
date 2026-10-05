@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import './helpers';
 import fs from 'fs';
 import path from 'path';
@@ -58,8 +59,8 @@ describe('Lumi operating kernel', () => {
 
   it('is wired into the shared chat/task and voice entrypoints', () => {
     const root = process.cwd();
-    const chat = fs.readFileSync(path.join(root, 'server', 'socket', 'chat.ts'), 'utf8');
-    const voice = fs.readFileSync(path.join(root, 'server', 'socket', 'voice.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server', 'socket', 'chat.ts'), 'utf8');
+    const voice = readImplementationSource(path.join(root, 'server', 'socket', 'voice.ts'), 'utf8');
 
     expect(chat).toContain('buildLumiOperatingKernelPrompt');
     expect(voice).toContain('buildLumiOperatingKernelPrompt');

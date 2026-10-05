@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { readDB } from '../../../db_layer';
+import { readDatabaseTables } from '../../../db_layer';
 import { getDataPath } from '../../config/data_path';
 import { ToolRegistry } from '../registry';
 import {
@@ -12,7 +12,7 @@ import {
 
 function scopeDirectory(userId: string, domain: string, orgId: string): string {
   if (domain === 'work' && orgId) return getDataPath(path.join('org', orgId, 'knowledge'));
-  const db = readDB();
+  const db = readDatabaseTables(["knowledgeFiles","memories","users"]);
   const primaryAdmin = (db.users || []).find((user: any) => user?.role === 'admin');
   if (primaryAdmin?.uid === userId) return getDataPath('knowledge');
   const directoryId = crypto.createHash('sha256').update(userId).digest('hex').slice(0, 24);
@@ -56,7 +56,7 @@ function buildKnowledgeCoverageSnapshot(context: any, filename = ''): Record<str
   const orgId = domain === 'work' ? String(context?.orgId || '') : '';
   if (domain === 'work' && !orgId) throw new Error('Organization context is required for work knowledge statistics.');
 
-  const db = readDB();
+  const db = readDatabaseTables(["knowledgeFiles","memories","users"]);
   const primaryAdmin = (db.users || []).find((user: any) => user?.role === 'admin');
   const primaryOwner = Boolean(primaryAdmin?.uid && primaryAdmin.uid === userId);
   const dir = scopeDirectory(userId, domain, orgId);

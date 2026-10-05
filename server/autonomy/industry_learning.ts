@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import type { ProfessionProfile } from './professions';
 import { isMemoryAvatarScoped } from '../memory';
 
@@ -178,7 +178,7 @@ function profileFromTaskCategory(category: string, tasks: any[], habits: string[
 }
 
 export function getIndustryLearningProfiles(userId: string): IndustryLearningProfile[] {
-  const db = readDB();
+  const db = readDatabaseTables(["memories","professionProfiles","workTakeoverTasks"]);
   const habits = recentHabitMemories(db, userId);
   const profiles = topProfessionProfiles(db).map(profile => profileFromProfession(profile, habits));
   const tasks = recentIndustryTasks(db, userId);

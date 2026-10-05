@@ -12,7 +12,7 @@ import { getDueReminders, type Reminder } from './memory';
 
 
 
-import { flushDBOrThrow, readDB, writeDB } from '../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../db_layer';
 
 
 
@@ -482,7 +482,7 @@ export class Scheduler {
 
   constructor(
     private readonly strictFlush: () => Promise<void> = flushDBOrThrow,
-    private readonly writeDatabase: (data: any) => void = writeDB,
+    private readonly writeDatabase: (data: any) => void = commitDatabaseTables,
     private readonly maintenanceConcurrency = 2,
   ) {}
 
@@ -523,7 +523,7 @@ export class Scheduler {
   /** Load disabled task IDs from DB */
   private loadDisabledState(): Set<string> {
     try {
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       const setting = (db.settings || []).find((s: any) => s.key === 'scheduler_disabled_tasks');
       if (setting?.value) {
         return new Set(JSON.parse(setting.value));
@@ -537,7 +537,7 @@ export class Scheduler {
   /** Persist disabled task IDs to DB */
   private persistDisabledState() {
     try {
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       let setting = (db.settings || []).find((s: any) => s.key === 'scheduler_disabled_tasks');
       const value = JSON.stringify([...this.disabledTasks]);
       if (setting) {
@@ -570,7 +570,7 @@ export class Scheduler {
     task.reconciledAt = task.reconciledAt || null;
     task.reconciliationResolution = task.reconciliationResolution || null;
     try {
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       const setting = (db.settings || []).find((candidate: any) => (
         candidate.key === SCHEDULER_RUNTIME_STATE_SETTING
       ));
@@ -702,7 +702,7 @@ export class Scheduler {
         task.lastPersistenceError = null;
       }
       if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       this.stageRuntimeState(db, task);
       this.writeDatabase(db);
       if (preservePersistenceFailure) {
@@ -765,7 +765,7 @@ export class Scheduler {
           }
           try {
             this.persistRecoveryDbWithRuntimeState(
-              readDB(),
+              readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]),
               visibleTask,
               visibleTask.persistenceStatus === 'failed' || execution.task.persistenceStatus === 'failed',
             );
@@ -992,7 +992,7 @@ export class Scheduler {
       persistenceStatus: 'ok',
       lastPersistenceError: null,
     };
-    const currentDb = readDB();
+    const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
     const candidateDb = {
       ...currentDb,
       settings: (currentDb.settings || []).map((setting: any) => ({ ...setting })),
@@ -1043,7 +1043,7 @@ export class Scheduler {
     deliveries: Array<{ deliveryIndex: number; delivery: ScheduledDelivery }>,
     timestamp: string,
   ): { createdInteractionIds: string[]; createdDeliveryIndexes: Set<number>; reminderChanges: Array<{ before: Reminder; after: Reminder }> } {
-    const currentDb = readDB();
+    const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
     const originalInteractions = Array.isArray(currentDb.interactions)
       ? currentDb.interactions
       : [];
@@ -1125,7 +1125,7 @@ export class Scheduler {
 
   private rollbackProactiveMessageBatch(createdInteractionIds: string[], reminderChanges: Array<{ before: Reminder; after: Reminder }> = []): void {
     if (createdInteractionIds.length === 0) return;
-    const rollbackDb = readDB();
+    const rollbackDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
     const created = new Set(createdInteractionIds);
     // Mutate the live projection before calling the writer as well: even a
     // writer that throws after swapping its candidate cannot leave these rows
@@ -1275,7 +1275,7 @@ export class Scheduler {
       for (const emission of pendingEmissions) {
         if (emission.normalized.reminderIds?.some(reminderId => {
           const expected = batch.reminderChanges.find(item => item.after.id === reminderId)?.after;
-          const current = (readDB().reminders || []).find((item: Reminder) => item.id === reminderId);
+          const current = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]).reminders || []).find((item: Reminder) => item.id === reminderId);
           return !expected || !current || current.status !== 'fired' || current.firedAt !== expected.firedAt
             || current.userId !== expected.userId || current.content !== expected.content || current.dueAt !== expected.dueAt
             || (current.domain || 'personal') !== (expected.domain || 'personal') || (current.orgId || '') !== (expected.orgId || '');
@@ -1412,7 +1412,7 @@ export class Scheduler {
       plan = buildScheduledTaskExecutionPlan(task, startedAt);
       execution.plan = plan;
       const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       const previousStatus = compactAudit
         ? getScheduledCapabilityExecutionStatus(db, {
             scheduledTaskId: task.id,
@@ -1528,7 +1528,7 @@ export class Scheduler {
         lastDurationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
       };
       phase = 'terminal_persistence';
-      const completedDb = readDB();
+      const completedDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       rollbackTerminalLedger = this.captureScheduledLedgerCheckpoint(completedDb, task.id, plan.taskId);
       persistScheduledCapabilityExecution(completedDb, {
         scheduledTaskId: task.id,
@@ -1626,7 +1626,7 @@ export class Scheduler {
         task.quarantinedExecutionId = plan.taskId;
         task.quarantineReason = task.lastError;
         try {
-          const db = readDB();
+          const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
             plan,
@@ -1713,7 +1713,7 @@ export class Scheduler {
       }
       if (plan) {
         try {
-          const db = readDB();
+          const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
             plan,
@@ -1743,7 +1743,7 @@ export class Scheduler {
       } else {
         try {
           this.persistRecoveryDbWithRuntimeState(
-            readDB(),
+            readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]),
             task,
             task.persistenceStatus === 'failed',
           );
@@ -1836,7 +1836,7 @@ export class Scheduler {
       target.nextRun = null;
     }
     try {
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       if (inFlight.plan) {
         persistScheduledCapabilityExecution(db, {
           scheduledTaskId: taskId,
@@ -1935,7 +1935,7 @@ export class Scheduler {
       ))
       .map((candidate: any) => candidate.id));
     return () => {
-      const currentDb = readDB();
+      const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
       currentDb.conversationActionTasks = (currentDb.conversationActionTasks || []).filter((candidate: any) => {
         if (candidate?.conversationId !== conversationId || candidate?.target !== scheduledTaskId) return true;
         return snapshots.has(candidate.id);
@@ -2160,12 +2160,12 @@ export function registerScheduledTasks(
 
   /** Get scheduler recipients from the authoritative user registry. */
   function getAllUserIds(): string[] {
-    return resolveScheduledUserIds(readDB());
+    return resolveScheduledUserIds(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]));
   }
 
 
   function getSystemAdminUserIds(): string[] {
-    const db = readDB();
+    const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
     return (db.users || [])
       .filter((user: any) => user?.uid && user.role === 'admin')
       .map((user: any) => user.uid);

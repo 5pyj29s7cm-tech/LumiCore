@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -5,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 
 function read(relativePath: string): string {
-  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+  return readImplementationSource(path.join(root, relativePath), 'utf8');
 }
 
 describe('unified organization workspace boundary', () => {

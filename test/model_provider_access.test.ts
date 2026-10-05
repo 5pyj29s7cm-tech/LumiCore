@@ -1,10 +1,11 @@
+import { readImplementationSource } from './implementation_source';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isUserLLMProvider } from '../server/llm/user_preferences';
 
 function readRepoFile(relativePath: string): string {
-  return readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 }
 
 describe('model provider access', () => {

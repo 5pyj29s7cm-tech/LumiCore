@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -153,10 +154,10 @@ describe('structured runtime status', () => {
   });
 
   it('keeps runtime evidence in System Explorer and only projects active work into a floating widget', () => {
-    const routes = readFileSync(path.join(process.cwd(), 'server/routes/system_routes.ts'), 'utf8');
-    const desktop = readFileSync(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
-    const chat = readFileSync(path.join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
-    const explorer = readFileSync(path.join(process.cwd(), 'src/components/SystemExplorer.tsx'), 'utf8');
+    const routes = readImplementationSource(path.join(process.cwd(), 'server/routes/system_routes.ts'), 'utf8');
+    const desktop = readImplementationSource(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
+    const chat = readImplementationSource(path.join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
+    const explorer = readImplementationSource(path.join(process.cwd(), 'src/components/SystemExplorer.tsx'), 'utf8');
     expect(routes).toContain("router.get('/runtime/status', requireAuth");
     expect(routes).toContain('const scope = resolveDomain(req.user!)');
     expect(desktop).not.toContain('<WorkflowPanel');

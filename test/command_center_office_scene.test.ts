@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 // @vitest-environment jsdom
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -16,7 +17,7 @@ import { CommandCenterPanel } from '../src/components/CommandCenterPanel';
 afterEach(() => { cleanup(); fixture.api.mockReset(); fixture.on.mockReset(); fixture.off.mockReset(); fixture.uid = 'user-a'; fixture.org = ''; });
 
 function source(relativePath: string): string {
-  return readFileSync(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
+  return readImplementationSource(path.join(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
 }
 
 describe('single-core command center', () => {

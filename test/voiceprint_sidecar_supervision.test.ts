@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -8,11 +9,11 @@ import {
 import { getGptSovitsRuntimeRoots } from '../server/tts/gptsovits_runtime';
 
 describe('voiceprint sidecar supervision', () => {
-  const provider = fs.readFileSync(
+  const provider = readImplementationSource(
     path.join(process.cwd(), 'server/biometrics/voiceprint_provider.ts'),
     'utf8',
   );
-  const bootstrap = fs.readFileSync(
+  const bootstrap = readImplementationSource(
     path.join(process.cwd(), 'server/runtime/bootstrap.ts'),
     'utf8',
   );
@@ -31,7 +32,7 @@ describe('voiceprint sidecar supervision', () => {
   });
 
   it('samples the full process tree frequently enough to enforce memory budgets', () => {
-    const monitor = fs.readFileSync(
+    const monitor = readImplementationSource(
       path.join(process.cwd(), 'server/runtime/process_resource_monitor.ts'),
       'utf8',
     );
@@ -46,7 +47,7 @@ describe('voiceprint sidecar supervision', () => {
   });
 
   it('keeps bounded headroom for the observed GPT-SoVITS startup peak', () => {
-    const runtime = fs.readFileSync(
+    const runtime = readImplementationSource(
       path.join(process.cwd(), 'server/tts/gptsovits_runtime.ts'),
       'utf8',
     );
@@ -71,7 +72,7 @@ describe('voiceprint sidecar supervision', () => {
   });
 
   it('leaves GPT-SoVITS lifecycle ownership with the supervised Node runtime', () => {
-    const nativeRuntime = fs.readFileSync(
+    const nativeRuntime = readImplementationSource(
       path.join(process.cwd(), 'src-tauri/src/lib.rs'),
       'utf8',
     );

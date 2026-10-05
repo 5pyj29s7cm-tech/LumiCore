@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,9 +9,9 @@ import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foregr
 describe('chat and voice tool-call stability', () => {
   it('keeps text and voice on the shared routing and desktop execution path', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const pipeline = readFileSync(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
+    const pipeline = readImplementationSource(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
 
     for (const source of [chat, voice]) {
       expect(source).toContain('buildLumiExecutionPipeline');
@@ -26,8 +28,8 @@ describe('chat and voice tool-call stability', () => {
 
   it('treats the shared pipeline policy and projection as immutable entry outputs', () => {
     const root = process.cwd();
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const rest = readFileSync(path.join(root, 'server/routes/chat_routes.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
+    const rest = readImplementationSource(path.join(root, 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(voice).toContain('const routedToolPolicy = executionPipeline.authorizationPolicy');
     expect(voice).toContain('const modelToolProjection = executionPipeline.modelToolProjection');
@@ -51,8 +53,8 @@ describe('chat and voice tool-call stability', () => {
 
   it('feeds the same persisted action pointer into text and voice continuation routing', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
 
     expect(chat).toContain('conversation?.actionContinuationState');
     expect(voice).toContain('conversation.actionContinuationState');
@@ -62,8 +64,8 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('keeps legal entry prompts in the shared execution decision instead of per-channel scripts', () => {
-    const executionDecision = readFileSync(path.join(process.cwd(), 'server/cognition/execution_decision.ts'), 'utf8');
-    const legalEntry = readFileSync(path.join(process.cwd(), 'server/cognition/legal_entry.ts'), 'utf8');
+    const executionDecision = readImplementationSource(path.join(process.cwd(), 'server/cognition/execution_decision.ts'), 'utf8');
+    const legalEntry = readImplementationSource(path.join(process.cwd(), 'server/cognition/legal_entry.ts'), 'utf8');
 
     expect(executionDecision).toContain('buildUnifiedLegalEntryPrompt');
     expect(legalEntry).toContain('Unified Legal Casework Entry');
@@ -78,7 +80,7 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('keeps REST chat on the same legal entry and finalizer path', () => {
-    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+    const restChat = readImplementationSource(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(restChat).toContain('buildUnifiedLegalEntryPrompt');
     expect(restChat).toContain('buildRestChatSystemInstruction');
@@ -91,7 +93,7 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('archives legal meeting analysis through the legal casework toolchain', () => {
-    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+    const restChat = readImplementationSource(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(restChat).toContain('buildLegalMeetingMinutesArgs');
     expect(restChat).toContain('shouldArchiveLegalMeeting');
@@ -106,7 +108,7 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('keeps personal direct legal tools out of the shared default organization scope', () => {
-    const restChat = readFileSync(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+    const restChat = readImplementationSource(path.join(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
 
     expect(restChat).toContain('function resolveLegalCaseworkOrgId');
     expect(restChat).toContain("return `personal:${safeLegalScopeSegment(input.userId)}`");
@@ -119,7 +121,7 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('binds legal meeting analysis to the current case and organization scope in the desktop client', () => {
-    const desktop = readFileSync(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
+    const desktop = readImplementationSource(path.join(process.cwd(), 'src/components/DesktopUI.tsx'), 'utf8');
 
     expect(desktop).toContain('const legalCaseId = legalCase?.id || getLegalConsultationCaseId()');
     expect(desktop).toContain("const workLegalScope = workDomain === 'work' && Boolean(orgConnection?.connected && orgConnection?.orgId)");
@@ -132,7 +134,7 @@ describe('chat and voice tool-call stability', () => {
   });
 
   it('keeps voice tool execution visible and aligned with chat permission behavior', () => {
-    const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
 
     expect(voice).toContain('shouldAllowVoiceLocalFileWriteForTurn');
     expect(voice).toContain('allowLocalFileWrites');
@@ -146,10 +148,10 @@ describe('chat and voice tool-call stability', () => {
 
   it('keeps personal and organization knowledge retrieval aligned across text and voice', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const messagingEntry = readFileSync(path.join(root, 'server/messaging/routes.ts'), 'utf8');
-    const messaging = readFileSync(path.join(root, 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
+    const messagingEntry = readImplementationSource(path.join(root, 'server/messaging/routes.ts'), 'utf8');
+    const messaging = readImplementationSource(path.join(root, 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
 
     for (const source of [chat, voice]) {
       expect(source).toContain('retrieveChunks');
@@ -168,8 +170,8 @@ describe('chat and voice tool-call stability', () => {
 
   it('keeps ordinary tools silent and records hard boundaries for one-time text confirmation', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
 
     for (const source of [chat, voice]) {
       expect(source).toContain('createTurnConfirmation({');
@@ -181,7 +183,7 @@ describe('chat and voice tool-call stability', () => {
 
   it('returns consumed confirmation receipts to the shared model loop in both text execution surfaces', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
 
     for (const source of [chat]) {
       expect(source).toContain('buildConfirmedStepContinuationMessages');
@@ -201,7 +203,7 @@ describe('chat and voice tool-call stability', () => {
     });
     expect(String(args?.message || '')).toContain('\u665a\u5b89');
 
-    const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chat).not.toContain('buildForegroundWeChatSendArgs');
     expect(chat).not.toContain('executeForegroundMessagingAction');
     expect(chat).not.toContain('shouldRunLegacyDirectExecution() && !responseText');
@@ -243,7 +245,7 @@ describe('chat and voice tool-call stability', () => {
       message: '在干嘛？',
     });
 
-    const voice = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
     expect(voice).toContain('executeForegroundMessagingAction');
     expect(voice).toContain("foregroundWeChatReadArgs ? 'read' : 'send'");
     expect(voice).toContain('action: foregroundMessagingAction');
@@ -282,7 +284,7 @@ describe('chat and voice tool-call stability', () => {
       operation: 'read',
     });
 
-    const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chat).not.toContain("const toolName = 'wechat_read_recent_chat'");
     expect(chat).toContain('toolPolicy: modelCapabilityPolicy');
   });

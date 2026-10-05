@@ -1,5 +1,11 @@
+import { executeChatModelTurn } from "./chat/model_execution";
+import { answerPriorTaskStatus } from "./chat/prior_task_status";
+import { prepareChatPromptContext } from "./chat/prompt_context";
+import { retrieveChatContext } from "./chat/context_retrieval";
+import { completeChatTurn } from "./chat/result_delivery";
+import { executeConfirmedChatTurn } from "./chat/confirmation_execution";
 import { isNamedPersistentWorkTaskStatusQuery } from '../cognition/action_contract';
-import { buildRecentFailureExplanation, normalizeChatHistoryRecord } from "./chat/history";
+import { buildRecentFailureExplanation } from "./chat/history";
 export { normalizeChatHistoryRecord } from "./chat/history";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "./chat/attachments";
 export { buildChatAttachmentContext } from "./chat/attachments";
@@ -12,16 +18,19 @@ import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
 import { reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution } from '../cognition/conversation_execution';
 import { resolveUserTurn, type TurnResolution } from '../cognition/turn_resolution';
 import { revalidateAcceptedTaskRelation } from '../cognition/task_concurrency';
-import { isExplicitMemoryRequest, persistTurnMemory, scheduleTurnMemory } from '../memory/turn_memory';
+import { isExplicitMemoryRequest, persistTurnMemory } from '../memory/turn_memory';
+/**
+ * agent:chat socket handler — the core conversational AI pipeline
+ */
 /**
  * agent:chat socket handler — the core conversational AI pipeline
  */
 import { Server, Socket } from "socket.io";
-import { TASK_TARGET_HISTORY_LIMIT, buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
-import { flushDBOrThrow, readDB, writeDB } from "../../db_layer";
-import { pushNotification } from "../routes/notifications";
-import { NormalizedMessage, StreamCallback } from "../llm/providers";
-import { runConversationTurn } from '../llm/conversation_turn';
+import { TASK_TARGET_HISTORY_LIMIT } from '../conversation/task_target_anchor';
+import { flushDBOrThrow, readDatabaseTables } from "../../db_layer";
+
+import { NormalizedMessage } from "../llm/providers";
+
 import { resolveModelRequestInputBudget } from "../llm/request_context_budget";
 import { ToolExecutionRecord, type ToolContext } from "../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from './media_artifact_receipt';
@@ -34,45 +43,42 @@ import { readScopedDeletionReceipt } from '../persistence/durable_scope_mutation
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope } from '../../shared/media_generation';
 import { toolRegistry } from "../tools/registry";
 import { executeToolCall } from "../tools/execution_engine";
-import { buildConfirmedStepContinuationMessages, type LLMResult } from "../llm/adapter";
+import { type LLMResult } from "../llm/adapter";
 import { createModelTurnState } from '../llm/model_turn_state';
-import { isModelConfigurationReadRequest } from '../cognition/model_configuration_intent';
+
 import { normalizeOperationMode } from "../cognition/operation_modes";
 import { getStoredOperationMode, saveStoredOperationMode } from "../cognition/operation_mode_store";
 import { buildInteractionModeOverlay } from "../cognition/turn_flow";
 import { buildOperationModeMetaResponse } from "../cognition/capability_meta";
 
 import { buildLumiCapabilitySelection } from "../cognition/capability_selection";
-import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
+
 import { buildDesktopExecutionStabilityPolicy } from "../cognition/desktop_execution_stability";
 import { createDesktopExecutionTracker, withDesktopExecutionReceipt } from "../desktop/execution_runtime";
-import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../cognition/result_finalizer";
+
 import { buildForegroundTaskCompletionFeedback } from "../cognition/acceptance_evidence";
 import { normalizeCompletionFeedbackForPersistence } from "../conversation/completion_feedback";
-import { recoverBlockedExecutionOnce, sanitizeExecutionResponseForDelivery, sanitizeExecutionNotificationForDelivery } from "../cognition/execution_guard_recovery";
-import { executionBoundaryPromptOverlay, restrictSystemPromptForExecutionBoundary, restrictVisibleToolNamesForExecutionBoundary } from "../tools/remote_policy";
+import { sanitizeExecutionResponseForDelivery, sanitizeExecutionNotificationForDelivery } from "../cognition/execution_guard_recovery";
+import { executionBoundaryPromptOverlay, restrictVisibleToolNamesForExecutionBoundary } from "../tools/remote_policy";
 
-import { shouldBlockForDesktopControlPause } from '../cognition/desktop_control_pause';
 import { createPreFinalizationTextGate, shouldDeferModelOutputUntilFinalized, shouldForwardPreFinalizationProgress } from "../cognition/response_delivery";
-import { buildLumiRuntimeCapabilityContext } from "../cognition/capability_context";
+
 import { buildTextReplyStyleOverlay } from '../cognition/reply_style';
 import { buildLumiOperatingKernelPrompt } from "../cognition/operating_kernel";
 import { persistLumiPostTurnLearning, shouldPersistPostTurnLearningSource } from "../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../work_takeover/execution_writeback";
 import { formatClientSelfPromptForTurn } from "../client/self_model";
-import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, consumePendingConfirmationDurably, formatPendingConfirmationRequest, getPendingConfirmationDurably, isExplicitConfirmationReply, isConfirmationCancellation, recordPendingConfirmationDurably } from "../tools/pending_confirmation";
+import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, formatPendingConfirmationRequest, getPendingConfirmationDurably, isExplicitConfirmationReply, isConfirmationCancellation, recordPendingConfirmationDurably } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
 import { buildPendingAssistantOfferContextFromTranscript, resolvePendingRuntimeCleanupOffer } from '../cognition/pending_assistant_offer';
 import { formatRuntimeCleanupReceipt } from '../i18n/runtime_cleanup_messages';
 import { admitAcceptedUserTurnDurably, resolveAcceptedTurnConfirmation, runAfterAcceptedUserTurnAdmission } from './action_turn_durability';
-import { queryMemoriesVector, CONVERSATIONAL_MEMORY_EVIDENCE } from "../memory";
-import { loadEmotionalState, saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, loadHIMState, saveHIMState, generateContextualGreeting, vectorMemoryBias } from "../personality/state";
-import { buildModeOverlay, generateSystemPrompt } from "../personality/engine";
+
 import { personalityRegistry } from "../personality";
-import { getMemoryAvatar, buildMemoryAvatarContext } from '../memory_avatar/store';
+import { getMemoryAvatar } from '../memory_avatar/store';
 import { captureMemoryAvatarAuthorization } from '../memory_avatar/lifecycle';
 
-import { getOrCreateConversationForTurn, addMessage, addMessageIdempotent as addMessageIdempotentUnbound, updateAssistantMessageTerminalPresentation, getMessageByRequestId, getMessages, getMessagesByTokenBudget, getConversationSummary, setConversationMode, extractTopics, trackTopic, getTopicContext, getConversationForScope, getOrCreateActiveConversation, getConversationActionStatus, bindConversationActionExecutionTurn, cancelConversationActionExecution, completeConversationActionFromUserObservation, createDurableForegroundReleaseGate, convergeForegroundRequestBeforeRelease, prepareConversationActionExecution, setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, type ForegroundRequestIdentity as ChatForegroundRequestIdentity, type ForegroundRequestReleaseInput, type ForegroundRequestReleaseResult as ChatForegroundRequestReleaseResult, type ForegroundRequestDurabilityDependencies } from "../conversation/manager";
+import { getOrCreateConversationForTurn, addMessage, addMessageIdempotent as addMessageIdempotentUnbound, updateAssistantMessageTerminalPresentation, getMessageByRequestId, getMessages, setConversationMode, getConversationForScope, getOrCreateActiveConversation, getConversationActionStatus, bindConversationActionExecutionTurn, cancelConversationActionExecution, completeConversationActionFromUserObservation, createDurableForegroundReleaseGate, convergeForegroundRequestBeforeRelease, prepareConversationActionExecution, setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, type ForegroundRequestIdentity as ChatForegroundRequestIdentity, type ForegroundRequestReleaseInput, type ForegroundRequestReleaseResult as ChatForegroundRequestReleaseResult, type ForegroundRequestDurabilityDependencies } from "../conversation/manager";
 import { getConversationActionStateByTaskId, getConversationActionStateFromLedger, getLatestConversationActionState } from "../conversation/action_ledger";
 import { findAdjacentVerifiedConfirmedAction } from '../conversation/duplicate_confirmation';
 import { scheduleConversationSummary } from "../conversation/summary_scheduler";
@@ -80,35 +86,29 @@ import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, i
 import { resolveExactConversationCorrection } from "../conversation/exact_correction";
 import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
 
-import { retrieveChunks } from "../agents/rag";
-import { runRetrievalRequest } from "../llm/retrieval_request";
 import { extractSentiment } from "../cognition/sentiment";
-import { buildRecentActionContinuationBridge, conversationActionRequiresFreshConfirmationReview, formatConversationActionTaskStatus, isUserObservedTaskCompletion, pendingRuntimeCancellationRecheck, RECONFIRMATION_REQUIRED_BLOCKER } from "../cognition/action_continuation";
+import { buildRecentActionContinuationBridge, conversationActionRequiresFreshConfirmationReview, formatConversationActionTaskStatus, isUserObservedTaskCompletion, pendingRuntimeCancellationRecheck } from "../cognition/action_continuation";
 import { buildDurableTaskDeterministicToolRecoveryCall, buildStructuredMediaDeterministicToolRecoveryCall } from '../cognition/deterministic_tool_recovery';
-import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, taskReceiptsToRecords, toolRecordSucceeded } from "../cognition/task_execution_ledger";
+import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../cognition/task_execution_ledger";
 import { summarizeToolRecordForPersistence } from "../cognition/tool_record_status";
 import { classifyRuntimeWorkIntent } from '../cognition/runtime_work_intent';
-import { recordTokenUsage } from "../llm/token_tracker";
-import { searchKnowledgeBase } from "../org/kb";
-import { buildProfessionOverlay } from "../autonomy/professions";
+
 import { buildResponseLanguageInstruction } from "../utils/language";
 
-import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
-import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
-import { buildModelSelfAwareness, buildVisionRoutingOverlay } from "../cognition/vision_routing";
+import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { buildSocketNativeRequestBinding } from './native_request_binding';
 export { buildSocketNativeRequestBinding } from './native_request_binding';
 export type { SocketNativeRequestBinding } from './native_request_binding';
-import { isDirectDesktopTool, createDesktopRelay } from "./desktop_relay";
+import { createDesktopRelay } from "./desktop_relay";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 
-import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope, scopedEmotionalStateKey } from "./scope";
+import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope } from "./scope";
 import { beginChatExecutionDurably, beginQueuedChatExecution, beginChatSidecarExecution, getDurableChatCancellationForCurrentExecution, getChatExecution, getChatSidecarCancellationTarget, markChatExecutionCancelling, persistChatSidecarCancellationIntent, recordChatExecutionEvent, recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, waitForChatSidecarCancellationIntent, type ChatExecutionScope } from "./chat_execution_registry";
 import { commitChatTerminalBoundary, persistAuthorizedTerminalReceipt as persistAuthorizedReceipt } from "./chat_terminal_boundary";
 import { chatPublicErrorCodeForException, sanitizeChatAgentErrorPayload } from "./chat_public_error";
 import { formatActiveTaskRelationContext, resolveActiveTaskMessageRelation, taskRelationFollowupIntent, bindPreparedTaskMessageRelation, type ActiveTaskMessageResolution } from "../cognition/task_concurrency";
-
 
 // Foreground executions outlive an individual Socket.IO connection. Keeping the
 // queue at module scope lets a reconnected client query or cancel the same
@@ -471,7 +471,7 @@ export function registerChatHandler(
       exactRequestId = requestId,
     ): ActiveTaskMessageResolution | null => {
       if (!exactConversationId || !resolvedTaskRelation) return null;
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]);
       const requestTurns = (db.conversationActionTurns || []).filter((turn: any) => (
         turn.conversationId === exactConversationId
         && turn.userId === uid
@@ -1830,13 +1830,13 @@ export function registerChatHandler(
         && controlTargetRevision === undefined;
       const previousActionState = asksToRecheckPreviousAction
         ? serverBoundRecheckTaskId
-          ? getConversationActionStateByTaskId(readDB(), {
+          ? getConversationActionStateByTaskId(readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]), {
               conversationId: conversation.id,
               userId: uid,
               taskId: serverBoundRecheckTaskId,
             })
           : mayUseUnboundRecheckFallback
-            ? getConversationActionStateFromLedger(readDB(), {
+            ? getConversationActionStateFromLedger(readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]), {
                 conversationId: conversation.id,
                 userId: uid,
                 query: visibleUserText,
@@ -1844,246 +1844,7 @@ export function registerChatHandler(
             : null
         : null;
       const runtimeCancellationRecheck = pendingRuntimeCancellationRecheck(previousActionState);
-      if (runtimeCancellationRecheck) {
-        const recheckPolicy = {
-          allowedTools: ['runtime_work_cancel'],
-          requireConfirmation: [],
-          forbiddenTools: [],
-          maxIterations: 1,
-        };
-        const recheckPreparation = prepareConversationActionExecution({
-          conversationId: conversation.id,
-          userId: uid,
-          userText: visibleUserText,
-          requestId,
-          userMessageId: acceptedUserMessageId,
-          toolPolicy: recheckPolicy,
-          forceResume: true,
-          forceNewTask: false,
-          forceTask: true,
-          preserveExistingTask: true,
-        });
-        if (recheckPreparation.state?.taskId === runtimeCancellationRecheck.taskId) {
-          const recheckState = recheckPreparation.state;
-          foregroundRequestIdentity = Object.freeze({
-            conversationId: conversation.id,
-            userId: uid,
-            requestId,
-            expectedTaskId: runtimeCancellationRecheck.taskId,
-          });
-          resolvedTaskRelation = {
-            ...resolvedTaskRelation,
-            binding: 'active_task',
-            taskId: recheckState.taskId,
-            revision: recheckState.revision,
-            targetRequestId: recheckState.activeRequestId || requestId,
-          };
-          emitAgent('agent:task_relation', {
-            relation: resolvedTaskRelation,
-            phase: 'runtime_cleanup_recheck_prepared',
-          });
-          const recheckRecord = await executeToolCall({
-            registry: toolRegistry,
-            id: `runtime_cleanup_recheck_${requestId}`,
-            name: 'runtime_work_cancel',
-            arguments: { taskIds: [...runtimeCancellationRecheck.taskIds] },
-            executionOrigin: 'deterministic_route',
-            context: {
-              ...toolSecurityContext,
-              userId: uid,
-              taskId: runtimeCancellationRecheck.taskId,
-              conversationId: conversation.id,
-              turnId: requestId,
-              requestId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              source: 'chat_runtime_cleanup_recheck',
-              turnRowId: 'turnRowId' in recheckPreparation ? recheckPreparation.turnRowId : undefined,
-              resolutionId: acceptedTurnResolution?.id,
-              toolPolicy: recheckPolicy,
-              actionIntent: previousActionState?.goal || visibleUserText,
-              routedTaskText: previousActionState?.goal || visibleUserText,
-              // This is an idempotent verification of the exact immutable IDs
-              // accepted in the immediately preceding cancellation receipt,
-              // not fresh mutation authority and never a cancel-all request.
-              userConfirmed: true,
-              executionSignal: abortController.signal,
-              isCancelled: isChatCancelled,
-            },
-          });
-          const recheckLifecycle = {
-            correlationId: recheckRecord.id || `runtime_cleanup_recheck_${requestId}`,
-            name: recheckRecord.name,
-            arguments: recheckRecord.arguments,
-            args: recheckRecord.arguments,
-            result: recheckRecord.error ? undefined : formatToolResultForUi(recheckRecord.result),
-            error: recheckRecord.error,
-          };
-          emitAgent('agent:tool_call', recheckLifecycle);
-          emitAgent('agent:tool', recheckLifecycle);
-          let recheckReceipt: Record<string, any> = {
-            ok: false,
-            status: 'failed',
-            requestedTaskIds: runtimeCancellationRecheck.taskIds,
-            cancelledTaskIds: [],
-            cancellingTaskIds: [],
-            notCancelledTaskIds: runtimeCancellationRecheck.taskIds,
-            targetResults: runtimeCancellationRecheck.taskIds.map(taskId => ({ taskId, status: 'failed' })),
-          };
-          try {
-            const parsed = JSON.parse(String(recheckRecord.result || '{}'));
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              recheckReceipt = parsed;
-            }
-          } catch {}
-          const recheckSettled = !recheckRecord.error
-            && recheckRecord.terminalVerification?.status === 'verified'
-            && ['idle', 'cancelled'].includes(String(recheckReceipt.status || ''));
-          const recheckPending = !recheckRecord.error
-            && String(recheckReceipt.status || '') === 'cancelling';
-          const recheckReason = recheckSettled
-            ? 'runtime_cleanup_recheck_completed'
-            : recheckPending
-              ? 'runtime_cleanup_recheck_pending'
-              : 'runtime_cleanup_recheck_failed';
-          const recheckText = formatRuntimeCleanupReceipt(visibleUserText, recheckReceipt);
-          const recheckCompletionFeedback = buildForegroundTaskCompletionFeedback({
-            taskId: runtimeCancellationRecheck.taskId,
-            taskLabel: previousActionState?.goal || visibleUserText,
-            toolRecords: [recheckRecord],
-            blocked: !recheckSettled,
-            reason: recheckSettled
-              ? ''
-              : recheckPending
-                ? 'Cancellation is still in progress.'
-                : recheckRecord.error
-                  || recheckRecord.terminalVerification?.reason
-                  || 'The exact runtime cancellation could not be verified.',
-          });
-          await commitDeterministicTerminal({
-            payload: {
-              text: recheckText,
-              agentName: 'Lumi',
-              finalized: true,
-              blocked: !recheckSettled,
-              reason: recheckReason,
-              completionFeedback: recheckCompletionFeedback,
-            },
-            persistAssistantMessage: () => {
-              const summary = summarizeToolRecordForPersistence(recheckRecord);
-              if (summary) {
-                addMessage({
-                  userId: uid,
-                  agentId: conversationAgentId,
-                  conversationId: conversation.id,
-                  role: 'tool',
-                  content: summary,
-                  domain: resolvedDomain,
-                  orgId: resolvedOrgId,
-                });
-              }
-              addMessageIdempotent({
-                userId: uid,
-                agentId: conversationAgentId,
-                conversationId: conversation.id,
-                role: 'assistant',
-                content: recheckText,
-                personality: personalityRegistry.get('lumi')?.id || 'lumi',
-                domain: resolvedDomain,
-                orgId: resolvedOrgId,
-                source: 'chat_runtime_cleanup_recheck',
-                channel: 'chat',
-                toolCalls: [recheckRecord],
-                cognitiveIntent: recheckReason,
-                llmWasCalled: false,
-                requestId,
-                completionFeedback: recheckCompletionFeedback,
-              });
-            },
-            publishAfter: () => emitConversationUpdated({
-              conversationId: conversation.id,
-              agentId: conversationAgentId,
-              source: 'chat_runtime_cleanup_recheck',
-              rolledOver: conversationTurn.rolledOver,
-              previousConversationId: conversationTurn.previousConversationId,
-            }),
-            errorContext: 'Runtime cleanup recheck terminal',
-          });
-          await releaseChatSession();
-          return;
-        }
-      }
-      if (
-        acceptedFollowupIntent === 'status'
-        && (
-          confirmationNeedsFreshReview
-          || asksAboutBoundConversationTask
-          || asksAboutRecentConversationTask
-          || (
-            acceptedNormalizedIntent.kind === 'status_query'
-            && acceptedNormalizedIntent.target === 'previous_action'
-          )
-        )
-      ) {
-        const executionFactQuestion = isConversationExecutionFactQuestion(visibleUserText);
-        const statusText = executionFactQuestion
-          ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
-              conversationId: conversation.id,
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              currentRequestId: requestId,
-              taskId: serverBoundRecheckTaskId || previousActionState?.taskId || '',
-            }), visibleUserText)
-          : getConversationActionStatus(
-              conversation.id,
-              uid,
-              visibleUserText,
-              conversation.actionContinuationState,
-              resolvedTaskRelation.taskId || '',
-            );
-        const responseIntent = executionFactQuestion
-          ? 'execution_facts'
-          : confirmationNeedsFreshReview
-            ? 'reconfirmation_required'
-            : 'task_status';
-        await commitDeterministicTerminal({
-          payload: {
-            text: statusText,
-            agentName: 'Lumi',
-            finalized: true,
-            blocked: confirmationNeedsFreshReview,
-            reason: responseIntent,
-          },
-          persistAssistantMessage: () => addMessageIdempotent({
-            userId: uid,
-            agentId: conversationAgentId,
-            conversationId: conversation.id,
-            role: 'assistant',
-            content: statusText,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            source: executionFactQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
-            channel: 'chat',
-            cognitiveIntent: responseIntent,
-            llmWasCalled: false,
-            requestId,
-            skipActionContinuation: true,
-          }),
-          publishAfter: () => {
-            emitConversationUpdated({
-            conversationId: conversation.id,
-            agentId: conversationAgentId,
-            source: executionFactQuestion ? 'chat_conversation_execution_facts' : 'chat_task_status',
-            rolledOver: conversationTurn.rolledOver,
-              previousConversationId: conversationTurn.previousConversationId,
-            });
-          },
-          errorContext: 'Deterministic task status terminal',
-        });
-        await releaseChatSession();
-        return;
-      }
+      if (await answerPriorTaskStatus({ get runtimeCancellationRecheck() { return runtimeCancellationRecheck; }, get conversation() { return conversation; }, set conversation(value) { conversation = value; }, get uid() { return uid; }, get visibleUserText() { return visibleUserText; }, get requestId() { return requestId; }, get acceptedUserMessageId() { return acceptedUserMessageId; }, get foregroundRequestIdentity() { return foregroundRequestIdentity; }, set foregroundRequestIdentity(value) { foregroundRequestIdentity = value; }, get resolvedTaskRelation() { return resolvedTaskRelation; }, set resolvedTaskRelation(value) { resolvedTaskRelation = value; }, get emitAgent() { return emitAgent; }, get toolSecurityContext() { return toolSecurityContext; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get acceptedTurnResolution() { return acceptedTurnResolution; }, set acceptedTurnResolution(value) { acceptedTurnResolution = value; }, get previousActionState() { return previousActionState; }, get abortController() { return abortController; }, get isChatCancelled() { return isChatCancelled; }, get formatToolResultForUi() { return formatToolResultForUi; }, get commitDeterministicTerminal() { return commitDeterministicTerminal; }, get conversationAgentId() { return conversationAgentId; }, get addMessageIdempotent() { return addMessageIdempotent; }, get emitConversationUpdated() { return emitConversationUpdated; }, get conversationTurn() { return conversationTurn; }, get releaseChatSession() { return releaseChatSession; }, get acceptedFollowupIntent() { return acceptedFollowupIntent; }, get confirmationNeedsFreshReview() { return confirmationNeedsFreshReview; }, get asksAboutBoundConversationTask() { return asksAboutBoundConversationTask; }, get asksAboutRecentConversationTask() { return asksAboutRecentConversationTask; }, get acceptedNormalizedIntent() { return acceptedNormalizedIntent; }, get serverBoundRecheckTaskId() { return serverBoundRecheckTaskId; } })) return;
 
       // `deferActionPreparation` persisted only the transcript while this
       // request waited. Now that this request owns the serial lease, bind its
@@ -2123,87 +1884,7 @@ export function registerChatHandler(
           resolvedOrgId,
         ) || conversation;
       }
-
-      // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)
-      const personalityConfig = isMemoryAvatar && memoryAvatar?.personalityConfig
-        ? memoryAvatar.personalityConfig
-        : personalityRegistry.getForUser(
-            personalityId,
-            uid,
-            resolvedDomain === 'work' ? resolvedOrgId : undefined,
-          );
-      console.log('[ChatHandler] personalityConfig:', !!personalityConfig);
-      const retrievalBiases = personalityConfig?.personalityVector
-        ? vectorMemoryBias(personalityConfig.personalityVector)
-        : { typeWeights: {}, perspectiveWeights: {} };
-
-      // Vector semantic search with keyword fallback
-      markTurnTiming('memoryStart');
-      const relevantMemories = await runRetrievalRequest(signal => queryMemoriesVector({
-        userId: uid,
-        query: text,
-        limit: isMemoryAvatar ? Math.min(20, Number(memoryAvatar?.personalityConfig?.memoryPolicy?.retrieveLimit) || 10) : 5,
-        minConfidence: isMemoryAvatar ? (Number(memoryAvatar?.personalityConfig?.memoryPolicy?.minConfidence) || 0.3) : 0.4,
-        agentId: isMemoryAvatar ? conversationAgentId : undefined,
-        retrievalTypeWeights: retrievalBiases.typeWeights,
-        retrievalPerspectiveWeights: retrievalBiases.perspectiveWeights,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-        useVector: true,
-        evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
-        recordRetrieval: true,
-        signal,
-      }), abortController.signal);
-      turnAuthorization.assertCurrent();
-      markTurnTiming('memoryEnd');
-      console.log('[ChatHandler] relevantMemories (vector):', relevantMemories.length);
-
-      // RAG: retrieve relevant knowledge chunks from agent-scoped and Lumi knowledge.
-      let ragChunks: string[] = isMemoryAvatar
-        ? buildMemoryAvatarContext(uid, conversationAgentId, text)
-        : [];
-      const ragAgentIds = isMemoryAvatar
-        ? [conversationAgentId]
-        : Array.from(new Set([conversationAgentId, 'lumi'].filter(Boolean)));
-      for (const ragAgentId of ragAgentIds) {
-        const chunks = await runRetrievalRequest(signal => retrieveChunks(uid, ragAgentId, text, 3, {
-          domain: resolvedDomain,
-          orgId: resolvedDomain === 'work' ? resolvedOrgId : '',
-          signal,
-        }), abortController.signal);
-        turnAuthorization.assertCurrent();
-        for (const chunk of chunks) {
-          const content = (chunk as any).content;
-          if (content && !ragChunks.includes(content)) ragChunks.push(content);
-          if (ragChunks.length >= 5) break;
-        }
-        if (ragChunks.length >= 5) break;
-      }
-
-      markTurnTiming('ragEnd');
-      // Org: search company KB when in work domain
-      let kbContext: string | undefined;
-      if (resolvedDomain === 'work' && resolvedOrgId) {
-        try {
-          const kbResults = await runRetrievalRequest(signal => searchKnowledgeBase(resolvedOrgId, text, { limit: 3, userId: uid, signal }), abortController.signal);
-          turnAuthorization.assertCurrent();
-          if (kbResults.length > 0) {
-            kbContext = kbResults
-              .map(r => `[${r.title}] ${r.chunk}`)
-              .join('\n');
-            console.log('[ChatHandler] KB search results:', kbResults.length, 'articles found');
-          }
-        } catch (err: any) {
-          abortController.signal.throwIfAborted();
-          console.warn('[ChatHandler] KB search failed:', err.message);
-        }
-      }
-
-      const emotionKey = scopedEmotionalStateKey(uid, requestScope, isMemoryAvatar ? conversationAgentId : undefined);
-      const emotionalState = loadEmotionalState(emotionKey);
-      const himState = loadHIMState(emotionKey);
-      console.log('[ChatHandler] emotionalState loaded');
-      const isNovel = relevantMemories.length < 2;
+      let { relevantMemories, ragChunks, emotionalState, personalityConfig, kbContext, isNovel, himState, emotionKey } = await retrieveChatContext({ get isMemoryAvatar() { return isMemoryAvatar; }, get memoryAvatar() { return memoryAvatar; }, get personalityId() { return personalityId; }, get uid() { return uid; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get markTurnTiming() { return markTurnTiming; }, get text() { return text; }, get conversationAgentId() { return conversationAgentId; }, get abortController() { return abortController; }, get turnAuthorization() { return turnAuthorization; }, get requestScope() { return requestScope; } });
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
       const conversationId = conversation?.id;
@@ -2245,12 +1926,12 @@ export function registerChatHandler(
           return;
         }
         const boundTerminalTask = resolvedTaskRelation.taskId
-          ? getConversationActionStateByTaskId(readDB(), {
+          ? getConversationActionStateByTaskId(readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]), {
               conversationId,
               userId: uid,
               taskId: resolvedTaskRelation.taskId,
             })
-          : getLatestConversationActionState(readDB(), { conversationId, userId: uid });
+          : getLatestConversationActionState(readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]), { conversationId, userId: uid });
         if (boundTerminalTask && !boundTerminalTask.unfinished) {
           const english = !/[\u3400-\u9fff]/u.test(visibleUserText);
           const responseText = english
@@ -2350,169 +2031,7 @@ export function registerChatHandler(
         } catch {}
         return 'assistant';
       })();
-
-      const sensory = sensoryFn(uid);
-      console.log('[ChatHandler] sensory loaded');
-      const personalityContext = {
-        mode: 'chat' as const,
-        sensory,
-      };
-      const personalityOptions = {
-        memories: relevantMemories.length > 0 ? relevantMemories : undefined,
-        ragKnowledge: ragChunks.length > 0 ? ragChunks : undefined,
-        emotionalState,
-        userId: uid,
-        userText: text,
-        domain: resolvedDomain,
-        orgId: resolvedOrgId,
-      };
-      const { config: personality, systemPrompt: systemInstruction } = isMemoryAvatar
-        ? {
-            config: personalityConfig,
-            systemPrompt: generateSystemPrompt(
-              personalityConfig as any,
-              personalityContext,
-              personalityOptions,
-            ),
-          }
-        : personalityRegistry.buildSystemPrompt(
-            personalityId,
-            personalityContext,
-            personalityOptions,
-          );
-      console.log('[ChatHandler] systemPrompt built, personality name:', personality?.name);
-
-      // Inject conversation summary chain for long-running conversations (anti-entropy)
-      let effectiveSystemPrompt = restrictSystemPromptForExecutionBoundary(
-        systemInstruction,
-        toolSecurityContext.executionBoundary,
-      );
-      if (conversationId) {
-        const summaryContext = getConversationSummary(conversationId);
-        if (summaryContext) {
-          effectiveSystemPrompt += `\n\n## Conversation Context\n${summaryContext}`;
-        }
-      }
-      // Topic continuity: inject recent conversation topics
-      if (conversationId) {
-        const topicCtx = getTopicContext(conversationId);
-        if (topicCtx) {
-          effectiveSystemPrompt += topicCtx;
-        }
-      }
-
-      // Inject conversation mode overlay (shapes interaction style without changing personality)
-      if (conversationMode) {
-        const modeOverlay = buildModeOverlay(conversationMode);
-        if (modeOverlay) {
-          effectiveSystemPrompt += '\n\n' + modeOverlay;
-        }
-      }
-      effectiveSystemPrompt += '\n\n' + buildNaturalReplyStyleOverlay(eventSource);
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\nFile handling rule: attachments supplied in this request may be newly added files or verified material carried forward by the client within this same conversation. Treat their copied local paths, extracted text, and transcripts as available conversation material and keep using them for follow-up questions. Ask the user to reattach only when no usable attachment/path is supplied or a supplied path is unreadable; never ask merely because the material first appeared in an earlier turn.';
-      }
-      if (pendingConfirmationPrompt) {
-        effectiveSystemPrompt += `\n\n${pendingConfirmationPrompt}`;
-      }
-      if (chatContextBridge) {
-        effectiveSystemPrompt += '\n\n' + chatContextBridge;
-      }
-      if (actionContinuationBridge) {
-        effectiveSystemPrompt += '\n\n' + actionContinuationBridge;
-      }
-      const currentTurnDecisionText = [
-        visibleUserText || text,
-        mediaRoutingEnvelope,
-      ].filter(Boolean).join('\n\n');
-      const continuationContext = [chatContextBridge, actionContinuationBridge, pendingConfirmationPrompt]
-        .filter(Boolean)
-        .join('\n\n');
-      const executionTaskText = [
-        text,
-        actionContinuationBridge,
-        mediaRoutingEnvelope,
-      ].filter(Boolean).join('\n\n');
-
-      const executionPipeline = buildLumiExecutionPipeline({
-        requestId, userText: visibleUserText || text, acceptedResolution: acceptedTurnResolution,
-        structuredMediaRequest,
-        dispatch: {
-          userId: uid,
-          text: currentTurnDecisionText,
-          continuationContext,
-          channel: 'chat',
-          source: eventSource,
-          category,
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-          operationMode,
-          targetIsLumi:
-            personality.id === 'lumi' ||
-            conversationAgentId === 'lumi' ||
-            /lumi/i.test(currentTurnDecisionText),
-        },
-        registry: toolRegistry,
-        personalityToolPolicy: personality.toolPolicy,
-        actionTaskState: conversation?.actionContinuationState,
-        taskRelation: resolvedTaskRelation,
-        persistedConversationHistory,
-        pendingAssistantOfferContext,
-        isSanctuary: isMemoryAvatar,
-        executionBoundary: toolSecurityContext.executionBoundary,
-        traceText: currentTurnDecisionText,
-        source: eventSource,
-      });
-      resolvedTaskRelation = executionPipeline.taskRelation;
-      const turnDispatch = executionPipeline.turnIntent;
-      const turnFlow = turnDispatch.flow;
-      turnFlow.currentAttachmentPaths = attachments.map(item => item.path).filter((value): value is string => Boolean(value));
-      // i18n-allow: Explicit reference to current uploaded material.
-      if (!turnFlow.acceptedTaskTarget && turnFlow.currentAttachmentPaths.length === 1 && /附件|\battachment\b/iu.test(visibleUserText)) {
-        const projection = buildTaskTargetAnchorProjection({ taskText: visibleUserText, sourcePaths: turnFlow.currentAttachmentPaths });
-        if (projection.pathResolved) turnFlow.acceptedTaskTarget = { target: projection.target, source: 'current_turn', sourceId: requestId };
-      }
-      const completionTaskText = executionPipeline.trustedActionContinuation
-        ? conversation?.actionContinuationState?.goal || executionTaskText
-        : executionTaskText;
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted') {
-        effectiveSystemPrompt += '\n\n' + turnDispatch.promptOverlay;
-        effectiveSystemPrompt += '\n\n' + turnFlow.promptOverlay;
-      }
-      if (toolSecurityContext.executionBoundary !== 'remote_restricted' && executionPipeline.executionRequested) {
-        effectiveSystemPrompt += '\n\n' + buildLumiRuntimeCapabilityContext({
-          userId: uid,
-          text: turnFlow.routeText,
-          flow: turnFlow,
-          toolRegistry,
-          domain: resolvedDomain,
-          orgId: resolvedOrgId,
-        });
-      }
-
-      // Inject company knowledge base context when in work domain
-      if (kbContext) {
-        effectiveSystemPrompt += `\n\n## Company Knowledge Base\n${kbContext}\n\nUse the above company knowledge to inform your response. Cite article titles when referencing company policy.`;
-      }
-
-      // Inject profession context — adapt language and expertise to user's trade
-      try {
-        const professionOverlay = resolvedDomain === 'personal' ? buildProfessionOverlay() : null;
-        if (professionOverlay) {
-          effectiveSystemPrompt += professionOverlay;
-        }
-      } catch {}
-
-      // Inject contact context when user mentions people they know
-      if (resolvedDomain === 'personal') try {
-        const { matchContactsFromText } = await import('../contacts/store');
-        const { formatContactsForContext } = await import('../contacts/context');
-        const mentioned = matchContactsFromText(uid, text);
-        if (mentioned.length > 0) {
-          effectiveSystemPrompt += '\n\n' + formatContactsForContext(mentioned);
-          effectiveSystemPrompt += '\n\nYou know these people personally. Use this information to provide relevant, contextual responses when the user asks about them.';
-        }
-      } catch {}
+      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText } = await prepareChatPromptContext({ get sensoryFn() { return sensoryFn; }, get uid() { return uid; }, get relevantMemories() { return relevantMemories; }, get ragChunks() { return ragChunks; }, get emotionalState() { return emotionalState; }, get text() { return text; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get isMemoryAvatar() { return isMemoryAvatar; }, get personalityConfig() { return personalityConfig; }, get personalityId() { return personalityId; }, get toolSecurityContext() { return toolSecurityContext; }, get conversationId() { return conversationId; }, get conversationMode() { return conversationMode; }, get buildNaturalReplyStyleOverlay() { return buildNaturalReplyStyleOverlay; }, get eventSource() { return eventSource; }, get pendingConfirmationPrompt() { return pendingConfirmationPrompt; }, set pendingConfirmationPrompt(value) { pendingConfirmationPrompt = value; }, get chatContextBridge() { return chatContextBridge; }, set chatContextBridge(value) { chatContextBridge = value; }, get actionContinuationBridge() { return actionContinuationBridge; }, set actionContinuationBridge(value) { actionContinuationBridge = value; }, get visibleUserText() { return visibleUserText; }, get mediaRoutingEnvelope() { return mediaRoutingEnvelope; }, get requestId() { return requestId; }, get acceptedTurnResolution() { return acceptedTurnResolution; }, set acceptedTurnResolution(value) { acceptedTurnResolution = value; }, get structuredMediaRequest() { return structuredMediaRequest; }, get category() { return category; }, get operationMode() { return operationMode; }, get conversationAgentId() { return conversationAgentId; }, get conversation() { return conversation; }, set conversation(value) { conversation = value; }, get resolvedTaskRelation() { return resolvedTaskRelation; }, set resolvedTaskRelation(value) { resolvedTaskRelation = value; }, get persistedConversationHistory() { return persistedConversationHistory; }, get pendingAssistantOfferContext() { return pendingAssistantOfferContext; }, set pendingAssistantOfferContext(value) { pendingAssistantOfferContext = value; }, get attachments() { return attachments; }, get kbContext() { return kbContext; } });
 
       const interactionId = crypto.randomUUID();
 
@@ -3307,341 +2826,7 @@ export function registerChatHandler(
           log: { info: console.log, warn: console.warn },
         });
       };
-
-      // Confirmation continues the exact pending action. Do not ask the model
-      // to rediscover the tool name or reconstruct arguments from conversation
-      // history after the user has already approved a concrete operation.
-      if (pendingConfirmation) {
-        const confirmedTask = pendingConfirmation.actionIntent || visibleUserText;
-        const confirmedArgs = pendingConfirmation.exactArgs || {};
-        const confirmedRecordId =
-          `chat-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const consumed = await consumePendingConfirmationDurably(
-          uid,
-          pendingConfirmation.id,
-          pendingConfirmation.toolName,
-          confirmedArgs,
-          confirmationScope,
-        );
-        emitAgent('agent:status', { status: 'thinking', agentName: personality.name, phase: 'tool' });
-        if (!isDirectDesktopTool(pendingConfirmation.toolName)) {
-          emitToolLifecycle({
-            correlationId: confirmedRecordId,
-            name: pendingConfirmation.toolName,
-            arguments: confirmedArgs,
-          });
-        }
-        const confirmedRecord = await executeToolCall({
-          registry: toolRegistry,
-          id: confirmedRecordId,
-          name: pendingConfirmation.toolName,
-          arguments: confirmedArgs,
-          context: {
-            ...toolSecurityContext,
-            userId: uid,
-            taskId: durableTaskId,
-            conversationId: conversation.id,
-            turnId: requestId,
-            turnRowId: actionTaskExecution.turnRowId,
-            requestId,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            desktopRelay,
-            llmGetters,
-            source: 'chat_confirmation',
-            supervisedExternalCommits: true,
-            allowLocalFileWrites,
-            localWriteIntentReason,
-            executionSignal: abortController.signal,
-            isCancelled: isChatCancelled,
-            onProgress: forwardToolProgress,
-            userConfirmed: true,
-            actionIntent: confirmedTask,
-            currentTurnExecutionRequested: executionPipeline.executionRequested,
-              resolutionId: executionPipeline.resolution.id,
-            trustedActionContinuation: executionPipeline.trustedActionContinuation,
-            routedTaskText: confirmedTask,
-            acceptedTaskTarget: turnFlow.acceptedTaskTarget,
-            currentAppTarget: turnFlow.currentAppEditTarget,
-            toolPolicy: modelCapabilityPolicy,
-            modelToolProjection,
-          },
-          preflight: () => consumed
-            ? { allowed: true, arguments: confirmedArgs }
-            : {
-                allowed: false,
-                arguments: confirmedArgs,
-                reason: 'The one-time confirmation expired before execution.',
-              },
-        });
-        confirmedRecord.executionOrigin = 'confirmed_action_resume';
-        rememberRequestToolRecord(confirmedRecord);
-        if (isChatCancelled()) throw new DOMException('Chat confirmation execution cancelled', 'AbortError');
-        if (!isDirectDesktopTool(confirmedRecord.name)) {
-          emitToolLifecycle({
-            correlationId: confirmedRecord.id || `chat-confirmed-${Date.now()}`,
-            name: confirmedRecord.name,
-            arguments: confirmedArgs,
-            ...(confirmedRecord.error
-              ? { error: confirmedRecord.error }
-              : {
-                  result: formatToolResultForUi(confirmedRecord.result),
-                  artifactReceipt: formatMediaArtifactReceiptForUi(confirmedRecord.name, confirmedArgs, confirmedRecord.result),
-                }),
-          });
-        }
-        let confirmationRecords: ToolExecutionRecord[] = [confirmedRecord];
-        let confirmationLlmWasCalled = false;
-        let confirmationCompletionGuard: LLMResult['completionGuard'];
-        const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
-          taskText: confirmedTask,
-          responseText: '',
-          toolRecords: taskAwareRecords([confirmedRecord]),
-          source: 'chat_confirmation',
-          flow: { ...turnFlow, routeText: confirmedTask },
-          taskId: durableTaskId,
-          requestId,
-        });
-        let candidate = completedConfirmedAction?.text || (toolRecordSucceeded(confirmedRecord)
-          ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
-          : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
-              confirmedRecord.error || confirmedRecord.result,
-            ));
-        if (
-          !completedConfirmedAction
-          &&
-          confirmedStepNeedsContinuation(
-            confirmedTask,
-            taskAwareRecords([confirmedRecord]),
-          )
-          && !isChatCancelled()
-        ) {
-          confirmationLlmWasCalled = true;
-          const continuation = await runAuthorizedTools({
-            messages: [
-              { role: 'system', content: effectiveSystemPrompt },
-              ...buildConfirmedStepContinuationMessages(confirmedTask, confirmedRecord, {
-                messageId: acceptedUserMessageId,
-                text: visibleUserText,
-              }),
-            ],
-            registry: toolRegistry,
-            config: {
-              provider: activeProvider,
-              model: activeModel,
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              signal: abortController.signal,
-              ...reasoningRoutePolicy,
-            },
-            onToolCall: record => {
-              rememberRequestToolRecord(record);
-              if (!record?.name || isDirectDesktopTool(record.name)) return;
-              emitToolLifecycle({
-                correlationId: record.id || `chat-confirmation-resume-${Date.now()}`,
-                name: record.name,
-                arguments: record.arguments || {},
-                result: record.error ? undefined : formatToolResultForUi(record.result),
-                error: record.error,
-                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-              });
-            },
-            maxIterations: Math.max(1, modelCapabilityPolicy.maxIterations || 5),
-            context: {
-              ...toolSecurityContext,
-              userId: uid,
-              taskId: durableTaskId,
-              conversationId: conversation.id,
-              turnId: requestId,
-              turnRowId: actionTaskExecution.turnRowId,
-              requestId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              source: 'chat_confirmation_resume',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites,
-              localWriteIntentReason,
-              executionSignal: abortController.signal,
-              isCancelled: isChatCancelled,
-              onProgress: forwardToolProgress,
-              requestConfirmation: requestToolConfirmation,
-              actionIntent: confirmedTask,
-              currentTurnExecutionRequested: executionPipeline.executionRequested,
-              resolutionId: executionPipeline.resolution.id,
-              trustedActionContinuation: executionPipeline.trustedActionContinuation,
-              routedTaskText: confirmedTask,
-              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
-            currentAppTarget: turnFlow.currentAppEditTarget,
-              toolPolicy: modelCapabilityPolicy,
-              modelToolProjection,
-              priorToolRecords: taskAwareRecords([confirmedRecord]),
-              desktopExecutionTracker,
-            },
-          });
-          if (isChatCancelled()) throw new DOMException('Chat confirmation continuation cancelled', 'AbortError');
-          for (const usage of continuation.usageRecords) {
-            recordTokenUsage(uid, usage.provider, usage.model, {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            }, interactionId);
-          }
-          const confirmationUsage = continuation.usageRecords.reduce(
-            (sum, usage) => sum + (usage.totalTokens || 0),
-            0,
-          );
-          if (turnAuthorization.isCurrent()) socket.emit('token:usage_update', {
-            userId: uid,
-            provider: activeProvider,
-            totalTokens: confirmationUsage,
-            mode: 'chat',
-            timestamp: new Date().toISOString(),
-          });
-          confirmationRecords = coalesceToolExecutionRecords([
-            confirmedRecord,
-            ...requestToolRecords,
-            ...(continuation.toolCalls || []),
-          ]);
-          confirmationCompletionGuard = continuation.completionGuard;
-          candidate = pendingConfirmationCreatedThisTurn
-            ? CN_TASK_EXECUTION_MESSAGES.waitingConfirmation(confirmedTask)
-            : continuation.text || candidate;
-        }
-        confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
-        const trustedConfirmationRequestText = pendingConfirmationCreatedThisTurn
-          ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
-          : undefined;
-        const finalized = pendingConfirmationCreatedThisTurn
-          ? {
-              text: trustedConfirmationRequestText!,
-              blocked: false,
-              reason: 'waiting_confirmation',
-              notification: undefined,
-            }
-          : finalizeLumiResponse({
-              taskText: confirmedTask,
-              responseText: candidate,
-              completionGuard: confirmationCompletionGuard,
-              toolRecords: taskAwareRecords(confirmationRecords),
-              source: 'chat_confirmation',
-              flow: { ...turnFlow, routeText: confirmedTask },
-              taskId: durableTaskId,
-              requestId,
-            });
-        confirmedRecord.executionOrigin = 'confirmed_action_resume';
-        const confirmationCompletionFeedback = buildForegroundTaskCompletionFeedback({
-          taskId: durableTaskId!,
-          taskLabel: confirmedTask,
-          toolRecords: taskAwareRecords(confirmationRecords),
-          blocked: finalized.blocked,
-          reason: finalized.reason,
-          status: pendingConfirmationCreatedThisTurn ? 'waiting_confirmation' : undefined,
-        });
-        const confirmationTerminalPayload = normalizeAgentPayload('agent:response', {
-          text: finalized.text,
-          agentName: personality.name,
-          finalized: true,
-          blocked: finalized.blocked,
-          reason: finalized.reason || '',
-          completionFeedback: confirmationCompletionFeedback,
-        }, trustedConfirmationRequestText ? { trustedConfirmationRequestText } : undefined);
-        const confirmationResponseText = String(confirmationTerminalPayload.text || '');
-        if (
-          pendingConfirmationCreatedThisTurn
-          && conversationId
-          && pendingConfirmationAssistantState !== confirmationResponseText
-        ) {
-          setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
-            assistantState: confirmationResponseText,
-            requestId,
-          });
-          pendingConfirmationAssistantState = confirmationResponseText;
-        }
-        const confirmationUnknownPayload = normalizeAgentPayload('agent:response', {
-          text: chatDurabilityUnknownText(visibleUserText),
-          agentName: personality.name,
-          finalized: true,
-          blocked: true,
-          reason: 'persistence_unknown',
-          completionFeedback: buildForegroundTaskCompletionFeedback({
-            taskId: durableTaskId!,
-            taskLabel: confirmedTask,
-            toolRecords: taskAwareRecords(confirmationRecords),
-            status: 'persistence_unknown',
-            reason: 'Terminal persistence outcome is unknown.',
-          }),
-        });
-        if (actionLeaseHeartbeat?.isLeaseLost()) {
-          await actionLeaseHeartbeat.leaseLoss;
-          await releaseChatSession();
-          return;
-        }
-        const terminalCommitted = await commitRecordedTerminal({
-        persistTerminalState: () => persistChatTakeoverExecution(confirmationResponseText, {
-            toolRecords: confirmationRecords,
-            source: 'chat_confirmation',
-            sourceInteractionId: `${interactionId}_confirmation`,
-            capabilitySelection,
-            finalizationBlocked: finalized.blocked,
-            assistantTextTrusted: !finalized.blocked,
-            finalizationReason: finalized.reason,
-          }),
-          persistAssistantMessage: () => {
-            if (!conversationId) return;
-            addMessageIdempotent({
-              userId: uid,
-              agentId: conversationAgentId,
-              conversationId,
-              role: 'assistant',
-              content: confirmationResponseText,
-              personality: personality.id,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              source: eventSource,
-              channel: 'chat',
-              toolCalls: confirmationRecords,
-              cognitiveIntent: finalized.blocked ? 'work_product_guard' : 'confirmation',
-              llmWasCalled: confirmationLlmWasCalled,
-              requestId,
-              completionFeedback: confirmationCompletionFeedback,
-              ...(finalized.blocked && durableTaskId ? {
-                terminalTaskDisposition: {
-                  outcome: 'blocked' as const,
-                  taskId: durableTaskId,
-                  requestId,
-                  reason: finalized.reason
-                    || 'The confirmed foreground request ended without verified goal-level completion evidence.',
-                },
-              } : {}),
-            });
-            refreshTerminalPayloadTaskRelation(confirmationTerminalPayload, durableTaskId);
-          },
-          payload: confirmationTerminalPayload,
-          unknownPayload: confirmationUnknownPayload,
-          notification: finalized.notification,
-          llmWasCalled: confirmationLlmWasCalled,
-          repairUnknownAssistant: true,
-          errorContext: 'Confirmation terminal persistence failed:'
-        });
-        if (!terminalCommitted) {
-          await releaseChatSession();
-          return;
-        }
-        actionLeaseHeartbeat?.stop();
-        if (conversationId) scheduleChatSummary(conversationId);
-        if (!finalized.blocked) {
-          persistChatLearning(confirmationResponseText, {
-            toolRecords: confirmationRecords,
-            sourceInteractionId: `${interactionId}_confirmation`,
-            logLabel: 'chat confirmation',
-          });
-        }
-        await releaseChatSession();
-        return;
-      }
+      if (pendingConfirmation) { await executeConfirmedChatTurn({ get pendingConfirmation() { return pendingConfirmation; }, set pendingConfirmation(value) { pendingConfirmation = value; }, get visibleUserText() { return visibleUserText; }, get uid() { return uid; }, get confirmationScope() { return confirmationScope; }, set confirmationScope(value) { confirmationScope = value; }, get emitAgent() { return emitAgent; }, get personality() { return personality; }, get emitToolLifecycle() { return emitToolLifecycle; }, get toolSecurityContext() { return toolSecurityContext; }, get durableTaskId() { return durableTaskId; }, get conversation() { return conversation; }, set conversation(value) { conversation = value; }, get requestId() { return requestId; }, get actionTaskExecution() { return actionTaskExecution; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get desktopRelay() { return desktopRelay; }, get llmGetters() { return llmGetters; }, get allowLocalFileWrites() { return allowLocalFileWrites; }, get localWriteIntentReason() { return localWriteIntentReason; }, get abortController() { return abortController; }, get isChatCancelled() { return isChatCancelled; }, get forwardToolProgress() { return forwardToolProgress; }, get executionPipeline() { return executionPipeline; }, get turnFlow() { return turnFlow; }, get modelCapabilityPolicy() { return modelCapabilityPolicy; }, get modelToolProjection() { return modelToolProjection; }, get rememberRequestToolRecord() { return rememberRequestToolRecord; }, get formatToolResultForUi() { return formatToolResultForUi; }, get formatMediaArtifactReceiptForUi() { return formatMediaArtifactReceiptForUi; }, get taskAwareRecords() { return taskAwareRecords; }, get runAuthorizedTools() { return runAuthorizedTools; }, get effectiveSystemPrompt() { return effectiveSystemPrompt; }, set effectiveSystemPrompt(value) { effectiveSystemPrompt = value; }, get acceptedUserMessageId() { return acceptedUserMessageId; }, get activeProvider() { return activeProvider; }, set activeProvider(value) { activeProvider = value; }, get activeModel() { return activeModel; }, set activeModel(value) { activeModel = value; }, get reasoningRoutePolicy() { return reasoningRoutePolicy; }, get requestToolConfirmation() { return requestToolConfirmation; }, get desktopExecutionTracker() { return desktopExecutionTracker; }, get interactionId() { return interactionId; }, get turnAuthorization() { return turnAuthorization; }, get socket() { return socket; }, get requestToolRecords() { return requestToolRecords; }, get pendingConfirmationCreatedThisTurn() { return pendingConfirmationCreatedThisTurn; }, set pendingConfirmationCreatedThisTurn(value) { pendingConfirmationCreatedThisTurn = value; }, get normalizeAgentPayload() { return normalizeAgentPayload; }, get conversationId() { return conversationId; }, get pendingConfirmationAssistantState() { return pendingConfirmationAssistantState; }, set pendingConfirmationAssistantState(value) { pendingConfirmationAssistantState = value; }, get chatDurabilityUnknownText() { return chatDurabilityUnknownText; }, get actionLeaseHeartbeat() { return actionLeaseHeartbeat; }, set actionLeaseHeartbeat(value) { actionLeaseHeartbeat = value; }, get releaseChatSession() { return releaseChatSession; }, get commitRecordedTerminal() { return commitRecordedTerminal; }, get persistChatTakeoverExecution() { return persistChatTakeoverExecution; }, get capabilitySelection() { return capabilitySelection; }, get addMessageIdempotent() { return addMessageIdempotent; }, get conversationAgentId() { return conversationAgentId; }, get eventSource() { return eventSource; }, get refreshTerminalPayloadTaskRelation() { return refreshTerminalPayloadTaskRelation; }, get scheduleChatSummary() { return scheduleChatSummary; }, get persistChatLearning() { return persistChatLearning; } }); return; }
 
       let responseText = '';
       let completionGuard: LLMResult['completionGuard'];
@@ -3676,196 +2861,7 @@ export function registerChatHandler(
         flow: turnFlow,
       });
       const chatTextGate = createPreFinalizationTextGate();
-      if (!responseText) {
-        // LumiCore owns every normal and complex task through this single model/tool path.
-
-        // Load conversation history from persistence (survives page reload / reconnect)
-        let persistedHistory: NormalizedMessage[] = [];
-        if (conversationId) {
-          // Keep seven persisted rows because the current user row is removed
-          // below, leaving three complete historical user/assistant turns.
-          const msgs = getMessagesByTokenBudget(conversationId, 6_000, 7).filter((m: any) => !(
-            m.role === 'user'
-            && (
-              m.requestId === requestId
-              || (
-                m.externalMessageId === requestId
-                && m.source === eventSource
-                && m.channel === 'chat'
-              )
-            )
-          ));
-          persistedHistory = msgs
-            .filter((m: any) => m.message || m.content || m.response)
-            .flatMap((m: any) => normalizeChatHistoryRecord(m, { serverOwned: true }));
-        }
-
-        // Once a server conversation exists, persistence is authoritative even
-        // when the new segment is intentionally empty. Falling back to the
-        // client's pre-rollover transcript would immediately restore the very
-        // stale context this boundary is meant to remove.
-        const conversationHistory = conversationId
-          ? persistedHistory
-          : (history ? history.flatMap((m: any) => normalizeChatHistoryRecord(m)) : []);
-
-        // Tell Lumi which model is currently active without hiding routed vision capacity.
-        const selfAwareness = buildModelSelfAwareness(activeProvider, activeModel, uid, { visionAware: visionIntent && effectiveOperationMode !== 'meeting' });
-        const messages: NormalizedMessage[] = [
-          { role: 'system', content: effectiveSystemPrompt + selfAwareness },
-          ...conversationHistory,
-          { role: 'user', content: text, sourceMessageId: acceptedUserMessageId },
-        ];
-        const modelIdentityRead = toolSessionActive && isModelConfigurationReadRequest(text);
-        if (modelIdentityRead) messages.splice(0, messages.length,
-          { role: 'system', content: 'Read model_configuration_get with role reasoning to answer the current model question. Report the current-turn activeCall when supplied, otherwise label the value as configuration. Do not change settings or test providers.' },
-          { role: 'user', content: text, sourceMessageId: acceptedUserMessageId });
-        normalTurnMessages = messages;
-
-        markTurnTiming('modelStart');
-        console.log('[ChatHandler] Calling Path C with provider:', activeProvider, 'model:', activeModel, 'tools:', toolSessionActive ? 'active' : 'conversation');
-        const onChunk: StreamCallback = (chunk) => {
-          if (!deferCompletionStream && !isExplicitMemoryRequest(text)) {
-            const safeText = chatTextGate.push(chunk);
-            if (safeText) {
-              emitAgent("agent:chunk", { text: safeText, agentName: personality.name });
-            }
-          }
-        };
-
-        // Sanctuary agents get zero tool access — they can only talk
-        if (!toolSessionActive) {
-          const response = await runConversationTurn({
-            messages,
-            config: { provider: activeProvider, model: activeModel, userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, signal: abortController.signal, ...reasoningRoutePolicy },
-            onChunk,
-            getters: llmGetters,
-            isCancelled: isChatCancelled,
-            assertCurrent: () => turnAuthorization.assertCurrent(),
-            taskText: text,
-          });
-
-          markTurnTiming('modelEnd');
-          responseText = response.text;
-          completionGuard = response.completionGuard;
-          llmWasCalled = true;
-          for (const usage of response.usageRecords) {
-            recordTokenUsage(uid, usage.provider, usage.model, {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            }, interactionId);
-          }
-          const totalUsage = response.usageRecords.reduce((sum, usage) => sum + (usage.totalTokens || 0), 0);
-          if (turnAuthorization.isCurrent()) socket.emit('token:usage_update', {
-            userId: uid,
-            provider: response.usageRecords.at(-1)?.provider || activeProvider,
-            totalTokens: totalUsage,
-            mode: 'chat',
-            timestamp: new Date().toISOString(),
-          });
-        } else {
-          const maxIterations = modelCapabilityPolicy.maxIterations || personality.toolPolicy.maxIterations || 25;
-
-          // Collect tool calls for persistence
-
-          const result = await runAuthorizedTools({
-            messages: messages,
-            registry: toolRegistry,
-            config: {
-              provider: activeProvider,
-              model: activeModel,
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              signal: abortController.signal,
-              ...reasoningRoutePolicy,
-              ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}),
-            },
-            onToolCall: (record) => {
-              allToolRecords.push(record);
-              if (isDirectDesktopTool(record.name)) return;
-              const toolPayload = {
-                correlationId: record.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: record.name,
-                arguments: record.arguments,
-                args: record.arguments,
-                result: formatToolResultForUi(record.result),
-                error: record.error,
-                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-              };
-              emitAgent("agent:tool_call", toolPayload);
-              emitAgent("agent:tool", toolPayload);
-            },
-            maxIterations: maxIterations,
-            onStreamChunk: onChunk,
-            context: {
-              ...toolSecurityContext,
-              userId: uid,
-              taskId: durableTaskId,
-              conversationId: conversation.id,
-              turnId: requestId,
-              turnRowId: actionTaskExecution.turnRowId,
-              requestId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              taskRevision: actionTaskExecution.state?.revision,
-              source: 'chat',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites,
-              localWriteIntentReason,
-              executionSignal: abortController.signal,
-              isCancelled: isChatCancelled,
-              onToolStart: (call) => {
-                if (isDirectDesktopTool(call.name)) return;
-                emitToolLifecycle({
-                  correlationId: call.id || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                  name: call.name,
-                  arguments: call.arguments,
-                });
-              },
-              onProgress: forwardToolProgress,
-              toolPolicy: modelCapabilityPolicy,
-              modelToolProjection,
-              actionIntent: visibleUserText,
-              currentTurnExecutionRequested: executionPipeline.executionRequested,
-              resolutionId: executionPipeline.resolution.id,
-              trustedActionContinuation: executionPipeline.trustedActionContinuation,
-              routedTaskText: turnFlow.routeText,
-              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
-              currentAppTarget: turnFlow.currentAppEditTarget,
-              priorToolRecords: priorTaskRecords,
-              ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
-              desktopExecutionTracker,
-              ...(toolSessionActive ? { requestConfirmation: requestToolConfirmation } : {}),
-            },
-          });
-
-          responseText = result.text || '';
-          completionGuard = result.completionGuard;
-          llmWasCalled = result.usageRecords.length > 0;
-          // Record provider/model analytics. Product billing is not part of the local execution path.
-          for (const u of result.usageRecords) {
-            recordTokenUsage(uid, u.provider, u.model, { promptTokens: u.promptTokens, completionTokens: u.completionTokens, totalTokens: u.totalTokens }, interactionId);
-          }
-          // Real-time token telemetry for the local dashboard.
-          const totalUsage = result.usageRecords.reduce((s: number, r: any) => s + (r.totalTokens || 0), 0);
-          if (turnAuthorization.isCurrent()) socket.emit('token:usage_update', {
-            userId: uid,
-            provider: activeProvider,
-            totalTokens: totalUsage,
-            mode: 'chat',
-            timestamp: new Date().toISOString(),
-          });
-        }
-        // The tool loop may cooperatively return a cancellation summary rather
-        // than throw. Do not feed that through ordinary completion guards: the
-        // outer cancellation boundary owns the only durable terminal outcome.
-        if (isChatCancelled()) {
-          throw new DOMException('Chat execution cancelled', 'AbortError');
-        }
-      }
+      await executeChatModelTurn({ get responseText() { return responseText; }, set responseText(value) { responseText = value; }, get conversationId() { return conversationId; }, get requestId() { return requestId; }, get eventSource() { return eventSource; }, get history() { return history; }, get activeProvider() { return activeProvider; }, set activeProvider(value) { activeProvider = value; }, get activeModel() { return activeModel; }, set activeModel(value) { activeModel = value; }, get uid() { return uid; }, get visionIntent() { return visionIntent; }, get effectiveOperationMode() { return effectiveOperationMode; }, get effectiveSystemPrompt() { return effectiveSystemPrompt; }, get text() { return text; }, get acceptedUserMessageId() { return acceptedUserMessageId; }, get toolSessionActive() { return toolSessionActive; }, get normalTurnMessages() { return normalTurnMessages; }, set normalTurnMessages(value) { normalTurnMessages = value; }, get markTurnTiming() { return markTurnTiming; }, get deferCompletionStream() { return deferCompletionStream; }, get chatTextGate() { return chatTextGate; }, get emitAgent() { return emitAgent; }, get personality() { return personality; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get abortController() { return abortController; }, get reasoningRoutePolicy() { return reasoningRoutePolicy; }, get llmGetters() { return llmGetters; }, get isChatCancelled() { return isChatCancelled; }, get turnAuthorization() { return turnAuthorization; }, get completionGuard() { return completionGuard; }, set completionGuard(value) { completionGuard = value; }, get llmWasCalled() { return llmWasCalled; }, set llmWasCalled(value) { llmWasCalled = value; }, get interactionId() { return interactionId; }, get socket() { return socket; }, get modelCapabilityPolicy() { return modelCapabilityPolicy; }, get runAuthorizedTools() { return runAuthorizedTools; }, get allToolRecords() { return allToolRecords; }, get formatToolResultForUi() { return formatToolResultForUi; }, get formatMediaArtifactReceiptForUi() { return formatMediaArtifactReceiptForUi; }, get toolSecurityContext() { return toolSecurityContext; }, get durableTaskId() { return durableTaskId; }, get conversation() { return conversation; }, set conversation(value) { conversation = value; }, get actionTaskExecution() { return actionTaskExecution; }, get desktopRelay() { return desktopRelay; }, get allowLocalFileWrites() { return allowLocalFileWrites; }, get localWriteIntentReason() { return localWriteIntentReason; }, get emitToolLifecycle() { return emitToolLifecycle; }, get forwardToolProgress() { return forwardToolProgress; }, get modelToolProjection() { return modelToolProjection; }, get visibleUserText() { return visibleUserText; }, get executionPipeline() { return executionPipeline; }, get turnFlow() { return turnFlow; }, get priorTaskRecords() { return priorTaskRecords; }, get runtimeOwnedDeterministicRecoveryCall() { return runtimeOwnedDeterministicRecoveryCall; }, set runtimeOwnedDeterministicRecoveryCall(value) { runtimeOwnedDeterministicRecoveryCall = value; }, get desktopExecutionTracker() { return desktopExecutionTracker; }, get requestToolConfirmation() { return requestToolConfirmation; } });
 
       chatTextGate.finish();
       const finalizedDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
@@ -3875,439 +2871,7 @@ export function registerChatHandler(
       const verifiedClientMode = getVerifiedClientModeChange(allToolRecords);
       if (verifiedClientMode) saveStoredOperationMode(uid, verifiedClientMode);
       const finalTaskRecords = taskAwareRecords(allToolRecords);
-      // Waiting for an immutable one-time confirmation is a valid terminal
-      // state for this turn, not a failed completion attempt. The model/tool
-      // path must render the same confirmation receipt as the deterministic
-      // quick-command path and must not let the completion guard overwrite it
-      // with a generic "missing core evidence" failure.
-      let finalResponse: ReturnType<typeof finalizeLumiResponse> = pendingConfirmationCreatedThisTurn
-        ? {
-            text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-            blocked: false,
-            reason: 'waiting_confirmation',
-            notification: undefined,
-          }
-        : finalizeLumiResponse({
-            taskText: executionTaskText,
-            responseText,
-            completionGuard,
-            toolRecords: finalTaskRecords,
-            source: 'chat',
-            flow: turnFlow,
-            taskId: durableTaskId,
-            requestId,
-          });
-      const desktopPauseBlocksCurrentTask = (
-        records = taskAwareRecords(allToolRecords),
-      ) => {
-        return shouldBlockForDesktopControlPause({
-          pauseReason: desktopRelay.getControlPauseReason(),
-          waitingForConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-          taskText: executionTaskText,
-          toolRecords: records,
-        });
-      };
-      if (desktopPauseBlocksCurrentTask()) {
-        const pausePresentation = formatDesktopControlPausePresentation(executionTaskText);
-        finalResponse = {
-          ...finalResponse,
-          text: pausePresentation.text,
-          blocked: true,
-          reason: pausePresentation.reason,
-        };
-      }
-      const guardRecovery = await recoverBlockedExecutionOnce({
-        task: executionTaskText,
-        responseText,
-        finalization: finalResponse,
-        allowToolUse: toolSessionActive,
-        pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-        requiresFreshConfirmation: correctionRequiresFreshConfirmation,
-        aborted: abortController.signal.aborted || desktopPauseBlocksCurrentTask(),
-        // A physical-input pause revokes further desktop authority, but it is
-        // not a user cancellation.  Treating the pause as AbortError made the
-        // outer chat catch publish the misleading "task stopped" terminal.
-        isAborted: isChatCancelled,
-        isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
-        toolRecords: taskAwareRecords(allToolRecords),
-        attempt: async ({ instruction, priorToolRecords, recordTool }) => {
-          console.warn('[ChatHandler] Recovering blocked execution internally.');
-          llmWasCalled = true;
-          const recovery = await runAuthorizedTools({
-            messages: [
-              ...normalTurnMessages,
-              ...(String(responseText || '').trim()
-                ? [{ role: 'assistant' as const, content: responseText }]
-                : []),
-              { role: 'user', content: instruction },
-            ],
-            registry: toolRegistry,
-            config: {
-              provider: activeProvider,
-              model: activeModel,
-              userId: uid,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              signal: abortController.signal,
-              ...reasoningRoutePolicy,
-            },
-            onToolCall: record => {
-              // Preserve terminal receipts independently from the provider
-              // result; a late provider error must not erase tool evidence.
-              rememberRequestToolRecord(record);
-              recordTool(record);
-              if (isDirectDesktopTool(record.name)) return;
-              const toolPayload = {
-                correlationId: record.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: record.name,
-                arguments: record.arguments,
-                args: record.arguments,
-                result: formatToolResultForUi(record.result),
-                error: record.error,
-                artifactReceipt: formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-              };
-              emitAgent('agent:tool_call', toolPayload);
-              emitAgent('agent:tool', toolPayload);
-            },
-            maxIterations: Math.max(2, Math.min(12, modelCapabilityPolicy.maxIterations || personality.toolPolicy.maxIterations || 8)),
-            context: {
-              ...toolSecurityContext,
-              userId: uid,
-              taskId: durableTaskId,
-              conversationId: conversation.id,
-              turnId: requestId,
-              turnRowId: actionTaskExecution.turnRowId,
-              requestId,
-              domain: resolvedDomain,
-              orgId: resolvedOrgId,
-              desktopRelay,
-              llmGetters,
-              taskRevision: actionTaskExecution.state?.revision,
-              source: 'chat_guard_recovery',
-              supervisedExternalCommits: true,
-              allowLocalFileWrites,
-              localWriteIntentReason,
-              executionSignal: abortController.signal,
-              isCancelled: isChatCancelled,
-              onProgress: forwardToolProgress,
-              onToolStart: call => {
-                if (isDirectDesktopTool(call.name)) return;
-                emitToolLifecycle({
-                  correlationId: call.id || `guard-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                  name: call.name,
-                  arguments: call.arguments,
-                });
-              },
-              toolPolicy: modelCapabilityPolicy,
-              modelToolProjection,
-              actionIntent: visibleUserText,
-              currentTurnExecutionRequested: executionPipeline.executionRequested,
-              resolutionId: executionPipeline.resolution.id,
-              trustedActionContinuation: executionPipeline.trustedActionContinuation,
-              routedTaskText: turnFlow.routeText,
-              acceptedTaskTarget: turnFlow.acceptedTaskTarget,
-            currentAppTarget: turnFlow.currentAppEditTarget,
-              ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
-              priorToolRecords,
-              desktopExecutionTracker,
-              requestConfirmation: requestToolConfirmation,
-            },
-              });
-          for (const usage of recovery.usageRecords) {
-            recordTokenUsage(uid, usage.provider, usage.model, {
-              promptTokens: usage.promptTokens,
-              completionTokens: usage.completionTokens,
-              totalTokens: usage.totalTokens,
-            }, interactionId);
-          }
-          return {
-            text: recovery.text,
-            completionGuard: recovery.completionGuard,
-            toolRecords: withDesktopExecutionReceipt(
-              recovery.toolCalls || [],
-              desktopExecutionTracker,
-            ),
-          };
-        },
-        finalize: (candidateText, records, recoveryCompletionGuard) => {
-          const recoveredRecords = withDesktopExecutionReceipt(records, desktopExecutionTracker);
-          const candidate = pendingConfirmationCreatedThisTurn
-            ? {
-                text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-                blocked: false,
-                reason: 'waiting_confirmation',
-                notification: undefined,
-              }
-            : finalizeLumiResponse({
-                taskText: executionTaskText,
-                responseText: candidateText,
-                completionGuard: recoveryCompletionGuard,
-                toolRecords: recoveredRecords,
-                source: 'chat_guard_recovery',
-                flow: turnFlow,
-                taskId: durableTaskId,
-                requestId,
-              });
-          if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;
-          const pausePresentation = formatDesktopControlPausePresentation(executionTaskText);
-          return {
-            ...candidate,
-            text: pausePresentation.text,
-            blocked: true,
-            reason: pausePresentation.reason,
-          };
-        },
-      });
-      for (const record of guardRecovery.toolRecords) {
-        const isPriorTaskReceipt = priorTaskRecords.some(item => (
-          record.id
-            ? item.id === record.id
-            : item.name === record.name && item.result === record.result && item.error === record.error
-        ));
-        if (isPriorTaskReceipt) continue;
-        const duplicate = record.id
-          ? allToolRecords.some(item => item.id === record.id)
-          : allToolRecords.some(item => (
-              item.name === record.name
-              && item.result === record.result
-              && item.error === record.error
-            ));
-        if (!duplicate) allToolRecords.push(record);
-      }
-      const recoveredDesktopRecords = withDesktopExecutionReceipt(allToolRecords, desktopExecutionTracker);
-      if (recoveredDesktopRecords.length > allToolRecords.length) {
-        allToolRecords.push(...recoveredDesktopRecords.slice(allToolRecords.length));
-      }
-      finalResponse = guardRecovery.finalization;
-      responseText = finalResponse.text;
-      if (finalResponse.blocked) {
-        console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);
-        // Keep the live action lease until the terminal assistant persistence
-        // boundary when this turn already has tool evidence.  Finalizing the
-        // task here clears its active request before `addMessageIdempotent`
-        // can bind the evidence, causing verified observations (notably the
-        // WPS active-window anchor) to be archived as stale and dropping the
-        // target from the durable capsule.  A blocked turn with no evidence
-        // still needs the early request finalization below.
-        if (conversationId && actionTaskExecution.state?.taskId && toolSessionActive && allToolRecords.length === 0) {
-          const blocker = correctionRequiresFreshConfirmation
-            && !pendingConfirmationCreatedThisTurn
-            ? RECONFIRMATION_REQUIRED_BLOCKER
-            : finalResponse.reason || 'The current work product did not pass final verification.';
-          setConversationActionExecutionStatus(conversationId, uid, 'blocked', {
-            blocker,
-            assistantState: responseText,
-            requestId: '',
-          });
-        }
-      }
-
-      // Completion is a durability claim. Keep the native terminal frame
-      // behind the task/message write and strict database flush.
-      const responseCompletionFeedback = durableTaskId
-        ? buildForegroundTaskCompletionFeedback({
-            taskId: durableTaskId,
-            taskLabel: completionTaskText,
-            toolRecords: taskAwareRecords(allToolRecords),
-            blocked: finalResponse.blocked,
-            reason: finalResponse.reason,
-            status: pendingConfirmationCreatedThisTurn || finalResponse.reason === 'waiting_confirmation'
-              ? 'waiting_confirmation' : finalResponse.reason === 'workflow_running' ? 'executing' : undefined,
-          })
-        : undefined;
-      const trustedConfirmationRequestText = pendingConfirmationCreatedThisTurn
-        ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
-        : undefined;
-      const responseTerminalPayload = normalizeAgentPayload('agent:response', {
-        text: responseText,
-        agentName: personality.name,
-        finalized: true,
-        blocked: finalResponse.blocked,
-        reason: finalResponse.reason || '',
-        completionFeedback: responseCompletionFeedback,
-      }, trustedConfirmationRequestText ? { trustedConfirmationRequestText } : undefined);
-      responseText = String(responseTerminalPayload.text || '');
-      finalResponse = { ...finalResponse, text: responseText };
-      if (
-        pendingConfirmationCreatedThisTurn
-        && conversationId
-        && pendingConfirmationAssistantState !== responseText
-      ) {
-        setConversationActionExecutionStatus(conversationId, uid, 'waiting_confirmation', {
-          assistantState: responseText,
-          requestId,
-        });
-        pendingConfirmationAssistantState = responseText;
-      }
-      const responseUnknownPayload = normalizeAgentPayload('agent:response', {
-        text: chatDurabilityUnknownText(visibleUserText),
-        agentName: personality.name,
-        finalized: true,
-        blocked: true,
-        reason: 'persistence_unknown',
-        completionFeedback: durableTaskId
-          ? buildForegroundTaskCompletionFeedback({
-              taskId: durableTaskId,
-              taskLabel: completionTaskText,
-              toolRecords: taskAwareRecords(allToolRecords),
-              status: 'persistence_unknown',
-              reason: 'Terminal persistence outcome is unknown.',
-            })
-          : undefined,
-      });
-      if (actionLeaseHeartbeat?.isLeaseLost()) {
-        await actionLeaseHeartbeat.leaseLoss;
-        await releaseChatSession();
-        return;
-      }
-      const terminalCommitted = await commitRecordedTerminal({
-          persistTerminalState: () => persistChatTakeoverExecution(responseText, {
-          toolRecords: allToolRecords,
-          source: 'chat',
-          sourceInteractionId: interactionId,
-          capabilitySelection,
-          finalizationBlocked: finalResponse.blocked,
-          assistantTextTrusted: !finalResponse.blocked,
-          finalizationReason: finalResponse.reason,
-        }),
-          persistAssistantMessage: () => {
-          if (!conversationId) return;
-          // Keep terminal tool evidence immediately before the assistant row in
-          // the same strict durability boundary.
-          for (const tc of allToolRecords) {
-            if (!tc.error && !String(tc.result || '').trim()) continue;
-            const tcSummary = summarizeToolRecordForPersistence(tc);
-            addMessage({ userId: uid, agentId: conversationAgentId, conversationId, role: 'tool', content: tcSummary, domain: resolvedDomain, orgId: resolvedOrgId });
-          }
-          addMessageIdempotent({
-            userId: uid,
-            agentId: conversationAgentId,
-            conversationId,
-            role: 'assistant',
-            content: responseText,
-            personality: personality.id,
-            domain: resolvedDomain,
-            orgId: resolvedOrgId,
-            source: eventSource,
-            channel: 'chat',
-            toolCalls: allToolRecords.length ? allToolRecords : undefined,
-            cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind,
-            llmWasCalled,
-            requestId,
-            completionFeedback: responseCompletionFeedback,
-            ...(finalResponse.blocked && durableTaskId ? {
-              terminalTaskDisposition: {
-                outcome: 'blocked' as const,
-                taskId: durableTaskId,
-                requestId,
-                reason: finalResponse.reason
-                  || 'The foreground request ended without verified goal-level completion evidence.',
-              },
-            } : {}),
-          });
-          refreshTerminalPayloadTaskRelation(responseTerminalPayload, durableTaskId);
-        },
-        payload: responseTerminalPayload,
-        unknownPayload: responseUnknownPayload,
-        notification: finalResponse.notification,
-        llmWasCalled,
-        repairUnknownAssistant: true,
-        errorContext: 'Terminal persistence failed:',
-      });
-      if (!terminalCommitted) {
-        await releaseChatSession();
-        return;
-      }
-      actionLeaseHeartbeat?.stop();
-
-      // Post-commit enrichment must never delay or precede the durable terminal.
-      if (!turnAuthorization.isCurrent()) return;
-
-      if (conversationId) {
-        // (conversation_updated NOW emitted AFTER agent:response — see below)
-
-        // Topic tracking — extract and record topics for cross-session continuity
-        if (!finalResponse.blocked) {
-          try {
-            const topics = extractTopics(text + ' ' + responseText);
-            for (const topic of topics) trackTopic(conversationId, topic);
-          } catch {}
-        }
-
-        // Shared chat/voice scheduler owns cadence, reservation, guard
-        // filtering, and captured-count persistence.
-        scheduleChatSummary(conversationId);
-      }
-
-      if (!isMemoryAvatar && !finalResponse.blocked) {
-        persistChatLearning(responseText, { toolRecords: allToolRecords, logLabel: 'chat' });
-      }
-
-      // Clean up abort session
-      await releaseChatSession();
-      if (!turnAuthorization.isCurrent()) return;
-
-      if (allowAdaptiveLearning && !finalResponse.blocked) scheduleTurnMemory({
-        userId: uid, domain: resolvedDomain, orgId: resolvedOrgId, userText: text,
-        channel: 'chat', source: eventSource, requestId, conversationId,
-        agentId: conversationAgentId, authorization: turnAuthorization, llmGetters,
-      });
-
-      // Update emotional state — reconnect if user was away for a while
-      if (!turnAuthorization.isCurrent()) return;
-      const hoursSinceLast = emotionalState.lastInteractionAt
-        ? (Date.now() - new Date(emotionalState.lastInteractionAt).getTime()) / (1000 * 60 * 60)
-        : 24;
-      const isReconnect = hoursSinceLast > 1;
-      let updatedState = updateEmotionalState(emotionalState, { type: 'interaction', userId: uid, timestamp: new Date().toISOString() });
-      // Apply sentiment analysis results to emotional state
-      if (sentiment.valence !== 0 || sentiment.frustration > 0 || sentiment.urgency > 0) {
-        updatedState = updateEmotionalState(updatedState, { type: 'sentiment_analysis', sentiment, userId: uid, timestamp: new Date().toISOString() });
-      }
-      if (isReconnect) {
-        updatedState = updateEmotionalState(updatedState, { type: 'reconnect', intensity: Math.min(1, hoursSinceLast / 72), userId: uid, timestamp: new Date().toISOString() });
-      }
-      if (isNovel) {
-        updatedState = updateEmotionalState(updatedState, { type: 'novel_topic', userId: uid, timestamp: new Date().toISOString() });
-      }
-      // HIM: comfort-gradient drive → dynamic initiative + curiosity
-      const { state: himUpdated, him: newHim } = updateEmotionalStateWithHIM(updatedState, { type: 'self_reflection', userId: uid }, himState, text.slice(0, 40));
-      saveEmotionalState(emotionKey, himUpdated);
-      saveHIMState(emotionKey, newHim);
-
-      // Emit a contextual greeting on reconnect.
-      if (!isMemoryAvatar && turnAuthorization.isCurrent() && isReconnect && updatedState.intimacy > 0.2) {
-        const greeting = generateContextualGreeting(updatedState, uid);
-        if (greeting) {
-          const greetingTs = new Date().toISOString();
-          // Save to chat log
-          const greetingDb = readDB();
-          greetingDb.interactions.push({
-            id: `greeting-${uid}-${Date.now()}`,
-            userId: uid,
-            agentId: conversationAgentId,
-            conversationId: conversationId || '',
-            content: greeting,
-            response: '',
-            role: 'agent',
-            personality: personality.id,
-            timestamp: greetingTs,
-            cognitiveIntent: 'greeting',
-            llmWasCalled: false,
-          });
-          writeDB(greetingDb);
-
-          // Emit to chat window and notification center
-          socket.emit('agent:proactive', {
-            type: 'greeting',
-            message: greeting,
-            agentName: personality.name,
-            intimacy: updatedState.intimacy,
-            timestamp: greetingTs,
-          });
-          pushNotification(uid, { type: 'greeting', title: `Welcome back`, message: greeting });
-        }
-      }
+      await completeChatTurn({ get pendingConfirmationCreatedThisTurn() { return pendingConfirmationCreatedThisTurn; }, set pendingConfirmationCreatedThisTurn(value) { pendingConfirmationCreatedThisTurn = value; }, get executionTaskText() { return executionTaskText; }, get responseText() { return responseText; }, set responseText(value) { responseText = value; }, get completionGuard() { return completionGuard; }, set completionGuard(value) { completionGuard = value; }, get finalTaskRecords() { return finalTaskRecords; }, get turnFlow() { return turnFlow; }, get durableTaskId() { return durableTaskId; }, get requestId() { return requestId; }, get taskAwareRecords() { return taskAwareRecords; }, get allToolRecords() { return allToolRecords; }, get desktopRelay() { return desktopRelay; }, get toolSessionActive() { return toolSessionActive; }, get correctionRequiresFreshConfirmation() { return correctionRequiresFreshConfirmation; }, set correctionRequiresFreshConfirmation(value) { correctionRequiresFreshConfirmation = value; }, get abortController() { return abortController; }, get isChatCancelled() { return isChatCancelled; }, get llmWasCalled() { return llmWasCalled; }, set llmWasCalled(value) { llmWasCalled = value; }, get runAuthorizedTools() { return runAuthorizedTools; }, get normalTurnMessages() { return normalTurnMessages; }, set normalTurnMessages(value) { normalTurnMessages = value; }, get activeProvider() { return activeProvider; }, set activeProvider(value) { activeProvider = value; }, get activeModel() { return activeModel; }, set activeModel(value) { activeModel = value; }, get uid() { return uid; }, get resolvedDomain() { return resolvedDomain; }, get resolvedOrgId() { return resolvedOrgId; }, get reasoningRoutePolicy() { return reasoningRoutePolicy; }, get rememberRequestToolRecord() { return rememberRequestToolRecord; }, get formatToolResultForUi() { return formatToolResultForUi; }, get formatMediaArtifactReceiptForUi() { return formatMediaArtifactReceiptForUi; }, get emitAgent() { return emitAgent; }, get modelCapabilityPolicy() { return modelCapabilityPolicy; }, get personality() { return personality; }, get toolSecurityContext() { return toolSecurityContext; }, get conversation() { return conversation; }, set conversation(value) { conversation = value; }, get actionTaskExecution() { return actionTaskExecution; }, get llmGetters() { return llmGetters; }, get allowLocalFileWrites() { return allowLocalFileWrites; }, get localWriteIntentReason() { return localWriteIntentReason; }, get forwardToolProgress() { return forwardToolProgress; }, get emitToolLifecycle() { return emitToolLifecycle; }, get modelToolProjection() { return modelToolProjection; }, get visibleUserText() { return visibleUserText; }, get executionPipeline() { return executionPipeline; }, get runtimeOwnedDeterministicRecoveryCall() { return runtimeOwnedDeterministicRecoveryCall; }, set runtimeOwnedDeterministicRecoveryCall(value) { runtimeOwnedDeterministicRecoveryCall = value; }, get desktopExecutionTracker() { return desktopExecutionTracker; }, get requestToolConfirmation() { return requestToolConfirmation; }, get interactionId() { return interactionId; }, get priorTaskRecords() { return priorTaskRecords; }, get conversationId() { return conversationId; }, get completionTaskText() { return completionTaskText; }, get normalizeAgentPayload() { return normalizeAgentPayload; }, get pendingConfirmationAssistantState() { return pendingConfirmationAssistantState; }, set pendingConfirmationAssistantState(value) { pendingConfirmationAssistantState = value; }, get chatDurabilityUnknownText() { return chatDurabilityUnknownText; }, get actionLeaseHeartbeat() { return actionLeaseHeartbeat; }, set actionLeaseHeartbeat(value) { actionLeaseHeartbeat = value; }, get releaseChatSession() { return releaseChatSession; }, get commitRecordedTerminal() { return commitRecordedTerminal; }, get persistChatTakeoverExecution() { return persistChatTakeoverExecution; }, get capabilitySelection() { return capabilitySelection; }, get conversationAgentId() { return conversationAgentId; }, get addMessageIdempotent() { return addMessageIdempotent; }, get eventSource() { return eventSource; }, get refreshTerminalPayloadTaskRelation() { return refreshTerminalPayloadTaskRelation; }, get turnAuthorization() { return turnAuthorization; }, get text() { return text; }, get scheduleChatSummary() { return scheduleChatSummary; }, get isMemoryAvatar() { return isMemoryAvatar; }, get persistChatLearning() { return persistChatLearning; }, get allowAdaptiveLearning() { return allowAdaptiveLearning; }, get emotionalState() { return emotionalState; }, get sentiment() { return sentiment; }, get isNovel() { return isNovel; }, get himState() { return himState; }, get emotionKey() { return emotionKey; }, get socket() { return socket; } });
 
     } catch (error: any) {
       if (isChatCancelled() || error?.name === 'AbortError') {

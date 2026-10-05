@@ -11,19 +11,20 @@ import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_
 export const pagePath = 'src/components/AgentChatPage.tsx';
 
 export const pageAst = readSourceAst(pagePath);
+const viewAst = readSourceAst("src/components/agent_chat/AgentChatView.tsx");
 
 export function sendButtonDisabled(dependencies: Record<string, unknown>) {
   dependencies = { conversationTransitionPending: false, ...dependencies };
   let expression = '';
   const visit = (node: ts.Node) => {
-    if (ts.isJsxAttribute(node) && node.name.getText(pageAst) === 'disabled'
+    if (ts.isJsxAttribute(node) && node.name.getText(viewAst) === 'disabled'
       && node.initializer && ts.isJsxExpression(node.initializer)
-      && node.initializer.expression?.getText(pageAst).includes('pendingAttachments.length === 0')) {
-      expression = node.initializer.expression.getText(pageAst);
+      && node.initializer.expression?.getText(viewAst).includes('pendingAttachments.length === 0')) {
+      expression = node.initializer.expression.getText(viewAst);
     }
     ts.forEachChild(node, visit);
   };
-  visit(pageAst);
+  visit(viewAst);
   if (!expression) throw new Error('Mounted send button disabled predicate missing');
   return vm.runInNewContext(expression, dependencies);
 }

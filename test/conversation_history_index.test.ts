@@ -8,7 +8,7 @@ const row = (id: string, role: string, message: string, offset: number, extra = 
 describe('indexed legacy conversation history', () => {
   it('preserves the strict two-second boundary, user/assistant role rules and foreign conversation isolation', () => {
     const rows = [row('combined', 'user', 'question', 0, { response: 'answer' }), row('outside', 'assistant', 'answer', 2000), row('foreign', 'user', 'question', 1, { conversationId: 'other' })];
-    vi.spyOn(database, 'readDB').mockReturnValue({ interactions: rows } as any);
+    vi.spyOn(database, 'readDatabaseTables').mockReturnValue({ interactions: rows } as any);
     expect(listConversationReceiptHistory('scope').map(item => item.id)).toEqual(['combined', 'outside']);
     rows.push(row('inside', 'assistant', 'answer', 1999));
     expect(listConversationReceiptHistory('scope').map(item => item.id)).toEqual(['inside', 'outside']);
@@ -19,7 +19,7 @@ describe('indexed legacy conversation history', () => {
       row('user-' + n, 'user', 'question-' + n, n * 3000, { routeSequence: 1 }),
       row('assistant-' + n, 'assistant', 'answer-' + n, n * 3000, { routeSequence: 2 }),
     ]).flat();
-    vi.spyOn(database, 'readDB').mockReturnValue({ interactions: rows } as any);
+    vi.spyOn(database, 'readDatabaseTables').mockReturnValue({ interactions: rows } as any);
     const visible = listConversationReceiptHistory('scope', 4);
     expect(visible.map(item => item.id)).toEqual(['user-1198', 'assistant-1198', 'user-1199', 'assistant-1199']);
     expect(listConversationReceiptHistory('scope', 10_000)).toHaveLength(2400);
@@ -27,7 +27,7 @@ describe('indexed legacy conversation history', () => {
   it('retains malformed timestamp rows without using them as duplicate evidence and detaches nested records', () => {
     const rows: any[] = [row('legacy', 'user', 'question', 0, { response: 'answer', toolCalls: [{ arguments: { path: 'original' } }] }),
       { ...row('malformed', 'assistant', 'answer', 0), timestamp: 'invalid' }];
-    vi.spyOn(database, 'readDB').mockReturnValue({ interactions: rows } as any);
+    vi.spyOn(database, 'readDatabaseTables').mockReturnValue({ interactions: rows } as any);
     const visible = listConversationReceiptHistory('scope');
     expect(visible.map(item => item.id)).toEqual(['legacy', 'malformed']);
     visible[0].toolCalls[0].arguments.path = 'mutated';

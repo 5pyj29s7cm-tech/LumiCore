@@ -62,7 +62,7 @@ describe('scheduler capability execution protocol', () => {
     const rows = [{}, { createdAt: new Date(cutoff - 1).toISOString(), type: 'preference' }, { domain: 'work' }, { orgId: 'organization' }, { userId: 'other' }, { agentId: 'memory_avatar_private' }]
       .map(override => ({ userId: 'owner', createdAt: new Date(cutoff).toISOString(), type: 'fact', keywords: Array.from({ length: 25 }, (_, i) => `topic-${i}`), ...override }));
     const fixture = { memories: rows, interactions: rows.map(row => ({ ...row, timestamp: row.createdAt })), conversations: [{ userId: 'owner', status: 'active' }, { userId: 'owner', domain: 'work', status: 'active' }] };
-    vi.spyOn(database, 'readDB').mockReturnValue(fixture as any);
+    vi.spyOn(database, 'readDatabaseTables').mockReturnValue(fixture as any);
     const getters = Array.from({ length: 12 }, () => () => null);
     const register = extractSourceExpression('server/scheduler/builtins/growth.ts', 'createGrowthTasks', {
       providerGetterArguments,

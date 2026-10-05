@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { promptBlockMessage, replacePromptBlock } from '../server/llm/prompt_blocks';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -367,13 +369,13 @@ describe('whole model-request context budget', () => {
     const sources = [
       'server/socket/chat.ts',
       'server/regions/packs/cn/messaging_routes.ts',
-    ].map(file => fs.readFileSync(path.join(process.cwd(), file), 'utf8'));
+    ].map(file => readImplementationSource(path.join(process.cwd(), file), 'utf8'));
     for (const source of sources) {
       expect(source).toContain('formatClientSelfPromptForTurn');
       expect(source).toContain('resolveModelRequestInputBudget');
       expect(source).not.toMatch(/\bformatClientSelfPrompt\(/);
     }
-    const voice = fs.readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
     expect(voice).toContain('formatCompactClientSelfPrompt');
   });
 });

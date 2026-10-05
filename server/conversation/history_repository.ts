@@ -1,5 +1,5 @@
 import { projectConversationReceiptHistory } from './receipt_history';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import type { ConversationOwner } from './lifecycle';
 
@@ -20,7 +20,7 @@ export interface InteractionHistoryFilter {
 export function listUserInteractions(userId: string, filter: InteractionHistoryFilter = {}): any[] {
   if (!userId) return [];
   const ids = filter.conversationIds ? new Set(filter.conversationIds) : null;
-  let rows = (readDB().interactions || []).filter((row: any) => row.userId === userId
+  let rows = (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).interactions || []).filter((row: any) => row.userId === userId
     && (filter.domain === undefined || (row.domain || 'personal') === filter.domain)
     && (filter.orgId === undefined || (row.orgId || '') === filter.orgId)
     && (filter.conversationId === undefined || row.conversationId === filter.conversationId)
@@ -40,16 +40,16 @@ export function listUserInteractions(userId: string, filter: InteractionHistoryF
 /** The transport may append a plain message, never choose its storage owner. */
 export function appendUserInteraction(userId: string, content: unknown, role: unknown): any {
   if (!userId) throw new Error('Interaction owner is required');
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]);
   const row = { id: crypto.randomUUID(), userId, content, role, timestamp: new Date().toISOString() };
   const next = cloneDatabaseValue(row);
-  writeDB({ ...db, interactions: [...(db.interactions || []), next] });
+  commitDatabaseTables({ ...db, interactions: [...(db.interactions || []), next] });
   return cloneDatabaseValue(next);
 }
 
 /** Identity-only check: reading authorization never repairs or writes a conversation. */
 export function ownedConversationExists(conversationId: string, owner: ConversationOwner): boolean {
-  return Boolean(conversationId && owner.userId) && (readDB().conversations || []).some(row => row.id === conversationId
+  return Boolean(conversationId && owner.userId) && (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).conversations || []).some(row => row.id === conversationId
     && row.userId === owner.userId && (!owner.agentId || row.agentId === owner.agentId)
     && (owner.domain === 'work'
       ? row.domain === 'work' && String(row.orgId || '') === String(owner.orgId || '')
@@ -62,7 +62,7 @@ function workspaceMatches(row: any, owner: ConversationOwner): boolean {
 
 /** Preserve transport 404/403 responses without exposing a foreign conversation. */
 export function conversationAccessStatus(id: string, owner: ConversationOwner): 'missing' | 'forbidden' | 'allowed' {
-  const row = (readDB().conversations || []).find(item => item.id === id);
+  const row = (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).conversations || []).find(item => item.id === id);
   if (!row) return 'missing';
   if (!owner.userId) return 'forbidden';
   return row.userId === owner.userId && (!owner.agentId || row.agentId === owner.agentId)
@@ -72,7 +72,7 @@ export function conversationAccessStatus(id: string, owner: ConversationOwner): 
 /** Bounded display metadata only; task state and summary repair stay in the manager. */
 export function listConversationHeaders(owner: ConversationOwner, limit?: number): any[] {
   if (!owner.userId) return [];
-  let rows = (readDB().conversations || []).filter(row => row.userId === owner.userId
+  let rows = (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).conversations || []).filter(row => row.userId === owner.userId
     && (!owner.agentId || row.agentId === owner.agentId) && workspaceMatches(row, owner));
   rows.sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
   if (limit !== undefined) rows = rows.slice(0, limit);
@@ -81,7 +81,7 @@ export function listConversationHeaders(owner: ConversationOwner, limit?: number
 
 /** Stable request history with receipt projection; duplicate legacy pairs use indexed lookup. */
 export function listConversationReceiptHistory(conversationId: string, limit = 1000): any[] {
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]);
   const rows = (db.interactions || []).map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
     .filter(({ row }: any) => row.conversationId === conversationId)
     .sort((a: any, b: any) => {

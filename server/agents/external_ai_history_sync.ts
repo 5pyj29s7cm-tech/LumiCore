@@ -2,7 +2,7 @@ import { providerGetterArguments } from "../llm/provider_getters";
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { runWithVision, parseScreenshotBase64 } from '../llm/adapter';
 import { ensureLocalModelReady, getLocalModelConfig, type LocalModelProvider } from '../llm/local_models';
 import {
@@ -373,7 +373,7 @@ export function registerExternalAiHistorySource(args: Record<string, any>, conte
     ...(expiresAt ? { expiresAt } : {}),
   };
   const authorizationDigest = digest(sourceBinding(draft));
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const { sources } = arrays(db);
   const existing = sources.find(source => source.authorizationDigest === authorizationDigest && source.status === 'active');
   if (existing) {
@@ -389,7 +389,7 @@ export function registerExternalAiHistorySource(args: Record<string, any>, conte
     updatedAt: now,
   };
   sources.push(source);
-  writeDB(db);
+  commitDatabaseTables(db);
   return JSON.stringify({
     ok: true,
     verified: true,
@@ -410,7 +410,7 @@ function publicSource(source: ExternalAiHistorySource): Record<string, unknown> 
 }
 
 export function listExternalAiHistorySources(_args: Record<string, any>, context?: ToolContext): string {
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const sources = arrays(db).sources.filter(source => sourceBelongsToContext(source, context));
   for (const source of sources) sourceIsUsable(source);
   return JSON.stringify({ ok: true, status: 'listed', sources: sources.map(publicSource), count: sources.length }, null, 2);
@@ -418,7 +418,7 @@ export function listExternalAiHistorySources(_args: Record<string, any>, context
 
 export function revokeExternalAiHistorySource(args: Record<string, any>, context?: ToolContext): string {
   if (context?.userConfirmed !== true) throw new Error('Revoking an external AI history authorization requires explicit confirmation.');
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const sourceId = normalizeId(args.sourceId, 200);
   const source = arrays(db).sources.find(item => item.id === sourceId && sourceBelongsToContext(item, context));
   if (!source) throw new Error('External AI history source was not found in this user/domain scope.');
@@ -426,7 +426,7 @@ export function revokeExternalAiHistorySource(args: Record<string, any>, context
     source.status = 'revoked';
     source.revokedAt = nowIso();
     source.updatedAt = source.revokedAt;
-    writeDB(db);
+    commitDatabaseTables(db);
   }
   return JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', status: 'revoked', sourceId }, null, 2);
 }
@@ -916,7 +916,7 @@ function jobReceipt(job: ExternalAiHistorySyncJob, source: ExternalAiHistorySour
 }
 
 async function runSync(args: Record<string, any>, context?: ToolContext): Promise<string> {
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const store = arrays(db);
   const sourceId = normalizeId(args.sourceId, 200);
   const source = store.sources.find(item => item.id === sourceId && sourceBelongsToContext(item, context));
@@ -948,7 +948,7 @@ async function runSync(args: Record<string, any>, context?: ToolContext): Promis
     job.status = 'blocked';
     job.blocker = usability.blocker;
     job.updatedAt = nowIso();
-    writeDB(db);
+    commitDatabaseTables(db);
     return jobReceipt(job, source);
   }
   if (job.status === 'completed' && args.restart !== true) return jobReceipt(job, source);
@@ -960,7 +960,7 @@ async function runSync(args: Record<string, any>, context?: ToolContext): Promis
   job.updatedAt = nowIso();
   source.lastJobId = job.id;
   source.updatedAt = job.updatedAt;
-  writeDB(db);
+  commitDatabaseTables(db);
   try {
     for (let runPage = 0; runPage < maxPages; runPage += 1) {
       const cursor = job.nextCursor;
@@ -973,14 +973,14 @@ async function runSync(args: Record<string, any>, context?: ToolContext): Promis
       job.limitations.push(...page.limitations);
       job.updatedAt = nowIso();
       source.updatedAt = job.updatedAt;
-      writeDB(db); // Durable checkpoint after every page.
+      commitDatabaseTables(db); // Durable checkpoint after every page.
       if (!page.hasMore) {
         job.status = 'completed';
         job.completedAt = nowIso();
         job.nextCursor = '';
         source.lastSyncAt = job.completedAt;
         source.updatedAt = job.completedAt;
-        writeDB(db);
+        commitDatabaseTables(db);
         return jobReceipt(job, source);
       }
       if (!page.nextCursor || page.nextCursor === cursor) throw new Error('History adapter reported more pages without advancing its cursor.');
@@ -989,14 +989,14 @@ async function runSync(args: Record<string, any>, context?: ToolContext): Promis
     job.completeness = job.completeness === 'partial_visible' ? 'partial_visible' : 'incremental';
     job.limitations.push(`This run stopped at the configured ${maxPages}-page bound and can resume from nextCursor.`);
     job.updatedAt = nowIso();
-    writeDB(db);
+    commitDatabaseTables(db);
     return jobReceipt(job, source);
   } catch (error: any) {
     job.status = /authorization|scope|foreground window|local vision|unavailable|observe-only|read-only|manifest|rejected/i.test(String(error?.message || error)) ? 'blocked' : 'failed';
     job.blocker = job.status === 'blocked' ? 'authorized_source_unavailable' : undefined;
     job.error = String(error?.message || error || 'History synchronization failed').slice(0, 1_000);
     job.updatedAt = nowIso();
-    writeDB(db);
+    commitDatabaseTables(db);
     return jobReceipt(job, source);
   }
 }
@@ -1012,7 +1012,7 @@ export async function syncExternalAiHistory(args: Record<string, any>, context?:
 }
 
 export function externalAiHistoryStatus(args: Record<string, any>, context?: ToolContext): string {
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const store = arrays(db);
   const sourceId = normalizeId(args.sourceId, 200);
   const jobId = normalizeId(args.jobId, 200);
@@ -1036,7 +1036,7 @@ export function externalAiHistoryStatus(args: Record<string, any>, context?: Too
 }
 
 export function queryExternalAiHistory(args: Record<string, any>, context?: ToolContext): string {
-  const db = readDB();
+  const db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]);
   const store = arrays(db);
   const sourceId = normalizeId(args.sourceId, 200);
   const source = store.sources.find(item => item.id === sourceId && sourceBelongsToContext(item, context));
@@ -1076,7 +1076,7 @@ export function queryExternalAiHistory(args: Record<string, any>, context?: Tool
 
 export function recoverInterruptedExternalAiHistorySyncs(): number {
   let db: any;
-  try { db = readDB(); } catch { return 0; }
+  try { db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]); } catch { return 0; }
   const store = arrays(db);
   let recovered = 0;
   for (const job of store.jobs) {
@@ -1086,7 +1086,7 @@ export function recoverInterruptedExternalAiHistorySyncs(): number {
     job.updatedAt = nowIso();
     recovered += 1;
   }
-  if (recovered > 0) writeDB(db);
+  if (recovered > 0) commitDatabaseTables(db);
   return recovered;
 }
 
@@ -1095,11 +1095,11 @@ export function resetExternalAiHistoryForTests(options: { clearPersisted?: boole
   runtimeOverrides = null;
   if (!options.clearPersisted) return;
   let db: any;
-  try { db = readDB(); } catch { return; }
+  try { db = readDatabaseTables(["externalAiHistoryAttachments","externalAiHistoryConversations","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs"]); } catch { return; }
   db.externalAiHistorySources = [];
   db.externalAiHistorySyncJobs = [];
   db.externalAiHistoryConversations = [];
   db.externalAiHistoryMessages = [];
   db.externalAiHistoryAttachments = [];
-  writeDB(db);
+  commitDatabaseTables(db);
 }

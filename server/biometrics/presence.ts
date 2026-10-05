@@ -1,5 +1,5 @@
 import type { PresenceState, PresenceHeartbeat, DetectedUser } from './types';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 
 const AWAY_TIMEOUT_MS = 5000; // 5s without face or voice → away
 
@@ -58,9 +58,9 @@ export function updatePresence(userId: string, heartbeat: PresenceHeartbeat): Pr
 }
 
 function detectOtherUsers(currentUserId: string): DetectedUser[] {
-  let db: ReturnType<typeof readDB>;
+  let db: ReturnType<typeof readDatabaseTables<'settings' | 'users'>>;
   try {
-    db = readDB();
+    db = readDatabaseTables(["settings","users"]);
   } catch {
     return [];
   }

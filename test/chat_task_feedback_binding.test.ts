@@ -1,8 +1,9 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+const chat = readImplementationSource(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
 
 describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {

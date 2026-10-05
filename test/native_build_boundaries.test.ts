@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -22,7 +23,7 @@ describe('native and package boundaries', () => {
     expect(fingerprintSourceSnapshot(input)).toBe(hash.digest('hex'));
   });
   it('uses a Pressed-edge guard for the native window toggle (static Rust verification)', () => {
-    const source = fs.readFileSync('src-tauri/src/lib.rs', 'utf8');
+    const source = readImplementationSource('src-tauri/src/lib.rs', 'utf8');
     const callback = source.slice(source.indexOf('reg.on_shortcut(WINDOW_TOGGLE_SHORTCUT'), source.indexOf('reg.on_shortcut(COMMAND_CENTER_SHORTCUT'));
     expect(callback.indexOf('event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed')).toBeGreaterThan(0);
     expect(callback.indexOf('return;')).toBeLessThan(callback.indexOf('window.hide()'));
@@ -30,7 +31,7 @@ describe('native and package boundaries', () => {
   it('applies the same forbidden-file filter to direct server-resource copies', async () => {
     const copies: string[] = [];
     const file = path.resolve('scripts/prepare-desktop-resources.mjs');
-    const source = fs.readFileSync(file, 'utf8');
+    const source = readImplementationSource(file, 'utf8');
     const entrypoint = source.indexOf('\nasync function prepareDesktopResources(');
     expect(entrypoint).toBeGreaterThan(0);
     const moduleSource = source.slice(0, entrypoint).replaceAll('import.meta.url', JSON.stringify(pathToFileURL(file).href)) + '\nexport { prepareServer, copyIfExists };';

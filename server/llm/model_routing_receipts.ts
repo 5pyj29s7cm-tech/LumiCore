@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import type { ProviderRuntimeObservation } from './provider_health';
 import type { UserLLMSelectionMode } from './user_preferences';
@@ -160,7 +160,7 @@ export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'
     completedAt: input.completedAt,
     durationMs: Math.max(0, Math.trunc(Number(input.durationMs) || 0)),
   };
-  const db = readDB();
+  const db = readDatabaseTables(["modelRoutingReceipts"]);
   const rows = [...(Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : []), cloneDatabaseValue(receipt)];
   let remainingForUser = MAX_RECEIPTS_PER_USER;
   const retained: ModelRoutingReceipt[] = [];
@@ -172,7 +172,7 @@ export function persistModelRoutingReceipt(input: Omit<ModelRoutingReceipt, 'id'
     }
     retained.push(candidate);
   }
-  writeDB({ ...db, modelRoutingReceipts: retained.reverse() });
+  commitDatabaseTables({ ...db, modelRoutingReceipts: retained.reverse() });
   return cloneDatabaseValue(receipt);
 }
 
@@ -185,7 +185,7 @@ export function listModelRoutingReceipts(
   const conversationId = compact(filter.conversationId);
   const requestId = compact(filter.requestId);
   const interactionId = compact(filter.interactionId);
-  const db = readDB();
+  const db = readDatabaseTables(["modelRoutingReceipts"]);
   return (Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [])
     .filter((receipt: ModelRoutingReceipt) => receipt.userId === uid)
     .filter((receipt: ModelRoutingReceipt) => !conversationId || receipt.conversationId === conversationId)
@@ -200,7 +200,7 @@ export function listModelRoutingReceipts(
 
 export function findProviderRuntimeObservation(provider: string, model: string): ProviderRuntimeObservation | null {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["modelRoutingReceipts"]);
     const receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
     for (let receiptIndex = receipts.length - 1; receiptIndex >= 0; receiptIndex -= 1) {
       const receipt = receipts[receiptIndex] as any;

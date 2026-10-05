@@ -1,5 +1,5 @@
 import type { RequestHandler, Router, Response } from 'express';
-import { readDB, writeDB, flushDBOrThrow } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { requireUserSession } from '../middleware/auth';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
@@ -9,7 +9,7 @@ function capture(orgId: string, prior: Rows = {}): Rows {
     const rows: Rows = {};
     if (!orgId)
         return rows;
-    const db = readDB();
+    const db = readDatabaseTables(["auditLog","departments","orgCredentialReferences","orgDevices","orgInvitations","orgKbArticles","orgKbEmbeddings","orgMemberships","orgPositions","orgResourceGrants","orgResourcePolicies","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","organizations"]);
     const articles = new Set([...(db.orgKbArticles || []).filter((row: any) => row.orgId === orgId), ...(prior.orgKbArticles || [])].map((row: any) => row.id));
     for (const [table, value] of Object.entries(db)) {
         if (!Array.isArray(value))
@@ -24,7 +24,7 @@ function capture(orgId: string, prior: Rows = {}): Rows {
 function restore(before: Rows, after: Rows): void {
     if (JSON.stringify(before) === JSON.stringify(after))
         return;
-    const db = readDB();
+    const db = readDatabaseTables(["auditLog","departments","orgCredentialReferences","orgDevices","orgInvitations","orgKbArticles","orgKbEmbeddings","orgMemberships","orgPositions","orgResourceGrants","orgResourcePolicies","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","organizations"]);
     const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     for (const table of new Set([...Object.keys(before), ...Object.keys(after)])) {
         const old = new Map((before[table] || []).map(row => [row.id, row]));
@@ -40,7 +40,7 @@ function restore(before: Rows, after: Rows): void {
                 restored.push(cloneDatabaseValue(row));
         db[table] = restored;
     }
-    writeDB(db);
+    commitDatabaseTables(db);
 }
 export function afterOrganizationSave(res: Response, publish: () => void): void {
     (res.locals.organizationOutbox ||= []).push(publish);

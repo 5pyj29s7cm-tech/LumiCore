@@ -1,9 +1,10 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 function source(path: string): string {
-  return readFileSync(resolve(process.cwd(), path), 'utf8');
+  return readImplementationSource(resolve(process.cwd(), path), 'utf8');
 }
 
 function between(text: string, start: string, end: string): string {

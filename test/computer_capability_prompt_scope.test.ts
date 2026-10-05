@@ -6,10 +6,10 @@ const mocks = vi.hoisted(() => ({
   writeDB: vi.fn(),
 }));
 
-vi.mock('../db_layer', () => ({
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({
   readDB: mocks.readDB,
   writeDB: mocks.writeDB,
-}));
+})) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 
 import {
   deriveComputerCapabilityProfile,

@@ -1,74 +1,8 @@
 {
-  "schemaVersion": 1,
-  "policy": "Unreviewed business and SQL database imports are migration debt. Reviewed repositories must retain scoped, detached and staged data access. Durability-only modules may import only their declared fence exports; reintroducing reads, writes or SQL fails the gate.",
-  "approvedScopedImporters": {
-    "server/org/durable_routes.ts": "Organization-scoped snapshots, serialized writes and row-version compensation.",
-    "server/persistence/settings_repository.ts": "Settings-table value access only; declared-key transactions are staged before writeDB accepts them. Durable writes restore only a still-current failed value.",
-    "server/memory/repository.ts": "Owned memory/reminder row values only; detached reads, staged single-row updates, immutable ownership, and same-lane parent validation before write acceptance.",
-    "server/conversation/history_repository.ts": "Owner-filtered detached interaction history, bounded conversation display metadata, authorization status only, staged plain-message append; no database/row callbacks or task writes.",
-    "server/tts/profile_store.ts": "Personal/organization keyed voice profiles, detached snapshots, staged writes with immutable owner identity; provider metadata getter returns model string only.",
-    "server/llm/model_routing_receipts.ts": "Declared model receipt append and per-user retention staged before writeDB; detached owned receipts, global provider observation returns bounded status metadata only.",
-    "server/llm/token_tracker.ts": "Token-usage table append staged before writeDB; detached rows for an exact user; anonymous never grants instance-wide access."
-  },
-  "allowedDatabaseImporters": [
-    "server/agents/external_ai_history_sync.ts",
-    "server/agents/workflows.ts",
-    "server/autonomy/industry_learning.ts",
-    "server/autonomy/planner.ts",
-    "server/autonomy/professions.ts",
-    "server/autonomy/system_explorer.ts",
-    "server/autonomy/task_queue.ts",
-    "server/autonomy/workflows.ts",
-    "server/biometrics/presence.ts",
-    "server/command_center/plans.ts",
-    "server/contacts/store.ts",
-    "server/context/read_only_tool_learning.ts",
-    "server/conversation/action_turn_ledger.ts",
-    "server/conversation/execution_facts.ts",
-    "server/conversation/execution_receipt_archive.ts",
-    "server/conversation/manager.ts",
-    "server/evidence/control_sequence_truth_snapshot.ts",
-    "server/evidence/stale_receipt_reclassification.ts",
-    "server/evidence/task_truth_snapshot.ts",
-    "server/evidence/voice_text_continuation_truth.ts",
-    "server/extensions/registry.ts",
-    "server/external_capabilities/registry.ts",
-    "server/files/generated_archive.ts",
-    "server/files/knowledge_directory.ts",
-    "server/marketplace/registry.ts",
-    "server/memory/provenance.ts",
-    "server/memory/store.ts",
-    "server/memory/turn_memory.ts",
-    "server/memory_avatar/live_history.ts",
-    "server/memory_avatar/store.ts",
-    "server/org/branch.ts",
-    "server/org/branch_sync.ts",
-    "server/org/db.ts",
-    "server/org/resource_acl.ts",
-    "server/org/work_routing.ts",
-    "server/regions/packs/cn/business/workflow_service.ts",
-    "server/regions/packs/cn/messaging_routes.ts",
-    "server/routes/auth.ts",
-    "server/routes/misc_routes.ts",
-    "server/routes/notifications.ts",
-    "server/routes/system_routes.ts",
-    "server/runtime/bootstrap.ts",
-    "server/scheduler.ts",
-    "server/skills/translations.ts",
-    "server/socket/chat.ts",
-    "server/socket/chat_execution_registry.ts",
-    "server/socket/proactive_reminder_delivery.ts",
-    "server/socket/scene.ts",
-    "server/tools/definitions/data_tools.ts",
-    "server/tools/definitions/knowledge_tools.ts",
-    "server/tools/definitions/model_configuration_tools.ts",
-    "server/tools/definitions/work_takeover_tools.ts",
-    "server/tools/pending_confirmation_repository.ts",
-    "server/tools/registry.ts",
-    "server/work_product/supervisor.ts",
-    "server/work_takeover/evidence_workflow.ts",
-    "server/workflows/conversation_binding.ts"
-  ],
+  "schemaVersion": 2,
+  "policy": "Business modules cannot read or adopt the whole database root. Named-table consumers have detached snapshots and atomic delta commits, checked against exact per-module table and export grants. SQL repositories and durability fences have separate explicit export grants.",
+  "approvedScopedImporters": {},
+  "allowedDatabaseImporters": [],
   "approvedDurabilityImporters": {
     "server/llm/model_configuration.ts": {
       "allowedExports": [
@@ -135,6 +69,907 @@
         "flushDBOrThrow"
       ],
       "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
+    },
+    "server/socket/voice_conversation_turn.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Voice conversation turn strict terminal fence only; storage operations remain in scoped repositories."
+    },
+    "server/socket/voice_input_pipeline.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Voice input pipeline strict terminal fence only; storage operations remain in scoped repositories."
+    },
+    "server/socket/voice_side_response.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Voice side response strict terminal fence only; storage operations remain in scoped repositories."
+    },
+    "server/regions/packs/cn/messaging_finalization.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Messaging accepted-turn and terminal-reply flush fence only; no root/table access."
+    }
+  },
+  "approvedTableImporters": {
+    "server/agents/external_ai_history_sync.ts": {
+      "tables": [
+        "externalAiHistoryAttachments",
+        "externalAiHistoryConversations",
+        "externalAiHistoryMessages",
+        "externalAiHistorySources",
+        "externalAiHistorySyncJobs"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/agents/workflows.ts": {
+      "tables": [
+        "settings",
+        "workflows"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/industry_learning.ts": {
+      "tables": [
+        "memories",
+        "professionProfiles",
+        "workTakeoverTasks"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/planner.ts": {
+      "tables": [
+        "plans",
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/professions.ts": {
+      "tables": [
+        "professionProfiles"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/system_explorer.ts": {
+      "tables": [
+        "systemFlags",
+        "systemSnapshots"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/task_queue.ts": {
+      "tables": [
+        "autonomousTasks"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/autonomy/workflows.ts": {
+      "tables": [
+        "autonomousWorkflows",
+        "migrations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/biometrics/presence.ts": {
+      "tables": [
+        "settings",
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/command_center/plans.ts": {
+      "tables": [
+        "commandCenterPlans"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/contacts/store.ts": {
+      "tables": [
+        "contacts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/context/read_only_tool_learning.ts": {
+      "tables": [
+        "readOnlyToolPatterns"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/action_turn_ledger.ts": {
+      "tables": [
+        "conversationActionTurns"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/execution_facts.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/execution_receipt_archive.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/manager.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/evidence/control_sequence_truth_snapshot.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "querySQL",
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/evidence/stale_receipt_reclassification.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/evidence/task_truth_snapshot.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/evidence/voice_text_continuation_truth.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/extensions/registry.ts": {
+      "tables": [
+        "extensionActivationReceipts",
+        "extensionPublishers",
+        "extensionRevisions"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/external_capabilities/registry.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "externalCapabilityPackages",
+        "externalCapabilityReceipts"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/files/generated_archive.ts": {
+      "tables": [
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "querySQL",
+        "withDatabaseSqlWriteLock"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/files/knowledge_directory.ts": {
+      "tables": [
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/marketplace/registry.ts": {
+      "tables": [
+        "communitySkills",
+        "skillDownloads",
+        "skillRatings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/memory/provenance.ts": {
+      "tables": [
+        "conversations",
+        "interactions",
+        "memories",
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/memory/store.ts": {
+      "tables": [
+        "memories",
+        "memoryAssociations",
+        "reminders"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/memory/turn_memory.ts": {
+      "tables": [
+        "memories",
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/memory_avatar/store.ts": {
+      "tables": [
+        "memoryAvatars"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/branch.ts": {
+      "tables": [
+        "branchState",
+        "interactions",
+        "memories",
+        "settings"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/branch_sync.ts": {
+      "tables": [
+        "auditLog",
+        "conversations",
+        "interactions",
+        "memories",
+        "settings"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/db.ts": {
+      "tables": [
+        "auditLog",
+        "departments",
+        "orgCredentialReferences",
+        "orgDevices",
+        "orgInvitations",
+        "orgKbArticles",
+        "orgKbEmbeddings",
+        "orgMemberships",
+        "orgPositions",
+        "orgResourceGrants",
+        "orgResourcePolicies",
+        "orgWorkApprovals",
+        "orgWorkHandoffs",
+        "orgWorkItems",
+        "orgWorkRoutingRules",
+        "organizations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/resource_acl.ts": {
+      "tables": [
+        "departments",
+        "orgCredentialReferences",
+        "orgDevices",
+        "orgPositions",
+        "orgResourceGrants",
+        "orgResourcePolicies",
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/work_routing.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "orgPositions",
+        "orgWorkApprovals",
+        "orgWorkHandoffs",
+        "orgWorkItems",
+        "orgWorkRoutingRules"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/regions/packs/cn/business/workflow_service.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/regions/packs/cn/messaging_routes.ts": {
+      "tables": [],
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/routes/auth.ts": {
+      "tables": [
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/routes/misc_routes.ts": {
+      "tables": [
+        "founderVision",
+        "founderVisionUpdatedAt",
+        "settings"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/routes/notifications.ts": {
+      "tables": [
+        "notifications"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/routes/system_routes.ts": {
+      "tables": [
+        "autonomousTasks",
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversations",
+        "extensionActivationReceipts",
+        "extensionRevisions",
+        "externalAiHistoryMessages",
+        "externalAiHistorySources",
+        "externalAiHistorySyncJobs",
+        "interactions",
+        "settings",
+        "tokenUsage",
+        "users"
+      ],
+      "allowedExports": [
+        "getDatabasePersistenceStatus",
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "isDbDirty"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/runtime/bootstrap.ts": {
+      "tables": [
+        "conversations",
+        "interactions",
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "flushDB",
+        "closeDatabase",
+        "ensureDatabaseInitialized",
+        "isDbDirty",
+        "pruneOldData",
+        "requireDatabaseStartupQuickCheck"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/scheduler.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "reminders",
+        "settings",
+        "users"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/skills/translations.ts": {
+      "tables": [
+        "skillTranslations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/socket/chat.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/socket/proactive_reminder_delivery.ts": {
+      "tables": [
+        "interactions",
+        "reminders"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "withDatabaseSqlWriteLock",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/tools/definitions/knowledge_tools.ts": {
+      "tables": [
+        "knowledgeFiles",
+        "memories",
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/tools/definitions/model_configuration_tools.ts": {
+      "tables": [
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/tools/registry.ts": {
+      "tables": [
+        "users"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/work_product/supervisor.ts": {
+      "tables": [
+        "workProductPlans"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/work_takeover/evidence_workflow.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/workflows/conversation_binding.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/tools/definitions/work_takeover_tools.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/socket/scene.ts": {
+      "tables": [
+        "autonomousTasks",
+        "conversationActionReceipts",
+        "conversationActionTasks"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/persistence/settings_repository.ts": {
+      "tables": [
+        "settings"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/memory/repository.ts": {
+      "tables": [
+        "memories",
+        "reminders"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/history_repository.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/tts/profile_store.ts": {
+      "tables": [
+        "voiceProfiles"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/llm/model_routing_receipts.ts": {
+      "tables": [
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/llm/token_tracker.ts": {
+      "tables": [
+        "tokenUsage"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/org/durable_routes.ts": {
+      "tables": [
+        "auditLog",
+        "departments",
+        "orgCredentialReferences",
+        "orgDevices",
+        "orgInvitations",
+        "orgKbArticles",
+        "orgKbEmbeddings",
+        "orgMemberships",
+        "orgPositions",
+        "orgResourceGrants",
+        "orgResourcePolicies",
+        "orgWorkApprovals",
+        "orgWorkHandoffs",
+        "orgWorkItems",
+        "orgWorkRoutingRules",
+        "organizations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables",
+        "flushDBOrThrow"
+      ],
+      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+    },
+    "server/conversation/action_execution_runtime.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Conversation-scoped action leases and terminal projection; immutable request ownership remains enforced."
+    },
+    "server/conversation/conversation_lifecycle.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Conversation creation, scope selection, rollover and deletion; existing owner and domain predicates retained."
+    },
+    "server/conversation/foreground_finalization.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Exact durable request/task/assistant convergence; shared persistence fence and conflict checks."
+    },
+    "server/conversation/summary_state.ts": {
+      "tables": [
+        "conversations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Conversation summary cadence and stored projection only; message reads use the history repository."
+    },
+    "server/socket/chat/result_delivery.ts": {
+      "tables": [
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Persist reconnect greeting interaction only; authenticated immutable turn scope remains in the request context."
+    },
+    "server/regions/packs/cn/messaging_persistence.ts": {
+      "tables": [
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Separated messaging conversation persistence retains exact ingress owner and accepted-turn identity; only declared conversation/interaction tables."
+    }
+  },
+  "approvedSqlImporters": {
+    "server/memory_avatar/live_history.ts": {
+      "allowedExports": [
+        "querySQL",
+        "withDatabaseSqlWriteLock"
+      ],
+      "reason": "Exact avatar and user history; serialized private history inserts/deletes, no in-memory database root."
+    },
+    "server/socket/chat_execution_registry.ts": {
+      "allowedExports": [
+        "ensureDatabaseInitialized",
+        "querySQL",
+        "runSQL"
+      ],
+      "reason": "Durable execution receipt adapter with exact request scope; startup recovers receipt metadata, no in-memory database root."
+    },
+    "server/tools/pending_confirmation_repository.ts": {
+      "allowedExports": [
+        "ensureDatabaseInitialized",
+        "querySQL",
+        "runSQL",
+        "withDatabaseSqlWriteLock",
+        "DatabaseSqlWriteSession"
+      ],
+      "reason": "Encrypted confirmation storage with exact owner/request matching and serialized SQL transitions, no in-memory database root."
+    },
+    "server/tools/definitions/data_tools.ts": {
+      "allowedExports": [
+        "querySQL"
+      ],
+      "reason": "Explicit admin-confirmed database_query contract: one bounded read-only SELECT or allowlisted PRAGMA; no snapshot or write API."
     }
   }
 }

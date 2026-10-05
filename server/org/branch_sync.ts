@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { canonicalizeBranchSyncValue as canonicalize, branchSyncDigest as digest } from './branch_protocol';
 import type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt } from './branch_protocol';
 export type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt } from './branch_protocol';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { authorizeOrganizationDevice, registerOrganizationDevice } from './resource_acl';
 
 const SYNC_LEDGER_SETTING = 'org.branch.sync.ledger.v1';
@@ -268,7 +268,7 @@ export function getBranchSyncReceipt(input: {
   const branchId = validateStableId(input.branchId, 'branchId');
   const batchId = validateStableId(input.batchId, 'batchId');
   if (pendingBranchSyncCommits.has(`${orgId}:${branchId}:${batchId}`)) return null;
-  const ledger = loadLedger(readDB());
+  const ledger = loadLedger(readDatabaseTables(["auditLog","interactions","memories","settings","conversations"]));
   return ledger.batches[`${orgId}:${branchId}:${batchId}`] || null;
 }
 
@@ -280,7 +280,7 @@ export async function persistBranchRegistration(input: {
   const orgId = validateStableId(input.orgId, 'orgId');
   const branchId = validateStableId(input.branchId, 'branchId');
   const userId = validateStableId(input.userId, 'userId');
-  const db = readDB();
+  const db = readDatabaseTables(["auditLog","interactions","memories","settings","conversations"]);
   const registry = parseSetting<Record<string, BranchRegistration>>(db, BRANCH_REGISTRY_SETTING, {});
   const existing = registry[branchId];
   if (existing && (existing.orgId !== orgId || existing.userId !== userId)) {
@@ -310,7 +310,7 @@ export async function persistBranchRegistration(input: {
     userAgent: null,
     timestamp: now,
   });
-  writeDB(db);
+  commitDatabaseTables(db);
   await flushDBOrThrow();
   return registration;
 }
@@ -329,23 +329,25 @@ function trimLedger(ledger: BranchSyncLedger): void {
 }
 
 function upsertById(
+  db: ReturnType<typeof readDatabaseTables<'memories' | 'interactions'>>,
   collection: 'memories' | 'interactions',
   item: NormalizedItem,
   compensate: Array<() => void>,
 ): 'inserted' | 'updated' {
-  const values = readDB()[collection] as any[];
+  const values = db[collection] as any[];
   const index = values.findIndex(candidate => candidate?.id === item.targetId);
   const previous = index < 0 ? undefined : values[index];
   const appliedDigest = digest(item.value);
   compensate.push(() => {
-    const current = readDB()[collection] as any[];
+    const rollbackDb = readDatabaseTables(["interactions","memories"]);
+    const current = rollbackDb[collection] as any[];
     const currentIndex = current.findIndex(candidate => candidate?.id === item.targetId);
     // Another writer may replace, delete, or mutate this row while SQLite is
     // busy. Only undo the exact row version still owned by this batch.
-    if (currentIndex < 0 || current[currentIndex] !== item.value
-      || digest(current[currentIndex]) !== appliedDigest) return;
+    if (currentIndex < 0 || digest(current[currentIndex]) !== appliedDigest) return;
     if (previous === undefined) current.splice(currentIndex, 1);
     else current[currentIndex] = previous;
+    commitDatabaseTables(rollbackDb);
   });
   if (index < 0) {
     values.push(item.value);
@@ -392,7 +394,7 @@ export async function persistBranchSyncBatch(input: {
     // A different branch may have held the commit queue while this device was
     // revoked. Check current authority before applying any queued mutation.
     authorizeOrganizationDevice({ orgId, branchId, userId: input.authenticatedUserId, permission: 'sync_write' });
-    const db = readDB();
+    const db = readDatabaseTables(["auditLog","interactions","memories","settings","conversations"]);
     const ledger = loadLedger(db);
     const existing = ledger.batches[batchKey];
     if (existing) {
@@ -403,6 +405,7 @@ export async function persistBranchSyncBatch(input: {
     }
 
     const compensate: Array<() => void> = [];
+    let accepted = false;
     db.memories ||= [];
     db.interactions ||= [];
     db.settings ||= [];
@@ -418,7 +421,7 @@ export async function persistBranchSyncBatch(input: {
           outcome = 'unchanged';
         } else {
           const collection = item.kind === 'memory' ? 'memories' : 'interactions';
-          outcome = upsertById(collection, item, compensate);
+          outcome = upsertById(db, collection, item, compensate);
         }
         ledger.items[itemKey] = { digest: item.digest, targetId: item.targetId, updatedAt: persistedAt };
         ledger.itemOrder.push(itemKey);
@@ -459,18 +462,20 @@ export async function persistBranchSyncBatch(input: {
       else db.settings[settingIndex] = nextSetting;
       const appliedSettingValue = nextSetting.value;
       compensate.push(() => {
-        const settings = readDB().settings as any[];
+        const rollbackDb = readDatabaseTables(["settings"]);
+        const settings = rollbackDb.settings as any[];
         const index = settings.findIndex(item => item?.key === SYNC_LEDGER_SETTING);
         if (index < 0) return;
         if (settings[index].value === appliedSettingValue) {
           if (previousSetting === undefined) settings.splice(index, 1);
           else settings[index] = previousSetting;
+          commitDatabaseTables(rollbackDb);
           return;
         }
         // Even if a writer copied/changed the settings table, a failed batch
         // must never leave its own verified receipt behind. Preserve other
         // ledger entries and only compensate item versions from this batch.
-        const currentLedger = loadLedger(readDB());
+        const currentLedger = loadLedger(rollbackDb);
         if (currentLedger.batches[batchKey]?.receiptId !== receipt.receiptId) return;
         delete currentLedger.batches[batchKey];
         currentLedger.batchOrder = currentLedger.batchOrder.filter(key => key !== batchKey);
@@ -485,6 +490,7 @@ export async function persistBranchSyncBatch(input: {
           }
         }
         settings[index] = { key: SYNC_LEDGER_SETTING, value: JSON.stringify(currentLedger) };
+        commitDatabaseTables(rollbackDb);
       });
       const auditEntry = {
         id: crypto.randomUUID(),
@@ -507,17 +513,18 @@ export async function persistBranchSyncBatch(input: {
       };
       db.auditLog.push(auditEntry);
       compensate.push(() => {
-        const auditLog = readDB().auditLog as any[];
-        const index = auditLog.indexOf(auditEntry);
-        if (index >= 0) auditLog.splice(index, 1);
+        const rollbackDb = readDatabaseTables(["auditLog"]);
+        const auditLog = rollbackDb.auditLog as any[];
+        const index = auditLog.findIndex(row => row.id === auditEntry.id && digest(row) === digest(auditEntry));
+        if (index >= 0) { auditLog.splice(index, 1); commitDatabaseTables(rollbackDb); }
       });
 
-      writeDB(db);
+      commitDatabaseTables(db);
+      accepted = true;
       await flushDBOrThrow();
       return receipt;
     } catch (error) {
-      for (const undo of compensate.reverse()) undo();
-      writeDB(readDB());
+      if (accepted) for (const undo of compensate.reverse()) undo();
       throw error;
     }
   });

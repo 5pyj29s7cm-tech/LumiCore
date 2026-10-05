@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { flushDBOrThrow, readDB, withDatabaseSqlWriteLock, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, withDatabaseSqlWriteLock, commitDatabaseTables } from '../../db_layer';
 import { runSerializedMutation, type MutationScope } from '../persistence/durable_scope_mutation';
 
 const inFlight = new Set<string>();
@@ -7,7 +7,7 @@ const MAX_REMINDER_AGE_MS = 24 * 60 * 60_000;
 
 /** Resolve a scheduler receipt, never a client-supplied task label or message. */
 function readReminderDelivery(interactionId: string, scope: MutationScope, reservation?: string) {
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","reminders"]);
   const row = (db.interactions || []).find((item: any) => item.id === interactionId);
   if (!row || row.userId !== scope.userId || row.role !== 'assistant' || row.mode !== 'proactive'
     || (row.domain || 'personal') !== scope.domain || (row.orgId || '') !== scope.orgId
@@ -28,7 +28,7 @@ function readReminderDelivery(interactionId: string, scope: MutationScope, reser
     || Date.parse(item.dueAt) > Date.parse(row.timestamp))) return null;
   const text = `Reminder: ${reminders.map((item: any) => item.content).join(' | ')}`;
   if (!text.trim() || text.length > 4_000 || row.message !== `[reminder_check] ${text}`) return null;
-  return { row, metadata, text };
+  return { db, row, metadata, text };
 }
 
 /** One optional voice dispatch for an existing durable scheduler message.
@@ -55,7 +55,7 @@ export function claimReminderVoiceDelivery(interactionId: unknown, scope: Mutati
   const confirmPersisted = async () => {
     assertCurrent();
     // Read behind the snapshot transaction lock, before our own reservation
-    // flush. A candidate merely visible in readDB is not delivery authority.
+    // flush. A candidate merely visible in readDatabaseTables is not delivery authority.
     const durable = await withDatabaseSqlWriteLock(async ({ query }) => {
       const [row] = await query<any>('SELECT userId,domain,orgId,role,mode,message,timestamp,toolCalls FROM interactions WHERE id = ?', [interactionId]);
       return row;
@@ -84,7 +84,7 @@ export function claimReminderVoiceDelivery(interactionId: unknown, scope: Mutati
         });
         let emitted = false;
         try {
-          writeDB(readDB());
+          commitDatabaseTables(current.db);
           await flushDBOrThrow();
           assertAllowed(); assertCurrent();
           emit();
@@ -93,13 +93,14 @@ export function claimReminderVoiceDelivery(interactionId: unknown, scope: Mutati
           if (!emitted) {
             // No audio was dispatched. Remove only our reservation so a later
             // permitted delivery can retry; do not restore stale reminder data.
-            const currentRow = (readDB().interactions || []).find((item: any) => item.id === interactionId);
+            const rollbackDb = readDatabaseTables(["interactions","reminders"]);
+            const currentRow = (rollbackDb.interactions || []).find((item: any) => item.id === interactionId);
             let latest: any;
             try { latest = JSON.parse(currentRow?.toolCalls || '{}'); } catch { latest = null; }
             if (currentRow && latest?.proactiveVoiceDispatch?.reservation === reservation) {
               delete latest.proactiveVoiceDispatch;
               currentRow.toolCalls = JSON.stringify(latest);
-              writeDB(readDB());
+              commitDatabaseTables(rollbackDb);
               await flushDBOrThrow();
             }
           }

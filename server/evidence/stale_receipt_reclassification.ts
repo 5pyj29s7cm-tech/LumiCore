@@ -1,6 +1,6 @@
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import {
   conversationTaskStatusOwnsExecutionLease,
   isTerminalConversationTaskStatus,
@@ -323,7 +323,7 @@ export async function reclassifyManifestBoundStaleReceipt(
     || input.displayRequestId === input.continueRequestId
   ) throw staleEvidenceError('task_regression_stale_binding_invalid');
 
-  const readDb = dependencies.readDb || readDB;
+  const readDb = dependencies.readDb || (() => readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions"]));
   const persistLateAssistant = dependencies.persistLateAssistant || defaultPersistLateAssistant;
   const beforeDb = clone(readDb());
   const conversation = exactRow<Record<string, any>>(

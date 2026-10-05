@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ db: { settings: [] as any[], memories: [] as any[] } }));
 const kbState = vi.hoisted(() => ({ articles: [] as any[], embeddings: [] as any[] }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: (next: typeof state.db) => { state.db = next; } }));
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({ readDB: () => state.db, writeDB: (next: typeof state.db) => { state.db = next; } })) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 vi.mock('../server/org/db', () => ({ listKbArticles: () => kbState.articles, getAllKbEmbeddings: () => kbState.embeddings, logAudit: () => {} }));
 vi.mock('../server/org/resource_acl', () => ({ getOrganizationResourcePolicy: () => ({ policy: null }) }));
 vi.mock('../server/config/keys', () => ({ loadKeys: () => ({ OPENAI_API_KEY: 'synthetic', SILICONFLOW_API_KEY: 'synthetic' }) }));
@@ -126,7 +126,7 @@ describe('embedding vector identity', () => {
       return response(body.model === 'space-a' ? (contractInput ? [1, 0] : [0, 1]) : (contractInput ? [0, 1] : [1, 0]), body.model);
     }));
     expect(await backfillEmbeddings(userId)).toBe(2);
-    expect(contract.embeddingNamespace).toEqual({ provider: 'openai', model: 'space-a', dimensions: 2 });
+    expect(state.db.memories.find(row => row.id === contract.id).embeddingNamespace).toEqual({ provider: 'openai', model: 'space-a', dimensions: 2 });
     primaryBroken = true;
     expect((await queryMemoriesVector({ userId, query: 'contract question', useVector: true, limit: 1 }))[0].id).toBe(contract.id);
     expect(models.slice(-2)).toEqual(['space-a', 'space-b']);
@@ -136,14 +136,14 @@ describe('embedding vector identity', () => {
     expect(models.slice(previousCount)).toEqual(['space-a']);
     configure('space-b', '');
     expect(await backfillEmbeddings(userId)).toBe(2);
-    expect(contract.embeddingNamespace?.model).toBe('space-b');
+    expect(state.db.memories.find(row => row.id === contract.id).embeddingNamespace?.model).toBe('space-b');
   });
 
   it('records the model identity reported by the actual embedding response', async () => {
     const row = memory('contract');
     vi.stubGlobal('fetch', vi.fn(async () => response([1, 0], 'resolved-model-version')));
     await backfillEmbeddings(userId);
-    expect(row.embeddingNamespace).toEqual({ provider: 'openai', model: 'resolved-model-version', dimensions: 2 });
+    expect(state.db.memories.find(item => item.id === row.id).embeddingNamespace).toEqual({ provider: 'openai', model: 'resolved-model-version', dimensions: 2 });
   });
 });
 

@@ -1,5 +1,5 @@
 import { providerGetterArguments } from "../llm/provider_getters";
-import { readDB, writeDB, flushDBOrThrow } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../db_layer';
 import { addMemory, queryMemories, refreshMemoryEmbedding, removeMemory } from './store';
 import type { Memory, MemoryPerspective } from './types';
 import { makeLLMCall } from '../llm/providers';
@@ -91,7 +91,7 @@ USER TEXT (data): ${JSON.stringify(input.userText)}`;
     if (!changes.length) return { status: 'unchanged', text: copy.unchanged, ids: [] };
     return await runSerializedMutation(`memory:${JSON.stringify([input.userId,input.domain,input.orgId])}`, async () => {
       current();
-      const db = readDB();
+      const db = readDatabaseTables(["memories","settings"]);
       // Validate every target before any write, including edits during the model call.
       for (const c of changes.filter(c => c.operation !== 'save')) {
         const row = db.memories.find(m => m.id === c.targetId && m.userId === input.userId
@@ -125,7 +125,7 @@ USER TEXT (data): ${JSON.stringify(input.userText)}`;
           ids.push(row.id);
         }
       }
-      writeDB(db);
+      commitDatabaseTables(db);
       await (input.flush || flushDBOrThrow)();
       current();
       if (!input.generatePlan && !isTestLearningSource(input.source)) scheduleMemoryEvolution(input);

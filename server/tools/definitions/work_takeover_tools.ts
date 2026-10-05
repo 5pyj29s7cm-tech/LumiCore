@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
-import { readDB, writeDB, flushDBOrThrow } from '../../../db_layer';
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../db_layer';
 import { ensureBackgroundConversationActionTask, appendConversationActionReceipts } from '../../conversation/action_ledger';
 import { ToolRegistry } from '../registry';
 import { executeToolCall } from '../execution_engine';
@@ -1239,7 +1239,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       let executionRecord: ToolExecutionRecord | undefined;
       let result = '';
       try {
-        const ledgerDb = readDB();
+        const ledgerDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
         const actionTask = ensureBackgroundConversationActionTask(ledgerDb, {
           taskId: task.id, userId, domain, orgId,
           conversationId: `work_takeover:${task.id}`,
@@ -1253,7 +1253,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         actionTask.status = 'created';
         actionTask.activeRequestId = '';
         actionTask.context = JSON.stringify({ taskId: task.id, executionOwner: 'work_takeover', ownerTaskId: task.id, source: 'work_takeover_task_run_suggested_tool' });
-        writeDB(ledgerDb);
+        commitDatabaseTables(ledgerDb);
         await flushDBOrThrow();
         if (controller.signal.aborted || !isWorkTakeoverTaskCurrent(task)) throw new Error('Work takeover execution stopped before adapter admission.');
         executionRecord = await executeToolCall({
@@ -1272,11 +1272,11 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         });
         const verificationFailure = executionRecord.error || (executionRecord.terminalVerification?.status !== 'verified'
           ? executionRecord.terminalVerification?.reason || 'The nested tool did not produce verified evidence.' : '');
-        const receiptDb = readDB();
+        const receiptDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
         appendConversationActionReceipts(receiptDb, {
           task: actionTask, records: [executionRecord], requestId, turnId,
         });
-        writeDB(receiptDb);
+        commitDatabaseTables(receiptDb);
         await flushDBOrThrow();
         if (verificationFailure) throw new Error(verificationFailure);
         result = executionRecord.result;

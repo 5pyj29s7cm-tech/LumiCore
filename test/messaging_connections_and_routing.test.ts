@@ -622,6 +622,22 @@ describe('messaging long connections and organization routing', () => {
     expect(getStoredOperationMode(userId)).toBe('assistant');
   });
 
+  it('keeps the stored mode unchanged when a remote mode receipt explicitly reports failure', async () => {
+    const userId = 'wechat-mode-failed-' + Date.now() + '-' + Math.random();
+    const { updateClientState } = await import('../server/client/self_model');
+    const { getStoredOperationMode } = await import('../server/cognition/operation_mode_store');
+    updateClientState(userId, { platform: 'desktop', mode: 'assistant' });
+    const message = incoming({ platform: 'wechat', userId: 'wx-' + userId, chatId: 'wx-' + userId,
+      boundUserId: userId, messageId: 'failed-mode-' + userId, text: '\u5207\u6362\u5230\u4f1a\u8bae\u6a21\u5f0f' });
+    const reply = await routes.processWithPersonality(message, {
+      createScopedDesktopRelay: () => async (_name, args) => JSON.stringify({
+        ok: true, success: false, action: args.action, mode: args.mode,
+      }),
+    });
+    expect(getStoredOperationMode(userId)).toBe('assistant');
+    expect(reply).not.toMatch(/\u5df2\u5b8c\u6210|\u5df2\u5207\u5230\u4f1a\u8bae/);
+  });
+
   it('persists remote execution plans and answers later status turns from the durable receipt ledger', async () => {
     const userId = `wechat-ledger-${Date.now()}-${Math.random()}`;
     const { updateClientState } = await import('../server/client/self_model');

@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import './helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -141,9 +142,9 @@ describe('model-owned main chat architecture', () => {
   });
 
   it('describes Chat foreground escalation consistently with the hard runtime policy', () => {
-    const translationsSource = readFileSync(path.resolve(process.cwd(), 'src/lib/translations.ts'), 'utf8');
-    const adapterRegistrySource = readFileSync(path.resolve(process.cwd(), 'server/adapters/registry.ts'), 'utf8');
-    const generatedMessages = JSON.parse(readFileSync(
+    const translationsSource = readImplementationSource(path.resolve(process.cwd(), 'src/lib/translations.ts'), 'utf8');
+    const adapterRegistrySource = readImplementationSource(path.resolve(process.cwd(), 'server/adapters/registry.ts'), 'utf8');
+    const generatedMessages = JSON.parse(readImplementationSource(
       path.resolve(process.cwd(), 'src/i18n/locales/ui.generated.json'),
       'utf8',
     ));
@@ -171,7 +172,7 @@ describe('model-owned main chat architecture', () => {
 
   it('wires the main model loop to the hard capability policy', () => {
 
-    const chatSource = readFileSync(path.resolve(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const chatSource = readImplementationSource(path.resolve(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chatSource).toContain('toolPolicy: modelCapabilityPolicy');
     expect(chatSource).toContain('// ── Model-owned natural-language dispatch');
     expect(chatSource).not.toContain('quickFinalized');
@@ -208,9 +209,9 @@ describe('model-owned main chat architecture', () => {
   });
 
   it('uses model-owned hard policies and further narrows the public REST entrance', () => {
-    const messaging = readFileSync(path.resolve(process.cwd(), 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
-    const rest = readFileSync(path.resolve(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
-    const misc = readFileSync(path.resolve(process.cwd(), 'server/routes/misc_routes.ts'), 'utf8');
+    const messaging = readImplementationSource(path.resolve(process.cwd(), 'server/regions/packs/cn/messaging_routes.ts'), 'utf8');
+    const rest = readImplementationSource(path.resolve(process.cwd(), 'server/routes/chat_routes.ts'), 'utf8');
+    const misc = readImplementationSource(path.resolve(process.cwd(), 'server/routes/misc_routes.ts'), 'utf8');
 
     expect(messaging).toContain('const modelToolPolicy = executionPlan.authorizationPolicy');
     expect(messaging).toContain('const modelToolProjection = executionPlan.modelToolProjection');

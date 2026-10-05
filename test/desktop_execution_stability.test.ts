@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -173,8 +175,8 @@ describe('desktop execution stability policy', () => {
 
   it('keeps chat, voice, and task sockets on the shared desktop stability path', () => {
     const root = process.cwd();
-    const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const chatSource = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readVoiceImplementationSource();
     const sources = [chatSource, voiceSource];
 
     for (const source of sources) {

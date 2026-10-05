@@ -14,7 +14,7 @@ import { branchSyncDigest as digest } from './branch_protocol';
 import type { BranchSyncPayload, BranchSyncItemReceipt, BranchSyncReceipt as ProtocolReceipt } from './branch_protocol';
 import { promises as dns } from 'node:dns';
 import { isIP } from 'node:net';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { runtimeBackgroundWork } from '../runtime/shutdown_work';
 
 const BRANCH_STATE_SETTING = 'org.branch.client.state.v2';
@@ -81,7 +81,7 @@ function isObject(value: unknown): value is Record<string, any> {
 
 function readSetting<T>(key: string, fallback: T): T {
   try {
-    const raw = (readDB().settings || []).find((item: any) => item?.key === key)?.value;
+    const raw = (readDatabaseTables(["interactions","memories","settings","branchState"]).settings || []).find((item: any) => item?.key === key)?.value;
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
@@ -132,7 +132,7 @@ function bs(): BranchState {
   if (branchState) return branchState;
   const saved = readSetting<unknown>(BRANCH_STATE_SETTING, null);
   const legacy = (() => {
-    try { return (readDB() as any).branchState; } catch { return null; }
+    try { return (readDatabaseTables(["interactions","memories","settings","branchState"]) as any).branchState; } catch { return null; }
   })();
   branchState = normalizeSavedState(saved) || normalizeSavedState(legacy) || newBranchState();
   saveBranchState();
@@ -141,9 +141,9 @@ function bs(): BranchState {
 
 function saveBranchState(): void {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["interactions","memories","settings","branchState"]);
     writeSetting(db, BRANCH_STATE_SETTING, bs());
-    writeDB(db);
+    commitDatabaseTables(db);
   } catch {
     // The runtime may ask for public state before database initialization.
   }
@@ -170,9 +170,9 @@ function getOfflineQueue(): OfflineAction[] {
 
 function saveOfflineQueue(queue: OfflineAction[]): void {
   if (queue.length > MAX_OFFLINE_ACTIONS) throw new Error('Organization offline queue capacity exceeded; existing batches were retained');
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","memories","settings","branchState"]);
   writeSetting(db, OFFLINE_QUEUE_SETTING, queue);
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 function getSyncIndex(): SyncIndex {
@@ -259,7 +259,7 @@ function receiptMatches(request: BranchSyncRequest, receipt: unknown): receipt i
 async function acknowledgeReceipt(action: OfflineAction, receipt: BranchSyncReceipt): Promise<number> {
   const request = action.payload as BranchSyncRequest;
   if (!receiptMatches(request, receipt)) throw new Error('Company receipt does not match the immutable sync batch');
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","memories","settings","branchState"]);
   const index = getSyncIndex();
   for (const item of receipt.items) {
     index[itemKey(item.kind, item.sourceId)] = {
@@ -274,7 +274,7 @@ async function acknowledgeReceipt(action: OfflineAction, receipt: BranchSyncRece
   writeSetting(db, OFFLINE_QUEUE_SETTING, queue);
   bs().lastSyncAt = receipt.persistedAt;
   writeSetting(db, BRANCH_STATE_SETTING, bs());
-  writeDB(db);
+  commitDatabaseTables(db);
   await flushDBOrThrow();
   return receipt.accepted;
 }
@@ -359,7 +359,7 @@ async function executeSyncAction(action: OfflineAction): Promise<{ synced: numbe
 }
 
 function unsyncedPayload(orgId: string): SyncPayload {
-  const db = readDB();
+  const db = readDatabaseTables(["interactions","memories","settings","branchState"]);
   const index = getSyncIndex();
   const select = (kind: BranchSyncItemReceipt['kind'], values: any[] = []) => values.filter(item => {
     if (item?.domain !== 'work' || item?.orgId !== orgId || !item?.id) return false;
@@ -575,9 +575,9 @@ export async function pullKbCache(): Promise<number> {
       tags: String(article.tags || ''),
       cachedAt: now,
     }));
-    const db = readDB();
+    const db = readDatabaseTables(["interactions","memories","settings","branchState"]);
     writeSetting(db, KB_CACHE_SETTING, kbCache);
-    writeDB(db);
+    commitDatabaseTables(db);
     return kbCache.length;
   } catch {
     return 0;

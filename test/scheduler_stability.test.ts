@@ -178,7 +178,7 @@ describe('scheduler stability', () => {
         lastRun: expect.any(String),
         lastError: expect.stringContaining('late result was discarded'),
       });
-      expect(ledgerTask).toMatchObject({ status: 'blocked' });
+      expect(readDB().conversationActionTasks.find((candidate: any) => candidate.id === ledgerTask.id)).toMatchObject({ status: 'blocked' });
       await expect(scheduler.reconcileTask(taskId, 'accepted_unknown_outcome')).resolves.toMatchObject({
         reconciled: true,
         reason: 'reconciled',

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { readDB, querySQL, withDatabaseSqlWriteLock } from '../../db_layer';
+import { readDatabaseTables, querySQL, withDatabaseSqlWriteLock } from '../../db_layer';
 import { getDataPath, resolveMigratedDataFile } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { generatedKnowledgeDirectory } from './knowledge_directory';
@@ -259,7 +259,7 @@ const reconciliations = new Map<string, Promise<{ archived: number; unavailable:
 export async function reconcileGeneratedArchive(scope: GeneratedArchiveScope) {
   const queueKey = `${key(scope)}:${scope.userId}`; const existing = reconciliations.get(queueKey); if (existing) return existing;
   const operation = (async () => {
-    const db = readDB();
+    const db = readDatabaseTables(["conversations","interactions"]);
     const conversations = new Set((db.conversations || []).filter((row: any) => row.userId === scope.userId
       && (row.domain || 'personal') === scope.domain && (row.orgId || '') === (scope.orgId || '')).map((row: any) => row.id));
     let archived = 0, unavailable = 0;

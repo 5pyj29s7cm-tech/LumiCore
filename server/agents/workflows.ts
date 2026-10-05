@@ -5,7 +5,7 @@
  * named workflows are explicitly saved by the user or the system when a useful
  * pattern is discovered. They can be run by name: "run my morning routine".
  */
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import {
   createWorkflowDefinitionDraft,
   getWorkflowDefinition as getVersionedWorkflowDefinition,
@@ -139,7 +139,7 @@ function persistWorkflows(db: any, workflows: WorkflowDefinition[]): void {
   const index = db.settings.findIndex((item: any) => item?.key === NAMED_WORKFLOW_SETTING);
   if (index >= 0) db.settings[index] = row;
   else db.settings.push(row);
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 function normalizedWorkflowScope(scope: WorkflowScope = {}): { domain: 'personal' | 'work'; orgId: string } {
@@ -164,7 +164,7 @@ export function saveWorkflow(
   category?: string,
   scope: WorkflowScope = {},
 ): WorkflowDefinition {
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
 
   // Upsert: if a workflow with same name exists for this user, update it
@@ -198,14 +198,14 @@ export function saveWorkflow(
 }
 
 export function listWorkflows(userId: string, category?: string, scope: WorkflowScope = {}): WorkflowDefinition[] {
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   return storedWorkflows(db)
     .filter((w: WorkflowDefinition) => w.userId === userId && workflowMatchesScope(w, scope) && (!category || w.category === category))
     .sort((a: WorkflowDefinition, b: WorkflowDefinition) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 export function getWorkflow(userId: string, name: string, scope: WorkflowScope = {}): WorkflowDefinition | null {
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   return storedWorkflows(db).find((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope)) || null;
 }
 
@@ -273,7 +273,7 @@ export function saveWorkflowDraftCandidate(
     steps: validatedSteps,
     provenance,
   });
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
   const stored = workflows.find((item: WorkflowDefinition) => item.id === legacy.id);
   if (stored) {
@@ -308,7 +308,7 @@ export function publishSavedWorkflow(
     expectedHash,
     userId,
   });
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
   const stored = workflows.find((item: WorkflowDefinition) => item.id === workflow.id);
   if (!stored) return null;
@@ -354,7 +354,7 @@ export function refreshSavedWorkflowRuntimeDraft(
       ])),
     },
   });
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
   const stored = workflows.find((item: WorkflowDefinition) => item.id === workflow.id);
   if (!stored) return null;
@@ -377,7 +377,7 @@ export function getSavedWorkflowRuntimeDefinition(workflow: WorkflowDefinition):
 }
 
 export function deleteWorkflow(userId: string, name: string, scope: WorkflowScope = {}): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
   const idx = workflows.findIndex((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope));
   if (idx < 0) return false;
@@ -396,7 +396,7 @@ export function deleteWorkflow(userId: string, name: string, scope: WorkflowScop
 }
 
 export function recordWorkflowRun(userId: string, name: string, scope: WorkflowScope = {}): void {
-  const db = readDB();
+  const db = readDatabaseTables(["settings","workflows"]);
   const workflows = storedWorkflows(db);
   const wf = workflows.find((w: WorkflowDefinition) => w.userId === userId && w.name === name && workflowMatchesScope(w, scope));
   if (wf) {

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import {
   captureOrganizationMembershipAuthorization,
   isOrganizationMembershipAuthorizationCurrent,
@@ -167,7 +167,7 @@ export function listCommandCenterPlans(input: {
   domain: 'personal' | 'work';
   orgId: string;
 }): CommandCenterPlan[] {
-  return plans(readDB())
+  return plans(readDatabaseTables(["commandCenterPlans"]))
     .filter(plan => plan.userId === input.userId && plan.domain === input.domain && plan.orgId === input.orgId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(publicPlan);
@@ -178,7 +178,7 @@ export function createCommandCenterPlan(scope: {
   domain: 'personal' | 'work';
   orgId: string;
 }, input: CommandCenterPlanInput, now = new Date()): CommandCenterPlan {
-  const db = readDB();
+  const db = readDatabaseTables(["commandCenterPlans"]);
   const value = normalizedInput(input);
   const timestamp = now.toISOString();
   const plan: CommandCenterPlan = {
@@ -199,7 +199,7 @@ export function createCommandCenterPlan(scope: {
   };
   plan.nextRunAt = nextCommandCenterPlanRun(plan, now);
   plans(db).push(plan);
-  writeDB(db);
+  commitDatabaseTables(db);
   return { ...plan };
 }
 
@@ -210,7 +210,7 @@ export function updateCommandCenterPlan(input: {
   orgId: string;
   patch: CommandCenterPlanInput & { status?: unknown; reauthorize?: unknown };
 }, now = new Date()): CommandCenterPlan | null {
-  const db = readDB();
+  const db = readDatabaseTables(["commandCenterPlans"]);
   const plan = plans(db).find(candidate => candidate.id === input.id
     && candidate.userId === input.userId
     && candidate.domain === input.domain
@@ -241,7 +241,7 @@ export function updateCommandCenterPlan(input: {
       plan.nextRunAt = nextCommandCenterPlanRun(plan, now);
     }
   }
-  writeDB(db);
+  commitDatabaseTables(db);
   return { ...plan };
 }
 
@@ -251,14 +251,14 @@ export function deleteCommandCenterPlan(input: {
   domain: 'personal' | 'work';
   orgId: string;
 }): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["commandCenterPlans"]);
   const index = plans(db).findIndex(candidate => candidate.id === input.id
     && candidate.userId === input.userId
     && candidate.domain === input.domain
     && candidate.orgId === input.orgId);
   if (index < 0) return false;
   db.commandCenterPlans.splice(index, 1);
-  writeDB(db);
+  commitDatabaseTables(db);
   return true;
 }
 
@@ -302,14 +302,14 @@ export function runCommandCenterPlan(input: {
   orgId: string;
   manual?: boolean;
 }, at = new Date()): { plan: CommandCenterPlan; task: AutonomousTask; reused: boolean } | null {
-  const db = readDB();
+  const db = readDatabaseTables(["commandCenterPlans"]);
   const plan = plans(db).find(candidate => candidate.id === input.id
     && candidate.userId === input.userId
     && candidate.domain === input.domain
     && candidate.orgId === input.orgId);
   if (!plan) return null;
   if (pauseUnauthorizedPlan(plan, at)) {
-    writeDB(db);
+    commitDatabaseTables(db);
     if (input.manual) throw new CommandCenterPlanAuthorizationError(plan.authorizationBlockedReason);
     return null;
   }
@@ -321,7 +321,7 @@ export function runCommandCenterPlan(input: {
         plan.lastRuntimeTaskId = active.id;
         plan.lastRunAt = active.createdAt;
         plan.updatedAt = at.toISOString();
-        writeDB(db);
+        commitDatabaseTables(db);
       }
       return { plan: { ...plan }, task: active, reused: true };
     }
@@ -349,16 +349,16 @@ export function runCommandCenterPlan(input: {
   plan.lastRuntimeTaskId = task.id;
   plan.updatedAt = timestamp;
   plan.nextRunAt = plan.status === 'active' ? nextCommandCenterPlanRun(plan, at) : '';
-  writeDB(db);
+  commitDatabaseTables(db);
   return { plan: { ...plan }, task, reused: false };
 }
 export function dispatchDueCommandCenterPlans(at = new Date()): number {
-  const db = readDB();
+  const db = readDatabaseTables(["commandCenterPlans"]);
   let authorizationChanged = false;
   for (const plan of plans(db)) {
     if (plan.status === 'active' && pauseUnauthorizedPlan(plan, at)) authorizationChanged = true;
   }
-  if (authorizationChanged) writeDB(db);
+  if (authorizationChanged) commitDatabaseTables(db);
   const due = plans(db)
     .filter(plan => plan.status === 'active' && plan.nextRunAt && new Date(plan.nextRunAt).getTime() <= at.getTime())
     .map(plan => ({ id: plan.id, userId: plan.userId, domain: plan.domain, orgId: plan.orgId }));
@@ -371,6 +371,6 @@ export function dispatchDueCommandCenterPlans(at = new Date()): number {
 
 /** Identity check for the dispatcher; never projects or changes authorization state. */
 export function commandCenterPlanExists(id: string, owner: { userId: string; domain: string; orgId: string }): boolean {
-  return (readDB().commandCenterPlans || []).some(plan => plan.id === id && plan.userId === owner.userId
+  return (readDatabaseTables(["commandCenterPlans"]).commandCenterPlans || []).some(plan => plan.id === id && plan.userId === owner.userId
     && plan.domain === owner.domain && plan.orgId === owner.orgId);
 }

@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +9,7 @@ import {
 describe('chat local action preflight', () => {
 
   it('leaves post-write verification planning inside the shared model/tool loop', () => {
-    const chat = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
     expect(chat).not.toContain('buildRequestedArtifactReadback');
     expect(chat).not.toContain('chat_post_write_verification');
     expect(chat).not.toContain('post-write-verification-');

@@ -1,13 +1,13 @@
-import { readDB, writeDB } from "../../db_layer";
+import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
 import { Contact, ContactInput } from "./types";
 
 export function getContacts(userId: string): Contact[] {
-  return (readDB().contacts || []).filter((c: Contact) => c.userId === userId);
+  return (readDatabaseTables(["contacts"]).contacts || []).filter((c: Contact) => c.userId === userId);
 }
 
 export function searchContacts(userId: string, query: string): Contact[] {
   const q = query.toLowerCase();
-  return (readDB().contacts || []).filter((c: Contact) =>
+  return (readDatabaseTables(["contacts"]).contacts || []).filter((c: Contact) =>
     c.userId === userId && (
       c.name.toLowerCase().includes(q) ||
       c.tags.some(t => t.toLowerCase().includes(q)) ||
@@ -18,7 +18,7 @@ export function searchContacts(userId: string, query: string): Contact[] {
 }
 
 export function addContact(userId: string, input: ContactInput): Contact {
-  const db = readDB();
+  const db = readDatabaseTables(["contacts"]);
   if (!db.contacts) db.contacts = [];
   const now = new Date().toISOString();
   const contact: Contact = {
@@ -38,12 +38,12 @@ export function addContact(userId: string, input: ContactInput): Contact {
     updatedAt: now,
   };
   db.contacts.push(contact);
-  writeDB(db);
+  commitDatabaseTables(db);
   return contact;
 }
 
 export function updateContact(id: string, userId: string, input: Partial<ContactInput> | ((contact: Contact) => Partial<ContactInput>)): Contact | null {
-  const db = readDB();
+  const db = readDatabaseTables(["contacts"]);
   const idx = (db.contacts || []).findIndex((c: Contact) => c.id === id && c.userId === userId);
   if (idx === -1) return null;
   const existing = db.contacts[idx];
@@ -63,16 +63,16 @@ export function updateContact(id: string, userId: string, input: Partial<Contact
     updatedAt: new Date().toISOString(),
   };
   db.contacts[idx] = updated;
-  writeDB(db);
+  commitDatabaseTables(db);
   return updated;
 }
 
 export function deleteContact(id: string, userId: string): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["contacts"]);
   const idx = (db.contacts || []).findIndex((c: Contact) => c.id === id && c.userId === userId);
   if (idx === -1) return false;
   db.contacts.splice(idx, 1);
-  writeDB(db);
+  commitDatabaseTables(db);
   return true;
 }
 
@@ -85,7 +85,7 @@ export function recordInteraction(id: string, userId: string, note?: string): Co
 }
 
 export function matchContactsFromText(userId: string, text: string): Contact[] {
-  return (readDB().contacts || []).filter((c: Contact) =>
+  return (readDatabaseTables(["contacts"]).contacts || []).filter((c: Contact) =>
     c.userId === userId && c.name && text.includes(c.name)
   );
 }

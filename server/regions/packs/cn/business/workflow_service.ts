@@ -2,7 +2,7 @@ import { parseStoredObject as parseObject } from '../../../../tools/receipt_payl
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readDB, writeDB, flushDBOrThrow } from '../../../../../db_layer';
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../../../db_layer';
 import { getConversationForScope, getOrCreateActiveConversation } from '../../../../conversation/manager';
 import {
   ensureBackgroundConversationActionTask,
@@ -791,7 +791,7 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
     ? getConversationForScope(requestedConversationId, input.userId, input.domain, input.orgId)
     : null) || getOrCreateActiveConversation(input.userId, 'lumi', input.domain, input.orgId);
   const requestedConversationTaskId = compact(input.conversationTaskId, 200);
-  const existingConversationTaskId = requestedConversationTaskId && (readDB().conversationActionTasks || []).some((candidate: any) => (
+  const existingConversationTaskId = requestedConversationTaskId && (readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]).conversationActionTasks || []).some((candidate: any) => (
     candidate.id === requestedConversationTaskId
     && candidate.conversationId === conversation.id
     && candidate.userId === input.userId
@@ -847,7 +847,7 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
     note: `Linked to conversation action task ${conversationTaskId}.`,
   }) || task;
 
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   const industryContext = {
     workTakeoverTaskId: task.id,
     productLine: contract.productLine,
@@ -874,7 +874,7 @@ export function startIndustryWorkflow(input: StartIndustryWorkflowInput): Indust
       context: { industryWorkflow: industryContext },
     });
   }
-  writeDB(db);
+  commitDatabaseTables(db);
 
   return {
     task: linkedTask,
@@ -912,7 +912,7 @@ export function settleIndustryWorkflowConversationTask(
   const correlation = correlationFor(task);
   if (!correlation.conversationTaskId) return;
   const record = verificationRecord(task, verification, correlation);
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   settleBackgroundConversationActionTask(db, {
     taskId: correlation.conversationTaskId,
     userId: task.userId,
@@ -921,7 +921,7 @@ export function settleIndustryWorkflowConversationTask(
     blocker: verification.passed ? '' : verification.summary,
     requestId: correlation.requestId,
   });
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 export function recordIndustryWorkflowExecution(input: RecordIndustryWorkflowInput): IndustryWorkflowRecordResult {
@@ -1131,9 +1131,9 @@ export function interruptIndustryWorkflow(scope: IndustryWorkflowScope, id: stri
   const task = getIndustryWorkflowTask(scope, id);
   if (!task || task.status === 'delivered') return;
   updateWorkTakeoverTask(scope.userId, id, { status: cancelled ? 'cancelled' : 'blocked', blockedBy: [reason], note: reason });
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   settleBackgroundConversationActionTask(db, { taskId: conversationTaskIdFor(task), userId: scope.userId, records: [], status: cancelled ? 'cancelled' : 'blocked', blocker: reason, requestId: correlationFor(task).requestId });
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 /** Persist each completed execution before another model request can time out. */
@@ -1142,11 +1142,11 @@ export async function observeIndustryWorkflowTool(scope: IndustryWorkflowScope, 
   if (!task) throw new Error('Industry workflow task was not found in the active user scope.');
   const correlation = correlationFor(task);
   if (!recordMatchesWorkflowBinding(task, record)) throw new Error('Industry tool receipt does not match the bound workflow.');
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   const action = findConversationActionTask(db, { userId: scope.userId, conversationId: correlation.conversationId, taskId: correlation.conversationTaskId });
   if (!action) throw new Error('The linked conversation task was not found.');
   appendConversationActionReceipts(db, { task: action, records: [record], requestId: correlation.requestId });
-  writeDB(db);
+  commitDatabaseTables(db);
   // Keep observation separate from delivery verification and its replay digest.
   const observations = Array.isArray(task.metadata?.industryObservedTools) ? task.metadata.industryObservedTools : [];
   updateWorkTakeoverTask(scope.userId, id, { metadata: { industryObservedTools: [...observations.filter((item: any) => item.id !== record.id), { id: record.id, name: record.name, error: record.error || null, status: record.terminalVerification?.status || 'unverified', at: new Date().toISOString() }].slice(-40) } });

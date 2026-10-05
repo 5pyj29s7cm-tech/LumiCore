@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { getMember, logAudit, type OrgMembership, type OrgRole } from './db';
 
 export type OrganizationResourceType =
@@ -242,7 +242,7 @@ export function getOrganizationResourcePolicy(
   resourceType: OrganizationResourceType,
   resourceId: string,
 ): { policy: OrganizationResourcePolicy | null; grants: OrganizationResourceGrant[] } {
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   const policy = findPolicy(db, orgId, normalizeText(resourceType, 80), normalizeText(resourceId));
   return {
     policy,
@@ -268,7 +268,7 @@ export function authorizeOrganizationResource(input: {
     return { allowed: false, reason: 'viewer_is_read_only', policy: null, matchedGrantIds: [] };
   }
 
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const resourceType = normalizeText(input.resourceType, 80);
   const resourceId = normalizeText(input.resourceId);
@@ -337,7 +337,7 @@ export function setOrganizationResourcePolicy(input: {
   if (!resourceType || !resourceId) throw new OrganizationResourceAuthorizationError('resourceType and resourceId are required', 400);
   const actorMembership = activeMembership(input.orgId, input.actorUserId);
   if (!actorMembership) throw new OrganizationResourceAuthorizationError('Active organization membership is required');
-  const initialDb = readDB();
+  const initialDb = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(initialDb);
   const existingPolicy = findPolicy(initialDb, input.orgId, resourceType, resourceId);
   const requestedOwner = normalizeText(input.ownerUserId) || input.actorUserId;
@@ -352,7 +352,7 @@ export function setOrganizationResourcePolicy(input: {
     : 'organization';
   const departmentId = normalizeText(input.departmentId) || null;
   if (classification === 'department') {
-    const department = (readDB().departments || []).find((item: any) => item.id === departmentId && item.orgId === input.orgId);
+    const department = (readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]).departments || []).find((item: any) => item.id === departmentId && item.orgId === input.orgId);
     if (!department) throw new OrganizationResourceAuthorizationError('A valid organization department is required', 400);
   }
   const ownerUserId = requestedOwner;
@@ -362,7 +362,7 @@ export function setOrganizationResourcePolicy(input: {
   if (!activeMembership(input.orgId, ownerUserId)) {
     throw new OrganizationResourceAuthorizationError('Resource owner must be an active organization member', 400);
   }
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const timestamp = now();
   let policy = findPolicy(db, input.orgId, resourceType, resourceId);
@@ -415,7 +415,7 @@ export function setOrganizationResourcePolicy(input: {
   db.orgResourceGrants = (db.orgResourceGrants as OrganizationResourceGrant[])
     .filter(grant => policyKey(grant.orgId, grant.resourceType, grant.resourceId) !== policyKey(input.orgId, resourceType, resourceId));
   db.orgResourceGrants.push(...nextGrants);
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -433,7 +433,7 @@ export function removeOrganizationResourcePolicy(input: {
   resourceType: OrganizationResourceType;
   resourceId: string;
 }): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const policy = findPolicy(db, input.orgId, input.resourceType, input.resourceId);
   if (!policy) return false;
@@ -448,7 +448,7 @@ export function removeOrganizationResourcePolicy(input: {
   db.orgResourceGrants = (db.orgResourceGrants as OrganizationResourceGrant[]).filter(grant => (
     grant.orgId !== input.orgId || grant.resourceType !== input.resourceType || grant.resourceId !== input.resourceId
   ));
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({ orgId: input.orgId, userId: input.actorUserId, action: 'resource.policy.remove', resourceType: input.resourceType, resourceId: input.resourceId });
   return true;
 }
@@ -495,7 +495,7 @@ export function createOrganizationCredentialReference(input: {
   const name = normalizeText(input.name, 120);
   const provider = normalizeText(input.provider, 120);
   if (!name || !provider) throw new OrganizationResourceAuthorizationError('name and provider are required', 400);
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   if ((db.orgCredentialReferences as OrganizationCredentialReference[]).some(item => item.orgId === input.orgId && item.name.toLowerCase() === name.toLowerCase() && item.status === 'active')) {
     throw new OrganizationResourceAuthorizationError('An active credential reference with this name already exists', 409);
@@ -507,7 +507,7 @@ export function createOrganizationCredentialReference(input: {
     createdBy: input.actorUserId, revision: 1, createdAt: timestamp, updatedAt: timestamp,
   };
   db.orgCredentialReferences.push(item);
-  writeDB(db);
+  commitDatabaseTables(db);
   setOrganizationResourcePolicy({
     orgId: input.orgId,
     actorUserId: input.actorUserId,
@@ -526,7 +526,7 @@ export function createOrganizationCredentialReference(input: {
 }
 
 export function listOrganizationCredentialReferences(orgId: string, actorUserId: string): ReturnType<typeof publicCredentialReference>[] {
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   return (db.orgCredentialReferences as OrganizationCredentialReference[])
     .filter(item => item.orgId === orgId && item.status === 'active')
@@ -539,7 +539,7 @@ export function resolveOrganizationCredentialReference(input: {
   actorUserId: string;
   credentialId: string;
 }): string {
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const item = (db.orgCredentialReferences as OrganizationCredentialReference[]).find(candidate => (
     candidate.id === input.credentialId && candidate.orgId === input.orgId && candidate.status === 'active'
@@ -559,14 +559,14 @@ export function resolveOrganizationCredentialReference(input: {
 
 export function revokeOrganizationCredentialReference(input: { orgId: string; actorUserId: string; credentialId: string }): boolean {
   requireAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const item = (db.orgCredentialReferences as OrganizationCredentialReference[]).find(candidate => candidate.id === input.credentialId && candidate.orgId === input.orgId);
   if (!item) return false;
   item.status = 'revoked';
   item.revision += 1;
   item.updatedAt = now();
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({ orgId: input.orgId, userId: input.actorUserId, action: 'credential_reference.revoked', resourceType: 'credential_reference', resourceId: item.id });
   return true;
 }
@@ -583,7 +583,7 @@ export function registerOrganizationDevice(input: {
   const branchId = normalizeText(input.branchId);
   const userId = normalizeText(input.userId);
   if (!orgId || !branchId || !userId) throw new OrganizationResourceAuthorizationError('orgId, branchId, and userId are required', 400);
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const conflicting = (db.orgDevices as OrganizationDeviceAccess[]).find(item => item.branchId === branchId && (item.orgId !== orgId || item.userId !== userId));
   if (conflicting) throw new OrganizationResourceAuthorizationError('This immutable branch identity belongs to another organization member', 409);
@@ -596,7 +596,7 @@ export function registerOrganizationDevice(input: {
     existing.lastRegisteredAt = timestamp;
     existing.updatedAt = timestamp;
     if (input.label) existing.label = normalizeText(input.label, 120);
-    writeDB(db);
+    commitDatabaseTables(db);
     return { ...existing, permissions: [...existing.permissions] };
   }
   const device: OrganizationDeviceAccess = {
@@ -605,7 +605,7 @@ export function registerOrganizationDevice(input: {
     createdAt: timestamp, updatedAt: timestamp, lastRegisteredAt: timestamp, revokedAt: null, revokedBy: null,
   };
   db.orgDevices.push(device);
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId, userId, action: 'branch_device.registered', resourceType: 'branch_device', resourceId: device.id,
     details: { branchId, permissions: device.permissions },
@@ -621,7 +621,7 @@ export function authorizeOrganizationDevice(input: {
 }): OrganizationDeviceAccess {
   const membership = activeMembership(input.orgId, input.userId);
   if (!membership) throw new OrganizationResourceAuthorizationError('Active organization membership is required');
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   let device = (db.orgDevices as OrganizationDeviceAccess[]).find(item => (
     item.orgId === input.orgId && item.branchId === input.branchId && item.userId === input.userId
@@ -654,7 +654,7 @@ export function authorizeOrganizationDevice(input: {
 
 export function listOrganizationDevices(orgId: string, actorUserId: string): OrganizationDeviceAccess[] {
   requireAdministrator(orgId, actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   return (db.orgDevices as OrganizationDeviceAccess[])
     .filter(item => item.orgId === orgId)
@@ -671,7 +671,7 @@ export function updateOrganizationDevice(input: {
   label?: string;
 }): OrganizationDeviceAccess | null {
   requireAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["departments","orgCredentialReferences","orgDevices","orgPositions","orgResourceGrants","orgResourcePolicies","settings"]);
   ensureTables(db);
   const device = (db.orgDevices as OrganizationDeviceAccess[]).find(item => item.id === input.deviceId && item.orgId === input.orgId);
   if (!device) return null;
@@ -691,7 +691,7 @@ export function updateOrganizationDevice(input: {
   }
   device.revision += 1;
   device.updatedAt = timestamp;
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId, userId: input.actorUserId, action: `branch_device.${device.status === 'revoked' ? 'revoked' : 'updated'}`,
     resourceType: 'branch_device', resourceId: device.id,

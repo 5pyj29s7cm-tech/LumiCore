@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'socket.io';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import { syncRuntimeScene } from '../scene/runtime_scene';
 import { resolveSocketScope } from './scope';
 
@@ -16,7 +16,7 @@ export function registerSceneHandlers(
     const userId = userIdFn(socket);
     const scope = resolveSocketScope(socket, userId);
     try {
-      const payload = syncRuntimeScene(readDB(), {
+      const payload = syncRuntimeScene(readDatabaseTables(["conversationActionTasks","conversationActionReceipts","autonomousTasks"]), {
         userId,
         domain: scope.domain,
         orgId: scope.orgId,

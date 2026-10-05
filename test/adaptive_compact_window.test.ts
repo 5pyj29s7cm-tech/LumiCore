@@ -1,9 +1,10 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
-const source = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(root, relativePath), 'utf8');
 
 describe('adaptive compact client window', () => {
   it('allows the normal Tauri client to shrink to the supported responsive floor', () => {

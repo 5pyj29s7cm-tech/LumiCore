@@ -1,9 +1,10 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
 function source(file: string) {
-  return fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), file), 'utf8');
 }
 
 describe('personal and organization client state boundaries', () => {

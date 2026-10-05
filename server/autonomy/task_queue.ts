@@ -1,7 +1,7 @@
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 /** Durable autonomous task queue for Lumi's unattended background work. */
 import { randomUUID } from 'crypto';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { OrganizationMembershipAuthorization } from '../org/membership_authorization';
 import { isAutonomousTaskFinalizationPending, projectAutonomousTaskFinalization, resetAutonomousTaskFinalizationsForTests } from './task_finalization';
@@ -313,9 +313,9 @@ export function recoverPersistedTask(task: AutonomousTask, recoveredAt = nowIso(
 
 function persist(): void {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["autonomousTasks"]);
     db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)].map(cloneTask);
-    writeDB(db);
+    commitDatabaseTables(db);
   } catch {
     // Unit tests and early bootstrap can legitimately run before SQLite exists.
   }
@@ -323,9 +323,9 @@ function persist(): void {
 
 /** Admission/terminal lifecycle barriers may never use best-effort persistence. */
 export async function persistAutonomousTaskQueue(): Promise<void> {
-  const db = readDB();
+  const db = readDatabaseTables(["autonomousTasks"]);
   db.autonomousTasks = [...queue, ...history.slice(-MAX_HISTORY)].map(cloneTask);
-  writeDB(db);
+  commitDatabaseTables(db);
   await flushDBOrThrow();
 }
 
@@ -436,7 +436,7 @@ export function hydrateAutonomousTasksFromDb(force = false): number {
   if (activeExecutors.size > 0) return 0;
   let db: any;
   try {
-    db = readDB();
+    db = readDatabaseTables(["autonomousTasks"]);
   } catch {
     return 0;
   }
@@ -874,5 +874,5 @@ export function resetAutonomousTaskQueueForTest(options: { clearPersisted?: bool
 
 /** Diagnostics read only persisted owned rows and do not trigger queue recovery. */
 export function listPersistedAutonomousTasks(userId: string): AutonomousTask[] {
-  return userId ? cloneDatabaseValue((readDB().autonomousTasks || []).filter(task => task.userId === userId)) : [];
+  return userId ? cloneDatabaseValue((readDatabaseTables(["autonomousTasks"]).autonomousTasks || []).filter(task => task.userId === userId)) : [];
 }

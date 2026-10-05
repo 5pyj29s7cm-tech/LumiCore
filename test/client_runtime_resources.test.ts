@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +9,7 @@ import {
 import { samePresenceState } from '../src/hooks/usePresence';
 
 function source(file: string) {
-  return fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), file), 'utf8');
 }
 
 describe('client runtime resource boundaries', () => {

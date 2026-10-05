@@ -69,7 +69,8 @@
     "deploy:mac": "bash scripts/deploy-macos.sh",
     "deploy:linux": "bash scripts/deploy-linux.sh",
     "repair:knowledge-filenames": "node scripts/repair-knowledge-filenames.mjs --apply",
-    "repair:knowledge-filenames:dry": "node scripts/repair-knowledge-filenames.mjs"
+    "repair:knowledge-filenames:dry": "node scripts/repair-knowledge-filenames.mjs",
+    "check:module-size": "node scripts/check-module-size.mjs"
   },
   "dependencies": {
     "@alicloud/lingmou20250527": "1.8.0",

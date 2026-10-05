@@ -2,7 +2,7 @@ import { providerGetterArguments } from "../llm/provider_getters";
 import { runtimeFaults } from './fault_state';
 import { repairTestMemoryProvenance, repairRuntimeLearningEvidence } from '../memory/provenance';
 import {
-  readDB,
+  readDatabaseTables,
   flushDB,
   closeDatabase,
   ensureDatabaseInitialized,
@@ -135,7 +135,7 @@ export async function bootstrap(ctx: BootstrapContext) {
     await ensureDatabaseInitialized();
     repairTestMemoryProvenance();
     repairRuntimeLearningEvidence();
-    const initializedDb = readDB();
+    const initializedDb = readDatabaseTables(["conversations","interactions","users"]);
     const migrationCounts = {
       quickCheck: requireDatabaseStartupQuickCheck(),
       // A migrated database must expose all three durable collections. Using
@@ -236,7 +236,7 @@ export async function bootstrap(ctx: BootstrapContext) {
       timeoutMs: 1_000,
       run: () => ({
         registeredTools: toolRegistry.list().length,
-        databaseReadable: Boolean(readDB()),
+        databaseReadable: Boolean(readDatabaseTables(["conversations","interactions","users"])),
         readOnlyCache: readOnlyContextCache.metrics(),
         gptSovits: getGptSovitsRuntimeStatus(),
         voiceprint: getVoiceprintRuntimeStatus(),

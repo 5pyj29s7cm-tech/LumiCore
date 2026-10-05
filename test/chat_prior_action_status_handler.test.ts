@@ -642,8 +642,8 @@ describe('chat prior-action status handler', () => {
       text: '刚才失败在视觉识别：服务返回 HTTP 400，但没有提供错误正文。',
     });
     expect(response.text).not.toMatch(/completed|乱码旧任务|undefined|ocr_screen/iu);
-    expect(storedConversation.actionContinuationState).toBeUndefined();
-    expect(db.conversationActionTasks.find((task: any) => task.id === staleTaskId)?.status)
+    expect(readDB().conversations.find((item: any) => item.id === isolated.id)?.actionContinuationState).toBeUndefined();
+    expect(readDB().conversationActionTasks.find((task: any) => task.id === staleTaskId)?.status)
       .toBe('completed');
     expect(llmTripwire).not.toHaveBeenCalled();
   });

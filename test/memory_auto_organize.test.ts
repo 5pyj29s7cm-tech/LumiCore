@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ db: { memories: [] as any[] }, writes: 0 }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: (db: any) => { state.db = db; state.writes++; } }));
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({ readDB: () => state.db, writeDB: (db: any) => { state.db = db; state.writes++; } })) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 import { organizePersonalMemories, organizeMemories } from '../server/memory/auto_organize';
 beforeEach(() => {
   state.writes = 0;

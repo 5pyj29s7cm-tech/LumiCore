@@ -1,9 +1,10 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('voice provider prompt contract', () => {
-  const source = fs.readFileSync(
+  const source = readImplementationSource(
     path.join(process.cwd(), 'server/socket/voice.ts'),
     'utf8',
   );

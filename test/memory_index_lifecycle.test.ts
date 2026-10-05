@@ -169,7 +169,7 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     const merged = addMemory({ userId: uid, type: 'fact', content: memory.content, keywords: ['football'], confidence: 0.9, sourceInteractionId: 'synthetic-index-merge' });
     expect(merged.id).toBe(memory.id);
     expect(merged.embedding).toBeUndefined();
-    await vi.waitFor(() => expect(merged.embedding).toEqual([0, 1]));
+    await vi.waitFor(() => expect(readDB().memories.find((row: any) => row.id === merged.id).embedding).toEqual([0, 1]));
     expect((await recall(uid, 'football')).map(item => item.id)).toEqual([memory.id]);
   });
 
@@ -228,8 +228,8 @@ describe('memory content and index lifecycle through actual REST and SQLite', ()
     });
     const pending = recall(uid); await started;
     if (change === 'content') expect((await request(uid, changed.id, 'PUT', { content: 'football updated candidate', keywords: ['football'] })).status).toBe(200);
-    else if (change === 'owner') { changed.userId = 'another-synthetic-user'; writeDB(readDB()); }
-    else if (change === 'scope') { changed.domain = 'work'; changed.orgId = 'another-scope'; writeDB(readDB()); }
+    else if (change === 'owner') { readDB().memories.find((row: any) => row.id === changed.id).userId = 'another-synthetic-user'; writeDB(readDB()); }
+    else if (change === 'scope') { const current = readDB().memories.find((row: any) => row.id === changed.id); current.domain = 'work'; current.orgId = 'another-scope'; writeDB(readDB()); }
     else expect((await request(uid, changed.id, 'DELETE')).status).toBe(200);
     release(); expect((await pending).map(item => item.id)).toEqual([kept.id]);
   });

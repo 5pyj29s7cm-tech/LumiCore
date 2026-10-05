@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,7 +63,7 @@ describe('persisted conversation cross-client synchronization', () => {
   });
 
   it('keeps the native chat listener wired to persisted message replacement', () => {
-    const chat = fs.readFileSync(path.join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
+    const chat = readImplementationSource(path.join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
     const start = chat.indexOf('const onConversationUpdated =');
     const end = chat.indexOf('const normalizeBackgroundTask =', start);
     const handler = chat.slice(start, end);

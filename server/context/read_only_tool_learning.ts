@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
 import { toolRegistry } from '../tools/registry';
 import type { ToolExecutionRecord } from '../tools/types';
@@ -103,7 +103,7 @@ export function recordReadOnlyToolPattern(input: {
   }));
   const signature = digest({ features: [...features].sort(), toolSequence });
   const observationRef = digest(input.observationRef || `${signature}:${records.map(record => record.requestId || record.id || '').join(':')}`).slice(0, 32);
-  const db = readDB();
+  const db = readDatabaseTables(["readOnlyToolPatterns"]);
   if (!Array.isArray(db.readOnlyToolPatterns)) db.readOnlyToolPatterns = [];
   const rows = db.readOnlyToolPatterns as ReadOnlyToolPatternRow[];
   let row = rows.find(candidate => candidate.id === `readonly_${signature.slice(0, 32)}` && scopeMatches(candidate, input.userId, scope.domain, scope.orgId));
@@ -136,7 +136,7 @@ export function recordReadOnlyToolPattern(input: {
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const evicted = new Set(scopedRows.slice(MAX_PATTERNS_PER_SCOPE).map(candidate => candidate.id));
   if (evicted.size > 0) db.readOnlyToolPatterns = rows.filter(candidate => !evicted.has(candidate.id));
-  writeDB(db);
+  commitDatabaseTables(db);
   return { recorded: true, reason: 'verified_read_only_pattern', pattern: { ...row, toolSequence: row.toolSequence.map(step => ({ ...step, argumentKeys: [...step.argumentKeys] })) } };
 }
 
@@ -152,7 +152,7 @@ export function rankReadOnlyToolPatterns(input: {
   const features = featureHashes(input.userText);
   if (features.length === 0) return [];
   const available = input.availableTools ? new Set(input.availableTools) : null;
-  const db = readDB();
+  const db = readDatabaseTables(["readOnlyToolPatterns"]);
   const rows = (Array.isArray(db.readOnlyToolPatterns) ? db.readOnlyToolPatterns : []) as ReadOnlyToolPatternRow[];
   const ranked = rows
     .filter(row => scopeMatches(row, input.userId, scope.domain, scope.orgId))

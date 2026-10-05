@@ -58,7 +58,7 @@ describe('shared chat and voice memory durability', () => {
   it('does not train associations or increment recall counters while browsing', () => {
     const input=base('unused');const row=addMemory({userId:input.userId,type:'fact',content:'蓝盒子在书架',keywords:['蓝盒子'],confidence:.9,sourceInteractionId:'manual'},{generateEmbedding:false});
     queryMemories({userId:input.userId,query:'蓝盒子'});expect(row.retrieveCount).toBe(0);
-    queryMemories({userId:input.userId,query:'蓝盒子',recordRetrieval:true});expect(row.retrieveCount).toBe(1);
+    queryMemories({userId:input.userId,query:'蓝盒子',recordRetrieval:true});expect(readDB().memories.find(m=>m.id===row.id).retrieveCount).toBe(1);
   });
   it('recognizes explicit corrections independently of generic conversation classification',()=>{
     expect(isExplicitMemoryRequest('修正青岚项目的设定：资料盒已移到南侧柜子第二层。')).toBe(true);

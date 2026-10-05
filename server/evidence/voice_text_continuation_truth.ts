@@ -9,7 +9,7 @@ import {
   verify as verifyBytes,
 } from 'node:crypto';
 import path from 'node:path';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 
 export const VOICE_TEXT_CONTINUATION_TRUTH_KIND =
   'lumi.voice-text-continuation-truth' as const;
@@ -896,7 +896,7 @@ export async function captureVoiceTextContinuationTruth(
   input: CaptureVoiceTextContinuationTruthInput,
 ): Promise<VoiceTextContinuationTruth> {
   const db = typeof structuredClone === 'function'
-    ? cloneDatabaseValue(readDB())
-    : JSON.parse(JSON.stringify(readDB()));
+    ? cloneDatabaseValue(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions"]))
+    : JSON.parse(JSON.stringify(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions"])));
   return buildVoiceTextContinuationTruthFromSources({ ...input, db });
 }

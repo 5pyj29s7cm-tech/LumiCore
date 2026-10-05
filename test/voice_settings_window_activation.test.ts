@@ -1,9 +1,9 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = (relativePath: string) => fs
-  .readFileSync(path.join(process.cwd(), relativePath), 'utf8')
+const source = (relativePath: string) => readImplementationSource(path.join(process.cwd(), relativePath), 'utf8')
   .replace(/\r\n/g, '\n');
 
 describe('voice workflow interaction semantics', () => {

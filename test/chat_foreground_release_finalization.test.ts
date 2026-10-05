@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import './helpers';
 import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { readFileSync } from 'node:fs';
@@ -223,7 +224,7 @@ describe('chat foreground release convergence', () => {
   });
 
   it('places convergence before desktop/serial release and persists ordinary failures as assistant responses', () => {
-    const source = readFileSync('server/socket/chat.ts', 'utf8');
+    const source = readImplementationSource('server/socket/chat.ts', 'utf8');
     const releaseStart = source.indexOf('const chatReleaseGate = createDurableForegroundReleaseGate({');
     const convergeAt = source.indexOf('convergeChatForegroundRequestBeforeRelease({', releaseStart);
     const durableSuccessAt = source.indexOf('if (!releaseResult.converged)', convergeAt);

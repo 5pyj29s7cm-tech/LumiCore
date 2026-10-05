@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -531,8 +533,8 @@ describe('Lumi execution decision', () => {
   it('keeps chat, voice, and task sockets on the shared execution decision path', () => {
     const root = process.cwd();
     const sources = [
-      readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
+      readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8'),
+      readVoiceImplementationSource(),
     ];
 
     for (const source of sources) {

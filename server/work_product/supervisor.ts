@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 
 export type DeliverableType =
   | 'document'
@@ -195,7 +195,7 @@ export function verifyWorkProduct(input: VerifyInput): WorkProductVerification {
 
 export function getWorkProductPlan(userId: string, planId: string): WorkProductPlan | null {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["workProductPlans"]);
     return (db.workProductPlans || []).find((plan: WorkProductPlan) => plan.id === planId && (plan.userId === userId || userId === 'anonymous')) || null;
   } catch {
     return null;
@@ -203,11 +203,11 @@ export function getWorkProductPlan(userId: string, planId: string): WorkProductP
 }
 
 function persistPlan(plan: WorkProductPlan): void {
-  const db = readDB();
+  const db = readDatabaseTables(["workProductPlans"]);
   if (!db.workProductPlans) db.workProductPlans = [];
   db.workProductPlans.push(plan);
   db.workProductPlans = db.workProductPlans.slice(-200);
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 function inferDeliverableType(task: string): DeliverableType {

@@ -1,9 +1,10 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 function source(relativePath: string): string {
-  return readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 }
 
 function expectFinalizationMetadataOnEveryAgentResponse(relativePath: string): void {
@@ -315,7 +316,7 @@ describe('finalized output paths', () => {
     expect(linkedPlanPath.indexOf("plan.status = 'completed'")).toBeGreaterThan(linkedPlanPath.indexOf('if (plan.steps.every('));
     const hideUnsavedPlan = linkedPlanPath.indexOf('pendingAutonomousPlanCompletions.set(taskId, pending)');
     expect(hideUnsavedPlan).toBeGreaterThanOrEqual(0);
-    expect(linkedPlanPath.indexOf('writeDB(db)')).toBeGreaterThan(hideUnsavedPlan);
+    expect(linkedPlanPath.indexOf('commitDatabaseTables(db)')).toBeGreaterThan(hideUnsavedPlan);
     expect(planner).toContain('.map(projectPlanCompletion)');
     expect(planner).toContain('return plan ? projectPlanCompletion(plan) : null');
     expect(autonomous).toContain('stageAutonomousPlanCompletion(task.id, task.planId, planScopeForTask(task), clipPlanResult(summary))');

@@ -1,11 +1,13 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('chat and voice finalized delivery paths', () => {
   const root = process.cwd();
-  const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-  const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+  const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+  const voice = readVoiceImplementationSource();
 
   it('keeps workflow adapters out of both interactive transports', () => {
     expect(chat).not.toContain('executeSkillWorkflowAdapter');

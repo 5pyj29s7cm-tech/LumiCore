@@ -1,8 +1,9 @@
+import { readImplementationSource } from './implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = (relativePath: string) => readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 
 describe('foreground task and request identity wiring', () => {
   it('prepares a durable Chat task before relay creation and preserves request identity separately', () => {

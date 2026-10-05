@@ -1,4 +1,6 @@
-use super::{run_command_blocking, CommandResult, CommandSupervisor, MAX_COMMAND_TIMEOUT_MS};
+use crate::native_shell::{run_command_blocking, MAX_COMMAND_TIMEOUT_MS};
+use crate::desktop_command_supervisor::CommandSupervisor;
+use crate::CommandResult;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[tauri::command]

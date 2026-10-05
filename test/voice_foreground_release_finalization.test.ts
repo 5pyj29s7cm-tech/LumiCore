@@ -1,3 +1,4 @@
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { readFileSync } from 'node:fs';
@@ -606,7 +607,7 @@ describe('voice foreground release convergence', () => {
   });
 
   it('keeps immutable identity and converges before retained control, exception, cancel, and model finally release', () => {
-    const source = readFileSync('server/socket/voice.ts', 'utf8');
+    const source = readVoiceImplementationSource();
 
     const identityAt = source.indexOf('const foregroundRequestIdentity: VoiceForegroundRequestIdentity = Object.freeze({');
     const bindingFailureAt = source.indexOf("if ('bindingFailure' in actionTaskExecution)");
@@ -620,7 +621,7 @@ describe('voice foreground release convergence', () => {
 
     const publicHelperStart = source.indexOf('export async function convergeVoiceForegroundRequestBeforeRelease');
     const settleBeforeFinalizeAt = source.indexOf('settleConversationActionExecutionRequest(', publicHelperStart);
-    const manager = readFileSync('server/conversation/manager.ts', 'utf8');
+    const manager = readFileSync('server/conversation/foreground_finalization.ts', 'utf8');
     const settleCallbackAt = manager.indexOf('input.settlePendingTask();');
     const fallbackFinalizeAt = manager.indexOf('const finalization = await finalizeForegroundRequestDurably({', settleCallbackAt);
     expect(settleBeforeFinalizeAt).toBeGreaterThan(publicHelperStart);

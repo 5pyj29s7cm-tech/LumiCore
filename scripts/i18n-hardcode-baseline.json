@@ -326,12 +326,6 @@
       "08ad15dedae7ed391fa1": 1
     },
     "server/cognition/action_contract.ts": {
-      "e7d36ed9c447c1d229d9": 1,
-      "eb4c34f0c9ad833000a9": 1,
-      "f2a79706b13792343a30": 1,
-      "7d19fd8eb15b65ab0276": 1,
-      "7f328f195c8cd12a8a43": 1,
-      "c72c5c968813114af1f0": 1,
       "8dc37809677786b402fc": 1,
       "fcbd8bda1bb457d78008": 1,
       "ca178c47f7555265368d": 1,
@@ -506,15 +500,6 @@
       "8e0d0fc389b72683c575": 1
     },
     "server/cognition/result_finalizer.ts": {
-      "0c310d45abd87b9cbf4a": 1,
-      "44bf26bf0e383ac444dd": 1,
-      "5aa10cea257eea5e63fe": 1,
-      "926fdb31fd316835d807": 1,
-      "281abfb4fef9402fa2aa": 1,
-      "18c5b144eca034b3be89": 1,
-      "07eaef0a5484682e116a": 1,
-      "d63804e90b4723a2b4b1": 1,
-      "72ceba0e0c821bad8f08": 1,
       "f68ec951d28ef0a32414": 1,
       "92af0a33e956580e0316": 1,
       "fff30f8f8b69a4cdfb29": 1,
@@ -529,42 +514,6 @@
       "8a1255c1a506539592da": 1,
       "c98f96e16dec01fc8b33": 1,
       "00d09721d2033a9f6fb2": 1,
-      "2b08c66d8c8fc93ac65e": 1,
-      "767303444019faf7371e": 2,
-      "02e29a8a9e56816ee8c1": 1,
-      "33f5ca16c9340d6f10d1": 1,
-      "1df4b5988c7332e035ba": 1,
-      "555ee27e0ac34f513af3": 1,
-      "610213cd0a6a1f1cdf2b": 1,
-      "4ffba5e74c334825a4fd": 1,
-      "b3d0d3e2c10556859213": 1,
-      "799fde0b0ec83b31834a": 1,
-      "8c07d3ed77aeb7bf2dd7": 1,
-      "f28461bb49c856471630": 1,
-      "3183f9cfddb6bd46aaa9": 1,
-      "f7ea85df9292c3a85f28": 1,
-      "d2b9cbffe3ca36b8a8cc": 1,
-      "7039bda73482511ce2e0": 1,
-      "bcadf636379101699474": 1,
-      "d8429cf6b968e71d69a2": 1,
-      "7fccd8cb03f534f6c46e": 1,
-      "b7f1ff6f19093113bc6f": 1,
-      "42d076ac4679d51ebe07": 1,
-      "fb71a11dc5f03b5e8c2d": 2,
-      "438081355e46e41f7bfa": 2,
-      "dd097c58aa887f065c60": 2,
-      "8899ca581e2866ed1d69": 2,
-      "e7f81ecd94c104ad73c4": 2,
-      "d170c1324a3a6f1c3dec": 1,
-      "c83f2c1900f97ded0c0e": 1,
-      "155b32a4096797da892a": 1,
-      "05ba1657501dd70b6701": 1,
-      "bf4ff068aafc522b2f38": 1,
-      "5f4d7cf2c82dd00a16bf": 1,
-      "fd07e6fc58d51343dda4": 1,
-      "145a3c1159f37deda9b2": 1,
-      "f30a7b13b0015a4881a8": 1,
-      "39dd152db3220fbf0223": 1,
       "7ed9e1cab173d14c64e1": 1,
       "b1d8730526dba6bc172f": 1
     },
@@ -705,37 +654,6 @@
       "23a53aede9b69f1060a0": 1,
       "b3078e60a474a57007c1": 1,
       "2a1e4ff06edb91b42eb1": 1
-    },
-    "server/conversation/manager.ts": {
-      "32aed6a1a1d24ba708c0": 1,
-      "3866042f01ce1414b1ac": 1,
-      "263200d7d529b522a902": 1,
-      "ff744b722ef79b355483": 1,
-      "98d7ec1f1a7c76057ca9": 1,
-      "3e1143e8e88bda62c06a": 1,
-      "a2629c3b6acc9972fed9": 1,
-      "6aa8f49cc992dfd75a11": 1,
-      "3ca7718593c06f4f5fc7": 1,
-      "99402f70bfa98137c945": 1,
-      "4d947325473f5b57635b": 1,
-      "4b5926c77e44cac05183": 1,
-      "54a4ed2ca1cb49dfeeb9": 1,
-      "de24c8d8d538883be1ea": 1,
-      "db95142124934467ce25": 1,
-      "23c9667ab55176f9b43b": 1,
-      "847c5f681ce955a05092": 1,
-      "d1a002ada65ab5318138": 1,
-      "625b97d43bcec5b79268": 1,
-      "67584bf0bbfa07bc393d": 1,
-      "a6a7e454cf11a0500368": 1,
-      "f9e31c979cc66c7f69d2": 1,
-      "68ea5dd4d7af20e623ef": 1,
-      "f0fddb1d8c8655bb71a3": 1,
-      "f6e7febc0bccfd0dcc5a": 1,
-      "38b127dedfcb6af4e0fb": 1,
-      "8d48a4ba3f56f3747bd4": 1,
-      "00ee554b9132cce1a412": 1,
-      "e2000dc0eccbbd8c738f": 1
     },
     "server/desktop/execution_plan.ts": {
       "1283ddbf69566ff8af82": 1
@@ -1955,20 +1873,6 @@
       "9f7b98cd01aefb8492b1": 1,
       "047d26e7618e32bca02d": 1,
       "86a03c96939ceb521471": 1
-    },
-    "server/socket/chat.ts": {
-      "35d64db853be008f05a6": 1,
-      "d8c3578c40cf0ddd72c6": 1
-    },
-    "server/socket/voice.ts": {
-      "60369052266532904804": 1,
-      "a72ef1682682c4225ebb": 2,
-      "824bbd8a4452602fab8d": 1,
-      "5ba255ef85a661021a41": 1,
-      "c478f57319ae7ace7b6b": 1,
-      "056c8780ded82e95f1ad": 1,
-      "f7324c7fe6783f48f9fb": 1,
-      "21afcad7cd6577c306a8": 1
     },
     "server/stt/file_transcription.ts": {
       "dffdcdd58cf06fe55374": 1,
@@ -3312,10 +3216,6 @@
       "ab2b1ef03f0cae33e8a8": 1,
       "c6a8410b52a1ab4d6bf1": 1
     },
-    "src/components/DesktopUI.tsx": {
-      "0ac45e5afa719ca6bcf8": 1,
-      "279c768406beafc786e8": 1
-    },
     "src/components/KnowledgeBase.tsx": {
       "28384d7afd2e4fa66084": 1
     },
@@ -3512,6 +3412,120 @@
     },
     "src/components/agent_chat/media_artifacts.tsx": {
       "093470d1e7023e599aaa": 1
+    },
+    "server/cognition/action_request.ts": {
+      "e7d36ed9c447c1d229d9": 1,
+      "eb4c34f0c9ad833000a9": 1,
+      "f2a79706b13792343a30": 1,
+      "7d19fd8eb15b65ab0276": 1,
+      "7f328f195c8cd12a8a43": 1,
+      "c72c5c968813114af1f0": 1
+    },
+    "server/cognition/result_finalizer_support.ts": {
+      "0c310d45abd87b9cbf4a": 1,
+      "44bf26bf0e383ac444dd": 1,
+      "5aa10cea257eea5e63fe": 1,
+      "926fdb31fd316835d807": 1,
+      "281abfb4fef9402fa2aa": 1,
+      "18c5b144eca034b3be89": 1,
+      "07eaef0a5484682e116a": 1,
+      "d63804e90b4723a2b4b1": 1,
+      "72ceba0e0c821bad8f08": 1
+    },
+    "server/cognition/result_artifact_presenter.ts": {
+      "f7ea85df9292c3a85f28": 1,
+      "d2b9cbffe3ca36b8a8cc": 1,
+      "7039bda73482511ce2e0": 1,
+      "bcadf636379101699474": 1,
+      "d8429cf6b968e71d69a2": 1,
+      "7fccd8cb03f534f6c46e": 1,
+      "b7f1ff6f19093113bc6f": 1,
+      "42d076ac4679d51ebe07": 1,
+      "fb71a11dc5f03b5e8c2d": 2,
+      "438081355e46e41f7bfa": 2,
+      "dd097c58aa887f065c60": 2,
+      "8899ca581e2866ed1d69": 2,
+      "e7f81ecd94c104ad73c4": 2,
+      "d170c1324a3a6f1c3dec": 1,
+      "c83f2c1900f97ded0c0e": 1,
+      "155b32a4096797da892a": 1,
+      "05ba1657501dd70b6701": 1,
+      "bf4ff068aafc522b2f38": 1,
+      "5f4d7cf2c82dd00a16bf": 1,
+      "fd07e6fc58d51343dda4": 1,
+      "145a3c1159f37deda9b2": 1,
+      "f30a7b13b0015a4881a8": 1,
+      "39dd152db3220fbf0223": 1
+    },
+    "server/cognition/result_desktop_presenter.ts": {
+      "2b08c66d8c8fc93ac65e": 1,
+      "767303444019faf7371e": 2,
+      "02e29a8a9e56816ee8c1": 1,
+      "33f5ca16c9340d6f10d1": 1,
+      "1df4b5988c7332e035ba": 1,
+      "555ee27e0ac34f513af3": 1,
+      "610213cd0a6a1f1cdf2b": 1,
+      "4ffba5e74c334825a4fd": 1,
+      "b3d0d3e2c10556859213": 1,
+      "799fde0b0ec83b31834a": 1,
+      "8c07d3ed77aeb7bf2dd7": 1,
+      "f28461bb49c856471630": 1,
+      "3183f9cfddb6bd46aaa9": 1
+    },
+    "server/conversation/summary_state.ts": {
+      "32aed6a1a1d24ba708c0": 1,
+      "3866042f01ce1414b1ac": 1,
+      "263200d7d529b522a902": 1,
+      "ff744b722ef79b355483": 1,
+      "98d7ec1f1a7c76057ca9": 1,
+      "3e1143e8e88bda62c06a": 1,
+      "a2629c3b6acc9972fed9": 1,
+      "6aa8f49cc992dfd75a11": 1,
+      "3ca7718593c06f4f5fc7": 1,
+      "99402f70bfa98137c945": 1,
+      "4d947325473f5b57635b": 1,
+      "4b5926c77e44cac05183": 1,
+      "54a4ed2ca1cb49dfeeb9": 1,
+      "de24c8d8d538883be1ea": 1,
+      "db95142124934467ce25": 1,
+      "23c9667ab55176f9b43b": 1,
+      "847c5f681ce955a05092": 1,
+      "d1a002ada65ab5318138": 1,
+      "625b97d43bcec5b79268": 1,
+      "67584bf0bbfa07bc393d": 1,
+      "a6a7e454cf11a0500368": 1,
+      "f9e31c979cc66c7f69d2": 1,
+      "68ea5dd4d7af20e623ef": 1,
+      "f0fddb1d8c8655bb71a3": 1,
+      "f6e7febc0bccfd0dcc5a": 1,
+      "38b127dedfcb6af4e0fb": 1,
+      "8d48a4ba3f56f3747bd4": 1,
+      "00ee554b9132cce1a412": 1,
+      "e2000dc0eccbbd8c738f": 1
+    },
+    "server/socket/voice.ts": {
+      "5ba255ef85a661021a41": 1,
+      "a72ef1682682c4225ebb": 1,
+      "c478f57319ae7ace7b6b": 1,
+      "056c8780ded82e95f1ad": 1,
+      "f7324c7fe6783f48f9fb": 1,
+      "21afcad7cd6577c306a8": 1
+    },
+    "server/socket/voice_conversation_turn.ts": {
+      "a72ef1682682c4225ebb": 1
+    },
+    "server/socket/voice_turn_policy.ts": {
+      "60369052266532904804": 1
+    },
+    "server/socket/chat.ts": {
+      "35d64db853be008f05a6": 1,
+      "d8c3578c40cf0ddd72c6": 1
+    },
+    "src/components/desktop/useMeetingTranscript.ts": {
+      "0ac45e5afa719ca6bcf8": 1
+    },
+    "src/components/desktop/useMeetingWorkflow.ts": {
+      "279c768406beafc786e8": 1
     }
   }
 }

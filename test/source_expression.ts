@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
+import path from 'node:path';
 import ts from 'typescript';
 
 const sources = new Map<string, ts.SourceFile>();
@@ -10,8 +11,12 @@ export function readSourceAst(file: string): ts.SourceFile {
 
 /** Execute the current production expression with explicit test dependencies. */
 export function extractSourceExpression(file: string, name: string, dependencies: Record<string, unknown>): any {
-  const ast = readSourceAst(file);
+  const visited = new Set<string>();
   let expression = '';
+  const findExpression = (sourcePath: string): void => {
+  if (visited.has(sourcePath)) return;
+  visited.add(sourcePath);
+  const ast = readSourceAst(sourcePath);
   function visit(node: ts.Node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name && node.initializer) {
       const init = node.initializer;
@@ -22,6 +27,18 @@ export function extractSourceExpression(file: string, name: string, dependencies
     ts.forEachChild(node, visit);
   }
   visit(ast);
+  if (expression) return;
+  for (const statement of ast.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const relative = statement.moduleSpecifier.text;
+    if (!relative.startsWith('.')) continue;
+    const base = path.resolve(path.dirname(sourcePath), relative);
+    const imported = [base + '.ts', base + '.tsx'].find(candidate => fs.existsSync(candidate));
+    if (imported) findExpression(imported);
+    if (expression) return;
+  }
+  };
+  findExpression(file);
   if (!expression) throw new Error('Production expression missing: ' + file + ':' + name);
   return vm.runInNewContext(ts.transpileModule('(' + expression + ')', {
     fileName: file,

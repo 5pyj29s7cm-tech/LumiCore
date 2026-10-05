@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +10,7 @@ import {
 import { containsInternalExecutionLanguage } from '../shared/public_execution_language';
 
 const root = process.cwd();
-const source = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(root, relativePath), 'utf8');
 const code = (relativePath: string) => ts.createPrinter({ removeComments: true }).printFile(
   ts.createSourceFile(relativePath, source(relativePath), ts.ScriptTarget.Latest, true,
     relativePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS),

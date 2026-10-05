@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -5,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { TaskCompletionFeedbackDetails } from '../src/components/TaskCompletionFeedbackDetails';
 import { normalizeTaskCompletionFeedback } from '../src/components/workflowTypes';
 
-const source = (relativePath: string) => fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 
 describe('task completion feedback normalization', () => {
   it('keeps every bounded receipt-backed section and rejects unrelated payloads', () => {

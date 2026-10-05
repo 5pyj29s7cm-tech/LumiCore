@@ -1,6 +1,6 @@
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { listExtensionRuntimeSnapshots } from '../extensions/registry';
 import { executeToolCall, isCanonicalToolExecutionRecord } from '../tools/execution_engine';
 import { externalCommitInputDigest, type ToolRegistry } from '../tools/registry';
@@ -142,13 +142,15 @@ async function persistStrict(): Promise<void> {
 }
 
 function arrays(): {
+  db: ReturnType<typeof readDatabaseTables<'externalCapabilityPackages' | 'externalCapabilityReceipts'>>;
   packages: ExternalCapabilityPackageRow[];
   receipts: ExternalCapabilityReceiptRow[];
 } {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","externalCapabilityPackages","externalCapabilityReceipts"]);
   if (!Array.isArray(db.externalCapabilityPackages)) db.externalCapabilityPackages = [];
   if (!Array.isArray(db.externalCapabilityReceipts)) db.externalCapabilityReceipts = [];
   return {
+    db,
     packages: db.externalCapabilityPackages,
     receipts: db.externalCapabilityReceipts,
   };
@@ -741,7 +743,7 @@ function projectRow(
     ))
     .map(({ receipt }) => receipt);
   const latestByAction = new Map<string, ExternalCapabilityReceiptRow>();
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","externalCapabilityPackages","externalCapabilityReceipts"]);
   const taskOwner = new Map((db.conversationActionTasks || []).map((task: any) => [String(task.id || ''), String(task.userId || '')]));
   const conversationReceipts = (db.conversationActionReceipts || []).flatMap((receipt: any, index: number) => {
     if (
@@ -965,8 +967,8 @@ function consumeReviewApproval(input: {
   }
 }
 
-function persistRows(): void {
-  writeDB(readDB());
+function persistRows(store: ReturnType<typeof arrays>): void {
+  commitDatabaseTables(store.db);
 }
 
 function snapshotExternalCapabilityStore(): {
@@ -984,10 +986,10 @@ function restoreExternalCapabilityStore(snapshot: {
   packages: ExternalCapabilityPackageRow[];
   receipts: ExternalCapabilityReceiptRow[];
 }): void {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","externalCapabilityPackages","externalCapabilityReceipts"]);
   db.externalCapabilityPackages = cloneDatabaseValue(snapshot.packages);
   db.externalCapabilityReceipts = cloneDatabaseValue(snapshot.receipts);
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 export async function reviewExternalCapabilityProposal(input: {
@@ -1062,7 +1064,7 @@ export async function reviewExternalCapabilityProposal(input: {
   };
   store.receipts.push(receipt);
   try {
-    persistRows();
+    persistRows(store);
     await persistStrict();
   } catch (error) {
     restoreExternalCapabilityStore(before);
@@ -1104,8 +1106,7 @@ function reviewedRow(input: {
   id?: string;
   version?: string;
   packageDigest?: string;
-}): ExternalCapabilityPackageRow {
-  const store = arrays();
+}, store: ReturnType<typeof arrays>): ExternalCapabilityPackageRow {
   const approval = reviewApprovals.get(String(input.reviewNonce || '').trim());
   let proposal: ExternalCapabilityPackageProposal | undefined;
   let digest = String(input.packageDigest || '').trim().toLowerCase();
@@ -1138,7 +1139,8 @@ export async function activateExternalCapabilityProposal(input: {
   desktopSessionProof: string;
   registry: ToolRegistry;
 }) {
-  const row = reviewedRow(input);
+  const store = arrays();
+  const row = reviewedRow(input, store);
   const before = snapshotExternalCapabilityStore();
   consumeReviewApproval({
     ownerUserId: input.ownerUserId,
@@ -1165,7 +1167,6 @@ export async function activateExternalCapabilityProposal(input: {
   if (reviewedIdentityChanged) {
     throw new Error('The registered capability identity changed after review. Review the package again.');
   }
-  const store = arrays();
   const now = new Date().toISOString();
   for (const candidate of store.packages) {
     if (
@@ -1200,7 +1201,7 @@ export async function activateExternalCapabilityProposal(input: {
     createdAt: now,
   });
   try {
-    persistRows();
+    persistRows(store);
     await persistStrict();
   } catch (error) {
     restoreExternalCapabilityStore(before);
@@ -1265,7 +1266,7 @@ export async function deactivateExternalCapability(input: {
   });
 
   try {
-    persistRows();
+    persistRows(store);
     await persistStrict();
   } catch (error) {
     restoreExternalCapabilityStore(before);
@@ -1363,7 +1364,7 @@ export async function hydrateExternalCapabilities(registry: ToolRegistry): Promi
   }
   if (changed) {
     try {
-      persistRows();
+      persistRows(store);
       await persistStrict();
     } catch (error) {
       restoreExternalCapabilityStore(before);
@@ -1468,12 +1469,12 @@ export async function executeExternalCapabilityAction(input: {
       priorReceipt.terminalVerification = canonical.terminalVerification;
       priorReceipt.persistenceState = 'persisted';
       delete priorReceipt.persistenceErrorDigest;
-      persistRows();
+      persistRows(store);
       try {
         await persistStrict();
       } catch (error) {
         Object.assign(priorReceipt, pendingSnapshot);
-        persistRows();
+        persistRows(store);
         return pendingExecution(priorReceipt);
       }
       return {
@@ -1550,7 +1551,7 @@ export async function executeExternalCapabilityAction(input: {
     // This durable preclaim is the outer action fence. If it cannot be stored,
     // the handler is never entered. A crash or later flush failure therefore
     // leaves a restart-visible unknown record rather than permitting a resend.
-    persistRows();
+    persistRows(store);
     await persistStrict();
   } catch (error) {
     restoreExternalCapabilityStore(beforePreclaim);
@@ -1603,7 +1604,7 @@ export async function executeExternalCapabilityAction(input: {
     receipt.persistenceErrorDigest = crypto.createHash('sha256')
       .update(String((error as Error)?.message || error || 'execution boundary failure'))
       .digest('hex');
-    persistRows();
+    persistRows(store);
     return pendingExecution(receipt);
   }
   const canonical = isCanonicalToolExecutionRecord(record);
@@ -1626,7 +1627,7 @@ export async function executeExternalCapabilityAction(input: {
     receipt.errorDigest = crypto.createHash('sha256').update(record.error).digest('hex');
   }
   try {
-    persistRows();
+    persistRows(store);
     await persistStrict();
   } catch (error) {
     const operation = record.capability?.operation;
@@ -1667,7 +1668,7 @@ export async function executeExternalCapabilityAction(input: {
     // The already-durable preclaim remains authoritative on disk. Keep the
     // richer canonical outcome only in memory until a same-key retry can flush
     // it; neither a process restart nor an immediate retry may re-enter handler.
-    persistRows();
+    persistRows(store);
     return pendingExecution(receipt);
   }
   return {
@@ -1745,10 +1746,10 @@ export function resetExternalCapabilityRegistryForTests(options: { clearPersiste
   persistenceOverride = null;
   if (!options.clearPersisted) return;
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","externalCapabilityPackages","externalCapabilityReceipts"]);
     db.externalCapabilityPackages = [];
     db.externalCapabilityReceipts = [];
-    writeDB(db);
+    commitDatabaseTables(db);
   } catch {}
 }
 

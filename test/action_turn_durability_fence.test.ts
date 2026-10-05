@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -355,7 +356,7 @@ describe('accepted action-turn durability fence', () => {
     reservationMarker,
     durableBeginMarker,
   ) => {
-    const source = fs.readFileSync(path.resolve('server/socket', fileName), 'utf8');
+    const source = readImplementationSource(path.resolve('server/socket', fileName), 'utf8');
     const admission = source.indexOf(admissionMarker);
     const persist = source.indexOf('persistAcceptedUserTurn:', admission);
     const flush = source.indexOf('flush: flushDBOrThrow', persist);

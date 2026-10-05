@@ -1,4 +1,4 @@
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
 import { createToolReceiptObserver } from '../tools/receipt_observer';
 import type { ToolExecutionRecord } from '../tools/types';
@@ -20,7 +20,7 @@ export function createConversationReceiptObserver(identity: ReceiptOwner, isAuth
   const owner = Object.freeze({ ...identity, domain: identity.domain || 'personal', orgId: identity.orgId || '' });
   const persist = async (record: ToolExecutionRecord): Promise<void> => {
     if (!owner.taskId || record.taskId !== owner.taskId || record.requestId !== owner.requestId || !isAuthorized()) return;
-    const db = readDB();
+    const db = readDatabaseTables(["conversationActionTasks","conversationActionTurns","conversations","conversationActionReceipts","interactions"]);
     const conversation = (db.conversations || []).find((row: any) => row.id === owner.conversationId
       && row.userId === owner.userId && (row.domain || 'personal') === owner.domain && (row.orgId || '') === owner.orgId);
     const task = (db.conversationActionTasks || []).find((row: ConversationActionTaskRow) => row.id === owner.taskId
@@ -38,7 +38,7 @@ export function createConversationReceiptObserver(identity: ReceiptOwner, isAuth
     // on-time tool result is only one step, not proof the whole task is complete.
     const appended = appendConversationActionReceipts(db, { task, records, turnId: owner.requestId, requestId: owner.requestId,
       turnRowId: turn.id, externalMessageId: owner.externalMessageId });
-    if (appended.length) writeDB(db);
+    if (appended.length) commitDatabaseTables(db);
     // Flush duplicate deliveries too: an earlier attempt may have staged the
     // row in memory but failed to persist it. Native ACKs must await durability.
     await flushDBOrThrow();

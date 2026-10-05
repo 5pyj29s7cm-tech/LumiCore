@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import { extractSourceExpression as extract } from './source_expression';
 import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
@@ -123,9 +124,9 @@ it('does not assign an unverified legacy display identity to a recovery owner', 
 });
 
 it('passes the context user through the shell and desktop to AgentChatPage', () => {
-  const shell = fs.readFileSync('src/entries/useAppShell.ts', 'utf8');
-  const entry = fs.readFileSync('src/entries/desktop.tsx', 'utf8');
-  const desktop = fs.readFileSync('src/components/DesktopUI.tsx', 'utf8');
+  const shell = readImplementationSource('src/entries/useAppShell.ts', 'utf8');
+  const entry = readImplementationSource('src/entries/desktop.tsx', 'utf8');
+  const desktop = readImplementationSource('src/components/DesktopUI.tsx', 'utf8');
   expect(shell).toContain('const { user, loading, logout, refreshUser } = useApp()');
   expect(shell).toMatch(/return\s*\{\s*user, loading/);
   expect(entry).toMatch(/<DesktopUI[^>]*user=\{shell.user\}/);

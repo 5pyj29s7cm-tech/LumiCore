@@ -1,6 +1,6 @@
 
 
-interface ChatIncomingAttachment {
+export interface ChatIncomingAttachment {
   id?: string;
   fileName: string;
   path?: string;

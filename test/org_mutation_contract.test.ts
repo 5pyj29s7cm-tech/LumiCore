@@ -54,7 +54,7 @@ describe('organization mutation authorization and durability', () => {
     it('does not overwrite a concurrent row revision while compensating a failed save', async () => {
         EDB.addMember(orgId, 'audit-concurrent', 'member');
         const save = vi.spyOn(DB, 'flushDBOrThrow').mockImplementation(async () => {
-            EDB.getMember(orgId, 'audit-concurrent')!.role = 'admin';
+            EDB.updateMemberRole(orgId, 'audit-concurrent', 'admin');
             throw new Error('failed while another writer changed the row');
         });
         try {

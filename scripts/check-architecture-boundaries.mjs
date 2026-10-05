@@ -5,6 +5,8 @@ import ts from 'typescript';
 
 const root = process.cwd();
 const baselinePath = path.join(root, 'architecture/import-boundaries.json');
+const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+const violations = [];
 const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
   cwd: root, windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
 }).split('\0').filter(file => /^(?:server\/|shared\/|src\/|server\.ts$)/.test(file) && /\.tsx?$/.test(file));
@@ -17,7 +19,14 @@ for (const file of files) {
   const source = ts.createSourceFile(file, fs.readFileSync(path.join(root, file), 'utf8'), ts.ScriptTarget.Latest, true);
   let importsDatabase = false;
   const bindings = new Set();
+  const tableReadAliases = new Set();
+  const tableReads = [];
   function visit(node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && tableReadAliases.has(node.expression.text)) {
+      const selection = node.arguments[0];
+      tableReads.push(selection && ts.isArrayLiteralExpression(selection) && selection.elements.every(ts.isStringLiteral)
+        ? selection.elements.map(element => element.text) : null);
+    }
     if (file !== 'server/llm/provider_getters.ts' && (ts.isInterfaceDeclaration(node) || ts.isTypeLiteralNode(node))) {
       const members = node.members;
       if (members.length >= 10 && members.every(member => member.name && providerFields.has(member.name.getText(source)))
@@ -35,13 +44,25 @@ for (const file of files) {
         importsDatabase = true;
         if (ts.isImportDeclaration(node) && node.importClause?.namedBindings
           && ts.isNamedImports(node.importClause.namedBindings) && !node.importClause.name) {
-          for (const binding of node.importClause.namedBindings.elements) bindings.add((binding.propertyName || binding.name).text);
+          for (const binding of node.importClause.namedBindings.elements) {
+            const name = (binding.propertyName || binding.name).text;
+            bindings.add(name);
+            if (name === 'readDatabaseTables') tableReadAliases.add(binding.name.text);
+          }
         } else bindings.add('*');
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
+  const tableGrant = baseline.approvedTableImporters?.[file];
+  const sqlGrant = baseline.approvedSqlImporters?.[file];
+  const grant = tableGrant || sqlGrant;
+  if (grant && [...bindings].some(binding => !grant.allowedExports.includes(binding))) violations.push(file + ': undeclared database export');
+  if (tableReadAliases.size && (!tableGrant || tableReads.some(keys => !keys?.length || new Set(keys).size !== keys.length || keys.some(key => !tableGrant.tables.includes(key))))) {
+    violations.push(file + ': table selection must be a nonempty distinct literal subset of the module grant');
+  }
+  if (bindings.has('readDB') || bindings.has('writeDB')) violations.push(file + ': full database root access is forbidden');
   if (importsDatabase) {
     const normalized = file.replaceAll('\\', '/');
     importers.push(normalized);
@@ -50,16 +71,11 @@ for (const file of files) {
 }
 importers.sort();
 if (process.argv.includes('--record-baseline')) {
-  fs.writeFileSync(baselinePath, JSON.stringify({
-    schemaVersion: 1,
-    policy: 'Existing global database imports are migration debt. New importers require a reviewed scoped repository; update this allow-list explicitly with its scope justification.',
-    approvedScopedImporters: {'server/org/durable_routes.ts': 'Organization-scoped snapshots, serialized writes and row-version compensation.'},
-    allowedDatabaseImporters: importers,
-  }, null, 2) + '\n');
+  throw new Error('Global database baselines cannot be regenerated; review explicit table/export grants.');
+
 } else {
-  const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
   const durability = baseline.approvedDurabilityImporters || {};
-  const allowed = new Set([...baseline.allowedDatabaseImporters, ...Object.keys(baseline.approvedScopedImporters || {}), ...Object.keys(durability)]);
+  const allowed = new Set([...baseline.allowedDatabaseImporters, ...Object.keys(baseline.approvedScopedImporters || {}), ...Object.keys(durability), ...Object.keys(baseline.approvedTableImporters || {}), ...Object.keys(baseline.approvedSqlImporters || {})]);
   const escapedFences = importers.filter(file => durability[file]
     && [...databaseBindings.get(file)].some(binding => !durability[file].allowedExports.includes(binding)));
   if (escapedFences.length) {
@@ -74,9 +90,11 @@ if (process.argv.includes('--record-baseline')) {
     console.log('[architecture] ' + importers.length + ' database importers: '
       + importers.filter(file => baseline.allowedDatabaseImporters.includes(file)).length + ' legacy, '
       + importers.filter(file => baseline.approvedScopedImporters?.[file]).length + ' scoped, '
-      + importers.filter(file => durability[file]).length + ' durability-only; no new unreviewed crossings.');
+      + importers.filter(file => durability[file]).length + ' durability-only, ' + importers.filter(file => baseline.approvedTableImporters?.[file]).length + ' selected-table, ' + importers.filter(file => baseline.approvedSqlImporters?.[file]).length + ' SQL; no new unreviewed crossings.');
   }
 }
+
+if (violations.length) { console.error('Database scope violations:\n' + violations.join('\n')); process.exitCode = 1; }
 
 if (duplicateProviderTypes.length) {
   console.error('Duplicate provider getter types must use server/llm/provider_getters.ts:\n' + duplicateProviderTypes.join('\n'));

@@ -1,4 +1,4 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { isMemoryAvatarAgentId, type Memory } from './types';
 import type { Reminder } from './store';
@@ -12,7 +12,7 @@ function belongs(row: { userId: string; domain?: string; orgId?: string; agentId
     && (scope.agentId === undefined ? !isMemoryAvatarAgentId(row.agentId) : (row.agentId || '') === scope.agentId);
 }
 
-function rows<K extends keyof Tables>(table: K): Tables[K][] { return readDB()[table] || []; }
+function rows<K extends keyof Tables>(table: K): Tables[K][] { return readDatabaseTables(["memories","reminders"])[table] || []; }
 function owned<K extends keyof Tables>(table: K, scope: MemoryOwnerScope, id: string): Tables[K] | undefined {
   return rows(table).find(row => row.id === id && belongs(row, scope));
 }
@@ -35,7 +35,7 @@ function assertMemoryParent(scope: MemoryOwnerScope, memory: Memory, all: Memory
 
 /** Callbacks see one detached owned row. Refused writes cannot alter the live table. */
 function updateRow<K extends keyof Tables>(table: K, scope: MemoryOwnerScope, id: string, update: (row: Tables[K]) => void): Tables[K] | undefined {
-  const db = readDB(), all: Tables[K][] = db[table] || [];
+  const db = readDatabaseTables(["memories","reminders"]), all: Tables[K][] = db[table] || [];
   const current = all.find(row => row.id === id && belongs(row, scope));
   if (!current) return undefined;
   const draft = cloneDatabaseValue(current);
@@ -48,23 +48,23 @@ function updateRow<K extends keyof Tables>(table: K, scope: MemoryOwnerScope, id
   if (table === 'memories' && (next as Memory).parentId !== (current as Memory).parentId) {
     assertMemoryParent(scope, next as Memory, all as Memory[]);
   }
-  writeDB({ ...db, [table]: all.map(row => row === current ? next : row) });
+  commitDatabaseTables({ ...db, [table]: all.map(row => row === current ? next : row) });
   return cloneDatabaseValue(next);
 }
 export function updateMemoryRow(scope: MemoryOwnerScope, id: string, update: (row: Memory) => void): Memory | undefined { return updateRow('memories', scope, id, update); }
 export function updateReminderRow(scope: MemoryOwnerScope, id: string, update: (row: Reminder) => void): Reminder | undefined { return updateRow('reminders', scope, id, update); }
 export function insertMemoryRow(scope: MemoryOwnerScope, memory: Memory): Memory {
-  const db = readDB(), all: Memory[] = db.memories || [];
+  const db = readDatabaseTables(["memories","reminders"]), all: Memory[] = db.memories || [];
   if (!belongs(memory, scope) || all.some(row => row.id === memory.id)) throw new Error('Invalid memory insertion identity');
   const next = cloneDatabaseValue(memory);
   assertMemoryParent(scope, next, all);
-  writeDB({ ...db, memories: [...all, next] });
+  commitDatabaseTables({ ...db, memories: [...all, next] });
   return cloneDatabaseValue(next);
 }
 export function removeReminderRow(scope: MemoryOwnerScope, id: string): boolean {
-  const db = readDB(), all: Reminder[] = db.reminders || [];
+  const db = readDatabaseTables(["memories","reminders"]), all: Reminder[] = db.reminders || [];
   const row = all.find(row => row.id === id && belongs(row, scope));
   if (!row) return false;
-  writeDB({ ...db, reminders: all.filter(item => item !== row) });
+  commitDatabaseTables({ ...db, reminders: all.filter(item => item !== row) });
   return true;
 }

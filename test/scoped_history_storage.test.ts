@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ db: {} as any, reject: false }));
-vi.mock('../db_layer', () => ({
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({
   readDB: () => state.db,
   writeDB: vi.fn((next: any) => { if (state.reject) throw new Error('refused'); state.db = next; }),
   flushDBOrThrow: vi.fn(async () => {}),
-}));
+})) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 import { appendUserInteraction, conversationAccessStatus, listConversationHeaders, listUserInteractions, ownedConversationExists } from '../server/conversation/history_repository';
 import { addScopedVoiceProfile, listScopedVoiceProfiles, removeScopedVoiceProfile, updateScopedVoiceProfile, voiceProfileScope } from '../server/tts/profile_store';
 import { listTokenUsageRows, recordTokenUsage } from '../server/llm/token_tracker';

@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -17,7 +18,7 @@ import {
 } from '../src/lib/chatProgress';
 
 const root = process.cwd();
-const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const read = (relativePath: string) => readImplementationSource(path.join(root, relativePath), 'utf8');
 
 describe('frontend agent response finalization gate', () => {
   it('detects concrete success claims without confusing failure wording for success', () => {

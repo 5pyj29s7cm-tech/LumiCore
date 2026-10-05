@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -98,13 +98,10 @@ export interface AuditEntry {
 // ── Generic helpers ──────────────────────────────────────────────────────
 
 function entDB() {
-  return readDB();
+  return readDatabaseTables(["auditLog","departments","orgCredentialReferences","orgDevices","orgInvitations","orgKbArticles","orgKbEmbeddings","orgMemberships","orgPositions","orgResourceGrants","orgResourcePolicies","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","organizations"]);
 }
 
-function entWrite() {
-  const db = entDB();
-  writeDB(db);
-}
+
 
 function now(): string {
   return new Date().toISOString();
@@ -145,7 +142,7 @@ export function createOrg(name: string, slug: string, ownerUid: string): Organiz
   };
   if (!db.organizations) db.organizations = [];
   db.organizations.push(org);
-  entWrite();
+  commitDatabaseTables(db);
   return org;
 }
 
@@ -170,7 +167,7 @@ export function repairCorruptedOrganizationNames(): number {
     org.updatedAt = now();
     repaired += 1;
   }
-  if (repaired > 0) writeDB(db);
+  if (repaired > 0) commitDatabaseTables(db);
   return repaired;
 }
 
@@ -199,7 +196,7 @@ export function updateOrgProfile(
   }
 
   org.updatedAt = now();
-  writeDB(db);
+  commitDatabaseTables(db);
   return org;
 }
 
@@ -221,17 +218,20 @@ export function deleteOrg(orgId: string): boolean {
   db.orgCredentialReferences = (db.orgCredentialReferences || []).filter((item: any) => item.orgId !== orgId);
   db.orgDevices = (db.orgDevices || []).filter((item: any) => item.orgId !== orgId);
   db.orgInvitations = (db.orgInvitations || []).filter((i: OrgInvitation) => i.orgId !== orgId);
-  entWrite();
+  commitDatabaseTables(db);
   return true;
 }
 
 /** One in-memory revision; its caller owns the durable commit boundary. */
 export function transferOrgOwnership(orgId: string, previousOwnerId: string, newOwnerId: string): Organization {
-  const org = getOrgById(orgId), previous = getMember(orgId, previousOwnerId), next = getMember(orgId, newOwnerId);
+  const db = entDB();
+  const org = (db.organizations || []).find((row: Organization) => row.id === orgId);
+  const previous = (db.orgMemberships || []).find((row: OrgMembership) => row.orgId === orgId && row.userId === previousOwnerId);
+  const next = (db.orgMemberships || []).find((row: OrgMembership) => row.orgId === orgId && row.userId === newOwnerId);
   if (!org || org.ownerUid !== previousOwnerId || !previous || !next || next.status !== 'active') throw new Error('Ownership snapshot changed.');
   previous.role = 'admin'; next.role = 'owner'; org.ownerUid = newOwnerId; org.updatedAt = now();
+  commitDatabaseTables(db);
   logAudit({ orgId, userId: previousOwnerId, action: 'org.transfer', resourceType: 'organization', resourceId: orgId, details: { newOwnerId } });
-  entWrite();
   return org;
 }
 
@@ -267,7 +267,7 @@ export function addMember(orgId: string, userId: string, role: OrgRole = 'member
   };
   if (!db.orgMemberships) db.orgMemberships = [];
   db.orgMemberships.push(membership);
-  entWrite();
+  commitDatabaseTables(db);
   return membership;
 }
 
@@ -278,7 +278,7 @@ export function updateMemberRole(orgId: string, userId: string, newRole: OrgRole
   );
   if (!m) return null;
   m.role = newRole;
-  entWrite();
+  commitDatabaseTables(db);
   return m;
 }
 
@@ -289,7 +289,7 @@ export function removeMember(orgId: string, userId: string): boolean {
   );
   if (idx === undefined || idx < 0) return false;
   db.orgMemberships.splice(idx, 1);
-  entWrite();
+  commitDatabaseTables(db);
   return true;
 }
 
@@ -301,7 +301,7 @@ export function setMemberStatus(orgId: string, userId: string, status: Membershi
   if (!m) return null;
   m.status = status;
   if (status === 'left') m.joinedAt = null as any; // clear join date
-  entWrite();
+  commitDatabaseTables(db);
   return m;
 }
 
@@ -322,7 +322,7 @@ export function createDepartment(orgId: string, name: string, parentId?: string)
   };
   if (!db.departments) db.departments = [];
   db.departments.push(dept);
-  entWrite();
+  commitDatabaseTables(db);
   return dept;
 }
 
@@ -349,7 +349,7 @@ export function createInvitation(
   };
   if (!db.orgInvitations) db.orgInvitations = [];
   db.orgInvitations.push(inv);
-  entWrite();
+  commitDatabaseTables(db);
   return inv;
 }
 
@@ -364,7 +364,7 @@ export function useInvitation(code: string): OrgInvitation | null {
   if (inv.expiresAt && new Date(inv.expiresAt) < new Date()) return null;
   if (inv.maxUses > 0 && inv.useCount >= inv.maxUses) return null;
   inv.useCount++;
-  entWrite();
+  commitDatabaseTables(db);
   return inv;
 }
 
@@ -418,7 +418,7 @@ export function createKbArticle(
   };
   if (!db.orgKbArticles) db.orgKbArticles = [];
   db.orgKbArticles.push(article);
-  entWrite();
+  commitDatabaseTables(db);
   return article;
 }
 
@@ -429,7 +429,7 @@ export function updateKbArticle(orgId: string, articleId: string, updates: Parti
   );
   if (!article) return null;
   Object.assign(article, updates, { updatedAt: now() });
-  entWrite();
+  commitDatabaseTables(db);
   return article;
 }
 
@@ -439,12 +439,13 @@ export function setKbArticleIngestionManifest(
   articleId: string,
   manifest: string,
 ): KbArticle | null {
-  const article = entDB().orgKbArticles?.find(
+  const db = entDB();
+  const article = db.orgKbArticles?.find(
     (candidate: KbArticle) => candidate.orgId === orgId && candidate.id === articleId,
   );
   if (!article) return null;
   article.ingestionManifest = manifest || '{}';
-  entWrite();
+  commitDatabaseTables(db);
   return article;
 }
 
@@ -459,7 +460,7 @@ export function deleteKbArticle(orgId: string, articleId: string): boolean {
   db.orgKbEmbeddings = (db.orgKbEmbeddings || []).filter(
     (e: KbEmbedding) => e.articleId !== articleId
   );
-  entWrite();
+  commitDatabaseTables(db);
   return true;
 }
 
@@ -478,7 +479,7 @@ export function saveKbEmbedding(articleId: string, chunkIndex: number, embedding
   };
   if (!db.orgKbEmbeddings) db.orgKbEmbeddings = [];
   db.orgKbEmbeddings.push(emb);
-  entWrite();
+  commitDatabaseTables(db);
   return emb;
 }
 
@@ -497,7 +498,7 @@ export function deleteKbEmbeddings(articleId: string): void {
   db.orgKbEmbeddings = (db.orgKbEmbeddings || []).filter(
     (e: KbEmbedding) => e.articleId !== articleId
   );
-  entWrite();
+  commitDatabaseTables(db);
 }
 
 // ── Audit Log ────────────────────────────────────────────────────────────
@@ -527,7 +528,7 @@ export function logAudit(entry: {
   };
   if (!db.auditLog) db.auditLog = [];
   db.auditLog.push(log);
-  entWrite();
+  commitDatabaseTables(db);
 }
 
 export function listAuditLog(orgId: string, limit: number | null = 50, offset: number = 0): AuditEntry[] {

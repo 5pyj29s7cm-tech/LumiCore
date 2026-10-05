@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import { makeApp } from './helpers';
@@ -615,8 +616,8 @@ describe('reasoning model switching stability', () => {
   it('contains no channel-level model substitution rules', async () => {
     const fs = await import('node:fs/promises');
     const [chat, voice] = await Promise.all([
-      fs.readFile('server/socket/chat.ts', 'utf8'),
-      fs.readFile('server/socket/voice.ts', 'utf8'),
+      Promise.resolve(readImplementationSource('server/socket/chat.ts', 'utf8')),
+      Promise.resolve(readImplementationSource('server/socket/voice.ts', 'utf8')),
     ]);
     expect(chat).not.toMatch(/activeModel\s*=\s*isComplex/);
     expect(voice).not.toMatch(/effectiveModel\s*=\s*isComplex/);

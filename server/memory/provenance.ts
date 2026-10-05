@@ -1,4 +1,4 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import type { Memory } from './types';
 import { isUnverifiedCapabilityBoundary, sanitizeSummaryForPrompt } from '../conversation/summary_grounding';
 
@@ -44,7 +44,7 @@ export function isOwnerEvolutionEvidence(memory: Memory): boolean {
 
 /** Archive the exact old values before isolating confirmed corrupt evidence. */
 export function repairRuntimeLearningEvidence(): number {
-  const db = readDB();
+  const db = readDatabaseTables(["conversations","interactions","memories","settings"]);
   const marker = 'learning_evidence_repair_v2';
   if (db.settings?.some(row => row.key === marker)) return 0;
   const memories: any[] = [];
@@ -68,13 +68,13 @@ export function repairRuntimeLearningEvidence(): number {
   }
   db.settings ||= [];
   db.settings.push({ key: marker, value: JSON.stringify({ at: new Date().toISOString(), memories, summaries }) });
-  writeDB(db);
+  commitDatabaseTables(db);
   return memories.length + summaries.length;
 }
 
 /** Preserve original records; remove confirmed test material from ordinary learning. */
 export function repairTestMemoryProvenance(): number {
-  const db = readDB();
+  const db = readDatabaseTables(["conversations","interactions","memories","settings"]);
   const marker = 'memory_test_provenance_repair_v1';
   if (db.settings?.some(row => row.key === marker)) return 0;
   const interactions = new Map<string, any>((db.interactions || []).map(row => [row.id, row]));
@@ -103,6 +103,6 @@ export function repairTestMemoryProvenance(): number {
   }
   db.settings ||= [];
   db.settings.push({ key: marker, value: JSON.stringify({ at: new Date().toISOString(), memories: changes, profiles }) });
-  writeDB(db);
+  commitDatabaseTables(db);
   return changes.length;
 }

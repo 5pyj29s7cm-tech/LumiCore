@@ -1,4 +1,4 @@
-import { readDB, writeDB } from "../../db_layer";
+import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
 
 export interface ProfessionProfile {
   profession: string;
@@ -98,13 +98,13 @@ export function detectProfession(installedApps: string[]): ProfessionProfile[] {
 }
 
 export function saveProfessionProfile(profiles: ProfessionProfile[]): void {
-  const db = readDB();
+  const db = readDatabaseTables(["professionProfiles"]);
   (db as any).professionProfiles = profiles;
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 export function getProfessionProfile(): ProfessionProfile[] {
-  const db = readDB();
+  const db = readDatabaseTables(["professionProfiles"]);
   return (db as any).professionProfiles || [];
 }
 

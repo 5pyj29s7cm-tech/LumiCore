@@ -1,4 +1,4 @@
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { migratePersistedClientActionName } from '../../shared/client_surfaces';
 
 export interface AutonomousWorkflow {
@@ -22,7 +22,7 @@ export const CLIENT_ACTION_WORKFLOW_MIGRATION = 'clientSurfaceActionsV1';
 
 function allWorkflows(): AutonomousWorkflow[] {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["autonomousWorkflows","migrations"]);
     const workflows = Array.isArray(db.autonomousWorkflows) ? db.autonomousWorkflows : [];
     const migrations = typeof db.migrations === 'object' && db.migrations
       ? db.migrations as Record<string, number>
@@ -37,7 +37,7 @@ function allWorkflows(): AutonomousWorkflow[] {
         ...migrations,
         [CLIENT_ACTION_WORKFLOW_MIGRATION]: 1,
       };
-      writeDB(db);
+      commitDatabaseTables(db);
       return migrated;
     }
     return workflows;
@@ -47,9 +47,9 @@ function allWorkflows(): AutonomousWorkflow[] {
 }
 
 function saveWorkflows(workflows: AutonomousWorkflow[]) {
-  const db = readDB();
+  const db = readDatabaseTables(["autonomousWorkflows","migrations"]);
   db.autonomousWorkflows = workflows;
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 function normalizeModes(value: unknown): Array<'analysis' | 'desktop' | 'terminal'> {

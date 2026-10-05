@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +7,7 @@ import {
   sanitizeChatAgentErrorPayload,
 } from '../server/socket/chat_public_error';
 
-const source = (relativePath: string) => fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+const source = (relativePath: string) => readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 
 describe('chat public terminal errors', () => {
   it('replaces raw exception content and unknown codes with reviewed public fields', () => {

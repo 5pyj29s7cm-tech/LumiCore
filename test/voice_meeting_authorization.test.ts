@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { extractSourceExpression } from './source_expression';
 // Real voice/meeting handlers with isolated models, PCM and DesktopUI callbacks.
 import './helpers';
@@ -469,7 +470,7 @@ describe('meeting capture ownership and complete paused recordings', () => {
     await socket.receive('audio:stop', { preserveMeeting: true });
     const directory = path.dirname(firstPath);
     const manifest = path.join(directory, `meeting_${meetingId.length}_${meetingId}_segments.json`);
-    const original = fs.readFileSync(manifest, 'utf8');
+    const original = readImplementationSource(manifest, 'utf8');
     const rename = fs.renameSync;
     const failure = vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
       if (String(target) === manifest) throw new Error('Synthetic disk replacement failure');
@@ -477,8 +478,8 @@ describe('meeting capture ownership and complete paused recordings', () => {
     });
     try { await socket.receive('audio:start', { ...start('atomic-second', true), meetingId }); }
     finally { failure.mockRestore(); }
-    expect(fs.readFileSync(manifest, 'utf8')).toBe(original);
-    expect(fs.readFileSync(firstPath)).toEqual(Buffer.alloc(16000, 0x37));
+    expect(readImplementationSource(manifest, 'utf8')).toBe(original);
+    expect(readImplementationSource(firstPath)).toEqual(Buffer.alloc(16000, 0x37));
     expect(fs.readdirSync(directory).filter(name => name.endsWith('.pcm'))).toEqual([path.basename(firstPath)]);
     expect(fs.readdirSync(directory).some(name => name.endsWith('.tmp'))).toBe(false);
   });

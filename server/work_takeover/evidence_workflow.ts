@@ -10,7 +10,7 @@ import {
   type EvidenceWorkflowStepStatus,
   type EvidenceWorkflowVerificationStatus,
 } from '../../shared/evidence_workflow';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import type { ConversationActionReceiptRow, ConversationActionTaskRow } from '../conversation/action_ledger';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { getWorkTakeoverTask, updateWorkTakeoverTask, type WorkTakeoverTask } from './tasks';
@@ -46,7 +46,7 @@ function verifiedReceiptRowsForStep(
       .filter(candidate => candidate.id !== stepId)
       .flatMap(candidate => candidate.receiptIds),
   );
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks"]);
   const actionTasks = Array.isArray(db.conversationActionTasks)
     ? db.conversationActionTasks as ConversationActionTaskRow[]
     : [];

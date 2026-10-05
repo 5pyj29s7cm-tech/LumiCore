@@ -1,4 +1,4 @@
-import { readDB, writeDB } from "../../db_layer";
+import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
 
 export interface LumiPlan {
   id: string;
@@ -85,7 +85,7 @@ export function stageAutonomousPlanCompletion(
     const pending = pendingAutonomousPlanCompletions.get(taskId)!;
     return () => { if (pendingAutonomousPlanCompletions.get(taskId) === pending) pendingAutonomousPlanCompletions.delete(taskId); };
   }
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   const plan = migrateLegacyPlans(db).find(candidate => candidate.id === planId && planMatchesScope(candidate, scope));
   if (!plan || plan.status !== 'active') return () => {};
   const step = plan.steps.find(candidate => candidate.status === 'in_progress')
@@ -107,7 +107,7 @@ export function stageAutonomousPlanCompletion(
     stepBefore, stepStaged: { status: step.status, result: step.result },
   };
   pendingAutonomousPlanCompletions.set(taskId, pending);
-  writeDB(db);
+  commitDatabaseTables(db);
   return () => { if (pendingAutonomousPlanCompletions.get(taskId) === pending) pendingAutonomousPlanCompletions.delete(taskId); };
 }
 
@@ -135,7 +135,7 @@ function migrateLegacyPlans(db: any): LumiPlan[] {
       changed = true;
     }
   }
-  if (changed) writeDB(db);
+  if (changed) commitDatabaseTables(db);
   return plans;
 }
 
@@ -179,16 +179,16 @@ export function createPlan(
     updatedAt: new Date().toISOString(),
   };
 
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   if (!(db as any).plans) (db as any).plans = [];
   (db as any).plans.push(plan);
-  writeDB(db);
+  commitDatabaseTables(db);
 
   return plan;
 }
 
 export function updatePlan(id: string, updates: PlanUpdate, scope: PlanScope): LumiPlan | null {
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   const plans = migrateLegacyPlans(db);
   const idx = plans.findIndex((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
   if (idx === -1) return null;
@@ -202,12 +202,12 @@ export function updatePlan(id: string, updates: PlanUpdate, scope: PlanScope): L
     updatedAt: new Date().toISOString(),
     ...(normalizedUpdates.status === "completed" ? { completedAt: new Date().toISOString() } : {}),
   });
-  writeDB(db);
+  commitDatabaseTables(db);
   return projectPlanCompletion(plan);
 }
 
 export function updatePlanStep(planId: string, stepId: string, updates: Partial<Pick<PlanStep, "status" | "title" | "description" | "result">>, scope: PlanScope): LumiPlan | null {
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   const plan = migrateLegacyPlans(db).find((p: LumiPlan) => p.id === planId && planMatchesScope(p, scope));
   if (!plan) return null;
 
@@ -223,12 +223,12 @@ export function updatePlanStep(planId: string, stepId: string, updates: Partial<
     plan.completedAt = new Date().toISOString();
   }
 
-  writeDB(db);
+  commitDatabaseTables(db);
   return projectPlanCompletion(plan);
 }
 
 export function listPlans(scope: PlanScope, filter?: PlanFilter): LumiPlan[] {
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   let plans: LumiPlan[] = migrateLegacyPlans(db).filter(plan => planMatchesScope(plan, scope)).map(projectPlanCompletion).map(plan => (
     (plan as any).status === "done"
       ? { ...plan, status: "completed", completedAt: plan.completedAt || plan.updatedAt }
@@ -248,18 +248,18 @@ export function listPlans(scope: PlanScope, filter?: PlanFilter): LumiPlan[] {
 }
 
 export function getPlan(id: string, scope: PlanScope): LumiPlan | null {
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   const plan = migrateLegacyPlans(db).find((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
   return plan ? projectPlanCompletion(plan) : null;
 }
 
 export function deletePlan(id: string, scope: PlanScope): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["plans","users"]);
   const plans = migrateLegacyPlans(db);
   const idx = plans.findIndex((p: LumiPlan) => p.id === id && planMatchesScope(p, scope));
   if (idx === -1) return false;
   (db as any).plans.splice(idx, 1);
-  writeDB(db);
+  commitDatabaseTables(db);
   return true;
 }
 

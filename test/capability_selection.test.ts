@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -615,8 +617,8 @@ describe('Lumi capability selection', () => {
   it('keeps chat, voice, and task sockets on the shared capability selection path', () => {
     const root = process.cwd();
     const sources = [
-      readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
-      readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
+      readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8'),
+      readVoiceImplementationSource(),
     ];
 
     for (const source of sources) {

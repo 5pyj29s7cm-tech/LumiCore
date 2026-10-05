@@ -1,7 +1,7 @@
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { normalizeMemoryAvatarAppearance } from '../../shared/memory_avatar';
 ﻿import { createHash, randomUUID } from 'node:crypto';
-import { readDB, writeDB, flushDBOrThrow } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../db_layer';
 import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
 import { invalidateMemoryAvatarAuthorization } from './lifecycle';
 import {
@@ -122,20 +122,23 @@ function normalize(row: any): MemoryAvatarRecord {
   };
 }
 export function listMemoryAvatars(userId: string, includeArchived = false): MemoryAvatarRecord[] {
-  return (readDB().memoryAvatars || []).filter((row: any) => row.userId === userId && (includeArchived || row.status !== 'archived')).map(normalize);
+  return (readDatabaseTables(["memoryAvatars"]).memoryAvatars || []).filter((row: any) => row.userId === userId && (includeArchived || row.status !== 'archived')).map(normalize);
 }
 export function getMemoryAvatar(userId: string, id: string): MemoryAvatarRecord | null {
-  const row = (readDB().memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId);
+  const row = (readDatabaseTables(["memoryAvatars"]).memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId);
   return row ? normalize(row) : null;
 }
 /** Authorization observes raw status and generation without normalizing legacy rows. */
 export function readMemoryAvatarAuthorization(userId: string, id: string): { status: string; sourceGeneration: number } | null {
-  const row = (readDB().memoryAvatars || []).find(item => item.id === id && item.userId === userId);
+  const row = (readDatabaseTables(["memoryAvatars"]).memoryAvatars || []).find(item => item.id === id && item.userId === userId);
   return row ? { status: row.status, sourceGeneration: Number(parsePayload(row.payload).sourceGeneration) || 0 } : null;
 }
+const rowSessions = new WeakMap<object, ReturnType<typeof readDatabaseTables<'memoryAvatars'>>>();
 function ownedRow(userId: string, id: string, archived = false): any {
-  const row = (readDB().memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId && (archived || item.status === 'active'));
+  const db = readDatabaseTables(["memoryAvatars"]);
+  const row = (db.memoryAvatars || []).find((item: any) => item.id === id && item.userId === userId && (archived || item.status === 'active'));
   if (!row) throw new MemoryAvatarError(404, 'memory_avatar_not_found', 'Memory avatar not found');
+  rowSessions.set(row, db);
   row.payload = parsePayload(row.payload);
   return row;
 }
@@ -161,7 +164,9 @@ function write(row: any): void {
   // SQLite's compatibility adapter also reads these aliases after reopening.
   for (const key of ['personalityConfig', 'evidenceMap', 'seedMemories', 'narrative', 'isFrozen']) row[key] = row.payload[key];
   row.updatedAt = new Date().toISOString();
-  writeDB(readDB());
+  const db = rowSessions.get(row);
+  if (!db) throw new Error('Avatar write requires an owned staged row');
+  commitDatabaseTables(db);
 }
 function checkRevision(row: any, revision: unknown): void {
   if (!Number.isSafeInteger(revision) || Number(revision) < 1) bad('revision must be a positive integer');
@@ -189,7 +194,7 @@ export function createMemoryAvatar(input: Omit<CreateMemoryAvatarInput, 'clientR
   return serial(async () => {
     const clientRequestId = requestId(input.clientRequestId, true);
     const fingerprint = hash({ ...input, clientRequestId: undefined });
-    const existing = clientRequestId && (readDB().memoryAvatars || []).find((row: any) => row.userId === input.userId && parsePayload(row.payload).createRequestId === clientRequestId);
+    const existing = clientRequestId && (readDatabaseTables(["memoryAvatars"]).memoryAvatars || []).find((row: any) => row.userId === input.userId && parsePayload(row.payload).createRequestId === clientRequestId);
     if (existing) {
       if (parsePayload(existing.payload).createFingerprint !== fingerprint) throw new MemoryAvatarError(409, 'memory_avatar_request_conflict', 'clientRequestId was already used with different input');
       await save(); return normalize(existing);
@@ -213,9 +218,10 @@ export function createMemoryAvatar(input: Omit<CreateMemoryAvatarInput, 'clientR
       presentation: input.presentation === undefined ? { mode: 'human3d' } : presentation(input.presentation, {}),
     };
     const row = { id, userId: input.userId, name, relationshipType: shortText(input.relationshipType || 'close_friend', 40, 'relationshipType', false), status: 'active', payload, createdAt: now, updatedAt: now };
-    const db = readDB();
+    const db = readDatabaseTables(["memoryAvatars"]);
     if (!Array.isArray(db.memoryAvatars)) db.memoryAvatars = [];
     db.memoryAvatars.push(row);
+    rowSessions.set(row, db);
     write(row); await save(); return normalize(row);
   });
 }

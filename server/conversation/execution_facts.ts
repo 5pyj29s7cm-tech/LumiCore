@@ -1,4 +1,4 @@
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import { projectConversationReceiptHistory } from './receipt_history';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from '../regions/packs/cn/conversation_execution_facts_messages';
@@ -244,7 +244,7 @@ function recalledAcceptanceCode(messages: string[]): string {
 }
 
 export function getConversationExecutionFacts(scope: ConversationExecutionFactScope): ConversationExecutionFacts {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionTasks","conversationActionTurns","conversationActionReceipts","conversations","interactions"]);
   const domain = scope.domain === 'work' ? 'work' : 'personal';
   const orgId = domain === 'work' ? String(scope.orgId || '') : '';
   const interactions: any[] = projectConversationReceiptHistory(db, (db.interactions || []).filter((item: any) => (

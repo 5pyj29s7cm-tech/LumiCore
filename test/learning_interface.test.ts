@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -228,9 +230,9 @@ describe('Lumi learning interface', () => {
   });
 
   it('keeps model-owned chat and voice terminal paths wired into post-turn learning', () => {
-    const chatSource = readFileSync(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
-    const voiceSource = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
-    const postTurnSource = readFileSync(path.join(process.cwd(), 'server/cognition/post_turn_learning.ts'), 'utf8');
+    const chatSource = readImplementationSource(path.join(process.cwd(), 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readVoiceImplementationSource();
+    const postTurnSource = readImplementationSource(path.join(process.cwd(), 'server/cognition/post_turn_learning.ts'), 'utf8');
 
     expect(postTurnSource).toContain('export function persistLumiPostTurnLearning');
     expect(postTurnSource).toContain('persistLumiLearningTurn');

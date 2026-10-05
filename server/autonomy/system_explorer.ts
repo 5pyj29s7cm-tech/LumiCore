@@ -1,7 +1,7 @@
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { readDB, writeDB } from "../../db_layer";
+import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
 import { isAppDiscoveryNoise } from "../../shared/system_apps";
 import {
   runHostProbeCommand,
@@ -1029,7 +1029,7 @@ export function persistFirstBootExploration(snapshot: SystemSnapshot): SystemSna
     throw new Error('Local computer exploration requires an explicit local-admin grant.');
   }
   // Persist
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   if (!(db as any).systemSnapshots) (db as any).systemSnapshots = [];
   (db as any).systemSnapshots.push(snapshot);
 
@@ -1038,7 +1038,7 @@ export function persistFirstBootExploration(snapshot: SystemSnapshot): SystemSna
   (db as any).systemFlags.firstBootExplored = true;
   (db as any).systemFlags.lastDailyScan = snapshot.timestamp;
 
-  writeDB(db);
+  commitDatabaseTables(db);
 
   console.log(`[Explorer] First-boot complete. Host: ${snapshot.hardware.hostname}, Apps: ${snapshot.software.installedApps.length}, Disks: ${snapshot.hardware.disks.length}`);
   return snapshot;
@@ -1049,7 +1049,7 @@ export function persistDailyExploration(collected: SystemSnapshot): SystemSnapsh
   if (!isSystemExplorationAllowed()) {
     throw new Error('Local computer exploration requires an explicit local-admin grant.');
   }
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   const lastSnapshot = ((db as any).systemSnapshots || [])
     .filter((s: SystemSnapshot) => s.type === "daily_scan")
     .sort((a: SystemSnapshot, b: SystemSnapshot) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
@@ -1113,32 +1113,32 @@ export function persistDailyExploration(collected: SystemSnapshot): SystemSnapsh
   if (!(db as any).systemFlags) (db as any).systemFlags = {};
   (db as any).systemFlags.lastDailyScan = snapshot.timestamp;
 
-  writeDB(db);
+  commitDatabaseTables(db);
 
   console.log(`[Explorer] Daily scan complete. ${snapshot.changeSummary}`);
   return snapshot;
 }
 
 export function getLatestExploration(): SystemSnapshot | null {
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   const snapshots = (db as any).systemSnapshots || [];
   return snapshots.sort((a: SystemSnapshot, b: SystemSnapshot) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
 }
 
 export function getExplorationHistory(limit = 30): SystemSnapshot[] {
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   return ((db as any).systemSnapshots || [])
     .sort((a: SystemSnapshot, b: SystemSnapshot) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, limit);
 }
 
 export function isFirstBootComplete(): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   return !!((db as any).systemFlags?.firstBootExplored);
 }
 
 export function getSystemExplorationConsent(): SystemExplorationConsent {
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   const stored = (db as any).systemFlags?.systemExplorationConsent;
   if (stored?.version === 1 && (stored.status === 'granted' || stored.status === 'declined')) {
     return {
@@ -1163,7 +1163,7 @@ export function setSystemExplorationConsent(
   granted: boolean,
   grantedByUserId: string,
 ): SystemExplorationConsent {
-  const db = readDB();
+  const db = readDatabaseTables(["systemFlags","systemSnapshots"]);
   if (!(db as any).systemFlags) (db as any).systemFlags = {};
   const consent: SystemExplorationConsent = {
     version: 1,
@@ -1172,7 +1172,7 @@ export function setSystemExplorationConsent(
     ...(granted ? { grantedByUserId: String(grantedByUserId || '').trim().slice(0, 180) } : {}),
   };
   (db as any).systemFlags.systemExplorationConsent = consent;
-  writeDB(db);
+  commitDatabaseTables(db);
   return consent;
 }
 

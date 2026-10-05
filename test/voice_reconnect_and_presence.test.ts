@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -39,9 +41,9 @@ describe('voice reconnect and perception continuity', () => {
 
   it('durably delivers finalized text before queueing speech playback', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const terminalBoundarySource = readFileSync(path.join(root, 'server/socket/chat_terminal_boundary.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const terminalBoundarySource = readImplementationSource(path.join(root, 'server/socket/chat_terminal_boundary.ts'), 'utf8');
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     const terminalBoundary = server.indexOf('const committed = await commitChatTerminalBoundary<T | undefined>({');
     const publishCommitted = server.indexOf('publishCommitted: terminalState => {', terminalBoundary);
     const finalizedText = server.indexOf("publishRecordedAgent('agent:response', terminalPayload)", terminalBoundary);
@@ -73,8 +75,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('never substitutes the configured Lumi voice with browser speech synthesis', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
 
     expect(server).not.toContain('audio:tts_fallback');
     expect(server).not.toContain('playBrowserSpeechFallback');
@@ -116,8 +118,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('keeps one wake owner per user and backs off provider retries', () => {
     const root = process.cwd();
-    const wakeSocket = readFileSync(path.join(root, 'server/socket/wake.ts'), 'utf8');
-    const wakeHook = readFileSync(path.join(root, 'src/hooks/useWakeWord.ts'), 'utf8');
+    const wakeSocket = readImplementationSource(path.join(root, 'server/socket/wake.ts'), 'utf8');
+    const wakeHook = readImplementationSource(path.join(root, 'src/hooks/useWakeWord.ts'), 'utf8');
 
     expect(wakeSocket).toContain('wakeOwnerByUser');
     expect(wakeSocket).toContain('taking ownership from');
@@ -129,7 +131,7 @@ describe('voice reconnect and perception continuity', () => {
   });
 
   it('keeps realtime microphone levels outside the DesktopUI React state', () => {
-    const source = readFileSync(path.join(process.cwd(), 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const source = readImplementationSource(path.join(process.cwd(), 'src/hooks/useVoiceCall.ts'), 'utf8');
     expect(source).toContain('rawAudioLevelRef.current = frameRms');
     expect(source).toContain("new CustomEvent('lumi:voice-audio-level'");
     expect(source).not.toContain('setAudioLevel(');
@@ -141,8 +143,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('releases streaming TTS nodes and contexts when a call ends', () => {
     const root = process.cwd();
-    const source = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
-    const button = readFileSync(path.join(root, 'src/components/VoiceCallButton.tsx'), 'utf8');
+    const source = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const button = readImplementationSource(path.join(root, 'src/components/VoiceCallButton.tsx'), 'utf8');
 
     expect(source).toContain('releaseAudioBufferSource(source)');
     expect(source).toContain('disposePlaybackContexts()');
@@ -155,8 +157,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('keeps the active voice work request alive while handling a conversational aside', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
 
     expect(server).toContain("socket.emit('audio:sidecar_response'");
     expect(server).toContain('requestId: workRequestId');
@@ -170,8 +172,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('keeps a semantic stop lane open during TTS before voiceprint gating', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     const priorityStop = server.indexOf('isPureInterruptCommand(immediateText)');
     const voiceprintGate = server.indexOf('if (!session.transcriptionOnly && !isVoiceprintGateOpen(session))', priorityStop);
 
@@ -190,7 +192,7 @@ describe('voice reconnect and perception continuity', () => {
     expect(client).toContain("currentSocket.volatile.emit('audio:chunk', chunk)");
     expect(client).not.toContain('ttsPreRollChunks');
     expect(client).toContain("socket.on('audio:end-call-request'");
-    const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
+    const voiceprint = readImplementationSource(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
     expect(voiceprint).toContain('createScriptProcessor(2048, 1, 1)');
   });
 
@@ -204,8 +206,8 @@ describe('voice reconnect and perception continuity', () => {
     expect(isEchoedImmediateVoiceControl('continue', true, scope)).toBe(false);
 
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     expect(server).toContain('session.isSpeaking || Date.now() < session.ttsPlaybackUntil');
     expect(server).toContain("socket.on('audio:playback_started'");
     expect(client).toContain('durationMs: Math.max(1, Math.round(decoded.duration * 1_000))');
@@ -213,8 +215,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('does not stop TTS from a raw local energy spike before semantic admission', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const client = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const client = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     const semanticLane = client.indexOf('Keep realtime STT active while Lumi speaks');
     const branchStart = client.indexOf('if (isTtsPlaying.current) {', semanticLane);
     const branchEnd = client.indexOf('const micAllowed =', branchStart);
@@ -228,7 +230,7 @@ describe('voice reconnect and perception continuity', () => {
   });
 
   it('uses a bounded voice history and avoids the serial advisory classifier', () => {
-    const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const source = readVoiceImplementationSource();
     expect(source).toContain('formatCompactClientSelfPrompt(session.userId, voiceScope)');
     expect(source).toContain('getMessagesByTokenBudget(conversationTurn.conversation.id, 6_000, 6, requestId)');
     expect(source).not.toContain('processInput(');
@@ -259,9 +261,9 @@ describe('voice reconnect and perception continuity', () => {
 
   it('uses the STT PCM stream and isolates voiceprint decisions by utterance', () => {
     const root = process.cwd();
-    const server = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
-    const call = readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
-    const voiceprint = readFileSync(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
+    const call = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const voiceprint = readImplementationSource(path.join(root, 'src/hooks/useVoiceprint.ts'), 'utf8');
 
     expect(server).not.toContain('voiceprintTrustedUntil');
     expect(server).toContain("socket.emit('voiceprint:utterance_reset'");
@@ -272,7 +274,7 @@ describe('voice reconnect and perception continuity', () => {
   });
 
   it('keeps meeting transcription multi-speaker while hiding unverified personal interim text', () => {
-    const server = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const server = readVoiceImplementationSource();
     expect(server).toContain('session.transcriptionOnly || !session.voiceprintRequired || isVoiceprintGateOpen(session)');
     expect(server).toContain('voiceAuthorized = session.transcriptionOnly || isVoiceprintGateOpen(session)');
   });
@@ -286,8 +288,8 @@ describe('voice reconnect and perception continuity', () => {
 
   it('binds accepted turns to durable request ownership across chat, voice, and task surfaces', () => {
     const root = process.cwd();
-    const chat = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voice = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const chat = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voice = readVoiceImplementationSource();
 
     expect(chat).toContain('const chatAdmission = await admitAcceptedUserTurnDurably({');
     expect(chat).toContain('() => beginChatExecutionDurably(executionScope, requestId');

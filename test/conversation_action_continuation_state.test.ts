@@ -1074,9 +1074,8 @@ describe('conversation action continuation state', () => {
       revision: 1,
       updatedAt: liveAt,
     };
-    conversation.actionContinuationState = terminalState;
-
     const db = readDB();
+    db.conversations.find((row: any) => row.id === conversation.id).actionContinuationState = terminalState;
     for (const [state, createdAt] of [
       [terminalState, terminalAt],
       [liveState, liveAt],

@@ -1,5 +1,5 @@
 import { updateMemoryRow, type MemoryOwnerScope } from './repository';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import {
   Memory,
   MemoryEvidenceClass,
@@ -16,9 +16,11 @@ import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding, memoryEmbeddingIn
 import { isTestMemory, isMalformedBehavioralMemory, isDerivedLearningMemory } from './provenance';
 import { runSerializedMutation } from '../persistence/durable_scope_mutation';
 
+const memorySessions = new WeakMap<Memory[], ReturnType<typeof readDatabaseTables<'memories'>>>();
 function getMemoryStore(): Memory[] {
-  const db = readDB();
+  const db = readDatabaseTables(["memories","memoryAssociations","reminders"]);
   if (!db.memories) db.memories = [];
+  memorySessions.set(db.memories, db);
   return db.memories;
 }
 
@@ -231,7 +233,7 @@ const ASSOCIATION_THRESHOLD = 0.25;            // Min strength to be considered 
 /** Load co-retrieval map from DB on startup */
 function loadCoRetrievalMap(): void {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["memories","memoryAssociations","reminders"]);
     if (db.memoryAssociations && Array.isArray(db.memoryAssociations)) {
       for (const row of db.memoryAssociations) {
         if (!coRetrievalMap.has(row.userId)) {
@@ -251,7 +253,7 @@ function loadCoRetrievalMap(): void {
 /** Persist co-retrieval map to DB */
 function saveCoRetrievalMap(): void {
   try {
-    const db = readDB();
+    const db = readDatabaseTables(["memories","memoryAssociations","reminders"]);
     const rows: { userId: string; memA: string; memB: string; strength: number }[] = [];
     for (const [userId, userMap] of coRetrievalMap) {
       for (const [memA, assocMap] of userMap) {
@@ -263,7 +265,7 @@ function saveCoRetrievalMap(): void {
       }
     }
     db.memoryAssociations = rows;
-    writeDB(db);
+    commitDatabaseTables(db);
   } catch {}
 }
 
@@ -374,30 +376,10 @@ export function isMemoryAvatarScoped(memory: Pick<Memory, 'agentId'>): boolean {
   return isMemoryAvatarAgentId(memory.agentId);
 }
 
-// ── Dedup index (lazy, invalidated on write) ──
-
-let dedupIndex: Map<string, Map<string, Memory[]>> | null = null;
-let dedupSource: Memory[] | null = null;
-
-function getDedupIndex(): Map<string, Map<string, Memory[]>> {
-  const rows = getMemoryStore();
-  if (dedupIndex && dedupSource === rows) return dedupIndex;
-  dedupSource = rows;
-  dedupIndex = new Map();
-  for (const m of rows) {
-    if (!dedupIndex.has(m.userId)) dedupIndex.set(m.userId, new Map());
-    const typeMap = dedupIndex.get(m.userId)!;
-    if (!typeMap.has(m.type)) typeMap.set(m.type, []);
-    typeMap.get(m.type)!.push(m);
-  }
-  return dedupIndex;
-}
-
 function saveMemoryStore(memories: Memory[]): void {
-  dedupIndex = null; // invalidate index on write
-  const db = readDB();
+  const db = memorySessions.get(memories) || readDatabaseTables(["memories"]);
   db.memories = memories;
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 function generateId(): string {
@@ -551,9 +533,6 @@ export function queryMemories(q: MemoryQuery): Memory[] {
       associated.sort((a, b) => (b.importance || 0) - (a.importance || 0));
       result.push(...associated.slice(0, Math.ceil(limit * 0.5)));
     }
-  } else if (q.userId && result.length === 1) {
-    // Single result: still record it for future co-retrieval opportunities
-    // (no pairwise to strengthen, but we can use this info later)
   }
 
   const uniqueResult = dedupeMemoriesInRankOrder(result);
@@ -699,12 +678,13 @@ async function runMemoryIndexBackfill(userId: string | undefined, options: Memor
       const code = status ? `http_${status}` : /timed? ?out|timeout/i.test(message) ? 'timeout' : 'provider_error';
       progress.errors[code] = (progress.errors[code] || 0) + 1;
     } });
-    const current = getMemoryStore().find(memory => memory.id === m.id);
+    const currentStore = getMemoryStore();
+    const current = currentStore.find(memory => memory.id === m.id);
     if (result && current && memoryEmbeddingInputHash(current) === inputHash) {
       current.embedding = result.vector;
       current.embeddingNamespace = embeddingNamespace(result);
       current.embeddingContentHash = inputHash;
-      saveMemoryStore(getMemoryStore());
+      saveMemoryStore(currentStore);
       count++;
       if (progress) progress.indexed++;
     } else if (progress) {
@@ -732,15 +712,15 @@ export interface Reminder {
 }
 
 function getReminderStore(): Reminder[] {
-  const db = readDB();
+  const db = readDatabaseTables(["memories","memoryAssociations","reminders"]);
   if (!db.reminders) db.reminders = [];
   return db.reminders;
 }
 
 function saveReminderStore(reminders: Reminder[]): void {
-  const db = readDB();
+  const db = readDatabaseTables(["memories","memoryAssociations","reminders"]);
   db.reminders = reminders;
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 export function addReminder(reminder: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'firedAt'>): Reminder {
@@ -870,13 +850,9 @@ export function addMemory(
   }
 
   // Deduplicate using index — only scan same userId + type
-  const idx = getDedupIndex();
-  const dedupCandidates = idx.get(memory.userId)?.get(memory.type) || [];
   const existing = overrides?.deduplicate === false || contradictions.length > 0
     ? undefined
-    : dedupCandidates.find(m =>
-        matchesMemoryScope(m, domain, orgId, scopedAgentId) && contentSimilarity(m.content, memory.content) > 0.7,
-      );
+    : candidates.find(m => contentSimilarity(m.content, memory.content) > 0.7);
 
   const now = new Date().toISOString();
 

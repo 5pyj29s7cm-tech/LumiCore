@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +23,7 @@ describe('agent user-visible status truth', () => {
   });
 
   it('routes active chat through the shared truthful projection', () => {
-    const agentChat = readFileSync(join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
+    const agentChat = readImplementationSource(join(process.cwd(), 'src/components/AgentChatPage.tsx'), 'utf8');
     expect(agentChat).toContain('projectAgentActivity(data.status');
     expect(agentChat).not.toContain("data.status === 'responding' || data.status === 'executing'");
   });

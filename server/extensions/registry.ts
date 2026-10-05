@@ -4,7 +4,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import OpenAI from 'openai';
 import { Agent as UndiciAgent } from 'undici';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { LUMI_CLIENT_MODE_IDS } from '../../shared/operation_modes';
 import { getKey, isPersistableKeyName } from '../config/keys';
 import type { ToolRegistry } from '../tools/registry';
@@ -246,7 +246,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function arrays(db = readDB()): ExtensionArrays {
+function arrays(db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"])): ExtensionArrays {
   if (!Array.isArray(db.extensionPublishers)) db.extensionPublishers = [];
   if (!Array.isArray(db.extensionRevisions)) db.extensionRevisions = [];
   if (!Array.isArray(db.extensionActivationReceipts)) db.extensionActivationReceipts = [];
@@ -916,9 +916,17 @@ function invalidateRevisionRuntime(revision: ExtensionRevision): void {
 
 function assertCurrentExecutableRevision(revision: ExtensionRevision): void {
   try {
-    verifyPersistedRevision(revision);
+    const store = arrays();
+    const current = store.revisions.find(item => item.id === revision.id && item.userId === revision.userId);
+    if (!current) throw new Error('Signed extension revision is no longer persisted.');
+    verifyPersistedRevision(current, store);
+    verifyPersistedRevision(revision, store);
+    if (current.manifestDigest !== revision.manifestDigest || current.signerFingerprint !== revision.signerFingerprint || current.extensionId !== revision.extensionId) {
+      throw new Error('Signed extension revision identity changed after runtime registration.');
+    }
     if (
-      revision.status !== 'active'
+      current.status !== 'active'
+      || revision.status !== 'active'
       || activeRuntime.get(revision.extensionId)?.id !== revision.id
     ) {
       throw new Error('Signed extension revision is not the current active runtime.');
@@ -1468,8 +1476,8 @@ function ensurePublisherTrust(
   fingerprint: string,
   userId: string,
   trustPublisher: boolean,
+  store: ExtensionArrays,
 ): void {
-  const store = arrays();
   const existing = store.publishers.find(item => item.fingerprint === fingerprint);
   if (existing?.status === 'revoked') throw new Error('Extension publisher key is revoked.');
   if (existing) {
@@ -1657,7 +1665,7 @@ export async function installAndActivateExtension(
     const { fingerprint } = verifyManifestSignature(manifest);
     const userId = context?.userId || 'anonymous';
     const manifestDigest = digest(unsignedManifest(manifest));
-    const db = readDB();
+    const db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"]);
     const store = arrays(db);
     const ownerConflict = store.revisions.find(item => item.extensionId === manifest.id && item.userId !== userId);
     if (ownerConflict) throw new Error('Extension id is already owned by a different local user.');
@@ -1667,7 +1675,7 @@ export async function installAndActivateExtension(
     if (sameVersion && sameVersion.manifestDigest !== manifestDigest) {
       throw new Error('Extension version is immutable and already exists with a different manifest digest.');
     }
-    ensurePublisherTrust(manifest, fingerprint, userId, input.trustPublisher === true);
+    ensurePublisherTrust(manifest, fingerprint, userId, input.trustPublisher === true, store);
     if (sameVersion?.status === 'active') {
       const runtime = extensionRuntimeState(sameVersion, targetRegistry);
       return JSON.stringify({
@@ -1702,7 +1710,7 @@ export async function installAndActivateExtension(
     revision.status = 'staged';
     revision.error = undefined;
     revision.updatedAt = now;
-    writeDB(db);
+    commitDatabaseTables(db);
 
     const compatibility = await compatibilityProbe(manifest);
     revision.compatibility = compatibility;
@@ -1712,7 +1720,7 @@ export async function installAndActivateExtension(
       revision.updatedAt = nowIso();
       const failedReceipt = receipt(revision, 'compatibility_failed', '', compatibility.error);
       pushReceipt(store, failedReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       await persistStrict();
       return JSON.stringify({
         ok: false,
@@ -1748,7 +1756,7 @@ export async function installAndActivateExtension(
       }
       const activatedReceipt = receipt(revision, 'activated', oldActive?.id || '');
       pushReceipt(store, activatedReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       await persistStrict();
       return JSON.stringify({
         ok: true,
@@ -1795,7 +1803,7 @@ export async function installAndActivateExtension(
       const rollbackStatus = runtimeRestored ? 'rolled_back' : 'rollback_failed';
       const rollbackReceipt = receipt(failed, rollbackStatus, oldActive?.id || '', failed.error);
       pushReceipt(restored, rollbackReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       let persisted = true;
       try { await persistStrict(); } catch { persisted = false; }
       return JSON.stringify({
@@ -1823,7 +1831,7 @@ export async function rollbackExtension(
   if (!targetRegistry) throw new Error('Tool registry is unavailable for rollback.');
   return withActivationLock(async () => {
     const userId = context?.userId || 'anonymous';
-    const db = readDB();
+    const db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"]);
     const store = arrays(db);
     const candidates = store.revisions.filter(item => item.extensionId === input.extensionId && item.userId === userId && item.status !== 'active');
     const target = input.version
@@ -1840,7 +1848,7 @@ export async function rollbackExtension(
     if (!compatibility.ok) {
       const failedReceipt = receipt(target, 'rollback_compatibility_failed', '', compatibility.error);
       pushReceipt(store, failedReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       await persistStrict();
       return JSON.stringify({ ok: false, verified: true, status: 'rollback_compatibility_failed', receipt: failedReceipt }, null, 2);
     }
@@ -1867,7 +1875,7 @@ export async function rollbackExtension(
       }
       const rollbackReceipt = receipt(target, 'rollback_activated', current?.id || '');
       pushReceipt(store, rollbackReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       await persistStrict();
       return JSON.stringify({
         ok: true,
@@ -1901,7 +1909,7 @@ export async function rollbackExtension(
       }
       const failedReceipt = receipt(target, 'rollback_failed_previous_restored', current?.id || '', cleanError(error));
       pushReceipt(store, failedReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       try { await persistStrict(); } catch {}
       return JSON.stringify({ ok: false, verified: true, status: 'rollback_failed_previous_restored', receipt: failedReceipt }, null, 2);
     }
@@ -1918,7 +1926,7 @@ export async function disableExtension(
   const targetRegistry = registry || context?.toolRegistry;
   if (!targetRegistry) throw new Error('Tool registry is unavailable for extension disable.');
   return withActivationLock(async () => {
-    const db = readDB();
+    const db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"]);
     const store = arrays(db);
     const revision = store.revisions.find(item => item.extensionId === extensionId && item.status === 'active' && item.userId === (context?.userId || 'anonymous'));
     if (!revision) throw new Error('Active extension was not found in this user scope.');
@@ -1934,7 +1942,7 @@ export async function disableExtension(
       providerClients.delete(extensionId);
       const disabledReceipt = receipt(revision, 'disabled', revision.id);
       pushReceipt(store, disabledReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       await persistStrict();
       return JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', status: 'disabled', receipt: disabledReceipt }, null, 2);
     } catch (error) {
@@ -1951,7 +1959,7 @@ export async function disableExtension(
       providerClients.delete(extensionId);
       const failedReceipt = receipt(revision, 'disable_failed_previous_restored', revision.id, cleanError(error));
       pushReceipt(store, failedReceipt);
-      writeDB(db);
+      commitDatabaseTables(db);
       try { await persistStrict(); } catch {}
       return JSON.stringify({
         ok: false,
@@ -1993,7 +2001,8 @@ export function listExtensionReceipts(context?: ToolContext, extensionId?: strin
 }
 
 export async function hydrateActiveExtensions(registry: ToolRegistry): Promise<{ activated: number; failed: number; errors: string[] }> {
-  const store = arrays();
+  const db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"]);
+  const store = arrays(db);
   let activated = 0;
   let failed = 0;
   const errors: string[] = [];
@@ -2013,7 +2022,7 @@ export async function hydrateActiveExtensions(registry: ToolRegistry): Promise<{
     }
   }
   if (failed > 0) {
-    writeDB(readDB());
+    commitDatabaseTables(db);
     await persistStrict().catch(() => undefined);
   }
   return { activated, failed, errors };
@@ -2035,10 +2044,10 @@ export function resetExtensionRegistryForTests(options: { clearPersisted?: boole
   activationLock = Promise.resolve();
   runtimeOverrides = null;
   if (options.clearPersisted) {
-    const db = readDB();
+    const db = readDatabaseTables(["extensionActivationReceipts","extensionPublishers","extensionRevisions"]);
     db.extensionPublishers = [];
     db.extensionRevisions = [];
     db.extensionActivationReceipts = [];
-    writeDB(db);
+    commitDatabaseTables(db);
   }
 }

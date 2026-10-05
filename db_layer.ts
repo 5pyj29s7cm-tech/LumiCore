@@ -1,4 +1,6 @@
 import sqlite3 from 'sqlite3';
+import { createTableSession, prepareTableCommit, isTableSession } from './server/db/table_session';
+import { DATABASE_TABLES, DOCUMENT_COLLECTION_DEFAULTS, documentCollectionKey, loadDocumentCollections, type DatabaseTableName } from './server/db/table_catalog';
 import { migrateSchema } from './server/db/migrations';
 import fs from 'fs';
 import path from 'path';
@@ -318,13 +320,17 @@ function parsePayloadRows(rows: any[]): any[] {
 function* settingsRowsWithSystemState(items?: any[]): Iterable<any[]> {
   const settings = items || (Array.isArray(memoryDB?.settings) ? memoryDB.settings : []);
   for (const setting of settings) {
-    if (setting?.key !== SYSTEM_FLAGS_SETTING && setting?.key !== SYSTEM_SNAPSHOTS_SETTING) yield [setting.key, setting.value];
+    if (setting?.key !== SYSTEM_FLAGS_SETTING && setting?.key !== SYSTEM_SNAPSHOTS_SETTING && !Object.keys(DOCUMENT_COLLECTION_DEFAULTS).some(name => setting?.key === documentCollectionKey(name))) yield [setting.key, setting.value];
   }
 
   if (!items) yield* systemStateRows();
 }
 
 function* systemStateRows(): Iterable<any[]> {
+  for (const [name, fallback] of Object.entries(DOCUMENT_COLLECTION_DEFAULTS)) {
+    const value = memoryDB?.[name] ?? fallback;
+    if (JSON.stringify(value) !== JSON.stringify(fallback)) yield [documentCollectionKey(name), JSON.stringify(value)];
+  }
   if (memoryDB?.systemFlags && Object.keys(memoryDB.systemFlags).length > 0) {
     yield [SYSTEM_FLAGS_SETTING, JSON.stringify(memoryDB.systemFlags)];
   }
@@ -1392,6 +1398,7 @@ async function loadMemoryDB(): Promise<void> {
   });
 
   memoryDB = {
+    ...loadDocumentCollections(settings || []),
     users,
     interactions,
     marketplaceSkills,
@@ -1642,6 +1649,26 @@ function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   });
 }
 
+/** Select named tables only; the result is detached and writes must be committed explicitly. */
+export function readDatabaseTables<T extends DatabaseTableName>(tables: readonly T[]): Record<T, any> {
+  if (!memoryDB) throw new Error('Database not initialized. Call initDatabase() first.');
+  if (tables.some(table => !DATABASE_TABLES.includes(table))) throw new Error('Unknown database table');
+  return createTableSession(memoryDB, tables);
+}
+
+/** Accept table deltas atomically without adopting a caller-owned full database root. */
+export function commitDatabaseTables(data: unknown): void {
+  if (databaseClosing) throw new Error('Database is closing; new writes are not accepted.');
+  if (!db || !memoryDB) throw new Error('Database not initialized.');
+  const staged = prepareTableCommit(data, databaseSnapshots!.view);
+  if (!Object.keys(staged.changes).length) return;
+  for (const [key, value] of Object.entries(staged.changes)) databaseSnapshots!.view[key] = value;
+  staged.accept();
+  recordDatabaseDirty();
+  writeRevision += 1;
+  scheduleDatabaseFlush();
+}
+
 export function readDB(): any {
   if (!memoryDB) {
     throw new Error('Database not initialized. Call initDatabase() first.');
@@ -1837,6 +1864,7 @@ function configureSqliteExternalCommitJournal(): void {
 }
 
 export function writeDB(data: any): void {
+  if (isTableSession(data)) { commitDatabaseTables(data); return; }
   if (databaseClosing) throw new Error('Database is closing; new writes are not accepted.');
   if (!db) {
     throw new Error('Database not initialized.');
@@ -2336,7 +2364,7 @@ function buildPersistenceTableSpecs(): PersistenceTableSpec[] {
       name: 'settings',
       insertSQL: `INSERT INTO settings (key, value) VALUES (?, ?)`,
       source: 'settings',
-      dependencies: ['systemFlags', 'systemSnapshots'],
+      dependencies: ['systemFlags', 'systemSnapshots', ...Object.keys(DOCUMENT_COLLECTION_DEFAULTS)],
       extraRows: systemStateRows,
       rows: settingsRowsWithSystemState,
     },

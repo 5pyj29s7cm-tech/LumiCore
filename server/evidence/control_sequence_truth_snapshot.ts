@@ -1,7 +1,7 @@
 import { parseStoredObject as parseObject, parseStoredArray as parseArray } from '../tools/receipt_payload';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { createHash, randomUUID } from 'node:crypto';
-import { querySQL, readDB } from '../../db_layer';
+import { querySQL, readDatabaseTables } from '../../db_layer';
 import {
   normalizeProviderOutboundMessagesEvidence,
 } from '../llm/outbound_message_evidence';
@@ -707,7 +707,7 @@ export async function captureControlSequenceTruthSnapshot(
   );
   return buildControlSequenceTruthSnapshotFromSources({
     ...input,
-    db: cloneDb(readDB()),
+    db: cloneDb(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"])),
     chatExecutionReceipts,
   });
 }

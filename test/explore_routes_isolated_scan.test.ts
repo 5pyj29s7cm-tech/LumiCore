@@ -67,7 +67,7 @@ vi.mock('../server/autonomy/planner', () => ({
   getTodayPlanSummary: () => ({}),
 }));
 vi.mock('../server/org/db', () => ({ getMember: () => null }));
-vi.mock('../db_layer', () => ({ readDB: () => ({}) }));
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({ readDB: () => ({}) })) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 
 import { mountExploreRoutes } from '../server/routes/plan_explore_routes';
 

@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 // @vitest-environment jsdom
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +28,7 @@ beforeEach(() => { fixture.uid = 'first'; fixture.authorized = true; fixture.api
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); fixture.api.mockReset(); fixture.sensors.mockReset(); fixture.native.mockReset(); });
 
 function source(relativePath: string): string {
-  return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+  return readImplementationSource(path.join(process.cwd(), relativePath), 'utf8');
 }
 
 const telemetry = { computerScope: 'lumi_server_host', cpu: 24, cpuModel: 'Synthetic CPU', logicalCpus: 8, physicalCpus: null, cpus: 8,

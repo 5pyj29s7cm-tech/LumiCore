@@ -28,7 +28,7 @@ describe('explicit new conversation', () => {
       role: 'user',
       content: 'old conversation content',
     });
-    previous.actionContinuationState = {
+    readDB().conversations.find((row: any) => row.id === previous.id).actionContinuationState = {
       version: 1,
       goal: 'durable old task',
       latestInstruction: 'continue in background',

@@ -1,3 +1,5 @@
+import { readImplementationSource } from './implementation_source';
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -452,7 +454,7 @@ describe('execution guard recovery', () => {
 
   it('routes every socket notification event through the shared sanitizer', () => {
     for (const file of ['chat.ts', 'voice.ts']) {
-      const source = readFileSync(path.resolve('server/socket', file), 'utf8');
+      const source = file === 'voice.ts' ? readVoiceImplementationSource() : readImplementationSource(path.resolve('server/socket', file), 'utf8');
       expect(source).toContain("event === 'agent:notification'");
       expect(source).toContain('sanitizeExecutionNotificationForDelivery');
     }
@@ -1146,8 +1148,8 @@ describe('execution guard recovery', () => {
 
   it('wires the shared one-shot recovery into chat, task and voice terminal paths', () => {
     const root = process.cwd();
-    const chatSource = readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8');
-    const voiceSource = readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8');
+    const chatSource = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
+    const voiceSource = readVoiceImplementationSource();
 
     for (const source of [chatSource, voiceSource]) {
       expect(source).toContain('await recoverBlockedExecutionOnce({');
@@ -1169,7 +1171,7 @@ describe('execution guard recovery', () => {
       expect(source).toContain('correctionRequiresFreshConfirmation,');
       expect(source).not.toContain('!pendingConfirmationMatchesExactProposal(');
     }
-    const confirmationSource = readFileSync(path.join(root, 'server/tools/turn_confirmation.ts'), 'utf8');
+    const confirmationSource = readImplementationSource(path.join(root, 'server/tools/turn_confirmation.ts'), 'utf8');
     expect(confirmationSource).toContain('input.correctionRequiresFreshConfirmation && !pendingConfirmationMatchesExactProposal(');
     expect(confirmationSource).toContain("throw new Error('Corrected action confirmation was not bound to the current task request')");
   });
@@ -1177,11 +1179,11 @@ describe('execution guard recovery', () => {
   it('keeps desktop pause and request cancellation separate in chat, task and voice recovery wiring', () => {
     const root = process.cwd();
     const cases = [{
-      source: readFileSync(path.join(root, 'server/socket/chat.ts'), 'utf8'),
+      source: readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8'),
       cancellationCheck: 'isAborted: isChatCancelled',
 
     }, {
-      source: readFileSync(path.join(root, 'server/socket/voice.ts'), 'utf8'),
+      source: readVoiceImplementationSource(),
       cancellationCheck: 'isAborted: () => !isCurrentTurn()',
     }];
 

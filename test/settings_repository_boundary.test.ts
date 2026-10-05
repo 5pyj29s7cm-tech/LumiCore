@@ -5,14 +5,14 @@ const state = vi.hoisted(() => ({
   refuseWrites: false,
   flush: vi.fn<() => Promise<void>>(),
 }));
-vi.mock('../db_layer', () => ({
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({
   readDB: () => state.database,
   flushDBOrThrow: () => state.flush(),
   writeDB: (database: typeof state.database) => {
     if (state.refuseWrites) throw new Error('Database is closing');
     state.database = database;
   },
-}));
+})) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 import { readSettingRecord, updateSetting, updateSettings, writeSetting, writeSettingDurably } from '../server/persistence/settings_repository';
 
 beforeEach(() => {

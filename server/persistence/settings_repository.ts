@@ -1,8 +1,8 @@
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 
 /** Settings consumers receive values, never the live database or mutable rows. */
 export function readSetting(key: string): string | undefined {
-  return (readDB().settings || []).find(row => row.key === key)?.value;
+  return (readDatabaseTables(["settings"]).settings || []).find(row => row.key === key)?.value;
 }
 
 export function readSettingRecord(key: string): Readonly<{ key: string; value: string }> | undefined {
@@ -17,12 +17,12 @@ export function readSettingJson<T = any>(key: string, fallback: T | null = null)
   } catch { return fallback; }
 }
 
-/** Stage every selected row before writeDB accepts the transaction. */
+/** Stage every selected row before commitDatabaseTables accepts the transaction. */
 export function updateSettings(
   keys: readonly string[],
   update: (previous: Readonly<Record<string, string | undefined>>) => Record<string, string | undefined>,
 ): void {
-  const db = readDB();
+  const db = readDatabaseTables(["settings"]);
   const selected = new Set(keys);
   const previous = Object.fromEntries(keys.map(key => [key, (db.settings || []).find(row => row.key === key)?.value]));
   const changes = update(Object.freeze(previous));
@@ -31,7 +31,7 @@ export function updateSettings(
   for (const [key, value] of Object.entries(changes)) {
     if (value !== undefined) settings.push({ ...(db.settings || []).find(row => row.key === key), key, value });
   }
-  writeDB({ ...db, settings });
+  commitDatabaseTables({ ...db, settings });
 }
 
 export function updateSetting(

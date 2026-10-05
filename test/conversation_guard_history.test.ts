@@ -312,7 +312,7 @@ describe('conversation guard history isolation', () => {
     writeDB(db);
 
     expect(checkAutoSummary(conversation.id).needed).toBe(false);
-    expect(stored.lastSummaryMessageCount).toBe(25);
+    expect(readDB().conversations.find((item: any) => item.id === conversation.id).lastSummaryMessageCount).toBe(25);
     await flushDB();
 
     expect(readDB().conversations.find((item: any) => item.id === conversation.id)).toMatchObject({
@@ -342,7 +342,7 @@ describe('conversation guard history isolation', () => {
     const check = checkAutoSummary(conversation.id);
     expect(check.needed).toBe(true);
     expect(check.summarizedThroughMessageCount).toBe(20);
-    expect(stored.lastSummaryMessageCount).toBe(0);
+    expect(readDB().conversations.find((item: any) => item.id === conversation.id).lastSummaryMessageCount).toBe(0);
   });
 
   it('accepts a clean mixed summary that describes the historical guard failure', () => {

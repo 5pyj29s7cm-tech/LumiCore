@@ -2,7 +2,7 @@
  * Skill translation cache — auto-translates skill metadata via LLM,
  * persists to DB so each skill is translated only once.
  */
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { logger } from '../../logger';
 import { CN_TIMER_SKILL_METADATA } from '../regions/packs/cn/skill_messages';
 
@@ -266,14 +266,14 @@ interface TranslationCache {
 }
 
 function loadCache(): TranslationCache {
-  const db = readDB();
+  const db = readDatabaseTables(["skillTranslations"]);
   return db.skillTranslations || {};
 }
 
 function saveCache(cache: TranslationCache) {
-  const db = readDB();
+  const db = readDatabaseTables(["skillTranslations"]);
   db.skillTranslations = cache;
-  writeDB(db);
+  commitDatabaseTables(db);
 }
 
 export function getTranslation(skillId: string, lang: string): TranslationEntry | null {

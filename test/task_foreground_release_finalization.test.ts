@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import './helpers';
 import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
 import { createServer, type Server as HttpServer } from 'node:http';
@@ -270,7 +271,7 @@ describe('task foreground release manager convergence', () => {
   });
 
   it('keeps pre-binding paths identity-free and orders convergence before resource release', () => {
-    const source = readFileSync('server/socket/chat.ts', 'utf8');
+    const source = readImplementationSource('server/socket/chat.ts', 'utf8');
     const releaseStart = source.indexOf('const chatReleaseGate = createDurableForegroundReleaseGate({');
     const convergeAt = source.indexOf('convergeChatForegroundRequestBeforeRelease({', releaseStart);
     const durableSuccessAt = source.indexOf('if (!releaseResult.converged)', convergeAt);

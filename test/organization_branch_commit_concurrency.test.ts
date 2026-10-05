@@ -118,9 +118,9 @@ describe('organization branch commit isolation', () => {
     const result = Promise.allSettled([pending]);
     gate.reject(new Error('synthetic disk failure'));
     expect((await result)[0].status).toBe('rejected');
-    expect(readDB().memories).toContain(otherMemory);
+    expect(readDB().memories).toContainEqual(otherMemory);
     expect(readDB().settings).toContainEqual({ key: 'branch-commit-independent', value: 'keep' });
-    expect(readDB().auditLog).toContain(otherAudit);
+    expect(readDB().auditLog).toContainEqual(otherAudit);
     expect(getBranchSyncReceipt(input('independent-failure').payload)).toBeNull();
     expect(readDB().memories.some((row: any) => row.orgId === orgId && row.userId === userId)).toBe(false);
     await realFlush();

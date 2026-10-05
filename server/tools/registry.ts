@@ -41,7 +41,7 @@ import {
   recordAdapterExecutionFailure,
   recordAdapterExecutionSuccess,
 } from './adapter_resilience';
-import { readDB } from '../../db_layer';
+import { readDatabaseTables } from '../../db_layer';
 import {
   isRemoteRestrictedExecution,
   isRemoteRestrictedToolAllowed,
@@ -100,7 +100,7 @@ function isAnonymousToolIdentity(userId: unknown): boolean {
 
 function isRegisteredAdmin(userId: string): boolean {
   try {
-    const user = (readDB().users || []).find((candidate: any) => candidate?.uid === userId);
+    const user = (readDatabaseTables(["users"]).users || []).find((candidate: any) => candidate?.uid === userId);
     return user?.role === 'admin';
   } catch {
     return false;

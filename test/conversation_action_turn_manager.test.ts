@@ -212,7 +212,7 @@ describe('manager conversation action-turn integration', () => {
 
   it('uses pendingActionContinuation only as a projection, never as the lock', () => {
     const { userId, conversation } = scope('legacy-projection');
-    conversation.pendingActionContinuation = {
+    readDB().conversations.find((row: any) => row.id === conversation.id).pendingActionContinuation = {
       userText: 'orphaned legacy text',
       messageId: 'missing-message',
       requestId: 'orphaned-request',
@@ -228,7 +228,7 @@ describe('manager conversation action-turn integration', () => {
       requestId,
       userMessageId: messageId,
     })).toMatchObject({ requestId });
-    expect(conversation.pendingActionContinuation).toMatchObject({ requestId, messageId });
+    expect(readDB().conversations.find((row: any) => row.id === conversation.id).pendingActionContinuation).toMatchObject({ requestId, messageId });
     persistAssistant({ userId, conversationId: conversation.id, requestId });
   });
 

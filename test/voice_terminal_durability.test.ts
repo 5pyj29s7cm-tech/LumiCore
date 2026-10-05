@@ -1,3 +1,4 @@
+import { readVoiceImplementationSource } from './voice_implementation_source';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -145,7 +146,7 @@ describe('voice durability', () => {
   });
 
   it('routes every in-turn terminal through the strict fence before speech', () => {
-    const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const source = readVoiceImplementationSource();
 
     expect(source.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBeGreaterThanOrEqual(10);
     expect(source).not.toMatch(/emitAgent\(["']agent:response["']/);
@@ -172,7 +173,7 @@ describe('voice durability', () => {
   });
 
   it('keeps the immediate voice-switch acknowledgement path intact', () => {
-    const source = readFileSync(path.join(process.cwd(), 'server/socket/voice.ts'), 'utf8');
+    const source = readVoiceImplementationSource();
     const handler = source.slice(
       source.indexOf("socket.on('audio:switch-voice'"),
       source.indexOf('let chunkCount', source.indexOf("socket.on('audio:switch-voice'")),

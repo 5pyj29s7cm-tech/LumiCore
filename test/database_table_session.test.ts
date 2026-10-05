@@ -1,0 +1,47 @@
+import { describe, it, expect } from 'vitest';
+import { createTableSession, prepareTableCommit } from '../server/db/table_session';
+const apply = (session: any, root: any) => { const staged = prepareTableCommit(session, root); Object.assign(root, staged.changes); staged.accept(); };
+describe('selected table transactions', () => {
+  it('never exposes unselected tables or live nested rows', () => {
+    const root = { users: [{ uid: 'a', name: 'A', tags: ['old'] }], secrets: [{ key: 'secret' }] };
+    const session = createTableSession(root, ['users']);
+    expect(() => (session as any).secrets).toThrow('outside selected scope');
+    expect(() => (session as any).secrets = []).toThrow('outside selected scope');
+    session.users[0].tags.push('new'); expect(root.users[0].tags).toEqual(['old']);
+    apply(session, root); session.users[0].tags.push('after'); expect(root.users[0].tags).toEqual(['old', 'new']);
+    expect(root.secrets).toEqual([{ key: 'secret' }]);
+  });
+  it('retains other writers on other tables, rows and independent fields', () => {
+    const root = { users: [{ uid: 'a', name: 'A', role: 'member' }], messages: [] };
+    const first = createTableSession(root, ['users']); first.users[0].name = 'New';
+    const second = createTableSession(root, ['users', 'messages']); second.users[0].role = 'admin'; second.users.push({ uid: 'b', name: 'B', role: 'member' }); second.messages.push({ id: 'm' });
+    apply(second, root); apply(first, root);
+    expect(root.users).toEqual([{ uid: 'a', name: 'New', role: 'admin' }, { uid: 'b', name: 'B', role: 'member' }]); expect(root.messages).toEqual([{ id: 'm' }]);
+  });
+  it('rejects conflicting fields atomically across every selected table', () => {
+    const root = { users: [{ uid: 'a', name: 'A' }], messages: [] };
+    const first = createTableSession(root, ['messages', 'users']); first.messages.push({ id: 'm' }); first.users[0].name = 'first';
+    const second = createTableSession(root, ['users']); second.users[0].name = 'second'; apply(second, root);
+    expect(() => apply(first, root)).toThrow('conflicts'); expect(root.messages).toEqual([]); expect(root.users[0].name).toBe('second');
+  });
+  it('rejects stale deletion and resurrection while preserving concurrent appends', () => {
+    const root = { rows: [{ id: 'a', value: 1 }, { id: 'b', value: 1 }] };
+    const deleting = createTableSession(root, ['rows']); deleting.rows.splice(0, 1);
+    const changing = createTableSession(root, ['rows']); changing.rows[0].value = 2; apply(changing, root);
+    expect(() => apply(deleting, root)).toThrow('conflicts');
+    const stale = createTableSession(root, ['rows']); stale.rows[0].value = 3;
+    const fresh = createTableSession(root, ['rows']); fresh.rows.splice(0, 1); apply(fresh, root);
+    expect(() => apply(stale, root)).toThrow('conflicts');
+  });
+  it('accepts spread replacements and checkpoints without persisting caller aliases', () => {
+    const root = { rows: [{ id: 'a', value: 1 }] }; const session = createTableSession(root, ['rows']);
+    const row = { id: 'b', value: 2 }; const replacement = { ...session, rows: [...session.rows, row] }; apply(replacement, root); row.value = 99;
+    expect(root.rows[1].value).toBe(2);
+    expect(() => apply({ ...session, extra: [] }, root)).toThrow('outside selected scope');
+    const checkpoints = createTableSession(root, ['rows']); checkpoints.rows[0].value = 3; apply(checkpoints, root); checkpoints.rows[0].value = 4; apply(checkpoints, root); expect(root.rows[0].value).toBe(4);
+  });
+  it('stages reentrant callback failures without changing accepted rows', () => {
+    const root = { rows: [{ id: 'a', value: 1 }] }; const session = createTableSession(root, ['rows']);
+    expect(() => { session.rows[0].value = 2; throw new Error('abort'); }).toThrow('abort'); expect(root.rows[0].value).toBe(1);
+  });
+});

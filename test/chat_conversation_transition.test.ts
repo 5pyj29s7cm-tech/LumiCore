@@ -37,6 +37,7 @@ function switchingHarness() {
     seenWorkflowToolEvents: { current: new Set() }, setConversationHistory: noop,
     setConversationHistorySelectorExpanded: noop, requestAnimationFrame: noop,
   });
+  h.deps.detachPreviousExecution = extract(pagePath, 'detachPreviousExecution', h.deps);
   h.deps.restoreTextConversation = extract(pagePath, 'restoreTextConversation', h.deps);
   h.deps.setIsCreatingConversation = (value: boolean) => { h.deps.isCreatingConversation = value; };
   h.deps.startNewTextConversation = extract(pagePath, 'startNewTextConversation', h.deps);

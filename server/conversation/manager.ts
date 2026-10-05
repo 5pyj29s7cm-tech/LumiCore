@@ -1,949 +1,23 @@
-import { type Conversation, type ConversationTurnOptions, type ConversationTurnResult, type MessageRecord } from "./manager/contracts";
-export { type Conversation, type MessageRecord, type ConversationTurnOptions, type ConversationTurnResult } from "./manager/contracts";
-import { getMessages, isPromptEligibleMessage } from "./manager/message_history";
-export { compactRecordForPrompt, getMessages, getMessagesByTokenBudget, getMessagesThroughExternalMessage } from "./manager/message_history";
-export { type DurableForegroundReleaseGateSnapshot, type DurableForegroundReleaseGate, type CreateDurableForegroundReleaseGateInput, createDurableForegroundReleaseGate } from "./manager/foreground_release_gate";
-
+import { acceptConversationActionTurn, bindConversationActionTurnTask, finalizeConversationActionTurn, getConversationActionTurn, listConversationActionTurns, quarantineConversationActionTurnPersistenceInDb, reconcileConversationActionTurnLease, reconcileConversationActionTurnLeases } from './action_turn_ledger';
+import { normalizeCompletionFeedbackForPersistence } from './completion_feedback';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
+import { type Conversation, type MessageRecord } from "./manager/contracts";
+import { buildConversationActionContinuationState, classifyToolRecordTaskDurability, classifyRecentActionFollowupIntent, isUserObservedTaskCompletion, needsRecentActionContinuationContext, normalizeConversationActionState, prepareConversationActionTaskState, RECONFIRMATION_REQUIRED_BLOCKER, type ConversationActionContinuationState } from '../cognition/action_continuation';
 import { parseStoredObject as parsePersistedObject } from '../tools/receipt_payload';
-import { flushDBOrThrow, readDB, writeDB } from '../../db_layer';
-
-import { AsyncLocalStorage } from 'node:async_hooks';
-
-import { buildConversationActionContinuationState, classifyToolRecordTaskDurability, classifyConversationActionFollowupIntent, classifyRecentActionFollowupIntent, formatConversationActionTaskStatus, isUserObservedTaskCompletion, needsRecentActionContinuationContext, normalizeConversationActionState, prepareConversationActionTaskState, RECONFIRMATION_REQUIRED_BLOCKER, type ConversationActionContinuationState } from '../cognition/action_continuation';
-import { conversationTaskStatusOwnsExecutionLease, isTerminalConversationTaskStatus, taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
-import { buildActionContract } from '../cognition/action_contract';
-import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import { attachConversationExecutionPlan, migrateLegacyConversationActionLedger, recoverConversationActionTaskLeases, repairTerminalConversationActionPointers, repairTerminalConversationActionTaskLeases, repairContradictoryConversationActionReceipts, compactLegacyScheduledCapabilityExecutions, archiveBoundConversationActionReceipts, finalizeConversationActionTask, getConversationActionStateByTaskId, syncConversationActionTaskLedger, type ConversationActionTerminalDisposition } from './action_ledger';
 import type { ToolPolicy } from '../personality/types';
-import { isolateLegacyGuardSummaryState, isGuardGeneratedAssistantText, isGuardGeneratedConversationRecord } from './guard_history';
-import { isUnverifiedExecutionAssistantRecord, isUnverifiedExecutionAssistantText, sanitizeSummaryForPrompt } from './summary_grounding';
-import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
-
+import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
+import { conversationTaskStatusOwnsExecutionLease, isTerminalConversationTaskStatus } from '../cognition/task_execution_ledger';
 import { normalizeNativeRequestBinding } from '../devices/native_identity';
 import { normalizeVoiceTurnProvenance } from '../socket/voice_provenance';
-import { normalizeCompletionFeedbackForPersistence } from './completion_feedback';
-import { formatConversationActionLedgerStatus, attachConversationExecutionPlan, migrateLegacyConversationActionLedger, recoverConversationActionTaskLeases, repairTerminalConversationActionPointers, repairTerminalConversationActionTaskLeases, repairContradictoryConversationActionReceipts, compactLegacyScheduledCapabilityExecutions, archiveBoundConversationActionReceipts, finalizeConversationActionTask, getConversationActionStateByTaskId, getConversationActionStateFromLedger, syncConversationActionTaskLedger, type ConversationActionTerminalDisposition, type ConversationActionLiveProjection } from './action_ledger';
-import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
-import { listConversationFocusThreads, updateConversationFocusThread, type ConversationFocusThread } from './focus_threads';
-import { acceptConversationActionTurn, acquireConversationActionTurnLease, bindConversationActionTurnTask, finalizeConversationActionTurn, getConversationActionTurn, listConversationActionTurns, quarantineConversationActionTurnPersistenceInDb, reconcileConversationActionTurnLease, reconcileConversationActionTurnLeases, releaseConversationActionTurnLease, type ConversationActionTurn } from './action_turn_ledger';
-import { buildTransportNeutralConfirmationScope, getPendingConfirmation } from '../tools/pending_confirmation';
 import { partitionConversationReceiptsByOwnership } from './receipt_ownership';
-
-function hasExactPendingConfirmationForTask(input: {
-  id: string;
-  conversationId: string;
-  userId: string;
-  domain?: string;
-  orgId?: string;
-}): boolean {
-  if (!input.id || !input.conversationId || !input.userId) return false;
-  return Boolean(getPendingConfirmation(
-    input.userId,
-    buildTransportNeutralConfirmationScope({
-      domain: input.domain,
-      orgId: input.orgId,
-      conversationId: input.conversationId,
-      taskId: input.id,
-    }),
-  ));
-}
-
-export function getConversationFocusThreads(input: {
-  userId: string;
-  domain?: string;
-  orgId?: string;
-  includeTerminal?: boolean;
-}): ConversationFocusThread[] {
-  return listConversationFocusThreads(readDB(), input);
-}
-
-export function updateConversationActionFocus(input: {
-  taskId: string;
-  userId: string;
-  domain?: string;
-  orgId?: string;
-  commitment?: string;
-  nextAction?: string;
-  waitingFor?: string;
-  interruption?: string;
-  resumePoint?: string;
-  dueAt?: string;
-}): ConversationFocusThread | null {
-  const db = readDB();
-  const focus = updateConversationFocusThread(db, input);
-  if (focus) writeDB(db);
-  return focus;
-}
-
-export function getConversationActionStatus(
-  conversationId: string,
-  userId: string,
-  query = '',
-  fallbackState?: ConversationActionContinuationState | null,
-  taskId = '',
-): string {
-  const db = readDB();
-  return formatConversationActionLedgerStatus(db, { conversationId, userId, query, taskId })
-    || formatConversationActionTaskStatus(fallbackState);
-}
-
-function hydrateConversationActionState(
-  db: any,
-  conversation: Conversation,
-  query = '',
-): ConversationActionContinuationState | null {
-  const existing = normalizeConversationActionState(conversation.actionContinuationState);
-  const resolveHistoricalTask = Boolean(
-    query.trim() && needsRecentActionContinuationContext(query),
-  );
-  // Once an unrelated conversational turn detaches the live pointer, only an
-  // explicit continuation query may rehydrate unfinished historical work.
-  // Looking up the newest ledger row for every ordinary turn recreates the
-  // stale pointer we just detached and lets an old goal leak into new text.
-  const recoverableActiveTask = !existing && !resolveHistoricalTask
-    ? (db.conversationActionTasks || [])
-      .filter((task: any) => (
-        task.conversationId === conversation.id
-        && task.userId === conversation.userId
-        && conversationTaskStatusOwnsExecutionLease(task.status)
-        && Boolean(String(task.activeRequestId || '').trim())
-        && (db.conversationActionTurns || []).some((turn: any) => (
-          turn.conversationId === conversation.id
-          && turn.userId === conversation.userId
-          && turn.taskId === task.id
-          && turn.requestId === task.activeRequestId
-          && (turn.status === 'accepted' || turn.status === 'leased')
-        ))
-      ))
-      .sort((left: any, right: any) => (
-        String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''))
-        || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
-      ))[0]
-    : null;
-  const recoverableActiveState = recoverableActiveTask
-    ? getConversationActionStateByTaskId(db, {
-        conversationId: conversation.id,
-        userId: conversation.userId,
-        taskId: String(recoverableActiveTask.id || ''),
-      })
-    : null;
-  const ledgerState = existing || resolveHistoricalTask
-    ? getConversationActionStateFromLedger(db, {
-        conversationId: conversation.id,
-        userId: conversation.userId,
-        query: resolveHistoricalTask ? query : '',
-      })
-    : recoverableActiveState;
-  const exactExistingLedgerState = existing?.taskId
-    ? getConversationActionStateByTaskId(db, {
-        conversationId: conversation.id,
-        userId: conversation.userId,
-        taskId: existing.taskId,
-      })
-    : null;
-  const exactLedgerUpdatedAt = exactExistingLedgerState
-    ? Date.parse(exactExistingLedgerState.updatedAt)
-    : Number.NaN;
-  const rawExistingUpdatedAt = existing ? Date.parse(existing.updatedAt) : Number.NaN;
-  const authoritativeExisting = exactExistingLedgerState
-    && Number.isFinite(exactLedgerUpdatedAt)
-    && (!Number.isFinite(rawExistingUpdatedAt) || exactLedgerUpdatedAt >= rawExistingUpdatedAt)
-    ? exactExistingLedgerState
-    : existing;
-  const existingLive = authoritativeExisting?.unfinished ? authoritativeExisting : null;
-  const ledgerLive = ledgerState?.unfinished ? ledgerState : null;
-  const existingUpdatedAt = existingLive ? Date.parse(existingLive.updatedAt) : Number.NaN;
-  const ledgerUpdatedAt = ledgerLive ? Date.parse(ledgerLive.updatedAt) : Number.NaN;
-  const state = existingLive && ledgerLive
-    ? existingLive.taskId === ledgerLive.taskId
-      && Number.isFinite(ledgerUpdatedAt)
-      && (!Number.isFinite(existingUpdatedAt) || ledgerUpdatedAt > existingUpdatedAt)
-        ? ledgerLive
-        : existingLive
-    : existingLive || ledgerLive;
-  // Historical and terminal projections live only in the durable ledger.
-  // A query may influence which unfinished ledger row is selected, but it may
-  // never repopulate the conversation's live pointer with completed work.
-  if (state) conversation.actionContinuationState = state;
-  else delete conversation.actionContinuationState;
-  return state;
-}
-
-function shouldDetachUnrelatedActionState(
-  state: ConversationActionContinuationState | null | undefined,
-  userText: string,
-): boolean {
-  const current = normalizeConversationActionState(state);
-  if (
-    !current?.unfinished
-    || !['blocked', 'waiting_confirmation'].includes(current.status || '')
-  ) return false;
-  return classifyConversationActionFollowupIntent(userText, current) === 'none';
-}
-
-/**
- * A blocked/confirmation-waiting task stays resumable in the durable ledger,
- * but stops being the conversation's live pointer once the user clearly starts
- * an unrelated turn. Detachment is not cancellation: an explicit later
- * continue/retry/confirmation may select the same task from the ledger.
- */
-function detachUnrelatedConversationActionState(
-  db: any,
-  conversation: Conversation,
-  userText: string,
-  now: string,
-): boolean {
-  const previous = normalizeConversationActionState(conversation.actionContinuationState);
-  if (!previous || !shouldDetachUnrelatedActionState(previous, userText)) return false;
-  // Persist the unfinished state without a request lease, then remove only the
-  // compatibility projection. The task identity, blocker, policy, receipts
-  // and pending confirmation remain authoritative in the durable ledger.
-  syncConversationActionTaskLedger(db, {
-    conversation,
-    state: previous,
-    userText: previous.latestInstruction || previous.goal,
-    now,
-  });
-  delete conversation.actionContinuationState;
-  return true;
-}
-
-function isolateConversationSummaryForUse(conv: Conversation): boolean {
-  const isolated = isolateLegacyGuardSummaryState({
-    summary: conv.summary,
-    summaryChain: conv.summaryChain,
-    lastSummaryMessageCount: conv.lastSummaryMessageCount,
-  });
-  if (!isolated.changed) return false;
-  conv.summary = isolated.summary;
-  conv.summaryChain = isolated.summaryChain;
-  conv.lastSummaryMessageCount = isolated.lastSummaryMessageCount;
-  return true;
-}
-
-function resolveConversationScope(domainOrOrgId?: string, orgIdMaybe?: string): { domain: 'personal' | 'work'; orgId: string } {
-  if (domainOrOrgId === 'personal') return { domain: 'personal', orgId: '' };
-  if (domainOrOrgId === 'work') return { domain: 'work', orgId: orgIdMaybe || '' };
-  return {
-    domain: domainOrOrgId ? 'work' : 'personal',
-    orgId: domainOrOrgId || '',
-  };
-}
-
-function conversationMatchesScope(c: Conversation, domainOrOrgId?: string, orgIdMaybe?: string): boolean {
-  const scope = resolveConversationScope(domainOrOrgId, orgIdMaybe);
-  if (scope.domain === 'work') {
-    return !!scope.orgId && c.orgId === scope.orgId;
-  }
-  return !c.orgId || c.orgId === '';
-}
-
-export function getConversationForScope(
-  conversationId: string,
-  userId: string,
-  domain?: string,
-  orgId?: string,
-): Conversation | null {
-  const db = readDB();
-  const conversation = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
-  if (!conversation || conversation.userId !== userId) return null;
-  if (!conversationMatchesScope(conversation, domain, orgId)) return null;
-  hydrateConversationActionState(db, conversation);
-  if (isolateConversationSummaryForUse(conversation)) writeDB(db);
-  return conversation;
-}
-
-/** All entry points share the same empty transcript defaults and storage identity. */
-function newConversationRecord(
-  userId: string, agentId: string | undefined, scope: { domain: 'personal' | 'work'; orgId: string },
-  status: Conversation['status'], now: string,
-  continuity: Partial<Pick<Conversation, 'mode' | 'summary' | 'recentTopics' | 'lastTopicChangeAt'>> = {},
-): Conversation {
-  return {
-    id: 'conv_' + crypto.randomUUID(), userId, agentId: agentId || '', title: '', status,
-    summary: '', summaryChain: [], lastSummaryMessageCount: 0, messageCount: 0,
-    lastActiveAt: now, createdAt: now, ...continuity, domain: scope.domain, orgId: scope.orgId,
-  };
-}
-
-export function getOrCreateActiveConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
-  const db = readDB();
-  if (!db.conversations) db.conversations = [];
-  const scope = resolveConversationScope(domain, orgId);
-
-  const active = db.conversations
-    .filter((c: Conversation) =>
-      c.userId === userId &&
-      c.agentId === (agentId || '') &&
-      c.status === 'active' &&
-      conversationMatchesScope(c, scope.domain, scope.orgId)
-    )
-    .sort((a: Conversation, b: Conversation) =>
-      new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
-    )[0];
-  if (active) {
-    hydrateConversationActionState(db, active);
-    if (isolateConversationSummaryForUse(active)) writeDB(db);
-    return active;
-  }
-
-  const now = new Date().toISOString();
-  const conv: Conversation = newConversationRecord(userId, agentId, scope, 'active', now);
-  db.conversations.push(conv);
-  writeDB(db);
-  return conv;
-}
-
-/**
- * Start an empty active conversation without deleting the archived transcript or
- * its durable task ledger. In-flight work may finish against the archived
- * conversation while later chat turns are isolated in the new conversation.
- */
-export function startNewConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
-  const db = readDB();
-  if (!db.conversations) db.conversations = [];
-  const scope = resolveConversationScope(domain, orgId);
-  const now = new Date().toISOString();
-
-  for (const conversation of db.conversations as Conversation[]) {
-    if (
-      conversation.userId === userId
-      && conversation.agentId === (agentId || '')
-      && conversation.status === 'active'
-      && conversationMatchesScope(conversation, scope.domain, scope.orgId)
-          ) {
-      conversation.status = 'closed';
-      conversation.lastActiveAt = now;
-    }
-  }
-
-  const conversation: Conversation = newConversationRecord(userId, agentId, scope, 'active', now);
-  db.conversations.push(conversation);
-  writeDB(db);
-  return conversation;
-}
-
-/**
- * Create an explicitly-bound conversation without changing the user's active
- * conversation. Formal E2E and other diagnostic callers must always send the
- * returned conversationId; the closed status keeps it out of normal active
- * conversation selection while still allowing bound turns to run.
- */
-export function startIsolatedConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
-  const db = readDB();
-  if (!db.conversations) db.conversations = [];
-  const scope = resolveConversationScope(domain, orgId);
-  const now = new Date().toISOString();
-  const conversation: Conversation = newConversationRecord(userId, agentId, scope, 'closed', now);
-  db.conversations.push(conversation);
-  writeDB(db);
-  return conversation;
-}
-
-export interface DeletedConversationData {
-  conversationId: string;
-  interactions: number;
-  actionTasks: number;
-  actionTurns: number;
-  actionReceipts: number;
-  routingReceipts: number;
-}
-
-/** Delete only records carrying the exact, already-authorized conversation id. */
-export function deleteConversationData(
-  conversationId: string,
-  userId: string,
-  domain?: string,
-  orgId?: string,
-): DeletedConversationData | null {
-  const db = readDB();
-  const conversation = (db.conversations || []).find((candidate: Conversation) => (
-    candidate.id === conversationId
-    && candidate.userId === userId
-    && conversationMatchesScope(candidate, domain, orgId)
-  ));
-  if (!conversation) return null;
-
-  const before = {
-    interactions: (db.interactions || []).length,
-    actionTasks: (db.conversationActionTasks || []).length,
-    actionTurns: (db.conversationActionTurns || []).length,
-    actionReceipts: (db.conversationActionReceipts || []).length,
-    routingReceipts: (db.modelRoutingReceipts || []).length,
-  };
-  const ownedTaskIds = new Set(
-    (db.conversationActionTasks || [])
-      .filter((row: any) => row.conversationId === conversationId)
-      .map((row: any) => String(row.id || ''))
-      .filter(Boolean),
-  );
-
-  db.conversations = (db.conversations || []).filter((row: Conversation) => row.id !== conversationId);
-  db.interactions = (db.interactions || []).filter((row: any) => row.conversationId !== conversationId);
-  db.conversationActionTasks = (db.conversationActionTasks || [])
-    .filter((row: any) => row.conversationId !== conversationId);
-  db.conversationActionTurns = (db.conversationActionTurns || [])
-    .filter((row: any) => row.conversationId !== conversationId);
-  db.conversationActionReceipts = (db.conversationActionReceipts || [])
-    .filter((row: any) => row.conversationId !== conversationId && !ownedTaskIds.has(String(row.taskId || '')));
-  db.modelRoutingReceipts = (db.modelRoutingReceipts || [])
-    .filter((row: any) => row.conversationId !== conversationId);
-  writeDB(db);
-
-  return {
-    conversationId,
-    interactions: before.interactions - db.interactions.length,
-    actionTasks: before.actionTasks - db.conversationActionTasks.length,
-    actionTurns: before.actionTurns - db.conversationActionTurns.length,
-    actionReceipts: before.actionReceipts - db.conversationActionReceipts.length,
-    routingReceipts: before.routingReceipts - db.modelRoutingReceipts.length,
-  };
-}
-
-const DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT = 240;
-
-function resolveConversationRolloverMessageLimit(override?: number): number {
-  const configured = override ?? Number.parseInt(
-    process.env.CONVERSATION_ROLLOVER_MESSAGE_LIMIT || '',
-    10,
-  );
-  if (!Number.isFinite(configured)) return DEFAULT_CONVERSATION_ROLLOVER_MESSAGE_LIMIT;
-  return Math.max(4, Math.floor(configured));
-}
-
-/**
- * Decide whether a completed conversation segment should be archived before
- * accepting a new user turn. Referential follow-ups get one extra segment so
- * a natural "continue" is not separated from the action it refers to. The hard
- * limit still prevents an indefinitely reused thread.
- */
-export function shouldRolloverConversationForTurn(
-  conversation: Conversation,
-  userText = '',
-  messageLimit?: number,
-): boolean {
-  const limit = resolveConversationRolloverMessageLimit(messageLimit);
-  const count = Math.max(0, Math.floor(Number(conversation.messageCount) || 0));
-  if (count < limit) return false;
-
-  // A user turn without a terminal assistant record is still in flight. Never
-  // split that turn merely because it crossed the message threshold.
-  if (conversation.pendingActionContinuation) return false;
-
-  const hardLimit = Math.max(limit + 1, limit * 2);
-  if (count >= hardLimit) return true;
-
-  return !needsRecentActionContinuationContext(String(userText || '').trim());
-}
-
-function compactRolloverText(value: unknown, limit: number): string {
-  const clean = String(value || '').replace(/\s+/g, ' ').trim();
-  if (clean.length <= limit) return clean;
-  return clean.slice(0, Math.max(0, limit - 1)).trimEnd() + '…';
-}
-
-function buildRolloverTranscriptTail(conversationId: string): string[] {
-  const lines: string[] = [];
-  const recent = getMessages(conversationId, 18)
-    .filter(isPromptEligibleMessage)
-    .filter(record => !isUnverifiedExecutionAssistantRecord(record))
-    .slice(-10);
-
-  for (const record of recent) {
-    const message = compactRolloverText(record.message, 360);
-    const response = compactRolloverText(record.response, 360);
-    if (record.role === 'user') {
-      if (message) lines.push(`User: ${message}`);
-      // Legacy rows sometimes stored both sides of a turn in one user record.
-      if (response && !isGuardGeneratedAssistantText(response) && !isUnverifiedExecutionAssistantText(response)) lines.push(`Lumi: ${response}`);
-    } else if (record.role === 'assistant' && message) {
-      lines.push(`Lumi: ${message}`);
-    }
-  }
-
-  return lines.slice(-10);
-}
-
-function buildConversationRolloverSummary(conversation: Conversation): string {
-  const priorParts: string[] = [];
-  if (conversation.summary && !isStandaloneGuardOutput(conversation.summary)) {
-    const safe = sanitizeSummaryForPrompt(conversation.summary);
-    if (safe) priorParts.push(compactRolloverText(safe, 1800));
-  }
-  if (conversation.summaryChain?.length) {
-    const older = conversation.summaryChain
-      .filter(summary => !isStandaloneGuardOutput(summary))
-      .map(summary => compactRolloverText(sanitizeSummaryForPrompt(summary), 700))
-      .filter(Boolean)
-      .join(' | ');
-    if (older) priorParts.push(`Earlier context: ${compactRolloverText(older, 1200)}`);
-  }
-
-  const recentLines = buildRolloverTranscriptTail(conversation.id);
-  return [
-    `Conversation continuity snapshot from an archived segment (${conversation.messageCount || 0} stored messages).`,
-    priorParts.length ? `Durable summary:\n${priorParts.join('\n')}` : '',
-    recentLines.length ? `Recent conversational context:\n${recentLines.join('\n')}` : '',
-    'Continuity boundary: treat this only as conversational background. Do not infer or claim that any prior tool run, pending confirmation, background job, or unfinished action remains active. Resume prior work only when the current user explicitly asks.',
-  ].filter(Boolean).join('\n\n');
-}
-
-/**
- * Acquire the conversation for one new user turn, rolling over an oversized
- * segment when safe. The compact continuity snapshot is stored as the new
- * segment's summary, so chat and voice share the same restart-safe context.
- */
-export function getOrCreateConversationForTurn(
-  userId: string,
-  agentId?: string,
-  domain?: string,
-  orgId?: string,
-  options: ConversationTurnOptions = {},
-): ConversationTurnResult {
-  const requestedConversationId = String(options.conversationId || '').trim();
-  const requestedConversation = requestedConversationId
-    ? getConversationForScope(requestedConversationId, userId, domain, orgId)
-    : null;
-  if (requestedConversationId && (!requestedConversation || requestedConversation.agentId !== (agentId || ''))) {
-    throw new Error('Conversation is unavailable for this user, agent, or workspace');
-  }
-  const current = requestedConversation || getOrCreateActiveConversation(userId, agentId, domain, orgId);
-  // An explicitly bound in-flight turn is allowed to finish after the user has
-  // opened a new conversation. Never roll that archived transcript into the new one.
-  if (requestedConversation && requestedConversation.status !== 'active') {
-    return { conversation: requestedConversation, rolledOver: false };
-  }
-  if (!shouldRolloverConversationForTurn(current, options.userText, options.messageLimit)) {
-    return { conversation: current, rolledOver: false };
-  }
-
-  const db = readDB();
-  if (!db.conversations) return { conversation: current, rolledOver: false };
-  const active = db.conversations.find((conversation: Conversation) =>
-    conversation.id === current.id
-    && conversation.userId === userId
-    && conversation.status === 'active'
-  );
-  if (
-    !active
-    || !conversationMatchesScope(active, domain, orgId)
-    || !shouldRolloverConversationForTurn(active, options.userText, options.messageLimit)
-  ) {
-    const selected = active || current;
-    hydrateConversationActionState(db, selected);
-    return { conversation: selected, rolledOver: false };
-  }
-
-  const now = new Date().toISOString();
-  const continuitySummary = buildConversationRolloverSummary(active);
-  active.status = 'closed';
-  active.summary = continuitySummary;
-  active.lastSummaryMessageCount = Math.max(0, active.messageCount || 0);
-  active.lastActiveAt = now;
-  delete active.pendingActionContinuation;
-
-  const next = newConversationRecord(userId, agentId, resolveConversationScope(domain, orgId), 'active', now, {
-    mode: active.mode, summary: continuitySummary,
-    recentTopics: active.recentTopics ? [...active.recentTopics] : undefined,
-    lastTopicChangeAt: active.lastTopicChangeAt,
-  });
-  db.conversations.push(next);
-  writeDB(db);
-
-  return {
-    conversation: next,
-    rolledOver: true,
-    previousConversationId: active.id,
-  };
-}
-
-export function closeConversation(conversationId: string, summary?: string, userId?: string): Conversation | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return null;
-  if (userId && conv.userId !== userId) return null;
-  const closingRequestId = String(
-    conv.actionContinuationState?.activeRequestId
-    || conv.pendingActionContinuation?.requestId
-    || '',
-  );
-  const now = new Date().toISOString();
-  cancelManagerActionTurns({
-    conversationId: conv.id,
-    userId: conv.userId,
-    reason: 'Conversation closed before the request reached a terminal result.',
-    now,
-  });
-  const previous = normalizeConversationActionState(conv.actionContinuationState);
-  if (previous?.unfinished) {
-    finalizeConversationActionTask(db, {
-      conversation: conv,
-      state: previous,
-      outcome: 'cancelled',
-      requestId: closingRequestId,
-      assistantState: 'Conversation closed by the user.',
-      now,
-    });
-  } else if (closingRequestId) {
-    finalizeConversationActionRequestInDb(db, conv, closingRequestId, {
-      fallbackBlocker: 'The conversation was closed before the request reached a verified terminal result.',
-      now,
-    });
-  }
-  delete conv.pendingActionContinuation;
-  conv.status = 'closed';
-  conv.summary = summary || '';
-  conv.lastActiveAt = now;
-  writeDB(db);
-  return conv;
-}
-
-export function getActiveConversation(userId: string, agentId?: string, domainOrOrgId?: string, orgIdMaybe?: string): Conversation | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const active = db.conversations
-    .filter((c: Conversation) => {
-      if (c.userId !== userId) return false;
-      if (agentId && c.agentId !== agentId) return false;
-      if (c.status !== 'active') return false;
-      return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
-    })
-    .sort((a: Conversation, b: Conversation) =>
-      new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime()
-    )[0] || null;
-  if (active) hydrateConversationActionState(db, active);
-  if (active && isolateConversationSummaryForUse(active)) writeDB(db);
-  return active;
-}
-
-export function setConversationMode(conversationId: string, mode: string): void {
-  const db = readDB();
-  if (!db.conversations) return;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return;
-  conv.mode = mode;
-  conv.lastActiveAt = new Date().toISOString();
-  writeDB(db);
-}
-
-export function getUserConversations(
-  userId: string,
-  limit = 20,
-  offset = 0,
-  domainOrOrgId?: string,
-  orgIdMaybe?: string,
-  agentId?: string,
-): Conversation[] {
-  const db = readDB();
-  if (!db.conversations) return [];
-  const conversations = db.conversations
-    .filter((c: Conversation) => {
-      if (c.userId !== userId) return false;
-      if (agentId && c.agentId !== agentId) return false;
-      return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
-    })
-    .sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime())
-    .slice(offset, offset + limit);
-  let summaryWasIsolated = false;
-  for (const conversation of conversations) {
-    hydrateConversationActionState(db, conversation);
-    if (isolateConversationSummaryForUse(conversation)) summaryWasIsolated = true;
-  }
-  if (summaryWasIsolated) writeDB(db);
-  return conversations;
-}
-
-export function activateConversation(
-  conversationId: string,
-  userId: string,
-  agentId: string,
-  domainOrOrgId?: string,
-  orgIdMaybe?: string,
-): Conversation | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const target = db.conversations.find((conversation: Conversation) => (
-    conversation.id === conversationId
-    && conversation.userId === userId
-    && conversation.agentId === agentId
-    && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
-  ));
-  if (!target) return null;
-
-  const now = new Date().toISOString();
-  for (const conversation of db.conversations as Conversation[]) {
-    if (
-      conversation.id !== target.id
-      && conversation.userId === userId
-      && conversation.agentId === agentId
-      && conversation.status === 'active'
-      && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
-    ) {
-      conversation.status = 'closed';
-      conversation.lastActiveAt = now;
-    }
-  }
-  target.status = 'active';
-  target.lastActiveAt = now;
-  hydrateConversationActionState(db, target);
-  writeDB(db);
-  return target;
-}
-
-export interface BindConversationActionExecutionTurnInput {
-  conversationId: string;
-  userId: string;
-  userText: string;
-  requestId: string;
-  /** Exact persisted user transcript row that owns this request. */
-  userMessageId: string;
-  preserveExistingTask?: boolean;
-}
-
-export interface BoundConversationActionExecutionTurn {
-  conversationId: string;
-  messageId: string;
-  requestId: string;
-  leaseOwnerId: string;
-  updatedAt: string;
-}
-
-export const CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS = 5 * 60 * 1_000;
-export const CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS = Math.floor(
-  CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS / 3,
-);
-
-interface ManagerActionTurnLease {
-  ownerId: string;
-  prepared: boolean;
-  /** Executor fenced by this lease, aborted if an expired owner is recovered. */
-  abortController?: AbortController;
-}
-
-const managerActionTurnLeases = new Map<string, ManagerActionTurnLease>();
-const managerActionTurnHeartbeatStops = new Map<string, () => void>();
-
-export interface ConversationTerminalPersistenceUnknownProjection {
-  text: string;
-  completionFeedback?: unknown;
-  reason?: string;
-}
-
-interface StagedConversationTerminalTurn {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  assistantMessageId: string;
-  desiredStatus: 'terminal' | 'cancelled';
-  reason: string;
-  now?: string;
-}
-
-export interface ConversationTerminalDurabilityStage {
-  turns: Map<string, StagedConversationTerminalTurn>;
-  settled: boolean;
-}
-
-const conversationTerminalDurabilityStorage = new AsyncLocalStorage<ConversationTerminalDurabilityStage>();
-
-export function runWithConversationTerminalDurabilityStage<T>(
-  operation: (stage: ConversationTerminalDurabilityStage) => Promise<T>,
-): Promise<T> {
-  const stage: ConversationTerminalDurabilityStage = {
-    turns: new Map(),
-    settled: false,
-  };
-  return conversationTerminalDurabilityStorage.run(stage, () => operation(stage));
-}
-
-function stageConversationTerminalTurn(input: StagedConversationTerminalTurn): boolean {
-  const stage = conversationTerminalDurabilityStorage.getStore();
-  if (!stage || stage.settled) return false;
-  const key = managerActionTurnKey(input);
-  const previous = stage.turns.get(key);
-  stage.turns.set(key, {
-    ...previous,
-    ...input,
-    assistantMessageId: input.assistantMessageId || previous?.assistantMessageId || '',
-    desiredStatus: input.desiredStatus === 'cancelled' || previous?.desiredStatus === 'cancelled'
-      ? 'cancelled'
-      : 'terminal',
-    reason: input.reason || previous?.reason || '',
-    now: input.now || previous?.now,
-  });
-  return true;
-}
-
-function stopManagerActionTurnHeartbeat(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-}): void {
-  managerActionTurnHeartbeatStops.get(managerActionTurnKey(input))?.();
-}
-
-function managerActionTurnKey(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-}): string {
-  return JSON.stringify([input.conversationId, input.userId, input.requestId]);
-}
-
-/**
- * Drop a process-local owner only after the durable lease no longer proves
- * that it owns this request. Keeping an expired map entry made an idempotent
- * retry return `busy` forever even though the durable TTL had recovered.
- */
-function reconcileManagerActionTurnLeaseOwner(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-}): ManagerActionTurnLease | undefined {
-  const key = managerActionTurnKey(input);
-  const managerLease = managerActionTurnLeases.get(key);
-  if (!managerLease) return undefined;
-  const durableTurn = getConversationActionTurn(input);
-  if (
-    durableTurn?.status === 'leased'
-    && durableTurn.leaseOwnerId === managerLease.ownerId
-  ) return managerLease;
-
-  if (managerLease.abortController && !managerLease.abortController.signal.aborted) {
-    managerLease.abortController.abort(new Error(
-      'Conversation action execution lease expired or lost ownership',
-    ));
-  }
-  stopManagerActionTurnHeartbeat(input);
-  managerActionTurnLeases.delete(key);
-  return undefined;
-}
-
-function acquireManagerActionTurnLease(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  reuseExistingLease: boolean;
-}): { acquired: true; ownerId: string } | { acquired: false; reason: 'busy' | 'stale' } {
-  const key = managerActionTurnKey(input);
-  // Recover the durable TTL first, then discard only a map owner that no
-  // longer matches it. The inverse order lets an expired in-memory entry act
-  // as an unbounded busy lock.
-  const recoveredDurableLeases = reconcileConversationActionTurnLeases();
-  for (const recovered of recoveredDurableLeases.turns) {
-    reconcileManagerActionTurnLeaseOwner(recovered);
-  }
-  const existingManagerLease = reconcileManagerActionTurnLeaseOwner(input);
-  if (!input.reuseExistingLease && existingManagerLease) {
-    return { acquired: false, reason: 'busy' };
-  }
-  if (input.reuseExistingLease && existingManagerLease?.prepared) {
-    return { acquired: false, reason: 'busy' };
-  }
-
-  // The database is process-exclusive. Durable recovery above runs
-  // synchronously before enforcing one live request per thread.
-  const competing = listConversationActionTurns({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    statuses: ['leased'],
-  }).find(turn => turn.requestId !== input.requestId);
-  if (competing) return { acquired: false, reason: 'busy' };
-
-  const turn = getConversationActionTurn(input);
-  if (!turn) return { acquired: false, reason: 'stale' };
-  if (!input.reuseExistingLease && turn.status === 'leased') {
-    return { acquired: false, reason: 'busy' };
-  }
-
-  const ownerId = existingManagerLease?.ownerId || `manager:${crypto.randomUUID()}`;
-  const acquired = acquireConversationActionTurnLease({
-    ...input,
-    leaseOwnerId: ownerId,
-    ttlMs: CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS,
-  });
-  if (acquired.acquired === false) {
-    return {
-      acquired: false,
-      reason: acquired.reason === 'not_found' || acquired.reason === 'terminal' ? 'stale' : 'busy',
-    };
-  }
-  managerActionTurnLeases.set(key, {
-    ownerId,
-    prepared: input.reuseExistingLease,
-  });
-  return { acquired: true, ownerId };
-}
-
-function releaseManagerActionTurnLease(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  reason: string;
-}): void {
-  const key = managerActionTurnKey(input);
-  stopManagerActionTurnHeartbeat(input);
-  const managerLease = managerActionTurnLeases.get(key);
-  const turn = getConversationActionTurn(input);
-  if (managerLease && turn?.status === 'leased') {
-    releaseConversationActionTurnLease({
-      ...input,
-      leaseOwnerId: managerLease.ownerId,
-    });
-  } else if (turn?.status === 'leased') {
-    // The executor is exiting but its in-process owner token is unavailable.
-    // Fence replay until durable transcript/task reconciliation proves safety.
-    reconcileConversationActionTurnLease({
-      ...input,
-      observedStatus: 'persistence_unknown',
-      reason: input.reason,
-    });
-  }
-  managerActionTurnLeases.delete(key);
-}
-
-function finalizeManagerActionTurnFromAssistant(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  assistantMessageId: string;
-  desiredStatus?: 'terminal' | 'cancelled';
-  reason?: string;
-  now?: string;
-}): void {
-  const desiredStatus = input.desiredStatus
-    || (getConversationActionTurn(input)?.status === 'cancelled' ? 'cancelled' : 'terminal');
-  if (stageConversationTerminalTurn({
-    ...input,
-    desiredStatus,
-    reason: input.reason || 'assistant transcript staged behind strict durability fence',
-  })) return;
-  finalizeManagerActionTurnFromAssistantImmediately({ ...input, desiredStatus });
-}
-
-function finalizeManagerActionTurnFromAssistantImmediately(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  assistantMessageId: string;
-  desiredStatus?: 'terminal' | 'cancelled';
-  reason?: string;
-  now?: string;
-}): void {
-  stopManagerActionTurnHeartbeat(input);
-  finalizeConversationActionTurn({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    requestId: input.requestId,
-    status: input.desiredStatus
-      || (getConversationActionTurn(input)?.status === 'cancelled' ? 'cancelled' : 'terminal'),
-    terminalMessageId: input.assistantMessageId,
-    reason: input.reason || 'assistant transcript persisted',
-    force: true,
-    now: input.now,
-  });
-  managerActionTurnLeases.delete(managerActionTurnKey(input));
-}
+import { buildActionContract } from '../cognition/action_contract';
+import { normalizeActionIntent } from '../cognition/normalized_action_intent';
+import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
+import { type ConversationTerminalDurabilityStage, stopManagerActionTurnHeartbeat, managerActionTurnLeases, managerActionTurnKey, finalizeManagerActionTurnFromAssistantImmediately, type ConversationTerminalPersistenceUnknownProjection, finalizeConversationActionRequestInDb, finalizeManagerActionTurnFromAssistant, acquireManagerActionTurnLease, releaseManagerActionTurnLease, cancelManagerActionTurns, managerActionTurnHeartbeatStops } from "./action_execution_runtime";
+import { type BoundConversationActionExecutionTurn, type BindConversationActionExecutionTurnInput, conversationMatchesScope } from "./conversation_lifecycle";
+import { detachUnrelatedConversationActionState, hydrateConversationActionState, hasExactPendingConfirmationForTask, compactRolloverText } from "./action_state_hydration";
+import { type SupersedeConversationActionExecutionRequestInput, type SupersedeConversationActionExecutionRequestResult, finalizeForegroundRequest } from "./foreground_finalization";
 
 /**
  * Release staged action turns only after the first strict transcript/task
@@ -1017,7 +91,7 @@ export function quarantineConversationTerminalDurabilityStage(
       nextSteps: ['Review the task state before retrying the action.'],
     },
   );
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   let quarantined = 0;
 
   for (const entry of stage.turns.values()) {
@@ -1098,7 +172,7 @@ export function quarantineConversationTerminalDurabilityStage(
   }
 
   stage.settled = true;
-  if (quarantined > 0) writeDB(db);
+  if (quarantined > 0) commitDatabaseTables(db);
   return quarantined;
 }
 
@@ -1155,48 +229,6 @@ function finalizePersistedAssistantActionTurnInDb(
     reason: taskOutcome ? `task_outcome:${taskOutcome}` : undefined,
     now: input.now,
   });
-}
-
-function cancelManagerActionTurns(input: {
-  conversationId: string;
-  userId: string;
-  requestId?: string;
-  reason: string;
-  now?: string;
-}): number {
-  const candidates = listConversationActionTurns({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    statuses: ['accepted', 'leased', 'persistence_unknown'],
-  }).filter(turn => !input.requestId || turn.requestId === input.requestId);
-  let cancelled = 0;
-  for (const turn of candidates) {
-    if (stageConversationTerminalTurn({
-      conversationId: turn.conversationId,
-      userId: turn.userId,
-      requestId: turn.requestId,
-      assistantMessageId: '',
-      desiredStatus: 'cancelled',
-      reason: input.reason,
-      now: input.now,
-    })) {
-      cancelled += 1;
-      continue;
-    }
-    stopManagerActionTurnHeartbeat(turn);
-    const result = finalizeConversationActionTurn({
-      conversationId: turn.conversationId,
-      userId: turn.userId,
-      requestId: turn.requestId,
-      status: 'cancelled',
-      reason: input.reason,
-      force: true,
-      now: input.now,
-    });
-    managerActionTurnLeases.delete(managerActionTurnKey(turn));
-    if (result.finalized && result.changed) cancelled += 1;
-  }
-  return cancelled;
 }
 
 interface BindConversationActionExecutionTurnResult {
@@ -1285,7 +317,7 @@ function rejectedConversationActionExecution(
 export function bindConversationActionExecutionTurn(
   input: BindConversationActionExecutionTurnInput,
 ): BoundConversationActionExecutionTurn | null {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === input.conversationId && item.userId === input.userId
   ));
@@ -1294,206 +326,8 @@ export function bindConversationActionExecutionTurn(
   const binding = bindConversationActionExecutionTurnInDb(db, conversation, input, false);
   if (!binding.turn) return null;
   conversation.lastActiveAt = new Date().toISOString();
-  writeDB(db);
+  commitDatabaseTables(db);
   return binding.turn;
-}
-
-/** Refresh the foreground fencing lease from any foreground channel heartbeat. */
-export function renewConversationActionExecutionLease(
-  conversationId: string,
-  userId: string,
-  requestId: string,
-): boolean {
-  const key = managerActionTurnKey({ conversationId, userId, requestId });
-  const lease = managerActionTurnLeases.get(key);
-  if (!lease) return false;
-  const renewed = acquireConversationActionTurnLease({
-    conversationId,
-    userId,
-    requestId,
-    leaseOwnerId: lease.ownerId,
-    ttlMs: CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS,
-  });
-  // Re-acquiring an already expired/released lease is not a renewal. There was
-  // an ownership gap, so the executor must fail closed instead of continuing
-  // side effects under a newly created lease that only happens to share its id.
-  return renewed.acquired && renewed.renewed && !renewed.recovered;
-}
-
-export interface ConversationActionExecutionLeaseLoss {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  status: 'persistence_unknown';
-  reason: string;
-  persisted: boolean;
-  occurredAt: string;
-}
-
-export interface ConversationActionExecutionHeartbeat {
-  stop(): void;
-  isRunning(): boolean;
-  isLeaseLost(): boolean;
-  /** Resolves after the durable quarantine and optional entrypoint receipt finish. */
-  leaseLoss: Promise<ConversationActionExecutionLeaseLoss>;
-}
-
-function persistConversationActionLeaseLoss(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  reason: string;
-  occurredAt: string;
-}): boolean {
-  const reconciled = reconcileConversationActionTurnLease({
-    conversationId: input.conversationId,
-    userId: input.userId,
-    requestId: input.requestId,
-    observedStatus: 'persistence_unknown',
-    reason: input.reason,
-    now: input.occurredAt,
-  });
-  managerActionTurnLeases.delete(managerActionTurnKey(input));
-
-  const db = readDB();
-  const conversation = (db.conversations || []).find((item: Conversation) => (
-    item.id === input.conversationId && item.userId === input.userId
-  ));
-  if (conversation) {
-    hydrateConversationActionState(db, conversation);
-    const previous = normalizeConversationActionState(conversation.actionContinuationState);
-    if (previous) {
-      finalizeConversationActionTask(db, {
-        conversation,
-        state: previous,
-        outcome: 'persistence_unknown',
-        requestId: input.requestId,
-        blocker: `persistence_unknown: ${input.reason}`,
-        assistantState: input.reason,
-        now: input.occurredAt,
-      });
-    }
-    writeDB(db);
-  }
-  return reconciled.turn?.status === 'persistence_unknown';
-}
-
-/**
- * Keep one prepared foreground action turn fenced for the full executor
- * lifetime. A lost renewal is a hard execution boundary: quarantine the
- * durable turn first, abort the entrypoint controller, then persist its
- * channel-specific unknown receipt.
- */
-export function startConversationActionExecutionHeartbeat(input: {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  abortController: AbortController;
-  onPersistenceUnknown?: (
-    loss: ConversationActionExecutionLeaseLoss,
-  ) => void | Promise<void>;
-}): ConversationActionExecutionHeartbeat {
-  const identity = {
-    conversationId: String(input.conversationId || '').trim(),
-    userId: String(input.userId || '').trim(),
-    requestId: String(input.requestId || '').trim(),
-  };
-  if (!identity.conversationId || !identity.userId || !identity.requestId) {
-    throw new TypeError('conversationId, userId, and requestId are required');
-  }
-
-  const key = managerActionTurnKey(identity);
-  stopManagerActionTurnHeartbeat(identity);
-  const managerLease = managerActionTurnLeases.get(key);
-  if (managerLease) managerLease.abortController = input.abortController;
-  let running = true;
-  let leaseLost = false;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let resolveLeaseLoss!: (loss: ConversationActionExecutionLeaseLoss) => void;
-  const leaseLoss = new Promise<ConversationActionExecutionLeaseLoss>(resolve => {
-    resolveLeaseLoss = resolve;
-  });
-
-  const stop = () => {
-    if (!running && !timer) return;
-    running = false;
-    if (timer) clearInterval(timer);
-    timer = null;
-    input.abortController.signal.removeEventListener('abort', stop);
-    if (managerActionTurnHeartbeatStops.get(key) === stop) {
-      managerActionTurnHeartbeatStops.delete(key);
-    }
-  };
-
-  const loseLease = () => {
-    if (!running || leaseLost) return;
-    leaseLost = true;
-    const occurredAt = new Date().toISOString();
-    const reason = 'The execution lease heartbeat could not be renewed; the outcome is unknown.';
-    const persisted = persistConversationActionLeaseLoss({
-      ...identity,
-      reason,
-      occurredAt,
-    });
-    stop();
-    if (!input.abortController.signal.aborted) {
-      input.abortController.abort(new Error('Conversation action execution lease was lost'));
-    }
-    const loss: ConversationActionExecutionLeaseLoss = {
-      ...identity,
-      status: 'persistence_unknown',
-      reason,
-      persisted,
-      occurredAt,
-    };
-    Promise.resolve(input.onPersistenceUnknown?.(loss))
-      .catch(error => {
-        console.error('[ConversationActionHeartbeat] Failed to persist entrypoint receipt:', error);
-      })
-      .finally(() => resolveLeaseLoss(loss));
-  };
-
-  const tick = () => {
-    if (!running) return;
-    if (input.abortController.signal.aborted) {
-      stop();
-      return;
-    }
-    if (renewConversationActionExecutionLease(
-      identity.conversationId,
-      identity.userId,
-      identity.requestId,
-    )) return;
-
-    const turn = getConversationActionTurn(identity);
-    if (turn?.status === 'terminal') {
-      stop();
-      return;
-    }
-    if (turn?.status === 'cancelled') {
-      stop();
-      if (!input.abortController.signal.aborted) {
-        input.abortController.abort(new Error('Conversation action execution was cancelled'));
-      }
-      return;
-    }
-    // An independently installed quarantine is also an execution stop, and its
-    // channel callback still needs a chance to write the public-safe receipt.
-    loseLease();
-  };
-
-  managerActionTurnHeartbeatStops.set(key, stop);
-  input.abortController.signal.addEventListener('abort', stop, { once: true });
-  timer = setInterval(tick, CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS);
-  timer.unref?.();
-  if (input.abortController.signal.aborted) stop();
-
-  return {
-    stop,
-    isRunning: () => running,
-    isLeaseLost: () => leaseLost,
-    leaseLoss,
-  };
 }
 
 export function prepareConversationActionExecution(input: {
@@ -1512,7 +346,7 @@ export function prepareConversationActionExecution(input: {
   /** Preserve the current task while binding corrective/continuation feedback. */
   preserveExistingTask?: boolean;
 }): ConversationActionExecutionPreparation {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === input.conversationId && item.userId === input.userId
   ));
@@ -1589,7 +423,7 @@ export function prepareConversationActionExecution(input: {
       if (conversation.pendingActionContinuation?.requestId === input.requestId) {
         delete conversation.pendingActionContinuation;
       }
-      writeDB(db);
+      commitDatabaseTables(db);
       return rejectedConversationActionExecution(
         taskBinding.reason === 'task_conflict' ? 'busy' : 'stale',
         taskBinding.reason === 'task_conflict'
@@ -1617,7 +451,7 @@ export function prepareConversationActionExecution(input: {
         };
       }
       conversation.lastActiveAt = new Date().toISOString();
-      writeDB(db);
+      commitDatabaseTables(db);
     }
     // The ledger may retain the previous task for status/history, but a plain
     // turn never receives that task id for plan/receipt binding.
@@ -1643,7 +477,7 @@ export function prepareConversationActionExecution(input: {
         now: conversation.lastActiveAt,
       });
     }
-    writeDB(db);
+    commitDatabaseTables(db);
   }
   return { ...prepared, turnRowId: persistedTurn?.id };
 }
@@ -1653,94 +487,11 @@ export function persistConversationExecutionPlan(input: {
   userId: string;
   plan: CapabilityExecutionPlan;
 }): boolean {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const task = attachConversationExecutionPlan(db, input);
   if (!task) return false;
-  writeDB(db);
+  commitDatabaseTables(db);
   return true;
-}
-
-interface FinalizeConversationActionRequestOptions {
-  assistantState?: string;
-  fallbackBlocker?: string;
-  now?: string;
-  terminalDisposition?: ConversationActionTerminalDisposition;
-}
-
-/**
- * End one foreground request without conflating that request lease with the
- * durable task. A blocked or confirmation-waiting task remains resumable, but
- * the process-local request that produced this terminal assistant record no
- * longer owns it.
- */
-function finalizeConversationActionRequestInDb(
-  db: any,
-  conversation: Conversation,
-  requestId: string,
-  options: FinalizeConversationActionRequestOptions = {},
-): ConversationActionContinuationState | null {
-  const normalizedRequestId = String(requestId || '').trim();
-  const previous = normalizeConversationActionState(conversation.actionContinuationState);
-  const pendingOwnsRequest = Boolean(
-    conversation.pendingActionContinuation
-    && (normalizedRequestId
-      ? conversation.pendingActionContinuation.requestId === normalizedRequestId
-      : !conversation.pendingActionContinuation.requestId),
-  );
-  const stateOwnsRequest = Boolean(
-    previous
-    && normalizedRequestId
-    && previous.activeRequestId === normalizedRequestId,
-  );
-  const now = options.now || new Date().toISOString();
-
-  if (previous && stateOwnsRequest) {
-    const completion = taskCompletionFromReceipts(
-      previous.goal,
-      previous.receipts || [],
-      previous.taskCapsule,
-      { requestId: normalizedRequestId, taskId: previous.taskId },
-    );
-    const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
-    const authoritativeDisposition = Boolean(
-      (options.terminalDisposition?.outcome === 'blocked' || options.terminalDisposition?.outcome === 'cancelled')
-      && options.terminalDisposition.requestId === normalizedRequestId
-      && options.terminalDisposition.taskId === previous.taskId,
-    );
-    const status = authoritativeDisposition
-      ? options.terminalDisposition!.outcome
-      : completion.complete
-      ? 'completed'
-      : requestWasRunning
-        ? 'blocked'
-        : previous.status;
-    const finalized = finalizeConversationActionTask(db, {
-      conversation,
-      state: previous,
-      outcome: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'blocked',
-      requestId: normalizedRequestId,
-      blocker: status === 'blocked' || status === 'cancelled'
-        ? (authoritativeDisposition ? options.terminalDisposition?.reason : '')
-          || previous.latestBlocker
-          || completion.blocker
-          || options.fallbackBlocker
-          || 'The execution request ended without a verified terminal result.'
-        : '',
-      assistantState: options.assistantState !== undefined
-        ? compactRolloverText(options.assistantState, 700)
-        : previous.assistantState,
-      completionSource: authoritativeDisposition
-        ? undefined
-        : completion.complete
-          ? 'tool_receipt'
-          : previous.completionSource,
-      now,
-    });
-    if (finalized) return finalized.state;
-  }
-
-  if (pendingOwnsRequest) delete conversation.pendingActionContinuation;
-  return normalizeConversationActionState(conversation.actionContinuationState);
 }
 
 export function cancelConversationActionExecution(
@@ -1749,7 +500,7 @@ export function cancelConversationActionExecution(
   reason = 'Cancelled by the user.',
   expectedRequestId?: string,
 ): ConversationActionContinuationState | null {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
@@ -1776,7 +527,7 @@ export function cancelConversationActionExecution(
     requestId,
     assistantState: reason,
   });
-  writeDB(db);
+  commitDatabaseTables(db);
   return finalized?.state || previous;
 }
 
@@ -1786,7 +537,7 @@ export function completeConversationActionFromUserObservation(
   userText: string,
   ownership?: { taskId: string; requestId: string; userMessageId: string },
 ): ConversationActionContinuationState | null {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
@@ -1822,7 +573,7 @@ export function completeConversationActionFromUserObservation(
   if (conversation.pendingActionContinuation?.requestId === previous.activeRequestId) {
     delete conversation.pendingActionContinuation;
   }
-  writeDB(db);
+  commitDatabaseTables(db);
   return finalized?.state || previous;
 }
 
@@ -1836,7 +587,7 @@ export function settleConversationActionExecutionRequest(
   requestId: string,
   fallbackBlocker = 'The execution request ended without a terminal tool receipt.',
 ): ConversationActionContinuationState | null {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
@@ -1878,643 +629,9 @@ export function settleConversationActionExecutionRequest(
       reason: fallbackBlocker,
     });
   }
-  writeDB(db);
+  commitDatabaseTables(db);
   return settled;
 }
-
-export interface ConvergeConversationActionRequestLeaseInput {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  now?: Date | string | number;
-  /** @internal Keep the process owner until the staged mutation is strictly flushed. */
-  deferLocalOwnerClear?: boolean;
-}
-
-export type ConversationActionRequestLeaseEvidence =
-  | 'found'
-  | 'missing'
-  | 'ambiguous'
-  | 'unbound';
-
-export interface ConvergeConversationActionRequestLeaseResult {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  taskId: string;
-  assistantMessageId: string;
-  beforeStatus: ConversationActionTurn['status'] | 'missing';
-  finalStatus: ConversationActionTurn['status'] | 'missing';
-  action: 'none' | 'terminal' | 'cancelled' | 'persistence_unknown';
-  converged: boolean;
-  changed: boolean;
-  reason: string;
-  evidence: {
-    conversation: ConversationActionRequestLeaseEvidence;
-    task: ConversationActionRequestLeaseEvidence;
-    assistant: ConversationActionRequestLeaseEvidence;
-  };
-  localOwnerCleared: boolean;
-  turn: ConversationActionTurn | null;
-}
-
-function normalizeConversationActionRequestLeaseIdentity(
-  input: ConvergeConversationActionRequestLeaseInput,
-): ConvergeConversationActionRequestLeaseInput & {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  now: string;
-} {
-  const conversationId = String(input.conversationId || '').trim();
-  const userId = String(input.userId || '').trim();
-  const requestId = String(input.requestId || '').trim();
-  if (!conversationId || !userId || !requestId) {
-    throw new TypeError('conversationId, userId, and requestId are required');
-  }
-  const parsedNow = input.now instanceof Date
-    ? new Date(input.now.getTime())
-    : new Date(input.now ?? Date.now());
-  if (!Number.isFinite(parsedNow.getTime())) throw new TypeError('now must be a valid date');
-  return {
-    ...input,
-    conversationId,
-    userId,
-    requestId,
-    now: parsedNow.toISOString(),
-  };
-}
-
-function clearManagerActionRequestLeaseOwner(
-  identity: Pick<ConvergeConversationActionRequestLeaseInput, 'conversationId' | 'userId' | 'requestId'>,
-  abortReason = '',
-): boolean {
-  const key = managerActionTurnKey(identity);
-  const owner = managerActionTurnLeases.get(key);
-  stopManagerActionTurnHeartbeat(identity);
-  const cleared = managerActionTurnLeases.delete(key);
-  if (abortReason && owner?.abortController && !owner.abortController.signal.aborted) {
-    owner.abortController.abort(new Error(abortReason));
-  }
-  return cleared;
-}
-
-export type ForegroundRequestFinalizationOutcome =
-  | 'terminal'
-  | 'cancelled'
-  | 'superseded'
-  | 'blocked'
-  | 'persistence_unknown';
-
-export interface FinalizeForegroundRequestInput {
-  /** Immutable identity of the already accepted foreground request. */
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  /** Optional caller assertion. It must agree with the durable turn binding. */
-  readonly expectedTaskId?: string;
-  readonly outcome: ForegroundRequestFinalizationOutcome;
-  /** Exact durable assistant row. Text alone is never terminal evidence. */
-  readonly assistantMessageId?: string;
-  /** Bounded user-visible state copied into a task projection when one exists. */
-  readonly assistantState?: string;
-  readonly reason?: string;
-  readonly now?: Date | string | number;
-  /** @internal Keep the process owner until the staged mutation is strictly flushed. */
-  readonly deferLocalOwnerClear?: boolean;
-}
-
-export type ForegroundRequestFinalizationEvidence =
-  | 'found'
-  | 'missing'
-  | 'ambiguous'
-  | 'unbound'
-  | 'mismatch';
-
-export interface FinalizeForegroundRequestResult {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  requestedOutcome: ForegroundRequestFinalizationOutcome;
-  effectiveOutcome: ForegroundRequestFinalizationOutcome;
-  taskId: string;
-  assistantMessageId: string;
-  taskStatus: string;
-  actionTurnStatus: ConversationActionTurn['status'] | 'missing' | 'ambiguous';
-  converged: boolean;
-  changed: boolean;
-  reason: string;
-  evidence: {
-    conversation: ForegroundRequestFinalizationEvidence;
-    actionTurn: ForegroundRequestFinalizationEvidence;
-    task: ForegroundRequestFinalizationEvidence;
-    assistant: ForegroundRequestFinalizationEvidence;
-  };
-  localOwnerCleared: boolean;
-}
-
-function normalizeForegroundRequestFinalizationInput(
-  input: FinalizeForegroundRequestInput,
-): FinalizeForegroundRequestInput & {
-  conversationId: string;
-  userId: string;
-  requestId: string;
-  expectedTaskId: string;
-  assistantMessageId: string;
-  assistantState: string | undefined;
-  reason: string;
-  now: string;
-} {
-  const conversationId = String(input.conversationId || '').trim();
-  const userId = String(input.userId || '').trim();
-  const requestId = String(input.requestId || '').trim();
-  if (!conversationId || !userId || !requestId) {
-    throw new TypeError('conversationId, userId, and requestId are required');
-  }
-  if (!['terminal', 'cancelled', 'superseded', 'blocked', 'persistence_unknown'].includes(input.outcome)) {
-    throw new TypeError('outcome must be terminal, cancelled, superseded, blocked, or persistence_unknown');
-  }
-  const parsedNow = input.now instanceof Date
-    ? new Date(input.now.getTime())
-    : new Date(input.now ?? Date.now());
-  if (!Number.isFinite(parsedNow.getTime())) throw new TypeError('now must be a valid date');
-  return {
-    ...input,
-    conversationId,
-    userId,
-    requestId,
-    expectedTaskId: String(input.expectedTaskId || '').trim(),
-    assistantMessageId: String(input.assistantMessageId || '').trim(),
-    assistantState: input.assistantState === undefined
-      ? undefined
-      : String(input.assistantState || '').replace(/\s+/g, ' ').trim().slice(0, 700),
-    reason: String(input.reason || '').replace(/\s+/g, ' ').trim().slice(0, 380),
-    now: parsedNow.toISOString(),
-  };
-}
-
-function foregroundTaskPersistenceRequestId(task: any): string {
-  const context = parsePersistedObject(task?.context);
-  const actionState = parsePersistedObject(context.actionState);
-  const marker = context.terminalPersistence?.status === 'persistence_unknown'
-    ? context.terminalPersistence
-    : actionState.terminalPersistence?.status === 'persistence_unknown'
-      ? actionState.terminalPersistence
-      : null;
-  return String(marker?.requestId || '').trim();
-}
-
-function foregroundTaskAlreadyConverged(
-  task: any,
-  outcome: ForegroundRequestFinalizationOutcome,
-  requestId: string,
-): boolean {
-  if (!task || String(task.activeRequestId || '').trim()) return false;
-  if (outcome === 'terminal' && task.status !== 'completed') return false;
-  if (outcome === 'cancelled' && task.status !== 'cancelled') return false;
-  if (
-    (outcome === 'blocked' || outcome === 'superseded' || outcome === 'persistence_unknown')
-    && task.status !== 'blocked'
-  ) {
-    return false;
-  }
-  if (outcome === 'persistence_unknown') {
-    return foregroundTaskPersistenceRequestId(task) === requestId;
-  }
-  const finalization = parsePersistedObject(parsePersistedObject(task.context).taskFinalization);
-  const persistedOutcome = outcome === 'terminal'
-    ? 'completed'
-    : outcome === 'superseded' ? 'blocked' : outcome;
-  return String(finalization.requestId || '').trim() === requestId
-    && finalization.outcome === persistedOutcome;
-}
-
-function applyForegroundActionTurnOutcomeInDb(
-  turn: ConversationActionTurn,
-  input: {
-    status: 'terminal' | 'cancelled' | 'persistence_unknown';
-    assistantMessageId: string;
-    reason: string;
-    now: string;
-  },
-): boolean {
-  if (
-    turn.status === input.status
-    && (input.status !== 'terminal' || turn.terminalMessageId === input.assistantMessageId)
-  ) return false;
-
-  turn.status = input.status;
-  turn.terminalMessageId = input.status === 'terminal' ? input.assistantMessageId : '';
-  turn.terminalReason = input.reason;
-  turn.terminalAt = input.now;
-  turn.updatedAt = input.now;
-  turn.revision = Math.max(0, Number(turn.revision) || 0) + 1;
-  turn.leaseOwnerId = '';
-  turn.leaseEpoch = '';
-  turn.leaseAcquiredAt = '';
-  turn.leaseHeartbeatAt = '';
-  turn.leaseExpiresAt = '';
-  if (input.status === 'persistence_unknown') {
-    turn.recoveryReason = input.reason;
-    turn.recoveredAt = input.now;
-  }
-  return true;
-}
-
-function quarantineForegroundTaskWithoutActionTurnInDb(
-  task: any,
-  state: ConversationActionContinuationState,
-  input: {
-    requestId: string;
-    reason: string;
-    assistantState?: string;
-    now: string;
-  },
-): ConversationActionContinuationState | null {
-  const marker = {
-    status: 'persistence_unknown' as const,
-    requestId: input.requestId,
-    quarantinedAt: input.now,
-  };
-  const next = normalizeConversationActionState({
-    ...state,
-    version: 2,
-    status: 'blocked',
-    unfinished: true,
-    latestBlocker: input.reason,
-    assistantState: input.assistantState === undefined
-      ? state.assistantState
-      : input.assistantState,
-    activeRequestId: undefined,
-    completionSource: undefined,
-    terminalPersistence: marker,
-    revision: Math.max(Number(task.revision) || 0, state.revision || 0) + 1,
-    updatedAt: input.now,
-  });
-  if (!next) return null;
-  const context = parsePersistedObject(task.context);
-  task.status = 'blocked';
-  task.blocker = input.reason;
-  task.activeRequestId = '';
-  task.completionSource = '';
-  task.completedAt = '';
-  task.updatedAt = input.now;
-  task.revision = next.revision;
-  task.context = JSON.stringify({
-    ...context,
-    actionState: next,
-    taskFinalization: {
-      outcome: 'persistence_unknown',
-      requestId: input.requestId,
-      reason: input.reason,
-      finalizedAt: input.now,
-    },
-    terminalPersistence: marker,
-  });
-  return next;
-}
-
-/**
- * Atomically converge one foreground request in the shared in-memory DB.
- *
- * The immutable action-turn binding is the authority for task ownership. The
- * task/live/pending projections are settled first, then the durable action
- * turn and finally its process-local owner. Missing or ambiguous evidence is
- * never guessed: an otherwise identifiable request is quarantined as
- * persistence_unknown instead of publishing success.
- *
- * Chat, Task, and Voice use this boundary before releasing foreground
- * resources so every entry point applies the same task/receipt ownership
- * verdict.
- */
-export function finalizeForegroundRequest(
-  input: FinalizeForegroundRequestInput,
-): FinalizeForegroundRequestResult {
-  const identity = normalizeForegroundRequestFinalizationInput(input);
-  const db = readDB();
-  const conversations = (Array.isArray(db.conversations) ? db.conversations : [])
-    .filter((row: Conversation) => (
-      row.id === identity.conversationId && row.userId === identity.userId
-    ));
-  const turns = (Array.isArray(db.conversationActionTurns) ? db.conversationActionTurns : [])
-    .filter((row: ConversationActionTurn) => (
-      row.conversationId === identity.conversationId
-      && row.userId === identity.userId
-      && row.requestId === identity.requestId
-    ));
-  const assistants = identity.assistantMessageId
-    ? (Array.isArray(db.interactions) ? db.interactions : []).filter((row: any) => (
-        row.id === identity.assistantMessageId
-        && row.userId === identity.userId
-        && row.conversationId === identity.conversationId
-        && row.role === 'assistant'
-        && (
-          String(row.requestId || '') === identity.requestId
-          || String(row.externalMessageId || '') === identity.requestId
-        )
-      ))
-    : [];
-
-  const evidence: FinalizeForegroundRequestResult['evidence'] = {
-    conversation: conversations.length === 1
-      ? 'found'
-      : conversations.length === 0 ? 'missing' : 'ambiguous',
-    actionTurn: turns.length === 1
-      ? 'found'
-      : turns.length === 0 ? 'missing' : 'ambiguous',
-    task: 'unbound',
-    assistant: !identity.assistantMessageId
-      ? 'unbound'
-      : assistants.length === 1 ? 'found' : assistants.length === 0 ? 'missing' : 'ambiguous',
-  };
-
-  const turnTaskIds: string[] = [...new Set<string>(turns.map((turn: ConversationActionTurn) => (
-    String(turn.taskId || '').trim()
-  )).filter(Boolean))];
-  const durableTurnTaskId = turns.length === 1
-    ? String(turns[0].taskId || '').trim()
-    : turnTaskIds.length === 1 ? turnTaskIds[0] : '';
-  // An executor can survive a damaged/missing action-turn row. The caller's
-  // expectedTaskId is usable only as a fail-closed cleanup fence when the one
-  // exact task row still says this request owns its active lease. It is never
-  // sufficient evidence for completion.
-  const durableTaskId = durableTurnTaskId || (
-    turns.length === 0 ? identity.expectedTaskId : ''
-  );
-  const taskRows = durableTaskId
-    ? (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
-        .filter((row: any) => (
-          row.id === durableTaskId
-          && row.conversationId === identity.conversationId
-          && row.userId === identity.userId
-        ))
-    : [];
-  if (durableTaskId) {
-    evidence.task = taskRows.length === 1
-      ? 'found'
-      : taskRows.length === 0 ? 'missing' : 'ambiguous';
-  }
-
-  let reason = identity.reason;
-  let effectiveOutcome = identity.outcome;
-  const exactMissingTurnTaskFence = Boolean(
-    turns.length === 0
-    && identity.expectedTaskId
-    && durableTaskId === identity.expectedTaskId
-    && taskRows.length === 1
-    && String(taskRows[0].activeRequestId || '').trim() === identity.requestId
-  );
-  let taskCanMutate = taskRows.length === 1
-    && (turns.length > 0 || exactMissingTurnTaskFence);
-  const exactAssistant = evidence.assistant === 'found';
-  let failedClosed = false;
-  const failClosed = (nextReason: string) => {
-    if (!reason || (identity.outcome === 'superseded' && !failedClosed)) reason = nextReason;
-    effectiveOutcome = 'persistence_unknown';
-    failedClosed = true;
-  };
-
-  if (evidence.actionTurn !== 'found') failClosed(`action_turn_${evidence.actionTurn}`);
-  if (evidence.conversation !== 'found') failClosed(`conversation_${evidence.conversation}`);
-  if (turns.length > 1 && turnTaskIds.length !== 1) {
-    evidence.task = turnTaskIds.length === 0 ? 'unbound' : 'ambiguous';
-    taskCanMutate = false;
-    failClosed('action_turn_task_binding_ambiguous');
-  }
-  if (identity.expectedTaskId) {
-    if (!durableTurnTaskId && turns.length > 0) {
-      evidence.task = 'mismatch';
-      taskCanMutate = false;
-      failClosed('expected_task_binding_missing');
-    } else if (durableTurnTaskId && durableTurnTaskId !== identity.expectedTaskId) {
-      evidence.task = 'mismatch';
-      taskCanMutate = false;
-      failClosed('expected_task_binding_mismatch');
-    }
-  }
-  if (durableTaskId && taskRows.length !== 1) {
-    taskCanMutate = false;
-    failClosed(`task_${evidence.task}`);
-  }
-  if (taskRows.length === 1) {
-    const activeRequestId = String(taskRows[0].activeRequestId || '').trim();
-    if (
-      (turns.length === 0 && identity.expectedTaskId && !exactMissingTurnTaskFence)
-      || (activeRequestId && activeRequestId !== identity.requestId)
-    ) {
-      evidence.task = 'mismatch';
-      taskCanMutate = false;
-      failClosed('task_active_request_mismatch');
-    }
-  }
-  if (identity.outcome === 'terminal' && !exactAssistant) {
-    failClosed(`assistant_${evidence.assistant}`);
-  }
-  if (identity.outcome === 'blocked' && !exactAssistant && !reason) {
-    reason = 'Foreground request ended without a durable assistant transcript.';
-  }
-  if (
-    !exactAssistant
-    && taskRows.length === 1
-    && ['completed', 'failed'].includes(String(taskRows[0].status || ''))
-  ) {
-    failClosed(`terminal_task_without_assistant:${String(taskRows[0].status || 'unknown')}`);
-  }
-  if (taskRows.length === 1 && foregroundTaskPersistenceRequestId(taskRows[0])) {
-    failClosed('task_already_persistence_unknown');
-  }
-
-  let desiredActionStatus: 'terminal' | 'cancelled' | 'persistence_unknown' =
-    effectiveOutcome === 'cancelled' || effectiveOutcome === 'superseded'
-      ? 'cancelled'
-      : effectiveOutcome === 'persistence_unknown'
-        ? 'persistence_unknown'
-        : exactAssistant ? 'terminal' : 'persistence_unknown';
-  if (!reason) {
-    reason = desiredActionStatus === 'terminal'
-      ? 'Exact durable assistant transcript finalized the foreground request.'
-      : desiredActionStatus === 'cancelled'
-        ? 'Foreground request was cancelled.'
-        : effectiveOutcome === 'blocked'
-          ? 'Foreground request is blocked and remains resumable.'
-          : 'Foreground request persistence outcome is unknown.';
-  }
-
-  // A previously quarantined request cannot be promoted by an ordinary retry.
-  // Likewise, a conflicting terminal identity must not mutate its task first.
-  let preserveUniqueTurn = false;
-  if (turns.length === 1) {
-    const current = turns[0];
-    const compatibleTerminal = current.status === desiredActionStatus
-      && (current.status !== 'terminal' || current.terminalMessageId === identity.assistantMessageId);
-    if (
-      ['terminal', 'cancelled', 'persistence_unknown'].includes(current.status)
-      && !compatibleTerminal
-    ) {
-      taskCanMutate = false;
-      preserveUniqueTurn = true;
-      effectiveOutcome = current.status === 'persistence_unknown'
-        ? 'persistence_unknown'
-        : effectiveOutcome;
-      desiredActionStatus = current.status;
-      reason = `action_turn_terminal_conflict:${current.status}`;
-    }
-  }
-
-  let dbChanged = false;
-  let taskStatus = taskRows.length === 1 ? String(taskRows[0].status || '') : '';
-  let finalizedTaskState: ConversationActionContinuationState | null = null;
-  if (durableTaskId && taskCanMutate) {
-    const taskOutcome = effectiveOutcome === 'terminal'
-      ? 'completed'
-      : effectiveOutcome === 'superseded' ? 'blocked' : effectiveOutcome;
-    const taskOutcomeKey: ForegroundRequestFinalizationOutcome = effectiveOutcome;
-    if (!foregroundTaskAlreadyConverged(taskRows[0], taskOutcomeKey, identity.requestId)) {
-      const taskState = getConversationActionStateByTaskId(db, {
-        conversationId: identity.conversationId,
-        userId: identity.userId,
-        taskId: durableTaskId,
-      });
-      const projection: ConversationActionLiveProjection = conversations.length === 1
-        ? conversations[0]
-        : { id: identity.conversationId, userId: identity.userId };
-      const finalizedState = taskState && exactMissingTurnTaskFence
-        ? quarantineForegroundTaskWithoutActionTurnInDb(taskRows[0], taskState, {
-            requestId: identity.requestId,
-            reason,
-            assistantState: identity.assistantState,
-            now: identity.now,
-          })
-        : taskState && finalizeConversationActionTask(db, {
-            conversation: projection,
-            state: taskState,
-            outcome: taskOutcome,
-            requestId: identity.requestId,
-            blocker: effectiveOutcome === 'terminal' || effectiveOutcome === 'superseded' ? '' : reason,
-            assistantState: identity.assistantState,
-            completionSource: effectiveOutcome === 'terminal' ? taskState.completionSource : undefined,
-            now: identity.now,
-          })?.state;
-      if (finalizedState) {
-        finalizedTaskState = finalizedState;
-        taskStatus = finalizedState.status;
-        if (effectiveOutcome === 'superseded') {
-          // Supersession is not a user-facing blocker, so keep latestBlocker
-          // clean while retaining an explicit internal audit reason.
-          const taskContext = parsePersistedObject(taskRows[0].context);
-          const taskFinalization = parsePersistedObject(taskContext.taskFinalization);
-          taskRows[0].context = JSON.stringify({
-            ...taskContext,
-            taskFinalization: {
-              ...taskFinalization,
-              requestDisposition: 'superseded',
-              reason,
-            },
-          });
-        }
-        dbChanged = true;
-      } else {
-        taskCanMutate = false;
-        effectiveOutcome = 'persistence_unknown';
-        desiredActionStatus = 'persistence_unknown';
-        reason = 'task_finalization_failed';
-      }
-    } else {
-      finalizedTaskState = getConversationActionStateByTaskId(db, {
-        conversationId: identity.conversationId,
-        userId: identity.userId,
-        taskId: durableTaskId,
-      });
-    }
-  }
-
-  // Remove only the exact request projection. A newer task/request is never
-  // cleared by a delayed finalizer.
-  for (const conversation of conversations) {
-    if (conversation.pendingActionContinuation?.requestId === identity.requestId) {
-      delete conversation.pendingActionContinuation;
-      dbChanged = true;
-    }
-    const live = normalizeConversationActionState(conversation.actionContinuationState);
-    if (
-      finalizedTaskState
-      && live?.taskId === durableTaskId
-      && (!live.activeRequestId || live.activeRequestId === identity.requestId)
-    ) {
-      if (isTerminalConversationTaskStatus(finalizedTaskState.status)) {
-        delete conversation.actionContinuationState;
-        dbChanged = true;
-      } else if (JSON.stringify(live) !== JSON.stringify(finalizedTaskState)) {
-        conversation.actionContinuationState = finalizedTaskState;
-        dbChanged = true;
-      }
-    }
-  }
-
-  if (turns.length > 0 && !(turns.length === 1 && preserveUniqueTurn)) {
-    for (const turn of turns) {
-      // Ambiguous duplicate rows are all quarantined. For a unique row the
-      // preflight above preserves any conflicting monotonic terminal state.
-      const status = turns.length > 1 ? 'persistence_unknown' : desiredActionStatus;
-      dbChanged = applyForegroundActionTurnOutcomeInDb(turn, {
-        status,
-        assistantMessageId: status === 'terminal' ? identity.assistantMessageId : '',
-        reason,
-        now: identity.now,
-      }) || dbChanged;
-    }
-  }
-
-  if (dbChanged) writeDB(db);
-  const localOwnerCleared = identity.deferLocalOwnerClear
-    ? false
-    : clearManagerActionRequestLeaseOwner(
-        identity,
-        desiredActionStatus === 'terminal' ? '' : reason,
-      );
-  const finalTurnStatus = turns.length === 0
-    ? 'missing'
-    : turns.length > 1 ? 'ambiguous' : turns[0].status;
-  const taskConverged = !durableTaskId
-    ? !identity.expectedTaskId
-    : taskCanMutate && !String(taskRows[0]?.activeRequestId || '').trim();
-  const actionConverged = turns.length === 1
-    && ['terminal', 'cancelled', 'persistence_unknown'].includes(turns[0].status);
-
-  return {
-    conversationId: identity.conversationId,
-    userId: identity.userId,
-    requestId: identity.requestId,
-    requestedOutcome: identity.outcome,
-    effectiveOutcome,
-    taskId: durableTaskId,
-    assistantMessageId: exactAssistant ? identity.assistantMessageId : '',
-    taskStatus,
-    actionTurnStatus: finalTurnStatus,
-    converged: actionConverged && taskConverged,
-    changed: dbChanged || localOwnerCleared,
-    reason,
-    evidence,
-    localOwnerCleared,
-  };
-}
-
-export interface SupersedeConversationActionExecutionRequestInput {
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  readonly expectedTaskId: string;
-  readonly reason?: string;
-  readonly now?: Date | string | number;
-  /** @internal Release-time callers retain the process owner through strict flush. */
-  readonly deferLocalOwnerClear?: boolean;
-}
-
-export type SupersedeConversationActionExecutionRequestResult =
-  FinalizeForegroundRequestResult & {
-    requestedOutcome: 'superseded';
-    superseded: boolean;
-  };
 
 /**
  * End only the transport request that yielded to an exact continuation.
@@ -2557,341 +674,6 @@ export function supersedeConversationActionExecutionRequest(
 }
 
 /**
- * Reconcile one foreground request from durable transcript/task evidence.
- *
- * This deliberately does not depend on a live conversation projection: an
- * executor can outlive a deleted conversation or task row, and its durable
- * action-turn lease must still stop fencing the thread. A successful assistant
- * transcript is sufficient terminal evidence. Missing or ambiguous ownership
- * is quarantined instead of being guessed from the task projection.
- *
- * Every foreground transport uses this manager-level primitive before its
- * channel-specific resources are released.
- */
-export function convergeConversationActionRequestLease(
-  input: ConvergeConversationActionRequestLeaseInput,
-): ConvergeConversationActionRequestLeaseResult {
-  const identity = normalizeConversationActionRequestLeaseIdentity(input);
-  const db = readDB();
-  const before = getConversationActionTurn(identity);
-  const conversations = (Array.isArray(db.conversations) ? db.conversations : [])
-    .filter((row: Conversation) => row.id === identity.conversationId && row.userId === identity.userId);
-  const assistants = (Array.isArray(db.interactions) ? db.interactions : [])
-    .filter((row: any) => (
-      row.userId === identity.userId
-      && row.conversationId === identity.conversationId
-      && row.role === 'assistant'
-      && (
-        String(row.requestId || '') === identity.requestId
-        || String(row.externalMessageId || '') === identity.requestId
-      )
-    ));
-  const taskId = String(before?.taskId || '').trim();
-  const tasks = taskId
-    ? (Array.isArray(db.conversationActionTasks) ? db.conversationActionTasks : [])
-        .filter((row: any) => (
-          row.id === taskId
-          && row.conversationId === identity.conversationId
-          && row.userId === identity.userId
-        ))
-    : [];
-  const evidence = {
-    conversation: conversations.length === 1
-      ? 'found' as const
-      : conversations.length === 0 ? 'missing' as const : 'ambiguous' as const,
-    task: !taskId
-      ? 'unbound' as const
-      : tasks.length === 1 ? 'found' as const : tasks.length === 0 ? 'missing' as const : 'ambiguous' as const,
-    assistant: assistants.length === 1
-      ? 'found' as const
-      : assistants.length === 0 ? 'missing' as const : 'ambiguous' as const,
-  };
-
-  const result = (
-    action: ConvergeConversationActionRequestLeaseResult['action'],
-    reason: string,
-    turn: ConversationActionTurn | null,
-    changed: boolean,
-    localOwnerCleared: boolean,
-  ): ConvergeConversationActionRequestLeaseResult => {
-    const exactTask = tasks.length === 1 ? tasks[0] : null;
-    const exactTaskActiveRequestId = String(exactTask?.activeRequestId || '').trim();
-    const taskLeaseSettled = !exactTask || (
-      exactTaskActiveRequestId
-        ? exactTaskActiveRequestId !== identity.requestId
-        : !conversationTaskStatusOwnsExecutionLease(String(exactTask.status || ''))
-    );
-    return {
-      conversationId: identity.conversationId,
-      userId: identity.userId,
-      requestId: identity.requestId,
-      taskId,
-      assistantMessageId: String(turn?.terminalMessageId || '').trim(),
-      beforeStatus: before?.status || 'missing',
-      finalStatus: turn?.status || 'missing',
-      action,
-      // A terminal action-turn is only one half of foreground convergence. A
-      // task owned by this exact request must still be settled. An explicit,
-      // different activeRequestId proves that a successor already owns the
-      // task; an old finally block must then converge request-scoped without
-      // clearing or mutating that newer owner.
-      converged: Boolean(
-        turn
-        && ['terminal', 'cancelled', 'persistence_unknown'].includes(turn.status)
-        && taskLeaseSettled
-      ),
-      changed: changed || localOwnerCleared,
-      reason,
-      evidence,
-      localOwnerCleared,
-      turn,
-    };
-  };
-
-  if (!before) {
-    const localOwnerCleared = identity.deferLocalOwnerClear
-      ? false
-      : clearManagerActionRequestLeaseOwner(
-          identity,
-          'The durable conversation action turn is missing.',
-        );
-    return result('none', 'action_turn_missing', null, false, localOwnerCleared);
-  }
-
-  if (['terminal', 'cancelled', 'persistence_unknown'].includes(before.status)) {
-    const localOwnerCleared = identity.deferLocalOwnerClear
-      ? false
-      : clearManagerActionRequestLeaseOwner(
-          identity,
-          before.status === 'terminal'
-            ? ''
-            : `Conversation action request is already ${before.status}.`,
-        );
-    return result('none', 'already_converged', before, false, localOwnerCleared);
-  }
-
-  let observedStatus: 'terminal' | 'cancelled' | 'persistence_unknown' | null = null;
-  let terminalMessageId = '';
-  let reason = '';
-
-  if (evidence.assistant === 'ambiguous') {
-    observedStatus = 'persistence_unknown';
-    reason = 'assistant_request_binding_ambiguous';
-  } else if (evidence.assistant === 'found') {
-    terminalMessageId = String(assistants[0]?.id || '').trim();
-    if (terminalMessageId) {
-      observedStatus = 'terminal';
-      reason = 'durable_assistant_transcript_found';
-    } else {
-      observedStatus = 'persistence_unknown';
-      reason = 'assistant_message_identity_missing';
-    }
-  } else if (evidence.conversation !== 'found') {
-    observedStatus = 'persistence_unknown';
-    reason = evidence.conversation === 'missing'
-      ? 'conversation_missing'
-      : 'conversation_binding_ambiguous';
-  } else if (evidence.task === 'missing' || evidence.task === 'ambiguous') {
-    observedStatus = 'persistence_unknown';
-    reason = evidence.task === 'missing' ? 'task_missing' : 'task_binding_ambiguous';
-  } else if (evidence.task === 'found' && tasks[0]?.status === 'cancelled') {
-    observedStatus = 'cancelled';
-    reason = 'durable_task_cancelled';
-  } else if (evidence.task === 'found' && isTerminalConversationTaskStatus(tasks[0]?.status)) {
-    // completed/failed proves that task execution ended, but without a durable
-    // assistant record it cannot prove what (if anything) the user saw.
-    observedStatus = 'persistence_unknown';
-    reason = `terminal_task_without_assistant:${String(tasks[0]?.status || 'unknown')}`;
-  }
-
-  if (!observedStatus) {
-    return result('none', taskId ? 'nonterminal_task_still_active' : 'terminal_evidence_missing', before, false, false);
-  }
-
-  if (
-    observedStatus === 'persistence_unknown'
-    && evidence.task === 'found'
-    && evidence.assistant !== 'found'
-  ) {
-    const finalized = finalizeForegroundRequest({
-      conversationId: identity.conversationId,
-      userId: identity.userId,
-      requestId: identity.requestId,
-      expectedTaskId: taskId,
-      outcome: 'persistence_unknown',
-      reason,
-      now: identity.now,
-      deferLocalOwnerClear: identity.deferLocalOwnerClear,
-    });
-    const finalTurn = getConversationActionTurn(identity);
-    return {
-      ...result(
-        finalTurn?.status === 'persistence_unknown' ? 'persistence_unknown' : 'none',
-        reason,
-        finalTurn,
-        finalized.changed,
-        finalized.localOwnerCleared,
-      ),
-      converged: finalized.converged,
-    };
-  }
-
-  const reconciled = reconcileConversationActionTurnLease({
-    conversationId: identity.conversationId,
-    userId: identity.userId,
-    requestId: identity.requestId,
-    observedStatus,
-    terminalMessageId: terminalMessageId || undefined,
-    reason,
-    now: identity.now,
-  });
-  const finalTurn = reconciled.turn || getConversationActionTurn(identity);
-  const localOwnerCleared = identity.deferLocalOwnerClear
-    ? false
-    : clearManagerActionRequestLeaseOwner(
-        identity,
-        observedStatus === 'terminal'
-          ? ''
-          : `Conversation action request converged to ${observedStatus}: ${reason}`,
-      );
-  return result(
-    reconciled.action === 'terminal'
-      || reconciled.action === 'cancelled'
-      || reconciled.action === 'persistence_unknown'
-      ? reconciled.action
-      : 'none',
-    reconciled.reconciled ? reason : reconciled.reason,
-    finalTurn,
-    reconciled.reconciled,
-    localOwnerCleared,
-  );
-}
-
-export interface ForegroundRequestDurabilityDependencies {
-  /** Strict persistence barrier. Tests may inject a deterministic failure. */
-  flush?: () => Promise<void>;
-}
-
-export interface ForegroundRequestIdentity {
-  readonly conversationId: string;
-  readonly userId: string;
-  readonly requestId: string;
-  readonly expectedTaskId?: string;
-}
-
-export interface ForegroundRequestReleaseInput {
-  readonly identity: ForegroundRequestIdentity;
-  readonly aborted: boolean;
-  readonly reason?: string;
-  readonly assistantState?: string;
-}
-
-export interface ForegroundRequestReleaseResult {
-  convergence: ConvergeConversationActionRequestLeaseResult;
-  finalization: FinalizeForegroundRequestResult | null;
-  converged: boolean;
-}
-
-/** Converge the exact durable request before any channel releases resources. */
-export async function convergeForegroundRequestBeforeRelease(input: ForegroundRequestReleaseInput & {
-  readonly channel: 'Chat' | 'Task' | 'Voice';
-  /** Voice can settle verified receipts that raced behind its terminal transcript. */
-  readonly settlePendingTask?: () => void;
-}, dependencies: ForegroundRequestDurabilityDependencies = {}): Promise<ForegroundRequestReleaseResult> {
-  let convergence = convergeConversationActionRequestLease({
-    ...input.identity,
-    deferLocalOwnerClear: true,
-  });
-  if (!convergence.converged && convergence.assistantMessageId && input.identity.expectedTaskId && input.settlePendingTask) {
-    input.settlePendingTask();
-    convergence = convergeConversationActionRequestLease({
-      ...input.identity,
-      deferLocalOwnerClear: true,
-    });
-  }
-  if (convergence.converged) {
-    convergence = await convergeConversationActionRequestLeaseDurably(input.identity, dependencies);
-    return { convergence, finalization: null, converged: true };
-  }
-  const finalization = await finalizeForegroundRequestDurably({
-    ...input.identity,
-    outcome: input.aborted ? 'cancelled' : 'blocked',
-    assistantMessageId: convergence.assistantMessageId || undefined,
-    reason: input.reason || (input.aborted
-      ? `${input.channel} foreground request was aborted before release.`
-      : `${input.channel} foreground executor exited without a fully converged terminal.`),
-    assistantState: input.assistantState,
-  }, dependencies);
-  return { convergence, finalization, converged: finalization.converged };
-}
-
-function clearDurableForegroundRequestOwner(
-  identity: Pick<ConvergeConversationActionRequestLeaseInput, 'conversationId' | 'userId' | 'requestId'>,
-  terminal: boolean,
-  reason: string,
-): boolean {
-  return clearManagerActionRequestLeaseOwner(
-    identity,
-    terminal ? '' : reason || 'Foreground request reached a durable fail-closed terminal.',
-  );
-}
-
-/**
- * Strict release-time reconciliation. `writeDB()` stages an in-memory
- * snapshot; this wrapper always executes the strict barrier, including on an
- * idempotent retry after an earlier flush failed. The process owner is cleared
- * only after both convergence and that barrier succeed.
- */
-export async function convergeConversationActionRequestLeaseDurably(
-  input: ConvergeConversationActionRequestLeaseInput,
-  dependencies: ForegroundRequestDurabilityDependencies = {},
-): Promise<ConvergeConversationActionRequestLeaseResult> {
-  const identity = normalizeConversationActionRequestLeaseIdentity(input);
-  const result = convergeConversationActionRequestLease({
-    ...identity,
-    deferLocalOwnerClear: true,
-  });
-  await (dependencies.flush || flushDBOrThrow)();
-  if (!result.converged) return result;
-  const localOwnerCleared = clearDurableForegroundRequestOwner(
-    identity,
-    result.finalStatus === 'terminal',
-    result.reason,
-  );
-  return {
-    ...result,
-    changed: result.changed || localOwnerCleared,
-    localOwnerCleared,
-  };
-}
-
-/** Strictly persist a fail-closed foreground terminal before releasing owner. */
-export async function finalizeForegroundRequestDurably(
-  input: FinalizeForegroundRequestInput,
-  dependencies: ForegroundRequestDurabilityDependencies = {},
-): Promise<FinalizeForegroundRequestResult> {
-  const identity = normalizeForegroundRequestFinalizationInput(input);
-  const result = finalizeForegroundRequest({
-    ...identity,
-    deferLocalOwnerClear: true,
-  });
-  // Always flush: an idempotent in-memory retry may be carrying the dirty
-  // snapshot left behind by the previous strict-barrier failure.
-  await (dependencies.flush || flushDBOrThrow)();
-  if (!result.converged) return result;
-  const localOwnerCleared = clearDurableForegroundRequestOwner(
-    identity,
-    result.actionTurnStatus === 'terminal',
-    result.reason,
-  );
-  return {
-    ...result,
-    changed: result.changed || localOwnerCleared,
-    localOwnerCleared,
-  };
-}
-
-/**
  * Foreground request leases are process-local. After a backend restart there
  * is no executor that can still own a persisted planning/executing state, and
  * a waiting confirmation is valid only when startup hydration restored its
@@ -2901,7 +683,7 @@ export async function finalizeForegroundRequestDurably(
 export function recoverOrphanedConversationActionExecutions(
   now = new Date().toISOString(),
 ): number {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const migrated = migrateLegacyConversationActionLedger(db);
   const repairedTerminalPointers = repairTerminalConversationActionPointers(db);
   const repairedTerminalLeases = repairTerminalConversationActionTaskLeases(db);
@@ -3008,7 +790,7 @@ export function recoverOrphanedConversationActionExecutions(
     || recoveredActionTurnLeases > 0
     || recoveredPendingTurns > 0
     || recovered > 0
-  ) writeDB(db);
+  ) commitDatabaseTables(db);
   return repairedTerminalPointers
     + repairedTerminalLeases
     + recoveredLedgerLeases
@@ -3024,7 +806,7 @@ export function setConversationActionExecutionStatus(
   status: NonNullable<ConversationActionContinuationState['status']>,
   options: { blocker?: string; assistantState?: string; requestId?: string } = {},
 ): ConversationActionContinuationState | null {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
     item.id === conversationId && item.userId === userId
   ));
@@ -3056,7 +838,7 @@ export function setConversationActionExecutionStatus(
         reason: options.blocker || options.assistantState || 'Task cancelled.',
       });
     }
-    writeDB(db);
+    commitDatabaseTables(db);
     return finalized?.state || previous;
   }
   // A task can remain resumable while no executor owns it. The accepted turn,
@@ -3085,7 +867,7 @@ export function setConversationActionExecutionStatus(
     conversation,
     state: conversation.actionContinuationState,
   });
-  writeDB(db);
+  commitDatabaseTables(db);
   return conversation.actionContinuationState;
 }
 
@@ -3205,7 +987,7 @@ export function addMessage(msg: {
    */
   skipActionContinuation?: boolean;
 }): string {
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   // Conversation IDs are parent identities, not optional labels. A delayed
   // model/voice/tool reply must never recreate content after that parent was
   // deleted. Unbound legacy interactions remain supported without an ID.
@@ -3350,7 +1132,7 @@ export function addMessage(msg: {
             now,
           });
         }
-        writeDB(db);
+        commitDatabaseTables(db);
         return id;
       }
 
@@ -3448,7 +1230,7 @@ export function addMessage(msg: {
               now,
             });
           }
-          writeDB(db);
+          commitDatabaseTables(db);
           return id;
         }
         if (records.length > 0 && currentToolRecords.length === 0) {
@@ -3475,7 +1257,7 @@ export function addMessage(msg: {
               now,
             });
           }
-          writeDB(db);
+          commitDatabaseTables(db);
           return id;
         }
         const pendingFollowupIntent = classifyRecentActionFollowupIntent(pending.userText);
@@ -3730,7 +1512,7 @@ export function addMessage(msg: {
     });
   }
 
-  writeDB(db);
+  commitDatabaseTables(db);
   return id;
 }
 
@@ -3757,7 +1539,7 @@ export function getMessageByRequestId(input: {
   if (!requestId) return null;
   const source = String(input.source || '');
   const channel = String(input.channel || '');
-  const row = (readDB().interactions || []).find((item: any) => (
+  const row = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).find((item: any) => (
     item.userId === input.userId
     && (!input.agentId || item.agentId === input.agentId)
     && (!input.conversationId || item.conversationId === input.conversationId)
@@ -3804,7 +1586,7 @@ export function addMessageIdempotent(msg: IdempotentConversationMessage): string
         now: existing.receivedAt || existing.timestamp,
       });
     } else if (msg.role === 'assistant') {
-      const db = readDB();
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
       const conversation = (db.conversations || []).find((item: Conversation) => (
         item.id === msg.conversationId && item.userId === msg.userId
       ));
@@ -3839,12 +1621,12 @@ export function addMessageIdempotent(msg: IdempotentConversationMessage): string
         reason: 'idempotent assistant transcript replay',
         now: existing.receivedAt || existing.timestamp,
       });
-      writeDB(db);
+      commitDatabaseTables(db);
     }
     return existing.id;
   }
 
-  const rows = (readDB().interactions || []).filter((item: any) => (
+  const rows = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).filter((item: any) => (
     item.conversationId === msg.conversationId
   ));
   const nextRouteSequence = rows.reduce((largest: number, item: any) => (
@@ -3877,7 +1659,7 @@ export function updateAssistantMessageTerminalPresentation(input: {
 }): boolean {
   const completionFeedback = normalizeCompletionFeedbackForPersistence(input.completionFeedback);
   if (!completionFeedback) return false;
-  const db = readDB();
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const requestId = String(input.requestId || '').trim();
   const row = (db.interactions || []).find((item: any) => (
     item.userId === input.userId
@@ -3896,337 +1678,18 @@ export function updateAssistantMessageTerminalPresentation(input: {
   row.content = content;
   row.response = '';
   row.completionFeedback = completionFeedback;
-  writeDB(db);
+  commitDatabaseTables(db);
   return true;
 }
 
 function normalizeToolCalls(value: unknown): any[] | undefined {
   return sanitizeToolRecordsForPersistence(value);
 }
-
-export function getMessagesForAgent(userId: string, agentId: string, limit = 500): MessageRecord[] {
-  const conv = getActiveConversation(userId, agentId);
-  if (!conv) return [];
-  return getMessages(conv.id, limit);
-}
-
-/** Messages threshold for auto-summarization */
-const AUTO_SUMMARY_THRESHOLD = 20;
-const AUTO_SUMMARY_RESERVATION_TTL_MS = 5 * 60 * 1000;
-
-interface AutoSummaryReservation {
-  summarizedThroughMessageCount: number;
-  startedAt: number;
-}
-
-const autoSummaryReservations = new Map<string, AutoSummaryReservation>();
-
-export interface AutoSummaryCheckResult {
-  needed: boolean;
-  conversation: Conversation | null;
-  recentMessages: MessageRecord[];
-  summarizedThroughMessageCount: number;
-}
-
-function isStandaloneGuardOutput(value: unknown): boolean {
-  const text = String(value || '').trim();
-  return isGuardGeneratedAssistantText(text)
-    && /^(?:我|I\b|Completion claim blocked)/i.test(text); // i18n-allow: guard-output prefix, not user-visible copy.
-}
-
-function normalizedLastSummaryMessageCount(conv: Conversation): number {
-  const stored = Number(conv.lastSummaryMessageCount);
-  if (Number.isFinite(stored) && stored >= 0) return Math.floor(stored);
-
-  // Existing databases predate this marker. A stored summary is the durable
-  // baseline; without one, the whole conversation is eligible for its first
-  // summary. Persist the inferred value so restarts preserve the cadence.
-  const storedSummary = String(conv.summary || '').trim();
-  const inferred = storedSummary
-    ? Math.max(0, conv.messageCount || 0)
-    : 0;
-  conv.lastSummaryMessageCount = inferred;
-  return inferred;
-}
-
-function activeAutoSummaryReservation(conversationId: string): AutoSummaryReservation | null {
-  const reservation = autoSummaryReservations.get(conversationId);
-  if (!reservation) return null;
-  if (Date.now() - reservation.startedAt <= AUTO_SUMMARY_RESERVATION_TTL_MS) return reservation;
-  autoSummaryReservations.delete(conversationId);
-  return null;
-}
-
-/**
- * Check if a conversation needs auto-summarization.
- * Returns the conversation and older messages if threshold exceeded.
- */
-export function checkAutoSummary(
-  conversationId: string,
-): AutoSummaryCheckResult {
-  const db = readDB();
-  const emptyResult = (conversation: Conversation | null = null): AutoSummaryCheckResult => ({
-    needed: false,
-    conversation,
-    recentMessages: [],
-    summarizedThroughMessageCount: 0,
-  });
-  if (!db.conversations) return emptyResult();
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return emptyResult();
-
-  const summaryWasIsolated = isolateConversationSummaryForUse(conv);
-  if (conv.messageCount < AUTO_SUMMARY_THRESHOLD) {
-    if (summaryWasIsolated) writeDB(db);
-    return emptyResult(conv);
-  }
-  const hadPersistedMarker = Number.isFinite(Number(conv.lastSummaryMessageCount))
-    && Number(conv.lastSummaryMessageCount) >= 0;
-  const lastCount = normalizedLastSummaryMessageCount(conv);
-  if (summaryWasIsolated || !hadPersistedMarker) writeDB(db);
-  if (conv.messageCount - lastCount < AUTO_SUMMARY_THRESHOLD) {
-    return emptyResult(conv);
-  }
-
-  const summarizedThroughMessageCount = Math.max(0, Math.floor(conv.messageCount));
-  const recentMessages = getMessages(conversationId, 40)
-    .filter(message => !isGuardGeneratedConversationRecord(message));
-  return {
-    needed: recentMessages.length > 0,
-    conversation: conv,
-    recentMessages,
-    summarizedThroughMessageCount,
-  };
-}
-
-/**
- * Atomically reserve one eligible summary interval before starting async LLM
- * work. `checkAutoSummary` deliberately stays side-effect free for callers
- * such as idle diagnostics that only inspect eligibility.
- */
-export function beginConversationSummary(
-  conversationId: string,
-  summarizedThroughMessageCount: number,
-): boolean {
-  const through = Math.max(0, Math.floor(Number(summarizedThroughMessageCount)));
-  if (!Number.isFinite(through) || through < AUTO_SUMMARY_THRESHOLD) return false;
-  if (activeAutoSummaryReservation(conversationId)) return false;
-
-  const db = readDB();
-  const conv = (db.conversations || []).find((item: Conversation) => item.id === conversationId);
-  if (!conv || through > conv.messageCount) return false;
-  const summaryWasIsolated = isolateConversationSummaryForUse(conv);
-  const markerBeforeNormalization = Number(conv.lastSummaryMessageCount);
-  const lastCount = normalizedLastSummaryMessageCount(conv);
-  if (
-    summaryWasIsolated
-    || !Number.isFinite(markerBeforeNormalization)
-    || markerBeforeNormalization < 0
-  ) writeDB(db);
-  if (through - lastCount < AUTO_SUMMARY_THRESHOLD) return false;
-
-  autoSummaryReservations.set(conversationId, {
-    summarizedThroughMessageCount: through,
-    startedAt: Date.now(),
-  });
-  return true;
-}
-
-/** Release a failed/empty async summary so the same interval can retry. */
-export function cancelConversationSummary(
-  conversationId: string,
-  summarizedThroughMessageCount?: number,
-): void {
-  const reservation = autoSummaryReservations.get(conversationId);
-  if (!reservation) return;
-  if (
-    summarizedThroughMessageCount !== undefined
-    && reservation.summarizedThroughMessageCount !== Math.floor(Number(summarizedThroughMessageCount))
-  ) return;
-  autoSummaryReservations.delete(conversationId);
-}
-
-/**
- * Store a conversation summary. Maintains a multi-level chain (max 3).
- * Newest summary becomes conv.summary; older ones move into summaryChain.
- */
-export function setConversationSummary(
-  conversationId: string,
-  summary: string,
-  summarizedThroughMessageCount?: number,
-): boolean {
-  const db = readDB();
-  if (!db.conversations) return false;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return false;
-  const priorSummaryWasIsolated = isolateConversationSummaryForUse(conv);
-  const cleanSummary = String(summary || '').trim();
-  // The source transcript is filtered by record metadata before summarization.
-  // Keep a final defense against a verbatim guard response, but do not reject a
-  // legitimate mixed summary merely because it describes a historical error.
-  if (!cleanSummary || isStandaloneGuardOutput(cleanSummary)) {
-    if (priorSummaryWasIsolated) writeDB(db);
-    cancelConversationSummary(conversationId, summarizedThroughMessageCount);
-    return false;
-  }
-
-  let summarizedThrough = Math.max(0, Math.floor(conv.messageCount || 0));
-  if (summarizedThroughMessageCount !== undefined) {
-    summarizedThrough = Math.max(0, Math.floor(Number(summarizedThroughMessageCount)));
-    const reservation = activeAutoSummaryReservation(conversationId);
-    if (!reservation || reservation.summarizedThroughMessageCount !== summarizedThrough) return false;
-    if (summarizedThrough > conv.messageCount) {
-      cancelConversationSummary(conversationId, summarizedThrough);
-      return false;
-    }
-  }
-
-  // Push the current clean summary into the chain before overwriting. Legacy
-  // guard contamination has already been isolated above.
-  if (
-    conv.summary
-    && conv.summary !== cleanSummary
-    && !isStandaloneGuardOutput(conv.summary)
-  ) {
-    if (!conv.summaryChain) conv.summaryChain = [];
-    conv.summaryChain.push(conv.summary);
-    // Keep max 2 in chain (plus current summary = 3 total layers)
-    if (conv.summaryChain.length > 2) {
-      const newestPriorSummary = conv.summaryChain[conv.summaryChain.length - 1];
-      conv.summaryChain = [
-        conv.summaryChain.slice(0, -1).join(' | '),
-        newestPriorSummary,
-      ];
-    }
-  }
-
-  conv.summary = cleanSummary;
-  conv.lastSummaryMessageCount = Math.max(
-    normalizedLastSummaryMessageCount(conv),
-    summarizedThrough,
-  );
-  cancelConversationSummary(conversationId, summarizedThroughMessageCount);
-  writeDB(db);
-  return true;
-}
-
-/**
- * Get full conversation context: recent summary + older layers.
- * Returns formatted string suitable for system prompt injection.
- */
-export function getConversationSummary(conversationId: string): string | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return null;
-  if (isolateConversationSummaryForUse(conv)) writeDB(db);
-
-  const parts: string[] = [];
-  if (conv.summary && !isStandaloneGuardOutput(conv.summary)) {
-    const safe = sanitizeSummaryForPrompt(conv.summary);
-    if (safe) parts.push(safe);
-  }
-  if (conv.summaryChain && conv.summaryChain.length > 0) {
-    const cleanChain = conv.summaryChain
-      .filter(summary => !isStandaloneGuardOutput(summary))
-      .map(summary => sanitizeSummaryForPrompt(summary))
-      .filter(Boolean);
-    if (cleanChain.length) parts.push('Earlier: ' + cleanChain.join(' | '));
-  }
-  return parts.length ? parts.join('\n') : null;
-}
-
-/**
- * Track a topic for a conversation. Appends to recentTopics, keeping max 8 entries.
- * If the same topic was already recent, it moves to the end (most recent).
- */
-export function trackTopic(conversationId: string, topic: string): void {
-  const db = readDB();
-  if (!db.conversations) return;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv) return;
-
-  if (!conv.recentTopics) conv.recentTopics = [];
-  // Remove if already exists — re-insert at end so it's "most recent"
-  const idx = conv.recentTopics.indexOf(topic);
-  if (idx >= 0) conv.recentTopics.splice(idx, 1);
-  conv.recentTopics.push(topic);
-  // Keep max 8
-  if (conv.recentTopics.length > 8) conv.recentTopics.shift();
-  conv.lastTopicChangeAt = new Date().toISOString();
-  writeDB(db);
-}
-
-/**
- * Extract likely topics from a user message using simple keyword extraction.
- * Returns 1-3 topic strings, or empty array if nothing discernible.
- */
-export function extractTopics(text: string): string[] {
-  const topics: string[] = [];
-  const lower = text.toLowerCase();
-
-  // Programming-related topics
-  const techPatterns: [RegExp, string][] = [
-    [/\b(rust|rustlang|cargo|borrow\s*checker|ownership|lifetime)\b/i, 'Rust'],
-    [/\b(python|py|pip|django|flask|fastapi|pytorch|numpy)\b/i, 'Python'],
-    [/\b(javascript|js|typescript|ts|react|vue|angular|node\.js|nodejs|npm)\b/i, 'JS/TS开发'],
-    [/\b(go|golang|goroutine)\b/i, 'Go'],
-    [/\b(java|spring|maven|gradle|kotlin)\b/i, 'Java'],
-    [/\b(c\+\+|cpp|cmake|unreal|ue5|ue4)\b/i, 'C++'],
-    [/\b(docker|kubernetes|k8s|container|pod)\b/i, '容器/Docker'],
-    [/\b(git|github|pr|pull\s*request|commit|branch|merge)\b/i, 'Git'],
-    [/\b(database|sql|mysql|postgres|mongodb|redis|db)\b/i, '数据库'],
-    [/\b(api|rest|graphql|grpc|endpoint|http)\b/i, 'API开发'],
-    [/\b(ai|llm|gpt|model|training|inference|embedding|transformer|deepseek|qwen)\b/i, 'AI/LLM'],
-    [/\b(debug|bug|error|crash|fix|修复|调试)\b/i, '调试/Debug'],
-    [/\b(test|testing|unit\s*test|测试|coverage)\b/i, '测试'],
-    [/\b(deploy|deployment|ci|cd|pipeline|release)\b/i, '部署'],
-  ];
-
-  for (const [pattern, label] of techPatterns) {
-    if (pattern.test(lower)) {
-      topics.push(label);
-    }
-  }
-
-  // Non-tech topics
-  if (/(天气|weather|温度|temperature|下雨|晴天)/i.test(lower)) topics.push('天气');
-  if (/(新闻|news|发生|最新)/i.test(lower)) topics.push('时事');
-  if (/(音乐|music|song|歌|播放|听)/i.test(lower)) topics.push('音乐');
-  if (/(游戏|game|玩|gaming|steam)/i.test(lower)) topics.push('游戏');
-  if (/(电影|movie|film|视频|video|看片)/i.test(lower)) topics.push('影视');
-  if (/(文件|file|folder|目录|路径|打开|保存)/i.test(lower)) topics.push('文件操作');
-  if (/(设置|setting|配置|config|开关|toggle)/i.test(lower)) topics.push('系统设置');
-  if (/(桌面|desktop|app|application|应用|程序|软件)/i.test(lower)) topics.push('桌面应用');
-  if (/(邮件|email|mail|消息|message)/i.test(lower)) topics.push('通讯');
-  if (/(文档|document|doc|ppt|excel|word|写作|write|笔记|note)/i.test(lower)) topics.push('文档/写作');
-
-  // Deduplicate and limit
-  return [...new Set(topics)].slice(0, 3);
-}
-
-/**
- * Build a topic continuity block for the system prompt.
- * Returns null if no recent topics exist.
- */
-export function getTopicContext(conversationId: string): string | null {
-  const db = readDB();
-  if (!db.conversations) return null;
-  const conv = db.conversations.find((c: Conversation) => c.id === conversationId);
-  if (!conv?.recentTopics || conv.recentTopics.length === 0) return null;
-
-  const topics = conv.recentTopics.slice(-5);
-  const lastChange = conv.lastTopicChangeAt
-    ? Math.round((Date.now() - new Date(conv.lastTopicChangeAt).getTime()) / (1000 * 60))
-    : null;
-
-  const lines: string[] = [];
-  lines.push('\n## Conversation Topics');
-  lines.push(`Recent topics discussed: ${topics.join(' → ')}.`);
-  if (lastChange !== null && lastChange > 0) {
-    lines.push(`Last topic change was ${lastChange} minutes ago.`);
-  }
-  lines.push('If the user references "that thing we discussed" or returns to a prior topic, check these recent topics for context.');
-
-  return lines.join('\n');
-}
+export { type Conversation, type MessageRecord, type ConversationTurnOptions, type ConversationTurnResult } from "./manager/contracts";
+export { compactRecordForPrompt, getMessages, getMessagesByTokenBudget, getMessagesThroughExternalMessage } from "./manager/message_history";
+export { type DurableForegroundReleaseGateSnapshot, type DurableForegroundReleaseGate, type CreateDurableForegroundReleaseGateInput, createDurableForegroundReleaseGate } from "./manager/foreground_release_gate";
+export { type AutoSummaryCheckResult, checkAutoSummary, beginConversationSummary, cancelConversationSummary, setConversationSummary, getConversationSummary, trackTopic, extractTopics, getTopicContext } from "./summary_state";
+export { CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS, CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS, type ConversationTerminalPersistenceUnknownProjection, type ConversationTerminalDurabilityStage, runWithConversationTerminalDurabilityStage, renewConversationActionExecutionLease, type ConversationActionExecutionLeaseLoss, type ConversationActionExecutionHeartbeat, startConversationActionExecutionHeartbeat } from "./action_execution_runtime";
+export { finalizeForegroundRequest, type SupersedeConversationActionExecutionRequestInput, type SupersedeConversationActionExecutionRequestResult, convergeConversationActionRequestLease, convergeForegroundRequestBeforeRelease, convergeConversationActionRequestLeaseDurably, finalizeForegroundRequestDurably } from "./foreground_finalization";
+export { type ConvergeConversationActionRequestLeaseInput, type ConversationActionRequestLeaseEvidence, type ConvergeConversationActionRequestLeaseResult, type ForegroundRequestFinalizationOutcome, type FinalizeForegroundRequestInput, type ForegroundRequestFinalizationEvidence, type FinalizeForegroundRequestResult, type ForegroundRequestDurabilityDependencies, type ForegroundRequestIdentity, type ForegroundRequestReleaseInput, type ForegroundRequestReleaseResult } from "./foreground_request_types";
+export { getConversationFocusThreads, updateConversationActionFocus, getConversationActionStatus, getConversationForScope, getOrCreateActiveConversation, startNewConversation, startIsolatedConversation, type DeletedConversationData, deleteConversationData, shouldRolloverConversationForTurn, getOrCreateConversationForTurn, closeConversation, getActiveConversation, setConversationMode, getUserConversations, activateConversation, type BindConversationActionExecutionTurnInput, type BoundConversationActionExecutionTurn, getMessagesForAgent } from "./conversation_lifecycle";

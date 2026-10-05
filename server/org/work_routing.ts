@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { readDB, writeDB } from '../../db_layer';
+import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { getMember, listDepartments, listMembers, logAudit } from './db';
 
 export type OrganizationPositionStatus = 'active' | 'archived';
@@ -271,7 +271,7 @@ function validatePosition(db: any, orgId: string, positionId?: string | null): O
 }
 
 export function listOrganizationPositions(orgId: string, includeArchived = false): OrganizationPosition[] {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   return (db.orgPositions as OrganizationPosition[])
     .filter(position => position.orgId === orgId && (includeArchived || position.status === 'active'))
@@ -289,7 +289,7 @@ export function createOrganizationPosition(input: {
   isManager?: boolean;
 }): OrganizationPosition {
   assertAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const name = normalizeText(input.name, 120);
   if (!name) throw new Error('Position name is required');
@@ -320,7 +320,7 @@ export function createOrganizationPosition(input: {
     updatedAt: timestamp,
   };
   db.orgPositions.push(position);
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -345,7 +345,7 @@ export function updateOrganizationPosition(input: {
   status?: OrganizationPositionStatus;
 }): OrganizationPosition | null {
   assertAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const position = (db.orgPositions as OrganizationPosition[]).find(item => item.id === input.positionId && item.orgId === input.orgId);
   if (!position) return null;
@@ -365,7 +365,7 @@ export function updateOrganizationPosition(input: {
   if (input.isManager !== undefined) position.isManager = input.isManager === true;
   if (input.status !== undefined) position.status = input.status === 'archived' ? 'archived' : 'active';
   position.updatedAt = now();
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -378,7 +378,7 @@ export function updateOrganizationPosition(input: {
 }
 
 export function listOrganizationWorkRoutingRules(orgId: string, includeDisabled = false): OrganizationWorkRoutingRule[] {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   return (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[])
     .filter(rule => rule.orgId === orgId && (includeDisabled || rule.enabled))
@@ -402,7 +402,7 @@ export function createOrganizationWorkRoutingRule(input: {
   requireApprovalForExternalCommit?: boolean;
 }): OrganizationWorkRoutingRule {
   assertAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const name = normalizeText(input.name, 120);
   if (!name) throw new Error('Routing rule name is required');
@@ -436,7 +436,7 @@ export function createOrganizationWorkRoutingRule(input: {
     updatedAt: timestamp,
   };
   db.orgWorkRoutingRules.push(rule);
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -455,7 +455,7 @@ export function updateOrganizationWorkRoutingRule(input: {
   updates: Partial<Omit<OrganizationWorkRoutingRule, 'id' | 'orgId' | 'createdBy' | 'createdAt' | 'updatedAt' | 'revision'>>;
 }): OrganizationWorkRoutingRule | null {
   assertAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const rule = (db.orgWorkRoutingRules as OrganizationWorkRoutingRule[]).find(item => item.id === input.ruleId && item.orgId === input.orgId);
   if (!rule) return null;
@@ -484,7 +484,7 @@ export function updateOrganizationWorkRoutingRule(input: {
   }
   rule.revision += 1;
   rule.updatedAt = now();
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -616,7 +616,7 @@ export function registerOrganizationWorkExecution(input: {
 }): OrganizationWorkExecution {
   assertActiveMember(input.orgId, input.actorUserId, true);
   if (input.abortController.signal.aborted) throw new Error('The work item execution was already cancelled');
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const item = getOrganizationWorkItem(input.orgId, input.workItemId);
   if (!item || item.requesterUserId !== input.actorUserId) throw new Error('The work item execution owner does not match');
@@ -638,7 +638,7 @@ export function registerOrganizationWorkExecution(input: {
     orgId: input.orgId, workItemId: input.workItemId, revision, actorUserId: input.actorUserId,
     isCurrent() {
       if (revoked) return false;
-      const currentDb = readDB();
+      const currentDb = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
       const current = (currentDb.orgWorkItems as OrganizationWorkItem[]).find(candidate => (
         candidate.orgId === input.orgId && candidate.id === input.workItemId
       ));
@@ -694,7 +694,7 @@ function bypassRedundantSelfApproval(input: {
 
 export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteOrganizationWorkResult {
   const requesterMembership = assertActiveMember(input.orgId, input.requesterUserId, true);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const requestId = normalizeText(input.requestId, 240);
   const source = normalizeText(input.source, 120);
@@ -704,7 +704,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
     item.orgId === input.orgId && item.idempotencyKey === idempotencyKey
   ));
   if (existing) {
-    if (applyWorkConstraints(db, existing)) writeDB(db);
+    if (applyWorkConstraints(db, existing)) commitDatabaseTables(db);
     const existingApproval = existing.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existing.approvalId && item.orgId === input.orgId) || null
       : null;
@@ -729,7 +729,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
       ))
     : null;
   if (existingTask) {
-    if (applyWorkConstraints(db, existingTask)) writeDB(db);
+    if (applyWorkConstraints(db, existingTask)) commitDatabaseTables(db);
     const existingApproval = existingTask.approvalId
       ? (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === existingTask.approvalId && item.orgId === input.orgId) || null
       : null;
@@ -812,7 +812,7 @@ export function routeOrganizationWork(input: RouteOrganizationWorkInput): RouteO
   const approvalRequired = approvalPolicyMatched && !requesterIsAdministrator;
   const approval = approvalRequired ? createApproval(db, workItem) : null;
   db.orgWorkItems.push(workItem);
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.requesterUserId,
@@ -844,7 +844,7 @@ export function listOrganizationWorkItems(orgId: string, filters: {
   taskId?: string;
   limit?: number;
 } = {}): OrganizationWorkItem[] {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const limit = Math.max(1, Math.min(500, Math.trunc(Number(filters.limit) || 100)));
   return (db.orgWorkItems as OrganizationWorkItem[])
@@ -868,7 +868,7 @@ export function organizationWorkItemInvolvesUser(item: OrganizationWorkItem, use
 }
 
 export function getOrganizationWorkItem(orgId: string, workItemId: string): OrganizationWorkItem | null {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   return (db.orgWorkItems as OrganizationWorkItem[]).find(item => item.orgId === orgId && item.id === workItemId) || null;
 }
@@ -879,7 +879,7 @@ export function bindOrganizationWorkItemTask(input: {
   conversationId?: string;
   taskId?: string;
 }): OrganizationWorkItem | null {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const item = (db.orgWorkItems as OrganizationWorkItem[]).find(candidate => candidate.orgId === input.orgId && candidate.id === input.workItemId);
   if (!item) return null;
@@ -896,7 +896,7 @@ export function bindOrganizationWorkItemTask(input: {
   if (!item.taskId && taskId) { item.taskId = taskId; changed = true; }
   if (changed) {
     item.updatedAt = now();
-    writeDB(db);
+    commitDatabaseTables(db);
   }
   return item;
 }
@@ -909,7 +909,7 @@ export function setOrganizationWorkItemExecutionStatus(input: {
   execution: OrganizationWorkExecution | null;
   blocker?: string;
 }): OrganizationWorkItem | null {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const item = (db.orgWorkItems as OrganizationWorkItem[]).find(candidate => candidate.orgId === input.orgId && candidate.id === input.workItemId);
   if (!item) return null;
@@ -926,7 +926,7 @@ export function setOrganizationWorkItemExecutionStatus(input: {
   item.status = input.status;
   item.lastBlocker = input.status === 'blocked' ? normalizeText(input.blocker, 500) : '';
   item.updatedAt = now();
-  writeDB(db);
+  commitDatabaseTables(db);
   logAudit({
     orgId: input.orgId,
     userId: input.actorUserId,
@@ -939,7 +939,7 @@ export function setOrganizationWorkItemExecutionStatus(input: {
 }
 
 export function listOrganizationWorkApprovals(orgId: string, status?: OrganizationWorkApprovalStatus): OrganizationWorkApproval[] {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   return (db.orgWorkApprovals as OrganizationWorkApproval[])
     .filter(item => item.orgId === orgId && (!status || item.status === status))
@@ -954,7 +954,7 @@ export function decideOrganizationWorkApproval(input: {
   reason?: string;
 }): { approval: OrganizationWorkApproval; workItem: OrganizationWorkItem } | null {
   assertAdministrator(input.orgId, input.actorUserId);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const approval = (db.orgWorkApprovals as OrganizationWorkApproval[]).find(item => item.id === input.approvalId && item.orgId === input.orgId);
   if (!approval) return null;
@@ -969,7 +969,7 @@ export function decideOrganizationWorkApproval(input: {
   if (approval.workItemRevision !== workItem.revision) {
     approval.status = 'expired';
     approval.updatedAt = now();
-    writeDB(db);
+    commitDatabaseTables(db);
     throw new Error('This approval expired because the work item routing changed');
   }
   const timestamp = now();
@@ -987,7 +987,7 @@ export function decideOrganizationWorkApproval(input: {
   }
   applyWorkConstraints(db, workItem);
   workItem.updatedAt = timestamp;
-  writeDB(db);
+  commitDatabaseTables(db);
   notifyWorkExecutionChanged(workItem);
   logAudit({
     orgId: input.orgId,
@@ -1019,7 +1019,7 @@ export function requestOrganizationWorkHandoff(input: {
   reason: string;
 }): OrganizationWorkHandoff | null {
   assertActiveMember(input.orgId, input.actorUserId, true);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const item = (db.orgWorkItems as OrganizationWorkItem[]).find(candidate => candidate.id === input.workItemId && candidate.orgId === input.orgId);
   if (!item) return null;
@@ -1066,7 +1066,7 @@ export function requestOrganizationWorkHandoff(input: {
   item.lastBlocker = `Waiting for handoff ${handoff.id} to be accepted`;
   applyWorkConstraints(db, item);
   item.updatedAt = timestamp;
-  writeDB(db);
+  commitDatabaseTables(db);
   notifyWorkExecutionChanged(item);
   logAudit({
     orgId: input.orgId,
@@ -1086,7 +1086,7 @@ export function decideOrganizationWorkHandoff(input: {
   decision: 'accept' | 'decline';
 }): { handoff: OrganizationWorkHandoff; workItem: OrganizationWorkItem } | null {
   assertActiveMember(input.orgId, input.actorUserId, true);
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   const handoff = (db.orgWorkHandoffs as OrganizationWorkHandoff[]).find(item => item.id === input.handoffId && item.orgId === input.orgId);
   if (!handoff) return null;
@@ -1149,7 +1149,7 @@ export function decideOrganizationWorkHandoff(input: {
   }
   applyWorkConstraints(db, item);
   item.updatedAt = timestamp;
-  writeDB(db);
+  commitDatabaseTables(db);
   notifyWorkExecutionChanged(item);
   logAudit({
     orgId: input.orgId,
@@ -1163,7 +1163,7 @@ export function decideOrganizationWorkHandoff(input: {
 }
 
 export function listOrganizationWorkHandoffs(orgId: string, workItemId?: string): OrganizationWorkHandoff[] {
-  const db = readDB();
+  const db = readDatabaseTables(["orgPositions","orgWorkApprovals","orgWorkHandoffs","orgWorkItems","orgWorkRoutingRules","conversationActionTasks","conversationActionReceipts","conversationActionTurns","conversations","interactions"]);
   ensureTables(db);
   return (db.orgWorkHandoffs as OrganizationWorkHandoff[])
     .filter(item => item.orgId === orgId && (!workItemId || item.workItemId === workItemId))

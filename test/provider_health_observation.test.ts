@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ db: { settings: [], modelRoutingReceipts: [] } as any }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: vi.fn() }));
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({ readDB: () => state.db, writeDB: vi.fn() })) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 import { readProviderRuntimeObservation } from '../server/llm/provider_health';
 
 afterEach(() => { state.db = { settings: [], modelRoutingReceipts: [] }; });

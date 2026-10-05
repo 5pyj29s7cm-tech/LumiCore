@@ -4,7 +4,7 @@ import { listTokenUsageRows } from '../llm/token_tracker';
 import os from "os";
 import fs from "fs";
 import path from "path";
-import { getDatabasePersistenceStatus, readDB, writeDB, isDbDirty } from "../../db_layer";
+import { getDatabasePersistenceStatus, readDatabaseTables, commitDatabaseTables, isDbDirty } from "../../db_layer";
 import { projectAutonomousTaskFinalization } from "../autonomy/task_finalization";
 import { sendDurableMutation } from './durable_mutation';
 import { logger } from "../../logger";
@@ -390,7 +390,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       if (!isLoopbackAddress(req.socket?.remoteAddress)) {
         return res.status(403).json({ error: 'Detailed health is available only from the local Lumi desktop client.' });
       }
-      const db = readDB();
+      const db = readDatabaseTables(["autonomousTasks","conversationActionReceipts","conversationActionTasks","conversations","extensionActivationReceipts","extensionRevisions","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs","interactions","settings","tokenUsage","users"]);
       const memory = process.memoryUsage();
       const toolMetrics = getToolRuntimeMetrics();
       const capabilityMetrics = getCapabilityRuntimeMetrics();
@@ -530,7 +530,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
     try {
       const scope = resolveDomain(req.user!);
       const toolMetrics = getToolRuntimeMetrics();
-      const db = readDB();
+      const db = readDatabaseTables(["autonomousTasks","conversationActionReceipts","conversationActionTasks","conversations","extensionActivationReceipts","extensionRevisions","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs","interactions","settings","tokenUsage","users"]);
       const capabilityMetrics = getCapabilityRuntimeMetrics();
       const runtimeStatus = buildStructuredRuntimeStatus(db, {
         userId: req.user!.uid,
@@ -1236,7 +1236,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       }
       const normalized = normalizeUserSetting(key, value);
       const persistedKey = scopedUserSettingKey(req.user!.uid, key);
-      const db = readDB();
+      const db = readDatabaseTables(["autonomousTasks","conversationActionReceipts","conversationActionTasks","conversations","extensionActivationReceipts","extensionRevisions","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs","interactions","settings","tokenUsage","users"]);
       if (!db.settings) db.settings = [];
       const idx = db.settings.findIndex((s: any) => s.key === persistedKey);
       if (idx >= 0) {
@@ -1244,7 +1244,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       } else {
         db.settings.push({ key: persistedKey, value: JSON.stringify(normalized) });
       }
-      writeDB(db);
+      commitDatabaseTables(db);
       await sendDurableMutation(req, res, { success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1256,7 +1256,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       if (!USER_SCOPED_SETTING_KEYS.has(req.params.key)) {
         return res.status(404).json({ error: 'Unknown user setting' });
       }
-      const db = readDB();
+      const db = readDatabaseTables(["autonomousTasks","conversationActionReceipts","conversationActionTasks","conversations","extensionActivationReceipts","extensionRevisions","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs","interactions","settings","tokenUsage","users"]);
       const persistedKey = scopedUserSettingKey(req.user!.uid, req.params.key);
       const row = (db.settings || []).find((s: any) => s.key === persistedKey);
       res.json(row ? JSON.parse(row.value) : null);
@@ -1283,7 +1283,7 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
   // Ecosystem stats
   router.get("/ecosystem/stats", requireAuth, requireAdmin, requireLocalRequest, (_req: any, res: any) => {
     try {
-      const db = readDB();
+      const db = readDatabaseTables(["autonomousTasks","conversationActionReceipts","conversationActionTasks","conversations","extensionActivationReceipts","extensionRevisions","externalAiHistoryMessages","externalAiHistorySources","externalAiHistorySyncJobs","interactions","settings","tokenUsage","users"]);
       const mcpCfg = getMCPConfig();
       const allServers = Object.entries(mcpCfg);
       const enabledServers = allServers.filter(([, c]) => c.enabled);

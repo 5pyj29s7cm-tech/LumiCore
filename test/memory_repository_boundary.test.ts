@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ db: { memories: [] as any[], reminders: [] as any[] }, refuse: false, writes: 0 }));
-vi.mock('../db_layer', () => ({ readDB: () => state.db, writeDB: (db: any) => {
+vi.mock('../db_layer', async (...databaseMockArgs: any[]) => { const mocked = await ((() => ({ readDB: () => state.db, writeDB: (db: any) => {
   if (state.refuse) throw new Error('storage refused'); state.db = db; state.writes++;
-} }));
+} })) as any)(...databaseMockArgs); const { withTableDatabaseMock } = await import("./helpers/table_database_mock"); return withTableDatabaseMock(mocked); });
 import { getMemoryRow, listMemoryRows, listReminderRows, updateMemoryRow, updateReminderRow, removeReminderRow } from '../server/memory/repository';
 import { moveNode, ensureBranch } from '../server/memory/tree';
 const owner = { userId: 'owner', domain: 'personal' as const, orgId: '' };
