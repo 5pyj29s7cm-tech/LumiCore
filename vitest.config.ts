@@ -4,6 +4,7 @@ import path from 'path';
 export default defineConfig({
   test: {
     globals: true,
+    setupFiles: ['./test/isolated_environment.ts'],
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}', 'test/**/*.test.{ts,tsx}'],
     exclude: ['node_modules', 'dist', 'dist-server', 'src-tauri', 'gpt-sovits-src'],

@@ -3,7 +3,7 @@ import { normalizeMemoryAvatarAppearance } from '../../shared/memory_avatar';
 ﻿import { createHash, randomUUID } from 'node:crypto';
 import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../db_layer';
 import { isVoiceProfileAccessible, voiceProfileScope } from '../tts/profile_store';
-import { invalidateMemoryAvatarAuthorization } from './lifecycle';
+import { invalidateMemoryAvatarAuthorization } from './authorization_watchers';
 import {
   DEFAULT_MEMORY_AVATAR_APPEARANCE,
   validMemoryAvatarAnimation, type MemoryAvatarPresentation,

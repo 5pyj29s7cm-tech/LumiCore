@@ -14,7 +14,7 @@ import { readSettingRecord, writeSetting } from "../persistence/settings_reposit
  * When L_t << max(W_buffer), hope activates → agent seeks to recover peak state.
  */
 
-import { EmotionalState } from './state';
+import type { EmotionalState } from './state';
 
 
 // ── Types ──
@@ -157,11 +157,8 @@ export function himTick(
     ? Math.min(0.5, (hopeGap - HOPE_THRESHOLD) * 2.5)
     : 0;
 
-  // 5c. Positive-drive: ΔL is rising — initiative relaxes, curiosity stays high
-  const positiveDrive = him.deltaL > 0.03 ? 0 : 0;
-
   // Combined drive
-  const drive = flatDrive + hopeDrive + positiveDrive;
+  const drive = flatDrive + hopeDrive;
 
   // Initiative = base + drive, capped
   const initiative = Math.min(1, 0.08 + drive);

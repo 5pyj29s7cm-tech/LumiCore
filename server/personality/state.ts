@@ -5,8 +5,6 @@ import { PersonalityVector } from './types';
 import { getSeasonInfo, getNearbyHoliday, isWeekend } from '../time/utils';
 import { himTick, loadHIMState, saveHIMState, getBestPeak, formatPeakForPrompt, type HIMState } from './him';
 
-const emotionWriteQueues = new Map<string, Promise<void>>();
-
 export interface EmotionalState {
   valence: number;        // -1 (unpleasant) ~ +1 (pleasant)
   arousal: number;        // 0 (calm) ~ 1 (excited)
@@ -72,19 +70,10 @@ export function loadEmotionalState(userId: string): EmotionalState {
 }
 
 export function saveEmotionalState(userId: string, state: EmotionalState): void {
-  const prev = emotionWriteQueues.get(userId) || Promise.resolve();
-  let release: () => void;
-  const next = new Promise<void>(r => { release = r; });
-  emotionWriteQueues.set(userId, next);
-
-  prev.then(() => {
-    try {
-      state.lastUpdated = new Date().toISOString();
-      writeSetting(`emotion_${userId}`, JSON.stringify(state));
-    } finally {
-      release!();
-    }
-  }).catch(() => release!());
+  try {
+    state.lastUpdated = new Date().toISOString();
+    writeSetting(`emotion_${userId}`, JSON.stringify(state));
+  } catch { /* Emotional telemetry remains best effort. */ }
 }
 
 /**
