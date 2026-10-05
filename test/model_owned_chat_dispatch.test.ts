@@ -1,6 +1,7 @@
 import { readImplementationSource } from './implementation_source';
 import './helpers';
-import { readFileSync } from 'node:fs';
+import { enCatalog } from '../src/i18n/locales/catalog_en';
+import { zhCatalog } from '../src/i18n/locales/catalog_zh';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
@@ -142,15 +143,14 @@ describe('model-owned main chat architecture', () => {
   });
 
   it('describes Chat foreground escalation consistently with the hard runtime policy', () => {
-    const translationsSource = readImplementationSource(path.resolve(process.cwd(), 'src/lib/translations.ts'), 'utf8');
     const adapterRegistrySource = readImplementationSource(path.resolve(process.cwd(), 'server/adapters/registry.ts'), 'utf8');
     const generatedMessages = JSON.parse(readImplementationSource(
       path.resolve(process.cwd(), 'src/i18n/locales/ui.generated.json'),
       'utf8',
     ));
 
-    expect(translationsSource).toContain("Clear action requests may use Assistant's foreground tools for that turn");
-    expect(translationsSource).toContain('明确要求执行时，该回合可调用助手模式的前台工具');
+    expect(enCatalog.modeChatDesc).toContain("Clear action requests may use Assistant's foreground tools for that turn");
+    expect(zhCatalog.modeChatDesc).toContain('明确要求执行时，该回合可调用助手模式的前台工具');
     expect(generatedMessages['desktop-onboarding.chat-answer-only-no-proactive.fb6dff28d4'].en)
       .toContain('explicit action requests may use Assistant tools');
     expect(generatedMessages['desktop-ui.pure-conversation-answers-and-discussion.10bb20f365'].en)

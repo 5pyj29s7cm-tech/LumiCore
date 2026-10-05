@@ -1797,12 +1797,13 @@ function scheduleDatabaseFlush(delayMs = 100): void {
 function configureSqliteExternalCommitJournal(): void {
   const adapter: ExternalCommitJournalAdapter = {
     async lookup(idempotencyKey) {
-      await writeLock;
-      const rows = await query<ExternalCommitJournalEntry>(
-        'SELECT * FROM external_commit_journal WHERE idempotencyKey = ? LIMIT 1',
-        [idempotencyKey],
-      );
-      return rows[0] || null;
+      return withDatabaseWriteLock(async () => {
+        const rows = await query<ExternalCommitJournalEntry>(
+          'SELECT * FROM external_commit_journal WHERE idempotencyKey = ? LIMIT 1',
+          [idempotencyKey],
+        );
+        return rows[0] || null;
+      });
     },
     async claim(entry) {
       return withDatabaseWriteLock(async () => {
@@ -2554,8 +2555,9 @@ export function ensureDatabaseInitialized(): Promise<void> {
 }
 
 export async function querySQL<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-  await writeLock;
-  return query<T>(sql, params);
+  // Admit the read to the same queue: waiting on an earlier lock alone lets
+  // a later replacement transaction expose its intermediate DELETE state.
+  return withDatabaseWriteLock(() => query<T>(sql, params));
 }
 
 export async function runSQL(sql: string, params: any[] = []): Promise<void> {

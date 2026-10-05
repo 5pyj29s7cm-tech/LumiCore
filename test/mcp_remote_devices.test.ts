@@ -86,10 +86,13 @@ describe('outbound MCP device connection ownership', () => {
   it('stops an open connector without leaving a retry timer', async () => {
     const timeout = vi.spyOn(globalThis, 'setTimeout');
     const factory = vi.fn(serverFactory('one'));
-    const connection = connectMcpServerToRemote(`${endpoint}/one`, factory, 'one');
+    let connected!: () => void;
+    const initialized = new Promise<void>(resolve => { connected = resolve; });
+    const connection = connectMcpServerToRemote(`${endpoint}/one`, factory, 'one', connected);
     connections.push(connection);
     const item = await waitForClients(1);
     await item.ready;
+    await initialized;
     timeout.mockClear();
     await connection.close();
     await connection.close();

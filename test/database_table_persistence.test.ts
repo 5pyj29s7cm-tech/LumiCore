@@ -1,6 +1,7 @@
 import './helpers';
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import sqlite3 from 'sqlite3';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, commitDatabaseTables, flushDBOrThrow, initDatabase, querySQL, readDatabaseTables, runSQL, withDatabaseSqlWriteLock } from '../db_layer';
 import { DOCUMENT_COLLECTION_DEFAULTS, documentCollectionKey, type DatabaseTableName } from '../server/db/table_catalog';
 
@@ -45,6 +46,41 @@ describe.sequential('selected-table SQLite persistence', () => {
     expect(readDatabaseTables(['settings']).settings).toContainEqual({ key, value: 'pending' });
     await runSQL('PRAGMA query_only = OFF'); await closeDatabase(); await initDatabase();
     expect(await querySQL('SELECT value FROM settings WHERE key = ?', [key])).toEqual([{ value: 'pending' }]);
+  });
+
+  it('keeps an admitted SQL read ahead of a later replacement transaction', async () => {
+    const key = 'read-fence-' + randomUUID();
+    await runSQL('INSERT INTO settings(key,value) VALUES (?,?)', [key, 'before']);
+    const sql = 'SELECT value FROM settings WHERE key = ? /* read-fence */';
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(done => { entered = done; });
+    const gate = new Promise<void>(done => { release = done; });
+    const original = sqlite3.Database.prototype.all;
+    const delayed = vi.spyOn(sqlite3.Database.prototype, 'all').mockImplementation(function (this: sqlite3.Database, ...args: any[]) {
+      if (args[0] !== sql) return Reflect.apply(original, this, args);
+      entered();
+      void gate.then(() => Reflect.apply(original, this, args));
+      return this;
+    });
+    let writerEntered = false;
+    const observed = querySQL(sql, [key]); await started;
+    const replacement = withDatabaseSqlWriteLock(async session => {
+      writerEntered = true;
+      await session.run('BEGIN IMMEDIATE');
+      await session.run('DELETE FROM settings WHERE key = ?', [key]);
+      await session.run('INSERT INTO settings(key,value) VALUES (?,?)', [key, 'after']);
+      await session.run('COMMIT');
+    });
+    try {
+      await new Promise<void>(done => setImmediate(done));
+      expect(writerEntered).toBe(false);
+      release();
+      expect(await observed).toEqual([{ value: 'before' }]);
+      await replacement;
+      expect(await querySQL(sql, [key])).toEqual([{ value: 'after' }]);
+    } finally {
+      release(); await observed; await replacement; delayed.mockRestore();
+    }
   });
 
   it('rejects writes during shutdown without changing the accepted snapshot', async () => {
