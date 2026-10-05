@@ -1,7 +1,6 @@
 
 import { type ConversationHistoryItem, type ConversationHistoryContextMenu, type WorkflowStatus, type ChatTurnUiMeta } from "./contracts";
 
-import { useConversationAttachments } from "../../hooks/useConversationAttachments";
 import type { ChatAttachmentReference } from "@/lib/chatAttachmentReferences";
 import React, { useCallback, useEffect, useMemo } from 'react';
 
@@ -10,7 +9,6 @@ import { ChatViewWorkRegistry } from '@/lib/chatViewWork';
 import { toast } from 'sonner';
 import { useAppConfirm } from '@/lib/appConfirm';
 
-import { type ChatResponseFinalization } from '@/lib/chatProgress';
 
 import { uiMessage } from "../../i18n/uiMessages";
 
@@ -38,12 +36,11 @@ lastResumedRequestIdsRef: React.RefObject<Set<string>>;
 streamingMsgIdsRef: React.RefObject<Map<string, string>>;
 streamingRawTextRef: React.RefObject<Map<string, string>>;
 chatTurnTimerGuardRef: React.RefObject<ChatTurnTimerGuard>;
-currentResponseFinalizationRef: React.RefObject<ChatResponseFinalization>;
+currentTurnUiMetaRef: React.RefObject<ChatTurnUiMeta>;
 resetMediaGenerationSurface: () => void;
 bindAttachmentContextToConversation: (conversationId: string, options?: { carryCurrent?: boolean; }) => void;
 setConversationHistory: React.Dispatch<React.SetStateAction<ConversationHistoryItem[]>>;
 setMessages: (update: React.SetStateAction<any[]>) => void;
-messagesRef: React.RefObject<any[]>;
 setPendingAttachments: React.Dispatch<React.SetStateAction<ChatAttachmentReference[]>>;
 pendingAttachmentsRef: React.RefObject<ChatAttachmentReference[]>;
 setSearchQuery: React.Dispatch<React.SetStateAction<string>>;
@@ -82,7 +79,7 @@ setConversationContextMenu: React.Dispatch<React.SetStateAction<ConversationHist
 appConfirm: ReturnType<typeof useAppConfirm>;
 setDeletingConversationId: React.Dispatch<React.SetStateAction<string>>;
 };
-export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentResponseFinalizationRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, messagesRef, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
+export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
 
   const detachPreviousExecution = useCallback(() => {
     for (const detach of activeChatViewDetachersRef.current) detach();
@@ -96,9 +93,24 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
     streamingMsgIdsRef.current.clear();
     streamingRawTextRef.current.clear();
     chatTurnTimerGuardRef.current.invalidate();
-    currentResponseFinalizationRef.current = null;
+    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
     resetMediaGenerationSurface();
-  }, [activeChatRequestIdRef, activeChatViewDetachersRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, currentResponseFinalizationRef, lastResumedRequestIdsRef, resetMediaGenerationSurface, streamingMsgIdsRef, streamingRawTextRef, textChatActiveRef]);
+  }, [activeChatRequestIdRef, activeChatViewDetachersRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, currentTurnUiMetaRef, lastResumedRequestIdsRef, resetMediaGenerationSurface, streamingMsgIdsRef, streamingRawTextRef, textChatActiveRef]);
+
+  const activateTranscript = useCallback((conversationId: string, messages: any[]) => {
+    detachPreviousExecution();
+    bindAttachmentContextToConversation(conversationId);
+    setMessages(messages); // The page setter synchronizes its ref and revision.
+    setPendingAttachments([]);
+    pendingAttachmentsRef.current = [];
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchError('');
+    setIsTyping(false);
+    setWorkflowStatus('idle');
+    clearChatProgress();
+    seenWorkflowToolEvents.current.clear();
+  }, [detachPreviousExecution, bindAttachmentContextToConversation, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents]);
 
   const startNewTextConversation = useCallback(async () => {
     if (conversationTransitionRef.current || isCreatingConversation || restoringConversationId) return;
@@ -125,20 +137,8 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
       // Detach the text surface from the previous execution without cancelling
       // its durable task. Any late receipt remains attached to the archived
       // conversation and the task widget continues to report its real status.
-      detachPreviousExecution();
-      bindAttachmentContextToConversation(result.conversation.id);
+      activateTranscript(result.conversation.id, []);
       setConversationHistory(previous => [result.conversation, ...previous.filter(item => item.id !== result.conversation.id)]);
-      setMessages([]);
-      messagesRef.current = [];
-      setPendingAttachments([]);
-      pendingAttachmentsRef.current = [];
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchError('');
-      setIsTyping(false);
-      setWorkflowStatus('idle');
-      clearChatProgress();
-      seenWorkflowToolEvents.current.clear();
       requestAnimationFrame(() => messageInputRef.current?.focus());
     } catch (error: any) {
       if (work.isCurrent()) toast.error(error?.message || 'Unable to create a new conversation');
@@ -150,7 +150,7 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         setIsCreatingConversation(false);
       }
     }
-  }, [activeDomain, agentId, bindAttachmentContextToConversation, chatViewWorkRef, clearChatProgress, conversationTransitionRef, detachPreviousExecution, invalidateChatViewWork, isCreatingConversation, messageInputRef, messagesRef, pendingAttachmentsRef, restoringConversationId, scopedConversationUrl, seenWorkflowToolEvents, setConversationHistory, setConversationTransitionPending, setIsCreatingConversation, setIsTyping, setMessages, setPendingAttachments, setSearchError, setSearchQuery, setSearchResults, setWorkflowStatus]);
+  }, [activeDomain, agentId, activateTranscript, chatViewWorkRef, conversationTransitionRef, invalidateChatViewWork, isCreatingConversation, messageInputRef, restoringConversationId, scopedConversationUrl, setConversationHistory, setConversationTransitionPending, setIsCreatingConversation]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -314,20 +314,7 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
 
       // Switching transcripts only detaches this chat surface. Durable tasks
       // keep running and remain visible exclusively in the task widget.
-      detachPreviousExecution();
-      bindAttachmentContextToConversation(conversationId);
-      const restoredMessages = normalizePersistedMessages(Array.isArray(messageResult?.messages) ? messageResult.messages : []);
-      setMessages(restoredMessages);
-      messagesRef.current = restoredMessages;
-      setPendingAttachments([]);
-      pendingAttachmentsRef.current = [];
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchError('');
-      setIsTyping(false);
-      setWorkflowStatus('idle');
-      clearChatProgress();
-      seenWorkflowToolEvents.current.clear();
+      activateTranscript(conversationId, normalizePersistedMessages(Array.isArray(messageResult?.messages) ? messageResult.messages : []));
       setConversationHistory(previous => previous.map(item => ({
         ...item,
         status: item.id === conversationId ? 'active' : item.status === 'active' ? 'closed' : item.status,
@@ -344,7 +331,7 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
         setRestoringConversationId('');
       }
     }
-  }, [conversationTransitionRef, restoringConversationId, isCreatingConversation, attachmentConversationIdRef, setConversationTransitionPending, setRestoringConversationId, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, agentId, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, normalizePersistedMessages, setMessages, messagesRef, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setConversationHistory, setConversationHistorySelectorExpanded, messageInputRef]);
+  }, [conversationTransitionRef, restoringConversationId, isCreatingConversation, attachmentConversationIdRef, setConversationTransitionPending, setRestoringConversationId, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, agentId, activeDomain, activateTranscript, normalizePersistedMessages, setConversationHistory, setConversationHistorySelectorExpanded, messageInputRef]);
 
   const deleteConversationFromHistory = useCallback(async (conversationId: string) => {
     const id = String(conversationId || '').trim();

@@ -1974,6 +1974,29 @@ async function runWithToolsInternal(
     : undefined;
   const usageRecords: LLMUsageRecord[] = usageRecordSink || [];
   const invocationBudget: ToolInvocationBudgetState = invocationBudgetState || newToolInvocationBudget();
+  function finish(text: string, completionGuard?: LLMResult['completionGuard']): LLMResult {
+    return { text, toolCalls: executionLog, usageRecords,
+      ...(arguments.length > 1 ? { completionGuard } : {}),
+    };
+  }
+  const stopBudget = (boundary: 'model_response' | 'turn', rawPlannedCalls: number, normalizedPlannedCalls: number, invocableCalls: number) => stopForToolInvocationBudget({
+    boundary, rawPlannedCalls, normalizedPlannedCalls, invocableCalls, budget: invocationBudget,
+    executionLog, messages, config, usageRecords, context: toolExecutionContext, onToolCall,
+  });
+  const providerGetters = [
+    getDeepSeek || (() => null),
+    getGemini || (() => null),
+    getOpenAI || (() => null),
+    getAnthropic || (() => null),
+    getQwen || (() => null),
+    getOllama || (() => null),
+    getLmStudio || (() => null),
+    getArk || (() => null),
+    getXiaomi || (() => null),
+    getKimi || (() => null),
+    getGlm || (() => null),
+    getRelay || (() => null),
+  ] as const;
   invocationBudget.lastTouchedAt = Date.now();
   const explicitProjection = context?.modelToolProjection?.toolNames;
   const toolSessionActive = maxIterations > 0
@@ -2016,8 +2039,7 @@ async function runWithToolsInternal(
   });
   if (pendingDesktopReview) {
     const text = desktopCompletionReviewText(primaryTask, pendingDesktopReview);
-    return { text, toolCalls: executionLog, usageRecords,
-      completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON } };
+    return finish(text, { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON });
   }
 
   // The routed iteration count is the ordinary planning budget. A model that
@@ -2039,21 +2061,13 @@ async function runWithToolsInternal(
   for (let iteration = 0; iteration < effectiveMaxIterations; iteration++) {
     // Check for cancellation between iterations
     if (context?.isCancelled?.()) {
-      return {
-        text: 'Task was cancelled by the user.',
-        toolCalls: executionLog,
-        usageRecords,
-      };
+      return finish('Task was cancelled by the user.');
     }
     if (desktopControlPauseReason(context)) {
       recordWorkflowIfToolsUsed(executionLog, messages, config);
-      return {
-        text: hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
+      return finish(hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
           ? ''
-          : buildDesktopControlPausedSummary(primaryTask),
-        toolCalls: executionLog,
-        usageRecords,
-      };
+          : buildDesktopControlPausedSummary(primaryTask));
     }
     refreshRuntimeActivatedToolAuthorization(toolExecutionContext, executionLog, toolRegistry);
     let toolDeclarations = toolRegistry.getToolDeclarationsForPolicy(
@@ -2152,35 +2166,13 @@ async function runWithToolsInternal(
             toolDeclarations,
             attemptConfig,
             attempt.onChunk,
-            getDeepSeek || (() => null),
-            getGemini || (() => null),
-            getOpenAI || (() => null),
-            getAnthropic || (() => null),
-            getQwen || (() => null),
-            getOllama || (() => null),
-            getLmStudio || (() => null),
-            getArk || (() => null),
-            getXiaomi || (() => null),
-            getKimi || (() => null),
-            getGlm || (() => null),
-            getRelay || (() => null),
+            ...providerGetters,
           )
         : makeLLMCall(
             modelMessages,
             toolDeclarations,
             attemptConfig,
-            getDeepSeek || (() => null),
-            getGemini || (() => null),
-            getOpenAI || (() => null),
-            getAnthropic || (() => null),
-            getQwen || (() => null),
-            getOllama || (() => null),
-            getLmStudio || (() => null),
-            getArk || (() => null),
-            getXiaomi || (() => null),
-            getKimi || (() => null),
-            getGlm || (() => null),
-            getRelay || (() => null),
+            ...providerGetters,
           );
     };
     let response: NormalizedLLMResponse;
@@ -2229,21 +2221,13 @@ async function runWithToolsInternal(
     // cancelled or timed out. Re-check before interpreting a late response so
     // it can never dispatch tool calls after a replacement model/turn starts.
     if (context?.isCancelled?.()) {
-      return {
-        text: 'Task was cancelled before the model response could be applied.',
-        toolCalls: executionLog,
-        usageRecords,
-      };
+      return finish('Task was cancelled before the model response could be applied.');
     }
     if (desktopControlPauseReason(context)) {
       recordWorkflowIfToolsUsed(executionLog, messages, config);
-      return {
-        text: hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
+      return finish(hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
           ? String(response.text || '')
-          : buildDesktopControlPausedSummary(primaryTask),
-        toolCalls: executionLog,
-        usageRecords,
-      };
+          : buildDesktopControlPausedSummary(primaryTask));
     }
 
     // Collect usage from this LLM call
@@ -2332,12 +2316,7 @@ async function runWithToolsInternal(
           taskId: toolExecutionContext?.taskId,
           acceptedTaskTarget: toolExecutionContext?.acceptedTaskTarget,
         });
-        return {
-          text: guarded.text,
-          completionGuard: guarded,
-          toolCalls: executionLog,
-          usageRecords,
-        };
+        return finish(guarded.text, guarded);
       }
       const missingVerification = buildMissingVerificationObligationPrompt(
         primaryTask,
@@ -2395,12 +2374,7 @@ async function runWithToolsInternal(
         taskId: toolExecutionContext?.taskId,
         acceptedTaskTarget: toolExecutionContext?.acceptedTaskTarget,
       });
-      return {
-        text: guarded.text,
-        completionGuard: guarded,
-        toolCalls: executionLog,
-        usageRecords,
-      };
+      return finish(guarded.text, guarded);
     }
 
     const rawToolCalls = plannedToolCalls.map((tc, index) => ({
@@ -2408,19 +2382,7 @@ async function runWithToolsInternal(
       id: tc.id || `call_${iteration}_${index}_${Date.now().toString(36)}`,
     }));
     if (rawToolCalls.length > invocationBudget.perResponseLimit) {
-      return stopForToolInvocationBudget({
-        boundary: 'model_response',
-        rawPlannedCalls: rawToolCalls.length,
-        normalizedPlannedCalls: rawToolCalls.length,
-        invocableCalls: rawToolCalls.filter(call => exposedToolNames.has(call.name)).length,
-        budget: invocationBudget,
-        executionLog,
-        messages,
-        config,
-        usageRecords,
-        context: toolExecutionContext,
-        onToolCall,
-      });
+      return stopBudget('model_response', rawToolCalls.length, rawToolCalls.length, rawToolCalls.filter(call => exposedToolNames.has(call.name)).length);
     }
     const normalizedToolCalls = normalizePlannedToolScope(
       rawToolCalls,
@@ -2431,19 +2393,7 @@ async function runWithToolsInternal(
     // per required schema enum member. Enforce the same response ceiling after
     // expansion so enum size cannot bypass the model-response budget.
     if (normalizedToolCalls.length > invocationBudget.perResponseLimit) {
-      return stopForToolInvocationBudget({
-        boundary: 'model_response',
-        rawPlannedCalls: rawToolCalls.length,
-        normalizedPlannedCalls: normalizedToolCalls.length,
-        invocableCalls: normalizedToolCalls.filter(call => exposedToolNames.has(call.name)).length,
-        budget: invocationBudget,
-        executionLog,
-        messages,
-        config,
-        usageRecords,
-        context: toolExecutionContext,
-        onToolCall,
-      });
+      return stopBudget('model_response', rawToolCalls.length, normalizedToolCalls.length, normalizedToolCalls.filter(call => exposedToolNames.has(call.name)).length);
     }
 
     // Check for duplicate tool calls (prevents infinite loops within maxIterations)
@@ -2492,11 +2442,7 @@ async function runWithToolsInternal(
             continue;
           }
           recordWorkflowIfToolsUsed(executionLog, messages, config);
-          return {
-            text: buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)),
-            toolCalls: executionLog,
-            usageRecords,
-          };
+          return finish(buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)));
         }
       }
     }
@@ -2512,19 +2458,7 @@ async function runWithToolsInternal(
       return !shouldSuppressConfirmedReplay(confirmedReplay);
     }).length;
     if (invocationBudget.used + invocableCallsInBatch > invocationBudget.turnLimit) {
-      return stopForToolInvocationBudget({
-        boundary: 'turn',
-        rawPlannedCalls: rawToolCalls.length,
-        normalizedPlannedCalls: normalizedToolCalls.length,
-        invocableCalls: invocableCallsInBatch,
-        budget: invocationBudget,
-        executionLog,
-        messages,
-        config,
-        usageRecords,
-        context: toolExecutionContext,
-        onToolCall,
-      });
+      return stopBudget('turn', rawToolCalls.length, normalizedToolCalls.length, invocableCallsInBatch);
     }
     // Reserve the whole admissible batch synchronously. Parallel/recovery
     // loops sharing this request id cannot both pass the remaining-budget
@@ -2545,21 +2479,13 @@ async function runWithToolsInternal(
       // Cancellation can also arrive between multiple tool calls in one model
       // response. Never continue the remaining batch after that boundary.
       if (context?.isCancelled?.()) {
-        return {
-          text: 'Task was cancelled before the remaining tool calls could run.',
-          toolCalls: executionLog,
-          usageRecords,
-        };
+        return finish('Task was cancelled before the remaining tool calls could run.');
       }
       if (desktopControlPauseReason(context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return {
-          text: hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
+        return finish(hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
             ? ''
-            : buildDesktopControlPausedSummary(primaryTask),
-          toolCalls: executionLog,
-          usageRecords,
-        };
+            : buildDesktopControlPausedSummary(primaryTask));
       }
       if (!exposedToolNames.has(tc.name)) {
         conversationHistory.push({
@@ -2655,17 +2581,17 @@ async function runWithToolsInternal(
       // The receipt observer may await persistence while cancellation or
       // physical user input arrives. Those signals win over goal completion.
       if (context?.isCancelled?.() || context?.executionSignal?.aborted || config.signal?.aborted) {
-        return { text: 'Task was cancelled before the remaining tool calls could run.', toolCalls: executionLog, usageRecords };
+        return finish('Task was cancelled before the remaining tool calls could run.');
       }
       if (desktopControlPauseReason(context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return { text: buildDesktopControlPausedSummary(primaryTask), toolCalls: executionLog, usageRecords };
+        return finish(buildDesktopControlPausedSummary(primaryTask));
       }
 
       const missingInput = missingTaskInputResult(primaryTask, [record]);
       if (missingInput) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return { text: missingInput.text, toolCalls: executionLog, usageRecords, completionGuard: missingInput };
+        return finish(missingInput.text, missingInput);
       }
 
       // A failed paid generation ends this attempt, including queued calls in
@@ -2677,8 +2603,7 @@ async function runWithToolsInternal(
           ? formatCnMediaGenerationFailure([record.error])
           : 'Generation did not complete. No further generation was submitted in this turn. A retry must reconcile any unknown prior provider outcome before resubmitting.';
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return { text, toolCalls: executionLog, usageRecords,
-          completionGuard: { text, blocked: true, reason: 'media_generation_failed' } };
+        return finish(text, { text, blocked: true, reason: 'media_generation_failed' });
       }
 
       // The native loop already stopped at an uncertain completion candidate.
@@ -2688,19 +2613,14 @@ async function runWithToolsInternal(
       if (desktopReview) {
         const text = desktopCompletionReviewText(primaryTask, desktopReview);
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return {
-          text,
-          toolCalls: executionLog,
-          usageRecords,
-          completionGuard: { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON },
-        };
+        return finish(text, { text, blocked: true, reason: DESKTOP_COMPLETION_REVIEW_REASON });
       }
 
       if (hasCompletedCurrentSimplePlayback(primaryTask, executionLog, context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
         // The channel's finalizer and strict terminal save own the success
         // response. Never execute an unnecessary queued click or toggle here.
-        return { text: '', toolCalls: executionLog, usageRecords };
+        return finish('');
       }
 
       conversationHistory.push({
@@ -2726,22 +2646,14 @@ async function runWithToolsInternal(
       // state with the receipts collected above.
       if (desktopControlPauseReason(context)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return {
-          text: hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
+        return finish(hasCompletedCoreAction(primaryTask, executionLog, toolExecutionContext)
             ? ''
-            : buildDesktopControlPausedSummary(primaryTask),
-          toolCalls: executionLog,
-          usageRecords,
-        };
+            : buildDesktopControlPausedSummary(primaryTask));
       }
 
       if (isConfirmationBlockedToolRecord(record)) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return {
-          text: buildConfirmationBlockedSummary(executionLog, getPrimaryUserText(messages)),
-          toolCalls: executionLog,
-          usageRecords,
-        };
+        return finish(buildConfirmationBlockedSummary(executionLog, getPrimaryUserText(messages)));
       }
 
       const completedBoundedAction = tryFinalizeVerifiedBoundedAction({
@@ -2754,7 +2666,7 @@ async function runWithToolsInternal(
       }, context?.acceptedTaskTarget);
       if (completedBoundedAction) {
         recordWorkflowIfToolsUsed(executionLog, messages, config);
-        return { text: completedBoundedAction.text, toolCalls: executionLog, usageRecords };
+        return finish(completedBoundedAction.text);
       }
     }
 
@@ -2764,11 +2676,7 @@ async function runWithToolsInternal(
       // neither initial planning nor a second summarization model call is
       // allowed to delay, mutate, duplicate, or hide that execution outcome.
       recordWorkflowIfToolsUsed(executionLog, messages, config);
-      return {
-        text: '',
-        toolCalls: executionLog,
-        usageRecords,
-      };
+      return finish('');
     }
 
   }
@@ -2778,17 +2686,9 @@ async function runWithToolsInternal(
     // Channels finalize this from the verified receipt set. Returning an empty
     // model body is safer than replacing completed work with an iteration or
     // recovery warning.
-    return {
-      text: '',
-      toolCalls: executionLog,
-      usageRecords,
-    };
+    return finish('');
   }
-  return {
-    text: buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)),
-    toolCalls: executionLog,
-    usageRecords,
-  };
+  return finish(buildIterationLimitSummary(executionLog, getPrimaryUserText(messages)));
 }
 
 /** Record workflow from tool execution trace, if any tools were actually called */

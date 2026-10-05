@@ -22,7 +22,6 @@ import { type LLMResult } from "../../llm/adapter";
 import { buildLumiCapabilitySelection } from "../../cognition/capability_selection";
 
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
-import { finalizeLumiResponse } from "../../cognition/result_finalizer";
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
 
 import { recoverBlockedExecutionOnce } from "../../cognition/execution_guard_recovery";
@@ -33,7 +32,7 @@ import { formatPendingConfirmationRequest } from "../../tools/pending_confirmati
 
 import { saveEmotionalState, updateEmotionalState, updateEmotionalStateWithHIM, saveHIMState, generateContextualGreeting } from "../../personality/state";
 
-import { addMessage, addMessageIdempotent as addMessageIdempotentUnbound, extractTopics, trackTopic, setConversationActionExecutionStatus } from "../../conversation/manager";
+import { addMessage, extractTopics, trackTopic, setConversationActionExecutionStatus } from "../../conversation/manager";
 
 import { RECONFIRMATION_REQUIRED_BLOCKER } from "../../cognition/action_continuation";
 

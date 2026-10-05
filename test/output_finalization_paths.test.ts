@@ -101,9 +101,10 @@ describe('finalized output paths', () => {
     for (const component of [
       source('src/components/AgentChatPage.tsx'),
     ]) {
-      expect(component).toContain('currentResponseFinalizationRef');
-      expect(component).toContain('currentResponseFinalizationRef.current = finalization');
-      expect(component).toContain('currentResponseFinalizationRef.current = null');
+      expect(component).toContain('currentTurnUiMetaRef');
+      expect(component).toContain('currentTurnUiMetaRef.current.finalization = finalization');
+      expect(component).toContain('currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null }');
+      expect(component).not.toContain('currentResponseFinalizationRef');
     }
   });
 

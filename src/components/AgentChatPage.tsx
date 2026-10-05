@@ -60,10 +60,6 @@ import { extractMediaGenerationArtifacts, mediaGenerationArgumentsMatch, mediaGe
 import { normalizeStructuredMediaRequest } from '../../shared/media_generation';
 
 const CHAT_HISTORY_LIMIT = 300;
-// Conversation index pages are deliberately small; the left rail keeps
-// requesting subsequent offsets as the user approaches its end rather than
-// imposing a product-level history cap.
-const CONVERSATION_HISTORY_PAGE_SIZE = 40;
 const CHAT_RENDER_LIMIT = 80;
 const CHAT_SEARCH_LIMIT = 200;
 
@@ -468,9 +464,8 @@ export function AgentChatPage({
   const seenWorkflowToolEvents = useRef<Set<string>>(new Set());
   const lastChatProgressTextRef = useRef('');
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const currentRequestHadToolRef = useRef(false);
-  const currentRequestNeedsEvidenceRef = useRef(false);
-  const currentResponseFinalizationRef = useRef<ChatResponseFinalization | null>(null);
+  // The foreground view points to the request's metadata instead of copying its fields.
+  const currentTurnUiMetaRef = useRef<ChatTurnUiMeta>({ hadTool: false, needsEvidence: false, finalization: null });
   const activeChatViewDetachersRef = useRef(new Set<() => void>());
   const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   const chatRequestLedgerRef = useRef(new ChatRequestLedger());
@@ -1082,6 +1077,7 @@ export function AgentChatPage({
       terminalReceiptsRef.current.clear();
       chatRequestLedgerRef.current.clear();
       chatTurnUiMetaRef.current.clear();
+      currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
       streamingMsgIdsRef.current.clear();
       streamingRawTextRef.current.clear();
       for (const detach of activeChatViewDetachersRef.current) detach();
@@ -1095,7 +1091,6 @@ export function AgentChatPage({
         localStorage.removeItem(attachmentContextStoragePrefix);
       } catch {}
       setMessages([]);
-      messagesRef.current = [];
       setPendingAttachments([]);
       pendingAttachmentsRef.current = [];
       bindAttachmentContextToConversation('');
@@ -1146,7 +1141,6 @@ export function AgentChatPage({
           currentMessageCount: messagesRef.current.length,
         })) return;
         const persistedMessages = normalizePersistedMessages(msgData.messages);
-        messagesRef.current = persistedMessages;
         setMessages(persistedMessages);
       } catch {} finally {
         if (conversationTransitionRef.current === transition) {
@@ -1301,9 +1295,7 @@ export function AgentChatPage({
     };
     const resumeForegroundRequest = (requestId: string) => {
       const nextMeta = chatTurnUiMetaRef.current.get(requestId);
-      currentRequestHadToolRef.current = nextMeta?.hadTool || false;
-      currentRequestNeedsEvidenceRef.current = nextMeta?.needsEvidence || false;
-      currentResponseFinalizationRef.current = nextMeta?.finalization || null;
+      currentTurnUiMetaRef.current = nextMeta || { hadTool: false, needsEvidence: false, finalization: null };
       setWorkflowStatus('thinking');
     };
 
@@ -1454,7 +1446,7 @@ export function AgentChatPage({
       const turnMeta = chatTurnUiMetaRef.current.get(requestId);
       if (turnMeta) turnMeta.hadTool = true;
       if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
-        currentRequestHadToolRef.current = true;
+        currentTurnUiMetaRef.current.hadTool = true;
       }
       const customerToolText = sanitizeAgentResponseTextForDisplay(
         data.publicText || describeToolProgress(data.name, phase, isZh),
@@ -1615,13 +1607,13 @@ export function AgentChatPage({
         blocked: data.blocked,
         reason: data.reason,
       };
-      if (turnMeta) turnMeta.finalization = finalization;
-      currentResponseFinalizationRef.current = finalization;
+      currentTurnUiMetaRef.current = turnMeta || currentTurnUiMetaRef.current;
+      currentTurnUiMetaRef.current.finalization = finalization;
       if (!displayable) {
         setWorkflowStatus('error');
         const rejected = describeTurnCompletionProgress(
           isZh,
-          turnMeta?.hadTool ?? currentRequestHadToolRef.current,
+          turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
           true,
           { finalized: false, blocked: true, reason: data.reason },
         );
@@ -1638,8 +1630,8 @@ export function AgentChatPage({
       );
       const completion = describeTurnCompletionProgress(
         isZh,
-        turnMeta?.hadTool ?? currentRequestHadToolRef.current,
-        turnMeta?.needsEvidence ?? currentRequestNeedsEvidenceRef.current,
+        turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
+        turnMeta?.needsEvidence ?? currentTurnUiMetaRef.current.needsEvidence,
         finalization,
       );
       finishChatProgress(completion.text, completion.tone);
@@ -1659,7 +1651,7 @@ export function AgentChatPage({
       const turnMeta = chatTurnUiMetaRef.current.get(String(data.requestId || ''));
       const activity = projectAgentActivity(data.status, {
         executionAccepted: data.executionAccepted,
-        hasToolEvidence: turnMeta?.hadTool ?? currentRequestHadToolRef.current,
+        hasToolEvidence: turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
       });
       if (activity === 'thinking') {
         if (String(data.requestId || '') !== chatRequestLedgerRef.current.foreground) return;
@@ -1677,7 +1669,7 @@ export function AgentChatPage({
       } else if (data.status === 'idle') {
         if (!terminalTracking?.remaining) {
           setIsTyping(false);
-          if (!currentResponseFinalizationRef.current) {
+          if (!currentTurnUiMetaRef.current.finalization) {
             setWorkflowStatus('idle');
             clearChatProgress();
             seenWorkflowToolEvents.current.clear();
@@ -2002,7 +1994,7 @@ export function AgentChatPage({
     if (socket.connected) resumeActiveExecution();
     return () => { disposed = true; socket.off('connect', resumeActiveExecution); };
   }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
-  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentResponseFinalizationRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, messagesRef, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId });
+  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId });
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -2030,9 +2022,7 @@ export function AgentChatPage({
     if (isOpen) return;
     setWorkflowStatus('idle');
     clearChatProgress();
-    currentRequestHadToolRef.current = false;
-    currentRequestNeedsEvidenceRef.current = false;
-    currentResponseFinalizationRef.current = null;
+    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
     seenWorkflowToolEvents.current.clear();
   }, [clearChatProgress, isOpen]);
 
@@ -2099,9 +2089,7 @@ export function AgentChatPage({
       finalization: null,
     });
     if (wasIdle) {
-      currentRequestHadToolRef.current = false;
-      currentRequestNeedsEvidenceRef.current = needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0);
-      currentResponseFinalizationRef.current = null;
+      currentTurnUiMetaRef.current = chatTurnUiMetaRef.current.get(requestId)!;
       clearChatProgress();
       pushChatProgress(
         reusedConversationAttachmentContext
@@ -2116,9 +2104,7 @@ export function AgentChatPage({
 
     setMessages(prev => {
       const base = prev.length >= priorMessages.length ? prev : priorMessages;
-      const next = [...base, userMsg];
-      messagesRef.current = next;
-      return next;
+      return [...base, userMsg];
     });
     setDraftText('');
     setPendingAttachments(prev => {

@@ -4,7 +4,6 @@ import type { ChatMessageWriter } from "./message_writer";
 
 
 import { type ToolSessionOptions } from "../../llm/tool_session";
-import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
 
 import { Socket } from "socket.io";
 
@@ -23,7 +22,7 @@ import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptanc
 
 import { consumePendingConfirmationDurably, formatPendingConfirmationRequest } from "../../tools/pending_confirmation";
 
-import { addMessageIdempotent as addMessageIdempotentUnbound, setConversationActionExecutionStatus } from "../../conversation/manager";
+import { setConversationActionExecutionStatus } from "../../conversation/manager";
 
 import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, toolRecordSucceeded } from "../../cognition/task_execution_ledger";
 

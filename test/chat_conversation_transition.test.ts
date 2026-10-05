@@ -38,6 +38,7 @@ function switchingHarness() {
     setConversationHistorySelectorExpanded: noop, requestAnimationFrame: noop,
   });
   h.deps.detachPreviousExecution = extract(pagePath, 'detachPreviousExecution', h.deps);
+  h.deps.activateTranscript = extract(pagePath, 'activateTranscript', h.deps);
   h.deps.restoreTextConversation = extract(pagePath, 'restoreTextConversation', h.deps);
   h.deps.setIsCreatingConversation = (value: boolean) => { h.deps.isCreatingConversation = value; };
   h.deps.startNewTextConversation = extract(pagePath, 'startNewTextConversation', h.deps);
@@ -46,6 +47,38 @@ function switchingHarness() {
 }
 
 describe('conversation transition send barrier', () => {
+  it('calculates evidence intent once and points the foreground view at the request metadata', async () => {
+    const h = switchingHarness();
+    h.deps.needsVisibleToolEvidence = vi.fn(() => true);
+    h.send();
+    const requestId = h.emitted[0].payload.requestId;
+    const metadata = h.deps.chatTurnUiMetaRef.current.get(requestId);
+    expect(h.deps.needsVisibleToolEvidence).toHaveBeenCalledTimes(1);
+    expect(h.deps.currentTurnUiMetaRef.current).toBe(metadata);
+    metadata.hadTool = true;
+    expect(h.deps.currentTurnUiMetaRef.current.hadTool).toBe(true);
+    const pending = h.restore(); h.finish(); await pending;
+    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, needsEvidence: false, finalization: null });
+    expect(h.deps.chatTurnUiMetaRef.current.size).toBe(0);
+  });
+
+  it('keeps queued metadata separate and resumes the next request by reference', () => {
+    const h = switchingHarness();
+    h.send();
+    const first = h.deps.currentTurnUiMetaRef.current;
+    first.hadTool = true;
+    h.deps.setDraftText('A queued request'); h.send();
+    const nextId = h.emitted[1].payload.requestId;
+    const next = h.deps.chatTurnUiMetaRef.current.get(nextId);
+    expect(next).not.toBe(first);
+    expect(h.deps.currentTurnUiMetaRef.current).toBe(first);
+    expect(next.hadTool).toBe(false);
+    extract(pagePath, 'resumeForegroundRequest', h.deps)(nextId);
+    expect(h.deps.currentTurnUiMetaRef.current).toBe(next);
+    next.finalization = { finalized: true, blocked: true, reason: 'synthetic' };
+    expect(h.deps.currentTurnUiMetaRef.current.finalization).toBe(next.finalization);
+  });
+
   it('control: after switching finishes, send goes to the selected conversation and remains visible', async () => {
     const h = switchingHarness();
     const pending = h.restore(); h.finish(); await pending;

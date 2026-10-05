@@ -14,7 +14,7 @@ import { formatRuntimeCleanupReceipt } from "../../i18n/runtime_cleanup_messages
 
 import { personalityRegistry } from "../../personality";
 
-import { addMessage, addMessageIdempotent as addMessageIdempotentUnbound, getConversationActionStatus, prepareConversationActionExecution, type ForegroundRequestIdentity as ChatForegroundRequestIdentity } from "../../conversation/manager";
+import { addMessage, getConversationActionStatus, prepareConversationActionExecution, type ForegroundRequestIdentity as ChatForegroundRequestIdentity } from "../../conversation/manager";
 
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../conversation/execution_facts";
 
