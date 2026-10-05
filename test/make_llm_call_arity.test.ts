@@ -17,7 +17,7 @@ function expandedArgumentCount(source: ts.SourceFile, call: ts.CallExpression): 
   if (!ts.isSpreadElement(spread) || !ts.isCallExpression(spread.expression)) return -1;
   const helper = spread.expression;
   if (!ts.isIdentifier(helper.expression) || helper.arguments.length < 1 || helper.arguments.length > 2) return -1;
-  if (helper.arguments.length === 2 && (!ts.isStringLiteral(helper.arguments[1]) || !['primary', 'optional'].includes(helper.arguments[1].text))) return -1;
+  if (helper.arguments.length === 2 && (!ts.isStringLiteral(helper.arguments[1]) || !['primary', 'optional', 'all'].includes(helper.arguments[1].text))) return -1;
   const name = helper.expression.text;
   const imported = source.statements.some(statement => {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith('.')) return false;
@@ -72,6 +72,17 @@ describe('production makeLLMCall provider getter contract', () => {
     expect(call.mock.calls[0].slice(0, 3)).toEqual(prefix);
     for (const getter of Object.values(getters)) expect(getter).not.toHaveBeenCalled();
     expect(call.mock.calls[0].slice(3).map(getter => getter())).toEqual(PROVIDER_KEYS);
+  });
+  it('preserves the tool loop fallback for every absent client without creating supplied clients early', () => {
+    const supplied = vi.fn(() => 'ark-client');
+    const args = providerGetterArguments({ getArk: supplied }, 'all');
+    expect(args).toHaveLength(PROVIDER_KEYS.length);
+    expect(supplied).not.toHaveBeenCalled();
+    const arkIndex = PROVIDER_KEYS.indexOf('getArk');
+    expect(args[arkIndex]).toBe(supplied);
+    for (let index = 0; index < args.length; index++) {
+      if (index !== arkIndex) expect(args[index]!()).toBeNull();
+    }
   });
   it('retains explicit primary fallback while leaving absent optional clients absent', () => {
     const args = providerGetterArguments({}, 'primary');

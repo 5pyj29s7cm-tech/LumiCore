@@ -1,3 +1,4 @@
+import { providerGetterArguments } from './provider_getters';
 import { promptBlockMessage, replacePromptBlock } from './prompt_blocks';
 import fs from 'fs';
 import { createModelTurnState, type ModelTurnState } from './model_turn_state';
@@ -1983,20 +1984,20 @@ async function runWithToolsInternal(
     boundary, rawPlannedCalls, normalizedPlannedCalls, invocableCalls, budget: invocationBudget,
     executionLog, messages, config, usageRecords, context: toolExecutionContext, onToolCall,
   });
-  const providerGetters = [
-    getDeepSeek || (() => null),
-    getGemini || (() => null),
-    getOpenAI || (() => null),
-    getAnthropic || (() => null),
-    getQwen || (() => null),
-    getOllama || (() => null),
-    getLmStudio || (() => null),
-    getArk || (() => null),
-    getXiaomi || (() => null),
-    getKimi || (() => null),
-    getGlm || (() => null),
-    getRelay || (() => null),
-  ] as const;
+  const providerGetters = {
+    getDeepSeek,
+    getGemini,
+    getOpenAI,
+    getAnthropic,
+    getQwen,
+    getOllama,
+    getLmStudio,
+    getArk,
+    getXiaomi,
+    getKimi,
+    getGlm,
+    getRelay,
+  };
   invocationBudget.lastTouchedAt = Date.now();
   const explicitProjection = context?.modelToolProjection?.toolNames;
   const toolSessionActive = maxIterations > 0
@@ -2166,13 +2167,13 @@ async function runWithToolsInternal(
             toolDeclarations,
             attemptConfig,
             attempt.onChunk,
-            ...providerGetters,
+            ...providerGetterArguments(providerGetters, 'all'),
           )
         : makeLLMCall(
             modelMessages,
             toolDeclarations,
             attemptConfig,
-            ...providerGetters,
+            ...providerGetterArguments(providerGetters, 'all'),
           );
     };
     let response: NormalizedLLMResponse;
