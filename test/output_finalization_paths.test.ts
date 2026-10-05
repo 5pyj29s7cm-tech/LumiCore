@@ -202,7 +202,7 @@ describe('finalized output paths', () => {
     const sharedTurnStart = voice.indexOf('const result = toolSessionActive', modelCandidateStart);
     const sharedToolStart = voice.indexOf('await runToolSession({', sharedTurnStart);
     const sharedConversationStart = voice.indexOf('await runConversationTurn({', sharedTurnStart);
-    const finalizerStart = voice.indexOf('let finalResponse: ReturnType<typeof finalizeLumiResponse>', sharedTurnStart);
+    const finalizerStart = voice.indexOf('let finalResponse = responseFinalizer.finalize({', sharedTurnStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
     const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
     const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);

@@ -8,22 +8,28 @@ const source = (relativePath: string) => readImplementationSource(path.join(proc
 describe('foreground task and request identity wiring', () => {
   it('prepares a durable Chat task before relay creation and preserves request identity separately', () => {
     const chat = source('server/socket/chat.ts');
-    const fresh = chat.indexOf('const preparesFreshAction = Boolean(');
+    const fresh = chat.indexOf('const preparation = acceptedRuntimeCleanupOffer');
     const prepare = chat.indexOf('prepareConversationActionExecution({', fresh);
     const durable = chat.indexOf('const durableTaskId = actionTaskExecution.state?.taskId;', prepare);
     const relay = chat.indexOf('const desktopRelay = createDesktopRelay({', durable);
     const confirmation = chat.indexOf("source: 'chat_confirmation'", relay);
     const confirmationContext = chat.slice(chat.lastIndexOf('context: {', confirmation), confirmation);
+    const contextStart = chat.indexOf('const toolContext: ToolContext = {', relay);
+    const admittedContext = chat.slice(contextStart, chat.indexOf('\n      };', contextStart));
 
     expect(fresh).toBeGreaterThan(-1);
-    expect(chat.slice(fresh, durable)).toContain('executionPipeline.capabilityPlan.taskLedgerRequired');
+    expect(chat.slice(fresh, durable)).toContain('capabilitySelection.taskLedgerRequired');
     expect(chat.slice(fresh, durable)).toContain('forceTask: true');
     expect(chat.slice(prepare, durable)).toContain("if ('bindingFailure' in actionTaskExecution)");
     expect(relay).toBeGreaterThan(durable);
     expect(chat.slice(relay, relay + 500)).toContain('taskId: durableTaskId');
-    expect(confirmationContext).toContain('taskId: durableTaskId');
-    expect(confirmationContext).toContain('turnId: requestId');
-    expect(confirmationContext).toContain('requestId,');
+    expect(contextStart).toBeGreaterThan(relay);
+    expect(contextStart).toBeLessThan(confirmation);
+    expect(admittedContext).toContain('taskId: durableTaskId');
+    expect(admittedContext).toContain('turnId: requestId');
+    expect(admittedContext).toContain('turnRowId: actionTaskExecution.turnRowId');
+    expect(admittedContext).toContain('requestId,');
+    expect(confirmationContext).toContain('...toolContext');
   });
 
   it('never substitutes a transport request id for a prepared task id in Chat, Task, or Voice', () => {

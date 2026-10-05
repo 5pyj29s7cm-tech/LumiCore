@@ -1196,10 +1196,15 @@ describe('execution guard recovery', () => {
       const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
       expect(recoveryBlock).toContain(cancellationCheck);
       expect(recoveryBlock).not.toMatch(/isAborted:\s*\(\)\s*=>[^\n]*desktopPauseBlocksCurrentTask/u);
-      expect(recoveryBlock).toContain('if (!desktopPauseBlocksCurrentTask(recoveredRecords)) return candidate;');
-      expect(recoveryBlock).toContain('text: pausePresentation.text');
-      expect(recoveryBlock).toContain('blocked: true');
-      expect(recoveryBlock).toContain('reason: pausePresentation.reason');
+      expect(recoveryBlock).toContain('return responseFinalizer.finalize({');
+      expect(recoveryBlock).toContain('toolRecords: recoveredRecords');
+      expect(source).toContain('controlPauseReason: () => desktopRelay.getControlPauseReason()');
     }
+    const finalizer = readImplementationSource(path.join(root, 'server/cognition/turn_response_finalizer.ts'), 'utf8');
+    expect(finalizer).toContain('shouldBlockForDesktopControlPause({');
+    expect(finalizer).toContain('pauseReason: controlPauseReason()');
+    expect(finalizer).toContain('waitingForConfirmation: Boolean(pendingConfirmation())');
+    expect(finalizer).toContain('if (!isDesktopPaused(candidate.toolRecords || [])) return result;');
+    expect(finalizer).toContain('text: pause.text, blocked: true, reason: pause.reason');
   });
 });

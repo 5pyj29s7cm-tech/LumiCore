@@ -61,7 +61,7 @@ describe('cross-channel action turn ownership wiring', () => {
       {
         name: 'chat',
         code: source('server/socket/chat.ts'),
-        prepare: 'const actionTaskExecution = acceptedRuntimeCleanupOffer',
+        prepare: 'const actionTaskExecution = preparation',
         heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
         abort: 'abortController,',
         stop: 'actionLeaseHeartbeat?.stop();',
