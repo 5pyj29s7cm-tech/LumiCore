@@ -213,9 +213,9 @@ describe('finalized output paths', () => {
     expect(sharedConversationStart).toBeGreaterThan(sharedToolStart);
     expect(finalizerStart).toBeGreaterThan(sharedConversationStart);
     expect(finalCommitStart).toBeGreaterThan(finalizerStart);
-    expect(terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably(')).toBeGreaterThan(0);
+    expect(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt(')).toBeGreaterThan(0);
     expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(
-      terminalBoundary.indexOf('recordChatExecutionTerminalEventDurably('),
+      terminalBoundary.indexOf('persistAuthorizedTerminalReceipt('),
     );
     expect(terminalBoundary.indexOf('queueFinalizedSpeech(input.speechText!)')).toBeGreaterThan(
       terminalBoundary.indexOf('publishCommitted:'),
@@ -388,7 +388,8 @@ describe('finalized output paths', () => {
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
     expect(voice.match(/await (?:commitVoiceTerminal|finishVoiceTerminal)\(\{/g)?.length || 0).toBe(11);
     expect(terminalBoundary).toContain('persistVoiceAssistantMessage(');
-    expect(terminalBoundary).toContain('recordChatExecutionTerminalEventDurably(');
+    expect(terminalBoundary).toContain('persistAuthorizedTerminalReceipt(');
+    expect(source('server/socket/chat_terminal_boundary.ts')).toContain('recordChatExecutionTerminalEventDurably(');
     expect(terminalBoundary).toContain('publishCommitted:');
     expect(terminalBoundary).toContain('scheduleVoiceSummary(conversationTurn.conversation.id)');
     expect(terminalBoundary.indexOf('scheduleVoiceSummary(conversationTurn.conversation.id)')).toBeGreaterThan(

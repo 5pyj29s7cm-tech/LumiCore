@@ -8,7 +8,7 @@ describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {
     const exactReplayGuard = chat.indexOf('if (existingExecution)');
     const relation = chat.indexOf('acceptedTurnResolution = resolveUserTurn({', exactReplayGuard);
-    const queueControl = chat.indexOf('const previousSession = chatExecutionQueue.getTail(sessionKey)', relation);
+    const queueControl = chat.indexOf("const previousSession = getCurrentConversationExecution(executionScope, 'tail')", relation);
 
     expect(exactReplayGuard).toBeGreaterThan(-1);
     expect(relation).toBeGreaterThan(exactReplayGuard);
@@ -34,7 +34,7 @@ describe('chat task feedback binding integration', () => {
       'persistChatSidecarCancellationIntent(executionScope, requestId, cancellationTargetRequestId)',
     );
     expect(chat).toContain(
-      'chatExecutionQueue.cancelRequest(sessionKey, cancellationTargetRequestId)',
+      'cancelConversationExecution(executionScope, cancellationTargetRequestId)',
     );
     expect(chat).not.toContain("reason: 'missing_control_target'");
   });

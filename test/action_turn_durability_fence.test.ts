@@ -347,7 +347,7 @@ describe('accepted action-turn durability fence', () => {
   });
 
   it.each([
-    ['chat.ts', 'const chatAdmission = await admitAcceptedUserTurnDurably({', 'chatExecutionQueue.reserve(', 'beginChatExecutionDurably('],
+    ['chat.ts', 'const chatAdmission = await admitAcceptedUserTurnDurably({', 'reserveConversationExecution(', 'beginChatExecutionDurably('],
     ['voice.ts', 'const voiceAdmission = await admitAcceptedUserTurnDurably({', 'resolveAcceptedTurnConfirmation({', 'beginChatExecutionDurably('],
   ])('places the %s source-order fence before confirmation, reservation, replacement and routing', (
     fileName,

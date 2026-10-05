@@ -301,8 +301,11 @@ describe('chat terminal durability boundary', () => {
     }
     const receiptStart = source.indexOf('const persistAuthorizedTerminalReceipt');
     const receipt = source.slice(receiptStart, source.indexOf('const commitDeterministicTerminal', receiptStart));
-    expect(receipt).toContain('recordChatExecutionTerminalEventDurably(');
-    expect(receipt).toContain('refreshTerminal: async () =>');
+    expect(receipt).toContain('persistAuthorizedReceipt({ scope: executionScope');
+    const shared = readFileSync(path.join(process.cwd(), 'server/socket/chat_terminal_boundary.ts'), 'utf8');
+    expect(shared).toContain('recordChatExecutionTerminalEventDurably(');
+    expect(shared).toContain('refreshTerminal: async () =>');
+    expect(shared).toContain('await input.flush()');
     expect(boundary).toContain('recordChatExecutionPersistenceUnknownDurably(');
     expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:notification'/);
     expect(boundary).toMatch(/publishRecordedAgent\(\s*'agent:task_execution_writeback'/);

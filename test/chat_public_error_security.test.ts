@@ -72,6 +72,8 @@ describe('chat public terminal errors', () => {
     expect(terminalBoundary.indexOf('normalizeAgentPayload(terminalEvent, input.payload)'))
       .toBeLessThan(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt('));
     const receipt = chat.slice(chat.indexOf('const persistAuthorizedTerminalReceipt'), chat.indexOf('const commitDeterministicTerminal'));
-    expect(receipt).toContain('recordChatExecutionTerminalEventDurably(executionScope, requestId, event, payload, unknownPayload');
+    expect(receipt).toContain('persistAuthorizedReceipt({ scope: executionScope, requestId, event, payload, unknownPayload');
+    const shared = source('server/socket/chat_terminal_boundary.ts');
+    expect(shared).toContain('recordChatExecutionTerminalEventDurably(input.scope, input.requestId, input.event, input.payload, input.unknownPayload');
   });
 });
