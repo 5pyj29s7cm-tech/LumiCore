@@ -14,7 +14,7 @@ import type { ToolExecutionRecord } from '../../../../tools/types';
 import { verifyWorkTakeoverResult, type WorkTakeoverResultVerification } from '../../../../work_takeover/result_verifier';
 import {
   createWorkTakeoverTask,
-  getWorkTakeoverTask,
+  getScopedWorkTakeoverTask,
   listWorkTakeoverTasks,
   updateWorkTakeoverTask,
   type WorkTakeoverTask,
@@ -96,12 +96,6 @@ function contractForCurrentProduct(entryId: unknown): IndustryWorkflowContract {
   const contract = businessContract(entryId);
   if (!contract) throw new Error('Unknown business workflow: ' + String(entryId || ''));
   return contract;
-}
-
-function scopeMatches(task: WorkTakeoverTask, scope: IndustryWorkflowScope): boolean {
-  return task.userId === scope.userId
-    && task.domain === scope.domain
-    && String(task.orgId || '') === String(scope.orgId || '');
 }
 
 function workflowMetadata(task: WorkTakeoverTask): Record<string, any> {
@@ -899,8 +893,8 @@ export function listIndustryWorkflowTasks(scope: IndustryWorkflowScope, limit = 
 }
 
 export function getIndustryWorkflowTask(scope: IndustryWorkflowScope, taskId: string): WorkTakeoverTask | null {
-  const task = getWorkTakeoverTask(scope.userId, taskId);
-  if (!task || !scopeMatches(task, scope)) return null;
+  const task = getScopedWorkTakeoverTask({ ...scope, orgId: scope.orgId || '' }, taskId);
+  if (!task) return null;
   const metadata = workflowMetadata(task);
   return BUSINESS_LINES.includes(metadata.productLine) && metadata.entryId ? task : null;
 }

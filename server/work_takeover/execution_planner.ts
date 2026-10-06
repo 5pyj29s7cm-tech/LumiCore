@@ -5,6 +5,11 @@ import type { WorkTakeoverArtifact, WorkTakeoverDraft, WorkTakeoverTask } from '
 
 export type WorkTakeoverExecutionMode = 'plan_only' | 'prepare_work' | 'visible_external_work';
 
+export function normalizeWorkTakeoverExecutionMode(value: unknown): WorkTakeoverExecutionMode {
+  const mode = String(value || '');
+  return mode === 'plan_only' || mode === 'visible_external_work' ? mode : 'prepare_work';
+}
+
 export interface WorkTakeoverCapabilitySelection {
   id: string;
   label: string;

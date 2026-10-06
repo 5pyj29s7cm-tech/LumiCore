@@ -55,6 +55,25 @@ describe('work takeover execution writeback', () => {
     await initDatabase();
   });
 
+  it.each(['flow', 'receipt'])('does not write a current turn into another organization through a stale %s pointer', async binding => {
+    const { createWorkTakeoverTask, getWorkTakeoverTask } = await import('../server/work_takeover/tasks');
+    const { persistWorkTakeoverTurnExecution } = await import('../server/work_takeover/execution_writeback');
+    const userId = 'writeback-scope-' + binding;
+    const task = createWorkTakeoverTask({ userId, domain: 'work', orgId: 'other-organization', category: 'general_work',
+      title: 'Foreign scoped task', status: 'in_progress', nextActions: ['Preserve this task'] });
+    const { dispatch, capabilitySelection } = await buildTurn(userId, 'continue the customer task');
+    dispatch.flow.workTakeover.shouldResumeTask = binding === 'flow';
+    dispatch.flow.workTakeover.latestTask = task;
+    const result = persistWorkTakeoverTurnExecution({ userId, userText: 'continue the customer task',
+      assistantText: 'Wrong organization result', source: 'chat', domain: 'work', orgId: 'org-writeback',
+      flow: dispatch.flow, capabilitySelection,
+      toolRecords: [{ name: binding === 'receipt' ? 'work_takeover_task_advance' : 'desktop_ui_snapshot',
+        arguments: binding === 'receipt' ? { id: task.id } : {}, result: '{"ok":true}' }],
+    });
+    expect(result).toMatchObject({ recorded: false, status: 'no_task' });
+    expect(getWorkTakeoverTask(userId, task.id)).toEqual(task);
+  });
+
   it('records the last capability lane, failed tool, and resume hint on the active task', async () => {
     const { createWorkTakeoverTask, getWorkTakeoverTask } = await import('../server/work_takeover/tasks');
     const { persistWorkTakeoverTurnExecution } = await import('../server/work_takeover/execution_writeback');

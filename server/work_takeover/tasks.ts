@@ -322,7 +322,7 @@ export function listWorkTakeoverTasks(filter: {
   let tasks = readStoredTasks();
   if (filter.userId) tasks = tasks.filter(task => task.userId === filter.userId);
   if (filter.domain) tasks = tasks.filter(task => task.domain === filter.domain);
-  if (filter.orgId) tasks = tasks.filter(task => task.orgId === filter.orgId);
+  if (filter.orgId !== undefined) tasks = tasks.filter(task => task.orgId === filter.orgId);
   if (filter.category) tasks = tasks.filter(task => task.category === filter.category);
   if (filter.status === 'active') {
     tasks = tasks.filter(task => ['queued', 'in_progress', 'waiting_confirmation', 'blocked'].includes(task.status));
@@ -335,6 +335,18 @@ export function listWorkTakeoverTasks(filter: {
 
 export function getWorkTakeoverTask(userId: string, taskId: string): WorkTakeoverTask | null {
   return readStoredTasks().find(task => task.id === taskId && task.userId === userId) || null;
+}
+
+/** Select only the task owned by the exact current surface, even for an explicit ID. */
+export function getScopedWorkTakeoverTask(
+  scope: Pick<WorkTakeoverTask, 'userId' | 'domain' | 'orgId'>,
+  taskId?: string,
+): WorkTakeoverTask | null {
+  if (scope.domain === 'work' && !scope.orgId) return null;
+  const task = taskId !== undefined
+    ? getWorkTakeoverTask(scope.userId, taskId)
+    : listWorkTakeoverTasks({ ...scope, status: 'active', limit: 1 })[0] || null;
+  return task && task.domain === scope.domain && task.orgId === scope.orgId ? task : null;
 }
 
 export function updateWorkTakeoverTask(userId: string, taskId: string, input: WorkTakeoverUpdateInput): WorkTakeoverTask | null {

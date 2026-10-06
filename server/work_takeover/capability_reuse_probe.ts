@@ -2,6 +2,7 @@ import {
   executeWorkTakeoverPlanStep,
   getWorkTakeoverExecutionProgress,
   planWorkTakeoverExecution,
+  normalizeWorkTakeoverExecutionMode,
   type WorkTakeoverCapabilitySelection,
   type WorkTakeoverExecutionMode,
   type WorkTakeoverExecutionPlan,
@@ -10,8 +11,7 @@ import {
 import { analyzeWechatIntake, type WechatIntakeResult } from './wechat_intake';
 import {
   createWorkTakeoverTaskFromWechatIntake,
-  getWorkTakeoverTask,
-  listWorkTakeoverTasks,
+  getScopedWorkTakeoverTask,
   updateWorkTakeoverTask,
   recordWorkTakeoverStepExecution,
   type WorkTakeoverStatus,
@@ -111,12 +111,6 @@ function compact(value: unknown): string {
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return Array.from(new Set(values.map(compact).filter(Boolean)));
-}
-
-function executionMode(value: unknown): WorkTakeoverExecutionMode {
-  return ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(value || ''))
-    ? String(value) as WorkTakeoverExecutionMode
-    : 'prepare_work';
 }
 
 function toolNames(tools: ToolDefinition[] = []): string[] {
@@ -354,7 +348,10 @@ async function resolveTask(options: WorkTakeoverCapabilityReuseProbeOptions): Pr
   const userId = options.userId || 'anonymous';
   const domain = options.domain || 'personal';
   const orgId = options.orgId || '';
-  let task = options.id ? getWorkTakeoverTask(userId, String(options.id)) : null;
+  const scope = { userId, domain, orgId };
+  if (domain === 'work' && !orgId) throw new Error('Work takeover requires the current organization scope.');
+  let task = options.id ? getScopedWorkTakeoverTask(scope, String(options.id)) : null;
+  if (options.id && !task) throw new Error('Work takeover task not found in the current scope: ' + options.id);
   let message = compact(options.message);
 
   if (!task && options.fromClipboard === true) {
@@ -381,7 +378,7 @@ async function resolveTask(options: WorkTakeoverCapabilityReuseProbeOptions): Pr
   }
 
   if (!task) {
-    task = listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+    task = getScopedWorkTakeoverTask(scope);
   }
   if (!task) throw new Error('No work takeover task found. Provide id, message, fromClipboard, or create a task first.');
   return { task, createdTask: false };
@@ -391,7 +388,7 @@ export async function runWorkTakeoverCapabilityReuseProbe(
   options: WorkTakeoverCapabilityReuseProbeOptions,
 ): Promise<WorkTakeoverCapabilityReuseProbeResult> {
   const userId = options.userId || 'anonymous';
-  const mode = executionMode(options.mode);
+  const mode = normalizeWorkTakeoverExecutionMode(options.mode);
   const shouldRecord = options.record !== false;
   const runSafeLoop = options.runSafeLoop !== false;
   const stopOnConfirmation = options.stopOnConfirmation !== false;
@@ -399,14 +396,12 @@ export async function runWorkTakeoverCapabilityReuseProbe(
   const { task, intake, createdTask } = await resolveTask(options);
 
   let currentTask = task;
-  let plan = planWorkTakeoverExecution(currentTask, { mode });
-  let progress = getWorkTakeoverExecutionProgress(currentTask, plan);
   const executions: WorkTakeoverStepExecutionResult[] = [];
 
   if (runSafeLoop) {
     for (let i = 0; i < maxSteps; i++) {
-      plan = planWorkTakeoverExecution(currentTask, { mode });
-      progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+      const plan = planWorkTakeoverExecution(currentTask, { mode });
+      const progress = getWorkTakeoverExecutionProgress(currentTask, plan);
       if (progress.complete) break;
       const execution = executeWorkTakeoverPlanStep(currentTask, plan, {
         stepId: progress.nextStep?.id,
@@ -418,8 +413,8 @@ export async function runWorkTakeoverCapabilityReuseProbe(
     }
   }
 
-  plan = planWorkTakeoverExecution(currentTask, { mode });
-  progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+  let plan = planWorkTakeoverExecution(currentTask, { mode });
+  let progress = getWorkTakeoverExecutionProgress(currentTask, plan);
 
   let packet: WorkTakeoverPacket | undefined;
   if (shouldRecord && options.exportPacket !== false) {

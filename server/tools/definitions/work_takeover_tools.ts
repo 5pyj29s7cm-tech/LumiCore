@@ -12,6 +12,7 @@ import {
   createWorkTakeoverTask,
   createWorkTakeoverTaskFromWechatIntake,
   getWorkTakeoverTask,
+  getScopedWorkTakeoverTask,
   isWorkTakeoverTaskCurrent,
   registerWorkTakeoverExecutor,
   listWorkTakeoverTasks,
@@ -19,7 +20,7 @@ import {
   recordWorkTakeoverStepExecution,
   type WorkTakeoverStatus,
 } from '../../work_takeover/tasks';
-import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
+import { executeWorkTakeoverPlanStep, getWorkTakeoverExecutionProgress, planWorkTakeoverExecution, normalizeWorkTakeoverExecutionMode, type WorkTakeoverExecutionMode } from '../../work_takeover/execution_planner';
 import { exportWorkTakeoverPacket } from '../../work_takeover/task_packet';
 import { verifyWorkTakeoverResult, type WorkTakeoverExpectedSurface } from '../../work_takeover/result_verifier';
 import { getTaskIndustryParameters, parseWorkTakeoverIndustryParameters } from '../../work_takeover/industry_parameters';
@@ -39,11 +40,29 @@ import {
 } from '../../../shared/evidence_workflow';
 
 function contextUser(context?: any): { userId: string; domain: string; orgId: string } {
-  return {
-    userId: context?.userId || 'anonymous',
-    domain: context?.domain || 'personal',
-    orgId: context?.orgId || '',
-  };
+  const scope = { userId: context?.userId || 'anonymous', domain: context?.domain || 'personal', orgId: context?.orgId || '' };
+  if (scope.domain === 'work' && !scope.orgId) throw new Error('Work takeover requires the current organization scope.');
+  return scope;
+}
+
+function requireTask(args: Record<string, any>, context?: any, requireId = false) {
+  const scope = contextUser(context);
+  const task = getScopedWorkTakeoverTask(scope, args.id ? String(args.id) : requireId ? '' : undefined);
+  if (!task) throw new Error(args.id ? 'Work takeover task not found in the current scope: ' + args.id : 'No active work takeover task found.');
+  return { ...scope, task };
+}
+
+function createTaskFromMessage(scope: ReturnType<typeof contextUser>, args: Record<string, any>, message: string, source: string) {
+  const intake = analyzeWechatIntake({ message, source,
+    contact: args.contact ? String(args.contact) : undefined,
+    takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
+    userRules: args.userRules ? String(args.userRules) : undefined,
+  });
+  const task = createWorkTakeoverTaskFromWechatIntake(scope.userId, intake, {
+    domain: scope.domain, orgId: scope.orgId, sourceMessage: message,
+    title: args.title ? String(args.title) : undefined,
+  });
+  return { intake, task };
 }
 
 function asStringArray(value: any): string[] | undefined {
@@ -268,19 +287,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const { userId, domain, orgId } = contextUser(context);
       const message = String(args.message || '').trim();
       if (!message) throw new Error('message is required.');
-      const intake = analyzeWechatIntake({
-        message,
-        contact: args.contact ? String(args.contact) : undefined,
-        source: args.source ? String(args.source) : 'wechat',
-        takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
-        userRules: args.userRules ? String(args.userRules) : undefined,
-      });
-      const task = createWorkTakeoverTaskFromWechatIntake(userId, intake, {
-        domain,
-        orgId,
-        sourceMessage: message,
-        title: args.title ? String(args.title) : undefined,
-      });
+      const { intake, task } = createTaskFromMessage({ userId, domain, orgId }, args, message, args.source ? String(args.source) : 'wechat');
       const persistedTask = requirePersistedTask(userId, task);
       return JSON.stringify({
         ok: true,
@@ -317,19 +324,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       const { userId, domain, orgId } = contextUser(context);
       const message = String(await context.desktopRelay('desktop_clipboard_read', {}) || '').trim();
       if (!message) throw new Error('Clipboard is empty. Copy the WeChat/message text first.');
-      const intake = analyzeWechatIntake({
-        message,
-        contact: args.contact ? String(args.contact) : undefined,
-        source: 'clipboard',
-        takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
-        userRules: args.userRules ? String(args.userRules) : undefined,
-      });
-      const task = createWorkTakeoverTaskFromWechatIntake(userId, intake, {
-        domain,
-        orgId,
-        sourceMessage: message,
-        title: args.title ? String(args.title) : undefined,
-      });
+      const { intake, task } = createTaskFromMessage({ userId, domain, orgId }, args, message, 'clipboard');
       const persistedTask = requirePersistedTask(userId, task);
       return JSON.stringify({
         ok: true,
@@ -393,8 +388,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id'],
     },
     handler: async (args, context) => {
-      const task = getWorkTakeoverTask(context?.userId || 'anonymous', String(args.id || ''));
-      if (!task) throw new Error(`Work takeover task not found: ${args.id}`);
+      const { task } = requireTask(args, context, true);
       return JSON.stringify({ task }, null, 2);
     },
     permission: 'user',
@@ -428,7 +422,8 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id'],
     },
     handler: async (args, context) => {
-      const task = updateWorkTakeoverTask(context?.userId || 'anonymous', String(args.id || ''), {
+      const { userId, task: target } = requireTask(args, context, true);
+      const task = updateWorkTakeoverTask(userId, target.id, {
         status: args.status as WorkTakeoverStatus | undefined,
         title: args.title,
         summary: args.summary,
@@ -447,7 +442,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         note: args.note,
       } as any);
       if (!task) throw new Error(`Work takeover task not found: ${args.id}`);
-      const persistedTask = requirePersistedTask(context?.userId || 'anonymous', task);
+      const persistedTask = requirePersistedTask(userId, task);
       return JSON.stringify({ ok: true, status: 'updated', persisted: true, task: persistedTask, note: 'Work takeover task updated.' }, null, 2);
     },
     permission: 'user',
@@ -467,9 +462,10 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const result = continueWorkTakeoverTask(context?.userId || 'anonymous', args.id ? String(args.id) : undefined);
+      const { userId, task: target } = requireTask(args, context);
+      const result = continueWorkTakeoverTask(userId, target.id);
       if (!result) throw new Error('No active work takeover task found.');
-      const task = requirePersistedTask(context?.userId || 'anonymous', result.task);
+      const task = requirePersistedTask(userId, result.task);
       return JSON.stringify({ ok: true, status: 'continued', persisted: true, ...result, task }, null, 2);
     },
     permission: 'user',
@@ -492,15 +488,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, task } = requireTask(args, context);
 
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const plan = planWorkTakeoverExecution(task, { mode });
       const shouldRecord = args.record !== false;
       let updatedTask = task;
@@ -564,15 +554,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, task } = requireTask(args, context);
 
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const plan = planWorkTakeoverExecution(task, { mode });
       const execution = executeWorkTakeoverPlanStep(task, plan, {
         stepId: args.stepId ? String(args.stepId) : undefined,
@@ -630,15 +614,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, task } = requireTask(args, context);
 
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const plan = planWorkTakeoverExecution(task, { mode });
       const progress = getWorkTakeoverExecutionProgress(task, plan);
       const shouldRecord = args.record !== false;
@@ -728,15 +706,9 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, task } = requireTask(args, context);
 
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const plan = planWorkTakeoverExecution(task, { mode });
       const packet = exportWorkTakeoverPacket(task, {
         outputDirectory: args.outputDirectory ? String(args.outputDirectory) : undefined,
@@ -824,11 +796,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: [],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, task } = requireTask(args, context);
 
       let activeWindowRaw = '';
       let runningProcessesRaw = '';
@@ -952,16 +920,12 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
     },
     handler: async (args, context) => {
       const { userId, domain, orgId } = contextUser(context);
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const shouldRecord = args.record !== false;
       const stopOnConfirmation = args.stopOnConfirmation !== false;
       const maxSteps = Math.max(1, Math.min(Number(args.maxSteps) || 3, 6));
 
-      let task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : null;
+      let task = args.id ? requireTask(args, context).task : null;
       let intake: ReturnType<typeof analyzeWechatIntake> | undefined;
       let createdTask = false;
       let message = compact(args.message);
@@ -973,36 +937,22 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       }
 
       if (!task && message) {
-        intake = analyzeWechatIntake({
-          message,
-          contact: args.contact ? String(args.contact) : undefined,
-          source: args.source ? String(args.source) : (args.fromClipboard ? 'clipboard' : 'manual'),
-          takeoverMode: args.takeoverMode ? String(args.takeoverMode) as any : 'auto',
-          userRules: args.userRules ? String(args.userRules) : undefined,
-        });
-        task = createWorkTakeoverTaskFromWechatIntake(userId, intake, {
-          domain,
-          orgId,
-          sourceMessage: message,
-          title: args.title ? String(args.title) : undefined,
-        });
+        ({ intake, task } = createTaskFromMessage({ userId, domain, orgId }, args, message,
+          args.source ? String(args.source) : (args.fromClipboard ? 'clipboard' : 'manual')));
         createdTask = true;
       }
 
       if (!task) {
-        task = listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
+        task = getScopedWorkTakeoverTask({ userId, domain, orgId });
       }
       if (!task) throw new Error('No work takeover task found. Provide id, message, fromClipboard, or create a task first.');
 
       const executions: any[] = [];
       const stopReasons: string[] = [];
       let currentTask: any = task;
-      let plan = planWorkTakeoverExecution(currentTask, { mode });
-      let progress = getWorkTakeoverExecutionProgress(currentTask, plan);
-
       for (let i = 0; i < maxSteps; i++) {
-        plan = planWorkTakeoverExecution(currentTask, { mode });
-        progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+        const plan = planWorkTakeoverExecution(currentTask, { mode });
+        const progress = getWorkTakeoverExecutionProgress(currentTask, plan);
         if (progress.complete) {
           stopReasons.push('safe_steps_complete');
           break;
@@ -1027,8 +977,8 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         }
       }
 
-      plan = planWorkTakeoverExecution(currentTask, { mode });
-      progress = getWorkTakeoverExecutionProgress(currentTask, plan);
+      const plan = planWorkTakeoverExecution(currentTask, { mode });
+      const progress = getWorkTakeoverExecutionProgress(currentTask, plan);
       let packet: ReturnType<typeof exportWorkTakeoverPacket> | undefined;
       if (args.exportPacket !== false) {
         packet = exportWorkTakeoverPacket(currentTask, {
@@ -1199,11 +1149,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['toolName'],
     },
     handler: async (args, context) => {
-      const { userId, domain, orgId } = contextUser(context);
-      const task = args.id
-        ? getWorkTakeoverTask(userId, String(args.id))
-        : listWorkTakeoverTasks({ userId, domain, orgId, status: 'active', limit: 1 })[0] || null;
-      if (!task) throw new Error(args.id ? `Work takeover task not found: ${args.id}` : 'No active work takeover task found.');
+      const { userId, domain, orgId, task } = requireTask(args, context);
 
       const toolName = String(args.toolName || '').trim();
       if (!toolName) throw new Error('toolName is required.');
@@ -1211,9 +1157,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
         throw new Error('Use work_takeover_task_* tools directly; the suggested-tool bridge does not run task-state tools.');
       }
 
-      const mode = ['plan_only', 'prepare_work', 'visible_external_work'].includes(String(args.mode || ''))
-        ? String(args.mode) as WorkTakeoverExecutionMode
-        : 'prepare_work';
+      const mode = normalizeWorkTakeoverExecutionMode(args.mode);
       const plan = planWorkTakeoverExecution(task, { mode });
       const step = args.stepId
         ? plan.steps.find(item => item.id === String(args.stepId))
@@ -1224,9 +1168,6 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       }
 
       const toolArgs = args.toolArgs && typeof args.toolArgs === 'object' ? args.toolArgs : {};
-      if (task.domain !== domain || (domain === 'work' && (!orgId || task.orgId !== orgId))) {
-        throw new Error('The work takeover task was not found in the current scope.');
-      }
       const controller = new AbortController();
       const stop = () => controller.abort(new DOMException('Work takeover execution was cancelled or changed.', 'AbortError'));
       const unregister = registerWorkTakeoverExecutor(task, stop);
@@ -1419,10 +1360,10 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id', 'definitionId', 'steps'],
     },
     handler: async (args, context) => {
-      const { userId } = contextUser(context);
+      const { userId, task } = requireTask(args, context, true);
       const result = startTaskEvidenceWorkflow({
         userId,
-        taskId: String(args.id || ''),
+        taskId: task.id,
         definitionId: String(args.definitionId || ''),
         blueprints: evidenceBlueprints(args.steps),
         stagesInScope: asStringArray(args.stagesInScope),
@@ -1462,10 +1403,10 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id', 'stepId', 'status'],
     },
     handler: async (args, context) => {
-      const { userId } = contextUser(context);
+      const { userId, task } = requireTask(args, context, true);
       const result = transitionTaskEvidenceWorkflowStep({
         userId,
-        taskId: String(args.id || ''),
+        taskId: task.id,
         stepId: String(args.stepId || ''),
         status: String(args.status || '') as EvidenceWorkflowStepStatus,
         receiptIds: asStringArray(args.receiptIds),
@@ -1503,9 +1444,7 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id'],
     },
     handler: async (args, context) => {
-      const { userId } = contextUser(context);
-      const task = getWorkTakeoverTask(userId, String(args.id || ''));
-      if (!task) throw new Error(`Work takeover task not found: ${args.id}`);
+      const { userId, task } = requireTask(args, context, true);
       const workflow = getAuditedTaskEvidenceWorkflow(task);
       if (!workflow) throw new Error(`Task ${task.id} has no evidence workflow.`);
       const nextStep = getNextEvidenceWorkflowStep(workflow);
@@ -1548,10 +1487,10 @@ export function registerWorkTakeoverTools(registry: ToolRegistry): void {
       required: ['id', 'stages'],
     },
     handler: async (args, context) => {
-      const { userId } = contextUser(context);
+      const { userId, task } = requireTask(args, context, true);
       const result = promoteTaskEvidenceWorkflow({
         userId,
-        taskId: String(args.id || ''),
+        taskId: task.id,
         stages: asStringArray(args.stages) || [],
       });
       return JSON.stringify({

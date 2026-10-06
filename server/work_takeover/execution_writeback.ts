@@ -3,8 +3,7 @@ import type { LumiTurnFlow } from '../cognition/turn_flow';
 import type { ToolExecutionRecord } from '../tools/types';
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import {
-  getWorkTakeoverTask,
-  listWorkTakeoverTasks,
+  getScopedWorkTakeoverTask,
   updateWorkTakeoverTask,
   type WorkTakeoverTask,
   type WorkTakeoverStatus,
@@ -175,34 +174,15 @@ function isPureTaskQuery(input: WorkTakeoverTurnExecutionWritebackInput): boolea
 }
 
 function resolveTask(input: WorkTakeoverTurnExecutionWritebackInput): WorkTakeoverTask | null {
-  // Merely having an unfinished task in the user's task center does not bind
-  // every later tool action to it. Only a direct continuation may use the
-  // flow pointer; task-id-bearing tool receipts remain an explicit binding.
-  const fromFlow = input.flow.workTakeover.shouldResumeTask
-    ? input.flow.workTakeover.latestTask?.id
-    : undefined;
-  if (fromFlow) {
-    const task = getWorkTakeoverTask(input.userId, fromFlow);
+  // Unrelated tool work never binds to whichever task happens to be active.
+  const scope = { userId: input.userId, domain: input.domain || 'personal', orgId: input.orgId || '' };
+  const fromFlow = input.flow.workTakeover.shouldResumeTask ? input.flow.workTakeover.latestTask?.id : undefined;
+  for (const taskId of [fromFlow, findTaskIdFromTools(input.toolRecords || [])]) {
+    if (!taskId) continue;
+    const task = getScopedWorkTakeoverTask(scope, taskId);
     if (task) return task;
   }
-
-  const fromTools = findTaskIdFromTools(input.toolRecords || []);
-  if (fromTools) {
-    const task = getWorkTakeoverTask(input.userId, fromTools);
-    if (task) return task;
-  }
-
-  if (input.flow.channel === 'task') {
-    return listWorkTakeoverTasks({
-      userId: input.userId,
-      domain: input.domain,
-      orgId: input.orgId,
-      status: 'active',
-      limit: 1,
-    })[0] || null;
-  }
-
-  return null;
+  return input.flow.channel === 'task' ? getScopedWorkTakeoverTask(scope) : null;
 }
 
 function summarizeToolFailure(record: ToolExecutionRecord): {

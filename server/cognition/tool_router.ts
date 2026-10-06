@@ -1,8 +1,11 @@
 import type { TurnAnalysis } from './turn_analysis';
+import { createToolRouteSelection } from './tool_route_selection';
+import { resolveExactToolScope } from './exact_tool_scope';
 import { businessToolHints } from '../regions/packs/cn/business_routing';
 import { ToolPolicy } from '../personality/types';
 import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
-import { mediaCreationInstruction, isAvatarAuthoringRequest } from './media_creation_intent';
+import { isAvatarAuthoringRequest } from './media_creation_intent';
+import { analyzeMediaToolRouting } from './media_tool_routing';
 import { classifySkillAuthoringIntent, skillAuthoringTools, executionBeforeWorkflowSave } from '../skills/authoring_intent';
 import {
   ToolRegistry,
@@ -373,9 +376,6 @@ export const CAD_GEOMETRY_EXTRACTION_ALLOWED_TOOLS = [
   'desktop_capture_screen',
   'ocr_screen',
 ] as const;
-
-const CAD_GEOMETRY_EXTRACTION_FORBIDDEN_TOOL_RE =
-  /^(?:mcp_filesystem_.*|run_command|desktop_run_command|code_execution|python_exec|powershell|shell_exec|terminal_exec|cad_generate_dxf|cad_prepare_autocad_operations|mcp_cad-drafting_(?:.*autocad.*|.*renovation.*)|write_file|create_(?:docx|pdf|ppt|pptx))$/i;
 
 function isCadGeometryExtractionAllowedTool(name: string): boolean {
   return (CAD_GEOMETRY_EXTRACTION_ALLOWED_TOOLS as readonly string[]).includes(name);
@@ -885,9 +885,8 @@ export function routeToolsForTurn(
   const routingManifest: CapabilityRoutingProjection[] = options?.capabilityManifest?.length
     ? options.capabilityManifest
     : declarations.map(projectToolDeclarationForRouting);
-  const selected = new Set<string>();
-  const categories: string[] = [];
-  const reasons: string[] = [];
+  const selection = createToolRouteSelection(availableNames);
+  const { selected, categories, reasons, forbiddenToolNames } = selection;
   if (restoredTrustedTaskRoute) {
     reasons.push('the exact server-bound durable task restored its original capability family for this terse continuation');
   }
@@ -953,75 +952,13 @@ export function routeToolsForTurn(
   const desktopObservationToolNames = currentAppEdit
     ? []
     : strictDesktopObservationToolNames(instructionText, actionContract.kind);
-  const desktopObservationOnly = desktopObservationToolNames.length > 0;
   const desktopLaunchRequest =
     actionContract.kind === 'desktop_operation'
     && Boolean(extractDesktopLaunchTarget(text, options?.analysis))
     && !documentOpenAndReview
     && !isDirectAutocadOperationsPlayback(instructionText);
-  const extensionRegistryOnly = actionContract.kind === 'extension_registry';
-  const forbiddenToolNames = new Set<string>();
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const structuredMediaCategory = /^(?:生成|创建|制作)图片\s*(?:\r?\n|$)/u.test(instructionText)
-    || /^(?:generate|create|make) (?:an? |some )?images?\s*(?:\r?\n|$)/iu.test(instructionText)
-    ? 'image_generation'
-    : /^edit image\s*(?:\r?\n|$)/iu.test(instructionText)
-      ? 'image_editing'
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    : /^(?:生成|创建|制作)视频\s*(?:\r?\n|$)/u.test(instructionText)
-      || /^(?:generate|create|make) (?:a )?video\s*(?:\r?\n|$)/iu.test(instructionText)
-      ? 'video_generation'
-      : null;
-  // i18n-allow: Reviewed Chinese image-editing input recognition; not user-visible copy.
-  const generativeImageEditRequest = structuredMediaCategory === 'image_editing' || (
-    /^(?:请)?(?:帮我)?(?:编辑|修改|重做|重绘|替换|变更).{0,48}(?:图片|图像|照片|海报|主图)/u.test(instructionText)
-    || /^(?:please\s+)?(?:edit|modify|rework|redraw|replace|change)\b.{0,64}\b(?:image|picture|photo|poster|artwork)\b/iu.test(instructionText)
-  );
-  const mediaGenerationExplicitlyNegated = !structuredMediaCategory && !mediaCreationInstruction(instructionText) && (
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /不再生图|(?:不要|别|无需|不用|不需要|禁止)[\s\S]{0,18}(?:实际)?(?:生成|创建|制作|产出|做)[\s\S]{0,28}(?:图片|图像|插画|海报|视频|短视频|短片|动画|成片)/u.test(instructionText)
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    || /(?:不要|别|无需|不用|不需要)[\s\S]{0,8}(?:实际)?(?:生成|创建|制作|产出)/u.test(instructionText)
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    || /(?:不是|并非)(?:想|要)?[\s\S]{0,8}(?:生成|创建|制作|产出)/u.test(instructionText)
-    || /\b(?:do\s+not|don't|never)\b[\s\S]{0,28}\b(?:generate|create|make|produce|render)\b[\s\S]{0,36}\b(?:image|picture|poster|video|clip|animation|movie|short\s+film|reel)\b/i.test(instructionText)
-    || /\bwithout\b[\s\S]{0,20}\b(?:generating|creating|making|producing|rendering)\b[\s\S]{0,36}\b(?:image|picture|poster|video|clip|animation|movie|short\s+film|reel)\b/i.test(instructionText)
-  );
-  const mediaGenerationMetaQuestion = !structuredMediaCategory && (
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /^(?:为什么|怎么|如何|是否|能否|图片生成|图像生成|视频生成|短视频生成)[\s\S]{0,80}(?:图片生成|图像生成|视频生成|短视频生成|模型|配置|失败|可用|费用|价格|多少钱|前端|容器|怎么|如何|为什么|是否|能否|吗|？|\?)/u.test(instructionText)
-    || /^\s*(?:why|how|what|which|is|are|can|could|does|did)\b[\s\S]{0,100}\b(?:image|video)\s+generation\b/i.test(instructionText)
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    || /^(?:介绍|说明|解释|讲讲|告诉我)[\s\S]{0,60}(?:图片|图像|视频|短视频)生成(?:功能|能力|模型)?/u.test(instructionText)
-    || /^\s*(?:image|video)\s+generation\b[\s\S]{0,100}\b(?:model|configure|configuration|fail|available|cost|price|pricing|frontend|container|why|how)\b/i.test(instructionText)
-    || /^\s*(?:explain|describe|introduce|tell\s+me\s+about)\b[\s\S]{0,80}\b(?:image|video)\s+generation\b/i.test(instructionText)
-  );
-  const existingMediaArtifactAction = !structuredMediaCategory && !generativeImageEditRequest && (
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /^(?:请|麻烦)?(?:帮我)?(?:查看|打开|删除|分析|检查|编辑|修改|发布|上传|发送|保存|下载|分享|播放)[\s\S]{0,32}(?:刚|已|已经|先前|之前)?(?:生成|创建|制作|产出)(?:的)?[\s\S]{0,20}(?:图|图片|图像|视频|短视频|短片|动画|成片)/u.test(instructionText)
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    || /^(?:请|麻烦)?(?:帮我)?(?:把|将)[\s\S]{0,20}(?:刚|已|已经|先前|之前)?(?:生成|创建|制作|产出)[\s\S]{0,20}(?:图片|图像|视频|短视频|短片|动画|成片)[\s\S]{0,24}(?:查看|打开|删除|分析|检查|编辑|修改|发布|上传|发送|保存|下载|分享|播放)/u.test(instructionText)
-    || /^\s*(?:please\s+)?(?:view|open|delete|analy[sz]e|inspect|check|edit|modify|publish|upload|send|save|download|share|play)\b[\s\S]{0,48}\b(?:generated|created|rendered)\b[\s\S]{0,24}\b(?:image|picture|video|clip|animation|movie)\b/i.test(instructionText)
-  );
-  // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-  const requestsCombinedVideoArtifact = /(?:脚本[\s\S]{0,40}(?:再|然后|并|以及|同时)[\s\S]{0,30}(?:生成|创建|制作|产出)[\s\S]{0,24}(?:视频|短视频|成片)|脚本[\s\S]{0,24}(?:和|并|以及|同时)[\s\S]{0,16}(?:视频|短视频|成片))/u.test(instructionText)
-    || /\b(?:script|copy|outline|prompt)\b[\s\S]{0,48}\b(?:and\s+then|then|and)\b[\s\S]{0,32}\b(?:generate|create|make|produce|render)\b[\s\S]{0,24}\b(?:video|clip|movie)\b/i.test(instructionText);
-  const mediaTextDeliverableOnly = !structuredMediaCategory && !requestsCombinedVideoArtifact && (
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    /^(?:请|麻烦)?(?:帮我)?(?:生成|创建|制作|编写|写)[\s\S]{0,40}(?:图片|图像|海报|封面|视频|短视频|动画)[\s\S]{0,16}(?:提示词|文案|脚本|大纲|方案|字幕|标题|文字|旁白|分镜)/u.test(instructionText)
-    || /^\s*(?:please\s+)?(?:generate|create|make|produce|write)\b[\s\S]{0,52}\b(?:copy|brief|prompt|script|outline|plan|subtitles?|titles?|caption|text|narration|storyboard)\b[\s\S]{0,52}\b(?:image|picture|poster|cover|thumbnail|video|clip|movie|animation|short\s+film|reel)\b/i.test(instructionText)
-    || /^\s*(?:please\s+)?(?:generate|create|make|produce|write)\b[\s\S]{0,52}\b(?:image|picture|poster|cover|thumbnail|video|clip|movie|animation|short\s+film|reel)\b[\s\S]{0,32}\b(?:copy|brief|prompt|script|outline|plan|subtitles?|titles?|caption|text|narration|storyboard)\b/i.test(instructionText)
-  );
-  const mediaCodeOrOfficeDeliverable = !structuredMediaCategory
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    && /(?:CSS|HTML|JavaScript|TypeScript|React|Vue|PPT|PowerPoint|组件|网页|页面|幻灯片|演示文稿|播放器|画廊|上传组件)/iu.test(instructionText)
-    // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
-    && /(?:图片|图像|视频|动画|image|video|animation|gallery|player)/iu.test(instructionText);
-  const mediaGenerationShouldBeForbidden = mediaGenerationExplicitlyNegated
-    || mediaGenerationMetaQuestion
-    || existingMediaArtifactAction
-    || mediaTextDeliverableOnly
-    || mediaCodeOrOfficeDeliverable;
+  const { structuredMediaCategory, creationInstruction, forbidGeneration: mediaGenerationShouldBeForbidden }
+    = analyzeMediaToolRouting(instructionText);
 
   if (!currentAppEdit) {
     for (const name of BASELINE_TOOLS) addIfAvailable(selected, available, name);
@@ -1036,8 +973,8 @@ export function routeToolsForTurn(
     const matchesTrustedCadContinuation = route.category === 'cad_design'
       && trustedCadContinuation;
     if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation
-      && !(route.category === 'image_generation' && mediaCreationInstruction(instructionText)
-        && routeMatches(route, mediaCreationInstruction(instructionText)!))) continue;
+      && !(route.category === 'image_generation' && creationInstruction
+        && routeMatches(route, creationInstruction))) continue;
     if (
       explicitArtifactCreation
       && ['messaging', 'client_surface', 'desktop_launch'].includes(route.category)
@@ -1119,54 +1056,19 @@ export function routeToolsForTurn(
     for (const name of continuationEvidenceTools) addIfAvailable(selected, available, name);
   }
 
-  if (actionContract.kind === 'messaging_read') {
+  const readOnlyMessaging = actionContract.kind === 'messaging_read';
+  const openingMessagingSurface = actionContract.kind === 'desktop_operation'
+    && categories.includes('messaging') && hasNamedMessagingSurface(instructionText)
+    && !isDirectMessagingSend(instructionText);
+  if (readOnlyMessaging || openingMessagingSurface) {
     for (const entry of routingManifest) {
       const externalCommit = entry.operation === 'communicate'
         || /(?:send|reply|post|publish|upload|submit|message_file)/i.test(entry.toolName);
-      if (entry.lane === 'messaging' && externalCommit) {
-        selected.delete(entry.toolName);
-        forbiddenToolNames.add(entry.toolName);
-      }
+      if (entry.lane === 'messaging' && externalCommit) forbiddenToolNames.add(entry.toolName);
     }
-    reasons.push('message reading hard-forbids every messaging capability with external side effects');
-  }
-
-  if (
-    actionContract.kind === 'desktop_operation'
-    && categories.includes('messaging')
-    && hasNamedMessagingSurface(instructionText)
-    && !isDirectMessagingSend(instructionText)
-  ) {
-    for (const entry of routingManifest) {
-      const externalCommit = entry.operation === 'communicate'
-        || /(?:send|reply|post|publish|upload|submit|message_file)/i.test(entry.toolName);
-      if (entry.lane === 'messaging' && externalCommit) {
-        selected.delete(entry.toolName);
-        forbiddenToolNames.add(entry.toolName);
-      }
-    }
-    reasons.push('opening a messaging surface without send intent hard-forbids messaging side effects');
-  }
-
-  if (readOnlyKnowledgeInspection && !currentAppEdit) {
-    selected.clear();
-    addIfAvailable(selected, available, 'knowledge_file_stats');
-    addIfAvailable(selected, available, 'knowledge_coverage_report');
-    categories.splice(0, categories.length, 'knowledge');
-    reasons.push('read-only knowledge inventory is isolated from client, system, document, and mutation routes');
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
-  if (confirmationOnlyExternalCommit && !currentAppEdit) {
-    selected.clear();
-    addIfAvailable(selected, available, 'wechat_send_message');
-    categories.splice(0, categories.length, 'messaging');
-    reasons.push('confirmation-only external messaging exposes only the exact send adapter, which must stop at the confirmation gate');
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
+    reasons.push(readOnlyMessaging
+      ? 'message reading hard-forbids every messaging capability with external side effects'
+      : 'opening a messaging surface without send intent hard-forbids messaging side effects');
   }
 
   if (currentAppEdit) {
@@ -1217,109 +1119,6 @@ export function routeToolsForTurn(
     }
   }
 
-  if (currentAuthoringDocumentInspection && !currentAppEdit) {
-    selected.clear();
-    addIfAvailable(selected, available, 'desktop_running_processes');
-    addIfAvailable(selected, available, 'desktop_active_window');
-    // Discovery/read tools are visible up front so one model turn can finish
-    // after a unique native window observation. The shared target-anchor
-    // preflight still blocks every file call until that exact observation is
-    // present, and then binds reads to the one bounded search result.
-    for (const name of [
-      'desktop_list_files',
-      'search_files',
-      'desktop_path_info',
-      'read_file',
-      'extract_document_text',
-      'read_pdf',
-      'read_docx',
-      'read_xlsx',
-    ]) addIfAvailable(selected, available, name);
-    categories.splice(0, categories.length, 'current_document_inspection');
-    reasons.splice(
-      0,
-      reasons.length,
-      trustedCurrentDocumentReadAnchor
-        ? 'a server-owned authoring-window anchor permits bounded discovery and read-only document extraction'
-        : 'current-document inspection first observes native background WPS/Office document candidates; shared preflight permits bounded discovery and reading only after one exact candidate is anchored',
-    );
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
-  if (documentOpenAndReview && !currentAppEdit) {
-    selected.clear();
-    for (const name of [
-      'desktop_list_files',
-      'search_files',
-      'desktop_path_info',
-      'desktop_open',
-      'desktop_active_window',
-      'read_pdf',
-      'read_docx',
-      'read_xlsx',
-      'extract_document_text',
-      'ocr_screen',
-      'ocr_region',
-    ]) addIfAvailable(selected, available, name);
-    categories.splice(0, categories.length, 'document_open_and_review');
-    reasons.splice(0, reasons.length, 'document presentation requires exact file discovery, opening, content extraction, and visible-target verification');
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
-  if (desktopLaunchRequest && !currentAppEdit) {
-    selected.clear();
-    // A compound "open X, then verify the active window" prompt can make the
-    // contract's observation branch prefer only desktop_active_window. Keep
-    // the exact launch actuator as the core step and the active-window read as
-    // its verifier; neither step is optional.
-    for (const name of actionContract.preferredTools) addIfAvailable(selected, available, name);
-    if (!selected.has('browser_open_task')) addIfAvailable(selected, available, 'desktop_open');
-    addIfAvailable(selected, available, 'desktop_active_window');
-    categories.splice(0, categories.length, 'desktop_launch');
-    reasons.splice(
-      0,
-      reasons.length,
-      'a launch-only request uses the exact target resolver and verification tools without unrelated production capabilities',
-    );
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
-  if (runtimeWorkIntent !== 'none' || actionContract.kind === 'task_control') {
-    const exactTool = runtimeWorkIntent === 'cancel'
-      ? 'runtime_work_cancel'
-      : 'runtime_work_status';
-    selected.clear();
-    addIfAvailable(selected, available, exactTool);
-    categories.splice(0, categories.length, 'task_control');
-    reasons.splice(
-      0,
-      reasons.length,
-      'runtime work status and cancellation use one exact unified-ledger tool without shell, process-list, or database fallbacks',
-    );
-    manifestPriorities.unshift(exactTool);
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
-  if (extensionRegistryOnly) {
-    selected.clear();
-    for (const name of [...actionContract.preferredTools, ...actionContract.verificationTools]) {
-      addIfAvailable(selected, available, name);
-    }
-    categories.splice(0, categories.length, 'extension_registry');
-    reasons.splice(0, reasons.length, 'signed extension and Provider operations use only the transactional registry and its persistent receipts');
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
-  }
-
   if (categories.length === 0 && instructionText) {
     const ranked = declarations
       .map(declaration => ({ name: declaration.function.name, score: scoreDeclaration(instructionText, declaration) }))
@@ -1341,11 +1140,9 @@ export function routeToolsForTurn(
     reasons.push('existing AutoCAD operations are played only through MCP/COM');
   }
 
-  if (!currentAppEdit && requestsBlankAutoCadDocument(instructionText)) {
-    selected.clear();
-    addIfAvailable(selected, available, 'mcp_cad-drafting_autocad_new_document');
-    reasons.push('blank AutoCAD document requests use the dedicated COM document tool and never synthesize geometry');
-  } else if (!currentAppEdit && requiresVisibleAutoCadExecution(instructionText)) {
+  const blankAutoCadDocument = requestsBlankAutoCadDocument(instructionText);
+  const visibleAutoCadExecution = requiresVisibleAutoCadExecution(instructionText);
+  if (!currentAppEdit && !blankAutoCadDocument && visibleAutoCadExecution) {
     if (!requestsExplicitCadFileExport(instructionText)) selected.delete('cad_generate_dxf');
     selected.delete('mcp_cad-drafting_cad_renovation_folder_workflow');
     addIfAvailable(selected, available, 'desktop_list_apps');
@@ -1368,50 +1165,6 @@ export function routeToolsForTurn(
     addIfAvailable(selected, available, 'floorplan_extract_geometry');
     addIfAvailable(selected, available, 'ocr_image_file');
     reasons.push('local desktop CAD images must use the built-in desktop discovery and image OCR/geometry path; project-scoped MCP filesystem and shell/base64 fallbacks are excluded');
-    if (requiresVisibleAutoCadExecution(instructionText) && available.has('cad_draw_floorplan_in_autocad')) {
-      selected.clear();
-      addIfAvailable(selected, available, 'cad_draw_floorplan_in_autocad');
-      reasons.push('one composite CAD skill owns discovery, calibration, verified geometry, AutoCAD playback, resume, and acceptance for local floor-plan drawing');
-    }
-  }
-
-  if (!currentAppEdit && cadGeometryExtractionOnly) {
-    selected.clear();
-    for (const name of availableNames) {
-      if (isCadGeometryExtractionAllowedTool(name)) {
-        selected.add(name);
-      }
-    }
-    for (const name of availableNames) {
-      if (CAD_GEOMETRY_EXTRACTION_FORBIDDEN_TOOL_RE.test(name)) {
-        forbiddenToolNames.add(name);
-      }
-    }
-    reasons.push('geometry-extraction-only requests use a hard read/observe allowlist and cannot generate files or operate AutoCAD');
-  }
-
-  if (desktopObservationOnly) {
-    selected.clear();
-    for (const name of desktopObservationToolNames) {
-      if (name === 'desktop_active_window') {
-        if (available.has('desktop_active_window')) {
-          selected.add('desktop_active_window');
-        } else {
-          addIfAvailable(selected, available, 'get_active_window_info');
-        }
-        continue;
-      }
-      addIfAvailable(selected, available, name);
-    }
-    categories.splice(0, categories.length, 'desktop_observation');
-    reasons.splice(
-      0,
-      reasons.length,
-      'pure desktop observation uses only the exact read-only window and desktop-directory tools requested',
-    );
-    for (const name of availableNames) {
-      if (!selected.has(name)) forbiddenToolNames.add(name);
-    }
   }
 
   if (compoundModeAction) {
@@ -1444,14 +1197,6 @@ export function routeToolsForTurn(
   }
 
   const avatarAuthoring = !currentAppEdit && isAvatarAuthoringRequest(instructionText);
-  if (avatarAuthoring) {
-    selected.clear();
-    for (const name of ['memory_avatar_read', 'memory_avatar_create', 'memory_avatar_import_image', 'memory_avatar_configure_animation', 'generate_image', 'ai_edit_image', 'get_image_generation_status', 'client_action']) {
-      if (!forbiddenToolNames.has(name)) addIfAvailable(selected, available, name);
-    }
-    categories.splice(0, categories.length, 'memory_avatar');
-    reasons.push('Memory person authoring uses the person store and image tools; no source-code or desktop-script workaround.');
-  }
   // A file task may still require a visible handoff. Expose that continuation
   // in the same turn instead of relying on the model to invent undeclared tools.
   const artifactHandoffTools = actionContract.kind === 'artifact_work' && !currentAppEdit
@@ -1486,8 +1231,18 @@ export function routeToolsForTurn(
     reasons.push('Execute the requested search on the named source; opening the site or generating a plan is not a retrieved case. Preserve court/date filters, verify result content, and report any actual login/captcha/access blocker.');
   }
 
+  const exactScope = resolveExactToolScope({
+    contract: actionContract, available, runtimeWorkIntent, currentAppEdit, avatarAuthoring,
+    desktopObservationToolNames,
+    cadGeometryExtractionTools: cadGeometryExtractionOnly ? availableNames.filter(isCadGeometryExtractionAllowedTool) : null,
+    compositeCad: localCadImageSourceRequest && visibleAutoCadExecution && available.has('cad_draw_floorplan_in_autocad'),
+    blankAutoCadDocument, desktopLaunchRequest, documentOpenAndReview,
+    currentAuthoringDocumentInspection, trustedCurrentDocumentReadAnchor,
+    confirmationOnlyExternalCommit, readOnlyKnowledgeInspection,
+  });
+  const resolvedSelection = selection.resolve(exactScope);
   const orderedBeforeHealthGate = applyRoutePriority(
-    availableNames.filter(name => selected.has(name)),
+    resolvedSelection.toolNames,
     unique([
       ...externalLookupTools,
       ...visualObservationTools,
@@ -1527,58 +1282,23 @@ export function routeToolsForTurn(
     maxTools,
     truncated,
     unavailableMcpServers: unique(unavailableMcpServers),
-    hardAllowlist: desktopObservationOnly
-      || avatarAuthoring
-      || readOnlyKnowledgeInspection
-      || confirmationOnlyExternalCommit
-      || currentAuthoringDocumentInspection
-      || documentOpenAndReview
-      || desktopLaunchRequest
-      || cadGeometryExtractionOnly
-      || extensionRegistryOnly
-      || runtimeWorkIntent !== 'none'
-      || actionContract.kind === 'task_control'
-      || selected.has('cad_draw_floorplan_in_autocad')
-      || undefined,
-    forbiddenToolNames: forbiddenToolNames.size > 0
-      ? Array.from(forbiddenToolNames)
-      : undefined,
-    maxIterations: avatarAuthoring ? 16 : selected.has('cad_draw_floorplan_in_autocad')
-      ? 2
-      : Boolean(structuredMediaCategory)
-      ? 1
-      : readOnlyKnowledgeInspection
-      ? Math.max(2, selected.size)
-      : confirmationOnlyExternalCommit
-      ? 1
-      : currentAuthoringDocumentInspection || documentOpenAndReview
-      ? Math.max(3, selected.size)
-      : desktopLaunchRequest
-      ? Math.max(2, selected.size)
-      : desktopObservationOnly
-      ? desktopObservationToolNames.length + 1
-      : extensionRegistryOnly
-      ? Math.max(2, selected.size)
-      : runtimeWorkIntent !== 'none' || actionContract.kind === 'task_control'
-      ? 1
-      : undefined,
+    hardAllowlist: resolvedSelection.hardAllowlist,
+    forbiddenToolNames: resolvedSelection.forbiddenToolNames,
+    maxIterations: resolvedSelection.maxIterations ?? (structuredMediaCategory ? 1 : undefined),
   };
 }
 
 export function mergeToolPolicyWithRoute(policy: ToolPolicy, route: ToolRoute): ToolPolicy {
   const baseAllowed = new Set(policy.allowedTools || []);
-  const routeForbidden = new Set(route.forbiddenToolNames || []);
-  const allowedTools = baseAllowed.has('*')
-    ? route.toolNames.filter(name => !routeForbidden.has(name))
-    : route.toolNames.filter(name => baseAllowed.has(name) && !routeForbidden.has(name));
+  const forbiddenTools = unique([...(policy.forbiddenTools || []), ...(route.forbiddenToolNames || [])]);
+  const forbidden = new Set(forbiddenTools);
+  const allowedTools = route.toolNames.filter(name => (baseAllowed.has('*') || baseAllowed.has(name))
+    && !forbidden.has('*') && !forbidden.has(name));
 
   return {
     ...policy,
     allowedTools,
-    forbiddenTools: unique([
-      ...(policy.forbiddenTools || []),
-      ...routeForbidden,
-    ]),
+    forbiddenTools,
     maxIterations: route.maxIterations === undefined
       ? policy.maxIterations
       : Math.max(0, Math.min(policy.maxIterations ?? route.maxIterations, route.maxIterations)),
