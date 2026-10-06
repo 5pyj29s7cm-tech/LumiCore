@@ -1,7 +1,7 @@
 import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
-import { reserveConversationExecution } from '../cognition/conversation_execution';
+import { reserveAnchoredEntryExecution } from '../conversation/entry_execution';
 import { getConversationActionTurn } from '../conversation/action_turn_ledger';
 import { getIndustryWorkflowTask, interruptIndustryWorkflow, observeIndustryWorkflowTool, recordIndustryWorkflowExecution, validateIndustryWorkflowSourceInput } from '../industry/workflow_service';
 import { Router } from "express";
@@ -337,7 +337,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
     const membershipWatcher = businessAuthority
       ? watchOrganizationMembershipAuthorization(businessAuthority, orgId, userId, request.abort)
       : undefined;
-    const isBusinessAuthorized = () => !membershipWatcher || membershipWatcher.isAuthorized();
+    const isBusinessAuthorized = () => (!membershipWatcher || membershipWatcher.isAuthorized()) && (!admission || admission.isCurrent());
     const assertRequestActive = () => {
       request.signal.throwIfAborted();
       if (!isBusinessAuthorized()) throw new Error('Business execution authorization was revoked');
@@ -345,12 +345,13 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
     const receiptObserver = businessTask ? createToolReceiptObserver(async record => {
       if (isBusinessAuthorized()) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
     }) : undefined;
-    let admission: ReturnType<typeof reserveConversationExecution> | undefined;
+    let admission: ReturnType<typeof reserveAnchoredEntryExecution>;
     try {
-      if (businessMetadata?.conversationId) {
-        admission = reserveConversationExecution({ userId, domain, orgId, conversationId: businessMetadata.conversationId }, requestId, request.signal);
-        await admission.waitForTurn();
-      }
+      admission = reserveAnchoredEntryExecution({
+        userId, scope: { domain, orgId }, entry: { kind: 'rest' },
+        conversationId: businessMetadata?.conversationId, requestId, signal: request.signal, abort: request.abort,
+      });
+      await admission?.waitForTurn();
       assertRequestActive();
       let responseText = '';
 
@@ -514,7 +515,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
         try { await flushDBOrThrow(); }
         catch (persistenceError) { error = persistenceError; }
       }
-      const authorizationRevoked = !isBusinessAuthorized();
+      const authorizationRevoked = error?.code === 'CONVERSATION_ENTRY_UNAVAILABLE' || !isBusinessAuthorized();
       if (request.signal.aborted && (!authorizationRevoked || res.destroyed)) return;
       console.error("AI Proxy Error:", error);
       const publicError = sanitizeChatAgentErrorPayload({

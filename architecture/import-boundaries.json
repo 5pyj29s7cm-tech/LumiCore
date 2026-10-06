@@ -244,7 +244,8 @@
     },
     "server/autonomy/task_queue.ts": {
       "tables": [
-        "autonomousTasks"
+        "autonomousTasks",
+        "commandCenterPlans"
       ],
       "allowedExports": [
         "flushDBOrThrow",

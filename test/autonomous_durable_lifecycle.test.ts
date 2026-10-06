@@ -348,3 +348,172 @@ describe('autonomous durable action lifecycle', () => {
     expect(f.handler).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('autonomous work sharing a conversation admission', () => {
+  async function anchoredTask() {
+    const { getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const conversation = getOrCreateActiveConversation(owner, 'lumi', 'personal', '');
+    const queued = enqueue({ userId: owner, conversationId: conversation.id, title: 'Create local report',
+      description: 'Create a local text report.', source: 'user_request', priority: 5, mode: 'analysis' })!;
+    return { conversation, queued, scope: { userId: owner, domain: 'personal' as const, orgId: '', conversationId: conversation.id } };
+  }
+  const io = { to: () => ({ emit: vi.fn() }) } as any;
+
+  it('waits behind foreground work and retains the shared queue until final persistence', async () => {
+    const { reserveConversationExecution } = await import('../server/cognition/conversation_execution');
+    const f = await anchoredTask();
+    const foreground = reserveConversationExecution({ ...f.scope, source: 'chat' }, 'foreground-anchor');
+    await foreground.waitForTurn();
+    const handler = vi.fn(async () => 'File written: synthetic.txt (4 bytes)');
+    toolRegistry.register({ name: 'write_file', description: 'Write a local text report', permission: 'public', securityLevel: 'safe',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, handler });
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    mocks.model.mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'anchored-write', name: 'write_file', arguments: { path: 'synthetic.txt', content: 'text' } }] })
+      .mockImplementation(async () => { mocks.flushGate = saveGate; return { text: 'The report is ready.', toolCalls: [] }; });
+    const pending = executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    let next: ReturnType<typeof reserveConversationExecution> | undefined;
+    try {
+      await vi.waitFor(() => expect(getRunningTask(owner)?.id).toBe(f.queued.id));
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+      foreground.release();
+      await vi.waitFor(() => expect(mocks.flushGate).toBe(saveGate));
+      next = reserveConversationExecution({ ...f.scope, source: 'voice' }, 'voice-after-anchor');
+      let entered = false;
+      const nextTurn = next.waitForTurn().then(() => { entered = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(entered).toBe(false);
+      expect(next.waitingForRequestId).toMatch(/^autonomy:/);
+      releaseSave();
+      await pending;
+      await nextTurn;
+      expect(entered).toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mocks.model.mock.calls[0][2].conversationId).toBe(f.conversation.id);
+    } finally { releaseSave(); foreground.release(); await pending; next?.release(); }
+  });
+
+  it('cancels queued autonomous work before any model or tool starts', async () => {
+    const { reserveConversationExecution } = await import('../server/cognition/conversation_execution');
+    const f = await anchoredTask();
+    const foreground = reserveConversationExecution({ ...f.scope, source: 'chat' }, 'foreground-cancel-anchor');
+    await foreground.waitForTurn();
+    const parent = new AbortController();
+    const pending = executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner, { signal: parent.signal });
+    try {
+      await vi.waitFor(() => expect(getRunningTask(owner)?.id).toBe(f.queued.id));
+      parent.abort(new Error('Cancel before shared conversation ownership'));
+      expect(mocks.model).not.toHaveBeenCalled();
+      foreground.release();
+      expect((await pending).result).toBe('Cancelled by user');
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(getTaskHistory(50, 0, owner).find(t => t.id === f.queued.id)?.status).toBe('cancelled');
+    } finally { foreground.release(); await pending; }
+  });
+
+  it('revokes a queued anchor when its conversation is deleted without switching to the new active transcript', async () => {
+    const { reserveConversationExecution, getConversationExecution } = await import('../server/cognition/conversation_execution');
+    const { startNewConversation, getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const { writeDB } = await import('../db_layer');
+    const f = await anchoredTask();
+    const foreground = reserveConversationExecution({ ...f.scope, source: 'chat' }, 'foreground-delete-anchor');
+    await foreground.waitForTurn();
+    const pending = executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    try {
+      await vi.waitFor(() => expect(getRunningTask(owner)?.id).toBe(f.queued.id));
+      const requestId = 'autonomy:' + getRunningTask(owner)!.leaseId;
+      const active = startNewConversation(owner, 'lumi', 'personal', '');
+      const db = readDB(); db.conversations = db.conversations.filter((row: any) => row.id !== f.conversation.id); writeDB(db);
+      await vi.waitFor(() => expect(getConversationExecution({ ...f.scope, source: 'autonomy' }, requestId)?.controller.signal.aborted).toBe(true));
+      expect(mocks.model).not.toHaveBeenCalled();
+      foreground.release();
+      expect((await pending).result).toBe('Cancelled by user');
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(getOrCreateActiveConversation(owner, 'lumi', 'personal', '').id).toBe(active.id);
+    } finally { foreground.release(); await pending; }
+  });
+
+  it('refuses a persisted foreign anchor before model execution', async () => {
+    const { getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const foreign = getOrCreateActiveConversation('foreign-anchor-owner', 'lumi', 'personal', '');
+    const queued = enqueue({ userId: owner, conversationId: foreign.id, title: 'Create local report',
+      description: 'Create a local text report.', source: 'user_request', priority: 5, mode: 'analysis' })!;
+    const result = await executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    expect(result.taskId).toBe(queued.id);
+    expect(result.result).toContain('bound conversation is unavailable');
+    expect(getTaskHistory(50, 0, owner).find(t => t.id === queued.id)).toMatchObject({ status: 'blocked', recovery: { lastFailureClass: 'policy_blocked' } });
+    expect(mocks.model).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('legacy command-center plan anchors', () => {
+  it('migrates a saved stateless plan key across SQLite restart and executes once without selecting an active conversation', async () => {
+    const { createCommandCenterPlan, runCommandCenterPlan } = await import('../server/command_center/plans');
+    const { getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const { writeDB } = await import('../db_layer');
+    const active = getOrCreateActiveConversation(owner, 'lumi', 'personal', '');
+    const plan = createCommandCenterPlan({ userId: owner, domain: 'personal', orgId: '' }, {
+      kind: 'daily_task', title: 'Create local report', instruction: 'Create a local text report.', cadence: 'none',
+    });
+    const queued = runCommandCenterPlan({ id: plan.id, userId: owner, domain: 'personal', orgId: '', manual: true })!.task;
+    expect(queued.conversationId).toBeUndefined();
+    const db = readDB();
+    db.autonomousTasks.find((row: any) => row.id === queued.id)!.conversationId = 'command-center-plan:' + plan.id;
+    writeDB(db);
+    await closeDatabase(); resetAutonomousTaskQueueForTest(); await initDatabase();
+    expect(hydrateAutonomousTasksFromDb(true)).toBe(1);
+    expect(getTaskQueue(owner).find(row => row.id === queued.id)).toMatchObject({ conversationId: undefined, planId: plan.id, idempotencyKey: queued.idempotencyKey });
+    await persistAutonomousTaskQueue();
+    await closeDatabase(); resetAutonomousTaskQueueForTest(); await initDatabase();
+    expect(hydrateAutonomousTasksFromDb(true)).toBe(0);
+    expect(getTaskQueue(owner).find(row => row.id === queued.id)?.conversationId).toBeUndefined();
+    const handler = vi.fn(async () => 'File written: synthetic.txt (4 bytes)');
+    toolRegistry.register({ name: 'write_file', description: 'Write a local text report', permission: 'public', securityLevel: 'safe',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }, handler });
+    mocks.model.mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'legacy-plan-write', name: 'write_file', arguments: { path: 'synthetic.txt', content: 'text' } }] })
+      .mockResolvedValue({ text: 'The report is ready.', toolCalls: [] });
+    const io = { to: () => ({ emit: vi.fn() }) } as any;
+    await executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(mocks.model.mock.calls[0][2].conversationId).toBeUndefined();
+    expect(getOrCreateActiveConversation(owner, 'lumi', 'personal', '').id).toBe(active.id);
+    expect(getTaskHistory(50, 0, owner).find(row => row.id === queued.id)?.actions?.[0].state).toBe('settled');
+    expect((await executeNextAutonomousTask(io, { getDeepSeek: () => null, getGemini: () => null }, owner)).executed).toBe(false);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('retains explicit, foreign, missing-plan, cross-scope, and mismatched sentinels during restart recovery', async () => {
+    const { createCommandCenterPlan } = await import('../server/command_center/plans');
+    const { getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const { writeDB } = await import('../db_layer');
+    const plan = createCommandCenterPlan({ userId: owner, domain: 'personal', orgId: '' }, {
+      kind: 'daily_task', title: 'Create local report', instruction: 'Create a local text report.', cadence: 'none',
+    });
+    const foreign = getOrCreateActiveConversation('legacy-foreign-owner', 'lumi', 'personal', '');
+    const db = readDB();
+    db.commandCenterPlans.push({ ...plan, id: plan.id + '-foreign', userId: 'legacy-foreign-owner' },
+      { ...plan, id: plan.id + '-anchored', conversationId: 'command-center-plan:' + plan.id + '-anchored' });
+    const cases = [
+      { planId: plan.id, conversationId: foreign.id },
+      { planId: plan.id, conversationId: 'command-center-plan:different-plan' },
+      { planId: plan.id, conversationId: 'command-center-plan:' + plan.id, idempotencyKey: 'unrelated-task-key' },
+      { planId: plan.id + '-foreign', conversationId: 'command-center-plan:' + plan.id + '-foreign' },
+      { planId: plan.id, conversationId: 'command-center-plan:' + plan.id, domain: 'work' as const, orgId: 'different-org' },
+      { planId: plan.id + '-anchored', conversationId: 'command-center-plan:' + plan.id + '-anchored' },
+      { planId: plan.id + '-missing', conversationId: 'command-center-plan:' + plan.id + '-missing' },
+      { planId: undefined, conversationId: 'command-center-plan:' + plan.id },
+    ];
+    const tasks = cases.map((entry, index) => ({ ...task(), ...entry, idempotencyKey: entry.idempotencyKey || 'command-center-plan:' + entry.planId + ':legacy-' + index }));
+    db.autonomousTasks = tasks; writeDB(db);
+    await closeDatabase(); resetAutonomousTaskQueueForTest(); await initDatabase();
+    expect(hydrateAutonomousTasksFromDb(true)).toBe(0);
+    for (const stored of getTaskQueue(owner)) expect(stored.conversationId).toBe(tasks.find(row => row.id === stored.id)!.conversationId);
+    expect(getTaskQueue(owner)).toHaveLength(cases.length);
+    const result = await executeNextAutonomousTask({ to: () => ({ emit: vi.fn() }) } as any, { getDeepSeek: () => null, getGemini: () => null }, owner);
+    expect(result.result).toContain('bound conversation is unavailable');
+    expect(mocks.model).not.toHaveBeenCalled();
+  });
+});

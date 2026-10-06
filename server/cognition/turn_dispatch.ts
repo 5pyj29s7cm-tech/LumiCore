@@ -91,3 +91,31 @@ export function buildLumiTurnDispatch(input: LumiTurnDispatchInput): LumiTurnDis
     promptOverlay: buildDispatchOverlay(dispatchWithoutPrompt),
   };
 }
+
+export function restrictLumiDispatchToUnboundConversation(dispatch: LumiTurnDispatch): LumiTurnDispatch {
+  const flow = {
+    ...dispatch.flow,
+    operationMode: 'chat' as const,
+    effectiveOperationMode: 'chat' as const,
+    requestedMode: null,
+    autoPromoteToAssistant: false,
+    allowToolUseForTurn: false,
+    selfRepairTurn: false,
+    clientActionOnlyTurn: false,
+    promptOverlay: [
+      '## Lumi Turn Flow',
+      'Channel: chat. Surface: chat. Mode: chat -> chat. Tool access: chat-only.',
+      'This remote sender is not identity-bound. Keep the turn conversational and do not expose private, local, organization, client, or desktop tools.',
+    ].join('\n'),
+  };
+  return {
+    ...dispatch,
+    boundary: 'conversation',
+    flow,
+    promptOverlay: [
+      '## Lumi Unified Turn Dispatch',
+      `Entry channel: chat. Source: ${dispatch.source}. Surface: chat. Boundary: conversation.`,
+      'Identity boundary: this sender is not bound to a Lumi user, so this turn cannot control or inspect a private Lumi client.',
+    ].join('\n'),
+  };
+}

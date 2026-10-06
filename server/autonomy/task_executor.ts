@@ -1,3 +1,4 @@
+import { reserveAnchoredEntryExecution } from '../conversation/entry_execution';
 import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 /**
@@ -662,9 +663,10 @@ export async function executeNextAutonomousTask(
   userId?: string,
   options: { taskId?: string; signal?: AbortSignal; isAuthorized?: () => boolean } = {},
 ): Promise<{ executed: boolean; taskId?: string; result?: string }> {
+  let conversationExecution: ReturnType<typeof reserveAnchoredEntryExecution>;
   let taskIsAuthorized = () => true;
   const isAuthorized = () => {
-    try { return taskIsAuthorized() && options.isAuthorized?.() !== false; } catch { return false; }
+    try { return taskIsAuthorized() && options.isAuthorized?.() !== false && (!conversationExecution || conversationExecution.isCurrent()); } catch { return false; }
   };
   const rejectUnauthorizedAdmission = async () => {
     if (options.taskId && cancelTask(options.taskId, userId)) await persistAutonomousTaskQueue();
@@ -768,7 +770,15 @@ export async function executeNextAutonomousTask(
   });
 
   try {
+    const requestId = 'autonomy:' + running.leaseId;
+    conversationExecution = reserveAnchoredEntryExecution({
+      userId: task.userId, scope: taskScope, entry: { kind: 'autonomy' },
+      conversationId: running.conversationId, requestId, signal: executionAbort.signal,
+      abort: reason => { if (!executionAbort.signal.aborted) executionAbort.abort(reason); },
+    });
+    await conversationExecution?.waitForTurn();
     assertAuthorized();
+    executionAbort.signal.throwIfAborted();
     const currentGate = getGateConfig(task.userId);
     const maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
     // Build desktop relay using the user's registered desktop client, not a broad user-room broadcast.
@@ -786,7 +796,6 @@ export async function executeNextAutonomousTask(
     });
     releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
-    const requestId = 'autonomy:' + running.leaseId;
     const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations, toolRegistry, requestId);
     sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
     attachAutonomousExecutionPlan(
@@ -809,7 +818,7 @@ export async function executeNextAutonomousTask(
       userId: task.userId,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
-      conversationId: running.conversationId,
+      conversationId: conversationExecution?.conversation.id,
       taskId: running.id, requestId, resolutionId: executionPipeline.resolution.id,
       currentTurnExecutionRequested: executionPipeline.executionRequested,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
@@ -883,7 +892,7 @@ export async function executeNextAutonomousTask(
     const result = await runLumiTurn({
       messages: messages,
       registry: toolRegistry,
-      config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: running.conversationId, signal: executionAbort.signal },
+      config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: conversationExecution?.conversation.id, signal: executionAbort.signal },
       onToolCall: async (record) => {
         await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);
@@ -1121,6 +1130,7 @@ export async function executeNextAutonomousTask(
       // The live owner outlasts both its handler and terminal persistence.
       membershipAuthority?.dispose();
       releaseAutonomousTaskExecutor(task.id, running.leaseId);
+      conversationExecution?.release();
     }
   }
 }

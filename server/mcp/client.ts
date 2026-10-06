@@ -1,3 +1,4 @@
+import { isProcessBacked, isInstallationPending, isMissingRequiredApiKey } from './client/readiness';
 import { reconcileMCPDeclaredCapabilities } from './client/capability_metadata';
 import { WebSocket } from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -18,7 +19,7 @@ import { migrateProfileSkills } from "./skill_profile_migration";
 import type { ConnectedServer, MCPToolDef, CrashTracker, MCPServerConfig, MCPConfigFile, SkillPackage, SkillRepairResult, MCPCallOptions } from './client/contracts';
 import { DEFAULT_RUNTIME_CONFIG, FACTORY_CONFIG, DEFAULT_CONFIG_FILE } from './client/defaults';
 import { requireSafeMCPServerName, PENDING_SKILL_MARKER, normalizeSkillInstallName, requireSafeMCPToolName, mapMCPTools, mcpRegistryToolName } from './client/security';
-import { ownServerConfig, mcpServerConfigFingerprint, stableConfigValue } from './client/fingerprints';
+import { ownServerConfig, mcpServerConfigFingerprint, hasCurrentCachedToolInventory, mcpToolInventoryAttestation } from './client/fingerprints';
 import { resolveDirectSkillDirectory, resolveValidatedSkillSourceDirectory } from './client/package_sources';
 import { readPkg, ensureSkillsDir, assertManagedSkillSource, copyDirSync, patchInstalledMetadata, patchInstalledVersion } from './client/package_files';
 import { ensureRuntimeNodeModulesLink, installLockedDepsWithoutScripts, prepareLocalSkillDependenciesSync, resolveRuntimeNodeModulesDir } from './client/dependencies';
@@ -1080,45 +1081,6 @@ export class MCPClientManager {
     this.saveConfig(config);
   }
 
-  // ── MCP Server connection management ──
-
-  private isProcessBacked(config: MCPServerConfig): boolean {
-    const transportType = config.transport || (config.url
-      ? (config.url.startsWith('wss://') || config.url.startsWith('ws://') ? 'ws' : 'http')
-      : 'stdio');
-    return transportType === 'stdio';
-  }
-
-  private isInstallationPending(name: string, config: MCPServerConfig): boolean {
-    if (config.installationState === 'pending') return true;
-    if (config.source !== 'local') return false;
-    try {
-      return fs.existsSync(path.join(resolveDirectSkillDirectory(name), PENDING_SKILL_MARKER));
-    } catch {
-      return true;
-    }
-  }
-
-  private hasCurrentCachedToolInventory(config: MCPServerConfig): boolean {
-    const current = Boolean(
-      config.cachedTools?.length
-      && config.cachedToolsFingerprint
-      && config.cachedToolsFingerprint === mcpServerConfigFingerprint(config),
-    );
-    if (!current || config.source !== 'local') return current;
-    if (!config.cachedToolsAttestation) return false;
-    const expected = crypto
-      .createHmac('sha256', getJwtSecret())
-      .update(JSON.stringify({
-        fingerprint: config.cachedToolsFingerprint,
-        tools: stableConfigValue(config.cachedTools),
-      }))
-      .digest();
-    let supplied: Buffer;
-    try { supplied = Buffer.from(config.cachedToolsAttestation, 'base64url'); } catch { return false; }
-    return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
-  }
-
   private cacheToolDefinitions(name: string, tools: MCPToolDef[]): void {
     const safeName = requireSafeMCPServerName(name);
     const config = this.getConfig();
@@ -1136,13 +1098,7 @@ export class MCPClientManager {
     }));
     config[safeName].cachedToolsFingerprint = mcpServerConfigFingerprint(config[safeName]);
     if (config[safeName].source === 'local') {
-      config[safeName].cachedToolsAttestation = crypto
-        .createHmac('sha256', getJwtSecret())
-        .update(JSON.stringify({
-          fingerprint: config[safeName].cachedToolsFingerprint,
-          tools: stableConfigValue(config[safeName].cachedTools),
-        }))
-        .digest('base64url');
+      config[safeName].cachedToolsAttestation = mcpToolInventoryAttestation(config[safeName]).toString('base64url');
     } else {
       delete config[safeName].cachedToolsAttestation;
     }
@@ -1158,7 +1114,7 @@ export class MCPClientManager {
 
   private scheduleIdleDisconnect(name: string): void {
     const config = this.getConfig()[name];
-    if (!config || !this.isProcessBacked(config)) return;
+    if (!config || !isProcessBacked(config)) return;
     this.clearIdleTimer(name);
     const timer = setTimeout(() => {
       this.idleTimers.delete(name);
@@ -1263,7 +1219,7 @@ export class MCPClientManager {
         console.warn(`[MCP] ${serverName}: skipped pending installation until activation commits`);
         continue;
       }
-      if (this.isInstallationPending(serverName, serverConfig)) {
+      if (isInstallationPending(serverName, serverConfig)) {
         console.warn(`[MCP] ${serverName}: skipped local package with an uncommitted pending marker`);
         continue;
       }
@@ -1271,7 +1227,7 @@ export class MCPClientManager {
         console.warn(`[MCP] ${serverName}: skipped unapproved auto-generated skill configuration`);
         continue;
       }
-      if (this.isMissingRequiredApiKey(serverConfig)) {
+      if (isMissingRequiredApiKey(serverConfig)) {
         console.log(`[MCP] ${serverName}: skipped (missing ${serverConfig.apiKeyEnv})`);
         continue;
       }
@@ -1291,8 +1247,8 @@ export class MCPClientManager {
         continue;
       }
 
-      const cacheMatchesConfig = this.hasCurrentCachedToolInventory(serverConfig);
-      if (this.isProcessBacked(serverConfig) && cacheMatchesConfig) {
+      const cacheMatchesConfig = hasCurrentCachedToolInventory(serverConfig);
+      if (isProcessBacked(serverConfig) && cacheMatchesConfig) {
         allTools.push(...serverConfig.cachedTools);
         console.log(`[MCP] ${serverName}: ${serverConfig.cachedTools.length} cached tools ready on demand`);
         continue;
@@ -1308,7 +1264,7 @@ export class MCPClientManager {
         this.cacheToolDefinitions(serverName, tools);
 
         console.log(`[MCP] ${serverName}: ${tools.length} tools discovered (${serverConfig.source || 'external'})`);
-        if (this.isProcessBacked(serverConfig)) {
+        if (isProcessBacked(serverConfig)) {
           await this.disconnectServer(serverName);
           console.log(`[MCP] ${serverName}: process released; tools will start on demand`);
         }
@@ -1534,10 +1490,10 @@ export class MCPClientManager {
     if (!serverConfig) throw new Error(`MCP server "${safeServerName}" is not configured`);
     if (serverConfig.enabled === false) throw new Error(`MCP server "${safeServerName}" is disabled`);
     assertMCPPackageRunnerPolicy(serverConfig);
-    if (this.isInstallationPending(safeServerName, serverConfig)) {
+    if (isInstallationPending(safeServerName, serverConfig)) {
       throw new Error(`MCP server "${safeServerName}" is pending activation and is not callable yet`);
     }
-    if (this.isMissingRequiredApiKey(serverConfig)) {
+    if (isMissingRequiredApiKey(serverConfig)) {
       throw new Error(`MCP server "${safeServerName}" requires ${serverConfig.apiKeyEnv}`);
     }
     if (serverConfig.source === 'local') {
@@ -1692,7 +1648,7 @@ export class MCPClientManager {
       try {
         const config = this.getConfig();
         const serverConfig = config[name];
-        if (!serverConfig || !serverConfig.enabled || this.isInstallationPending(name, serverConfig)) {
+        if (!serverConfig || !serverConfig.enabled || isInstallationPending(name, serverConfig)) {
           console.log(`[MCP] Server "${name}" is now disabled, skipping restart`);
           return;
         }
@@ -1717,17 +1673,6 @@ export class MCPClientManager {
       }
       this.broadcastHealth();
     }, delay);
-  }
-
-  private isMissingRequiredApiKey(config: MCPServerConfig): boolean {
-    if (!config.requiresApiKey || !config.apiKeyEnv) return false;
-    const fromEnv = process.env[config.apiKeyEnv]?.trim();
-    if (fromEnv) return false;
-    try {
-      return !loadKeys()[config.apiKeyEnv]?.trim();
-    } catch {
-      return true;
-    }
   }
 
   private recordStartupFailure(name: string, err: any): void {
@@ -1759,8 +1704,8 @@ export class MCPClientManager {
       const readyOnDemand = Boolean(
         config[name]?.enabled
         && !identityFailure
-        && this.isProcessBacked(config[name])
-        && this.hasCurrentCachedToolInventory(config[name]),
+        && isProcessBacked(config[name])
+        && hasCurrentCachedToolInventory(config[name]),
       );
       health[name] = {
         status: identityFailure ? 'failed'
@@ -1800,8 +1745,8 @@ export class MCPClientManager {
       .filter(([name, serverConfig]) => (
         serverConfig.enabled
         && (serverConfig.source !== 'local' || !this.invalidManagedRuntimes.has(name))
-        && !this.isInstallationPending(name, serverConfig)
-        && !this.isMissingRequiredApiKey(serverConfig)
+        && !isInstallationPending(name, serverConfig)
+        && !isMissingRequiredApiKey(serverConfig)
       ))
       .filter(([, serverConfig]) => {
         try {
@@ -1820,7 +1765,7 @@ export class MCPClientManager {
     const config = this.getConfig();
     return this.getAvailableServers().filter(name => (
       this.servers.has(name)
-      || (Boolean(config[name]) && this.hasCurrentCachedToolInventory(config[name]))
+      || (Boolean(config[name]) && hasCurrentCachedToolInventory(config[name]))
     ));
   }
 }

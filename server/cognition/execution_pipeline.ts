@@ -30,6 +30,7 @@ import {
 } from './intent_trace';
 import {
   buildLumiTurnDispatch,
+  restrictLumiDispatchToUnboundConversation,
   type LumiTurnDispatch,
   type LumiTurnDispatchInput,
 } from './turn_dispatch';
@@ -92,13 +93,8 @@ export interface BuildLumiExecutionPipelineInput {
   /** Explicit creation operation; still subject to ordinary authorization and current-turn vetoes. */
   structuredMediaRequest?: StructuredMediaRequest | null;
   dispatch: LumiTurnDispatchInput;
-  /**
-   * A caller may precompute the dispatch when it needs to apply a channel
-   * identity boundary before the rest of the shared pipeline runs. The
-   * normalized intent, capability plan, policy and execution plan are still
-   * produced here; callers must not rebuild those pieces independently.
-   */
-  prebuiltDispatch?: LumiTurnDispatch;
+  /** An unbound remote sender can only narrow the shared dispatch to conversation. */
+  unboundRemoteSender?: boolean;
   registry: ToolRegistry;
   personalityToolPolicy?: ToolPolicy;
   actionTaskState?: ConversationActionContinuationState | null;
@@ -266,12 +262,12 @@ export function buildLumiExecutionPipeline(
   const trustedActionContinuation = !acceptedPlan && !mediaRequest && hasTrustedActionContinuation(input, taskRelation);
   const continuationContext = input.dispatch.continuationContext
     || (trustedActionContinuation ? formatActiveTaskRelationContext(taskRelation, input.actionTaskState) : '');
-  const dispatched = input.prebuiltDispatch && !input.actionTaskState && !input.taskRelation && !mediaRequest && !acceptedPlan
-    ? input.prebuiltDispatch
-    : buildLumiTurnDispatch({ ...input.dispatch, analysis, text: effectiveText, continuationContext, actionFollowupIntent,
+  const resolvedDispatch = buildLumiTurnDispatch({ ...input.dispatch, analysis, text: effectiveText, continuationContext, actionFollowupIntent,
       continuationAppTarget: !mediaRequest && !acceptedPlan && taskRelation.binding !== 'stale'
         && input.actionTaskState && isCurrentContinuationTask(input.dispatch.text, input.actionTaskState)
         ? input.actionTaskState.appTarget : undefined });
+  const dispatched = input.unboundRemoteSender
+    ? restrictLumiDispatchToUnboundConversation(resolvedDispatch) : resolvedDispatch;
   const acceptedTaskTarget = resolveAcceptedTaskTarget({
     text: input.dispatch.text,
     persistedHistory: input.persistedConversationHistory,
@@ -347,7 +343,7 @@ export function buildLumiExecutionPipeline(
     actionTaskState: input.actionTaskState,
     trustedActionContinuation,
     pendingAssistantOfferContext: input.pendingAssistantOfferContext,
-    isSanctuary: input.isSanctuary,
+    isSanctuary: input.isSanctuary || input.unboundRemoteSender,
     visibilityContext,
   });
   const unrestrictedManifest = input.registry.getCapabilityManifest(routedExecution.toolPolicy, { context: visibilityContext });

@@ -155,4 +155,18 @@ describe('REST workflow canonical receipt lifecycle', () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toMatchObject({ error: expect.any(String), code: expect.any(String) });
   });
+
+  it('rejects a deleted business conversation anchor without running a model or redirecting work', async () => {
+    const f = fixture(); f.install('normal');
+    const { startNewConversation, getOrCreateActiveConversation } = await import('../server/conversation/manager');
+    const { writeDB } = await import('../db_layer');
+    const boundId = f.task().metadata.industryWorkflow.conversationId;
+    const active = startNewConversation(f.scope.userId, 'lumi', f.scope.domain, f.scope.orgId);
+    const db = readDB(); db.conversations = db.conversations.filter((row: any) => row.id !== boundId); writeDB(db);
+    const response = await f.send();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'CHAT_CONVERSATION_REFRESH_FAILED' });
+    expect(model.run).not.toHaveBeenCalled();
+    expect(getOrCreateActiveConversation(f.scope.userId, 'lumi', f.scope.domain, f.scope.orgId).id).toBe(active.id);
+  });
 });

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { getJwtSecret } from "../../config/local_identity";
 import type { MCPServerConfig } from './contracts';
 
 export function stableConfigValue(value: unknown): unknown {
@@ -103,3 +104,24 @@ export function ownServerConfig(
 ): MCPServerConfig | undefined {
   return Object.prototype.hasOwnProperty.call(config, name) ? config[name] : undefined;
 }
+
+export function mcpToolInventoryAttestation(config: MCPServerConfig): Buffer {
+  return crypto.createHmac('sha256', getJwtSecret()).update(JSON.stringify({
+    fingerprint: config.cachedToolsFingerprint,
+    tools: stableConfigValue(config.cachedTools),
+  })).digest();
+}
+
+export function hasCurrentCachedToolInventory(config: MCPServerConfig): boolean {
+    const current = Boolean(
+      config.cachedTools?.length
+      && config.cachedToolsFingerprint
+      && config.cachedToolsFingerprint === mcpServerConfigFingerprint(config),
+    );
+    if (!current || config.source !== 'local') return current;
+    if (!config.cachedToolsAttestation) return false;
+    const expected = mcpToolInventoryAttestation(config);
+    let supplied: Buffer;
+    try { supplied = Buffer.from(config.cachedToolsAttestation, 'base64url'); } catch { return false; }
+    return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  }

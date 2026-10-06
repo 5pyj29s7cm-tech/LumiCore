@@ -104,3 +104,24 @@ describe('conversation identity shared by transport entries', () => {
     expect(resolveConversationForEntry(userId, personal, { kind: 'mcp', agentId: 'lumi' }, '   ')).toBeNull();
   });
 });
+
+
+describe('durable non-interactive entry anchors', () => {
+  it.each(['rest', 'autonomy'] as const)('%s remains stateless without an explicit durable anchor', kind => {
+    const userId = uid();
+    const before = readDB().conversations.length;
+    expect(resolveConversationForEntry(userId, personal, { kind })).toBeNull();
+    expect(readDB().conversations).toHaveLength(before);
+  });
+  it.each(['rest', 'autonomy'] as const)('%s retains an owned archived anchor and refuses a foreign or deleted anchor', kind => {
+    const userId = uid();
+    const previous = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const active = startNewConversation(userId, 'lumi', 'personal', '');
+    const foreign = getOrCreateActiveConversation(uid(), 'lumi', 'personal', '');
+    const work = getOrCreateActiveConversation(userId, 'lumi', 'work', 'anchored-org');
+    expect(resolveConversationForEntry(userId, personal, { kind }, previous.id)?.id).toBe(previous.id);
+    for (const id of [foreign.id, work.id, 'missing']) expect(resolveConversationForEntry(userId, personal, { kind }, id)).toBeNull();
+    expect(resolveConversationForEntry(userId, personal, { kind, agentId: 'other-agent' }, previous.id)).toBeNull();
+    expect(getOrCreateActiveConversation(userId, 'lumi', 'personal', '').id).toBe(active.id);
+  });
+});

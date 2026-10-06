@@ -335,7 +335,7 @@ export function runCommandCenterPlan(input: {
     source: input.manual ? 'user_request' : 'scheduler',
     domain: plan.domain,
     orgId: plan.orgId,
-    conversationId: plan.conversationId || `command-center-plan:${plan.id}`,
+    conversationId: plan.conversationId || undefined,
     planId: plan.id,
     membershipAuthorization,
     priority: plan.kind === 'daily_task' ? 7 : 6,

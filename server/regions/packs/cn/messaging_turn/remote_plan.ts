@@ -5,7 +5,6 @@ import type { TurnResolution } from "../../../../cognition/turn_resolution";
 import type { OperationMode } from "../../../../cognition/operation_modes";
 import type { ToolPolicy } from "../../../../personality/types";
 import type { PendingAssistantOfferContext } from "../../../../cognition/pending_assistant_offer";
-import { buildLumiTurnDispatch, type LumiTurnDispatch } from "../../../../cognition/turn_dispatch";
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from "../../../../cognition/execution_pipeline";
 import { toolRegistry } from "../../../../tools/registry";
 
@@ -52,47 +51,7 @@ export interface RemoteLumiExecutionPlanInput {
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
-function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDispatch {
-  const flow = {
-    ...dispatch.flow,
-    operationMode: 'chat' as const,
-    effectiveOperationMode: 'chat' as const,
-    requestedMode: null,
-    autoPromoteToAssistant: false,
-    allowToolUseForTurn: false,
-    selfRepairTurn: false,
-    clientActionOnlyTurn: false,
-    promptOverlay: [
-      '## Lumi Turn Flow',
-      'Channel: chat. Surface: chat. Mode: chat -> chat. Tool access: chat-only.',
-      'This remote sender is not identity-bound. Keep the turn conversational and do not expose private, local, organization, client, or desktop tools.',
-    ].join('\n'),
-  };
-  return {
-    ...dispatch,
-    boundary: 'conversation',
-    flow,
-    promptOverlay: [
-      '## Lumi Unified Turn Dispatch',
-      `Entry channel: chat. Source: ${dispatch.source}. Surface: chat. Boundary: conversation.`,
-      'Identity boundary: this sender is not bound to a Lumi user, so this turn cannot control or inspect a private Lumi client.',
-    ].join('\n'),
-  };
-}
-
 export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): LumiExecutionPipeline {
-  const rawDispatch = buildLumiTurnDispatch({
-    userId: input.userId,
-    text: input.text,
-    channel: 'chat',
-    source: input.source,
-    category: input.domain === 'work' ? 'organization' : undefined,
-    domain: input.domain,
-    orgId: input.orgId,
-    operationMode: input.operationMode,
-    targetIsLumi: true,
-  });
-  const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
   return buildLumiExecutionPipeline({
     requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
     dispatch: {
@@ -106,7 +65,7 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
       operationMode: input.operationMode,
       targetIsLumi: true,
     },
-    prebuiltDispatch: dispatch,
+    unboundRemoteSender: !input.identityBound,
     registry: toolRegistry,
     personalityToolPolicy: input.personalityToolPolicy,
     actionTaskState: input.actionTaskState,

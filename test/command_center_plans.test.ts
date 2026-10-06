@@ -87,7 +87,7 @@ describe('command center durable plans', () => {
     const current = readDB().commandCenterPlans.find((candidate: any) => candidate.id === plan.id);
     expect(new Date(current.nextRunAt).getTime()).toBeGreaterThan(new Date('2026-08-13T01:01:30.000Z').getTime());
     expect(getTaskQueue(userId).find(candidate => candidate.id === current.lastRuntimeTaskId)).toMatchObject({
-      conversationId: `command-center-plan:${plan.id}`,
+      conversationId: undefined,
       planId: plan.id,
       status: 'pending',
     });

@@ -444,10 +444,24 @@ export function hydrateAutonomousTasksFromDb(force = false): number {
   const stored = (Array.isArray(db.autonomousTasks) ? db.autonomousTasks : [])
     .map(normalizeStoredTask)
     .filter((task): task is AutonomousTask => Boolean(task));
+  // Older plan dispatchers wrote their plan key into the conversation field.
+  // Only a matching owner-scoped stateless plan can retire that exact sentinel;
+  // explicit, deleted, foreign, and unrelated anchors retain normal validation.
+  const legacyPlanTasks = stored.filter(task => task.planId
+    && task.conversationId === `command-center-plan:${task.planId}`
+    && task.idempotencyKey?.startsWith(`command-center-plan:${task.planId}:`));
+  const legacyPlans = legacyPlanTasks.length
+    ? readDatabaseTables(["commandCenterPlans"]).commandCenterPlans || [] : [];
   let recoveredCount = 0;
   const recovered = stored.map(task => {
     const next = recoverPersistedTask(task, recoveredAt);
-    if (next.status !== task.status || next.recoveryCount !== task.recoveryCount) recoveredCount += 1;
+    if (legacyPlanTasks.includes(task) && legacyPlans.some(plan => plan.id === task.planId
+      && plan.userId === task.userId && !plan.conversationId
+      && autonomousTaskMatchesScope(task, plan))) {
+      next.conversationId = undefined;
+    }
+    if (next.status !== task.status || next.recoveryCount !== task.recoveryCount
+      || next.conversationId !== task.conversationId) recoveredCount += 1;
     return next;
   });
   const cutoff = Date.now() - TASK_TTL_DAYS * 86_400_000;

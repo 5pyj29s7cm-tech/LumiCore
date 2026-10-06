@@ -4,7 +4,9 @@ import { getConversationForScope, getOrCreateActiveConversation, getOrCreateConv
 
 export interface EntryConversationScope { domain?: string; orgId?: string; }
 export type AdmittedConversationEntry = { kind: 'chat' | 'voice'; phase: 'admit'; agentId: string; userText?: string };
+export type AnchoredConversationEntry = { kind: 'rest' | 'autonomy'; agentId?: string };
 export type SelectedConversationEntry =
+  | AnchoredConversationEntry
   | { kind: 'chat'; phase: 'select'; agentId: string; requestId: string; source: string }
   | { kind: 'voice'; phase: 'select'; agentId: string }
   | { kind: 'messaging'; agentId: string; requestId: string }
@@ -18,6 +20,7 @@ export function resolveConversationForEntry(
   userId: string, scope: EntryConversationScope, entry: ConversationEntryDescriptor, clientConversationId?: string,
 ): Conversation | ConversationTurnResult | null {
   const requestedId = String(clientConversationId || '').trim();
+  if ((entry.kind === 'rest' || entry.kind === 'autonomy') && !requestedId) return null;
   if ('phase' in entry && entry.phase === 'admit') {
     return getOrCreateConversationForTurn(userId, entry.agentId, scope.domain, scope.orgId, {
       userText: entry.userText, conversationId: requestedId,
@@ -25,7 +28,7 @@ export function resolveConversationForEntry(
   }
   const owned = (id: string) => {
     const conversation = getConversationForScope(id, userId, scope.domain, scope.orgId);
-    return conversation?.agentId === entry.agentId ? conversation : null;
+    return conversation && (entry.agentId === undefined || conversation.agentId === entry.agentId) ? conversation : null;
   };
   if (entry.kind === 'chat' || entry.kind === 'messaging') {
     const accepted = getMessageByRequestId({
@@ -38,6 +41,7 @@ export function resolveConversationForEntry(
     if (accepted) return accepted.conversationId ? owned(accepted.conversationId) : null;
   }
   if (requestedId) return owned(requestedId);
+  if (entry.kind === 'rest' || entry.kind === 'autonomy') return null;
   if (entry.kind === 'mcp') {
     if (clientConversationId) return null;
     const prior = entry.resumeConversationId ? owned(entry.resumeConversationId) : null;

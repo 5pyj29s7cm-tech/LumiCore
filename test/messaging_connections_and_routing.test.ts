@@ -779,4 +779,43 @@ describe('messaging long connections and organization routing', () => {
     expect(mixedMessage?.text).toBe('看这张图');
     expect(mixedMessage?.attachments?.[0]).toMatchObject({ type: 'image', downloadUrl: 'https://example.test/image' });
   });
+
+  it.each([true, false])('resolves bound=%s remote dispatch once from the accepted analysis', async identityBound => {
+    const dispatch = await import('../server/cognition/turn_dispatch');
+    const { vi } = await import('vitest');
+    const spy = vi.spyOn(dispatch, 'buildLumiTurnDispatch');
+    try {
+      const result = routes.buildRemoteLumiExecutionPlan({
+        userId: identityBound ? 'single-dispatch-owner' : 'anonymous', text: 'Open the desktop browser',
+        source: 'feishu_bot', domain: 'personal', orgId: '', operationMode: 'assistant',
+        identityBound, canWriteOrganization: identityBound,
+      });
+      expect(spy).toHaveBeenCalledOnce();
+      expect(spy.mock.calls[0][0].analysis).toBeDefined();
+      if (!identityBound) {
+        expect(result.turnIntent.boundary).toBe('conversation');
+        expect(result.turnIntent.flow.effectiveOperationMode).toBe('chat');
+        expect(result.execution.allowToolUse).toBe(false);
+        expect(result.authorizationPolicy.forbiddenTools).toContain('*');
+      }
+    } finally { spy.mockRestore(); }
+  });
+
+  it('keeps an unbound sender conversational even when a task snapshot is supplied', async () => {
+    const { normalizeConversationActionState } = await import('../server/cognition/action_continuation');
+    const state = normalizeConversationActionState({ taskId: 'guest-must-not-own-task', goal: 'Open the desktop browser',
+      status: 'executing', unfinished: true, revision: 1, receipts: [], updatedAt: new Date().toISOString() });
+    expect(state).not.toBeNull();
+    const result = routes.buildRemoteLumiExecutionPlan({
+      userId: 'anonymous', text: 'Continue opening the desktop browser', source: 'feishu_bot',
+      domain: 'personal', orgId: '', operationMode: 'assistant', identityBound: false,
+      canWriteOrganization: false, actionTaskState: state,
+    });
+    expect(result.turnIntent.boundary).toBe('conversation');
+    expect(result.turnIntent.flow.effectiveOperationMode).toBe('chat');
+    expect(result.execution.allowToolUse).toBe(false);
+    expect(result.executionRequested).toBe(false);
+    expect(result.modelToolProjection.toolNames).toEqual([]);
+    expect(result.authorizationPolicy.forbiddenTools).toContain('*');
+  });
 });
