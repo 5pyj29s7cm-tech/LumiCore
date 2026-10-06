@@ -55,6 +55,23 @@ async function importClientWithExec(
   return client;
 }
 
+
+/** Runtime tampering tests use an explicitly published fixture installed through the real atomic path. */
+async function installActiveFixtureSkill(
+  manager: import('../server/mcp/client').MCPClientManager,
+  name: string,
+  source: string,
+  options: { pendingActivation?: boolean; managedSkill?: import('../server/marketplace/official_identity').ManagedSkillIdentity } = {},
+): Promise<string> {
+  const directory = await manager.installSkillValidated(name, source, options);
+  const pkg = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
+  if (options.managedSkill && options.pendingActivation !== true && !pkg.lumi?.requiresApiKey) {
+    manager.beginSkillActivation(name);
+    manager.commitSkillActivation(name);
+  }
+  return directory;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   if (ORIGINAL_LUMI_DATA_DIR === undefined) delete process.env.LUMI_DATA_DIR;
@@ -453,7 +470,7 @@ describe('MCP skill install resilience', () => {
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
     const skillName = 'content-ops';
     const source = path.resolve('server', 'skills', 'bundled', skillName);
-    const installed = manager.installSkill(skillName, source, false, {
+    const installed = await installActiveFixtureSkill(manager, skillName, source, {
       managedSkill: createBundledSkillIdentity(`skill-${skillName}`, source),
     });
     const config = manager.getConfig();
@@ -507,7 +524,7 @@ describe('MCP skill install resilience', () => {
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
     const skillName = 'content-ops';
     const source = path.resolve('server', 'skills', 'bundled', skillName);
-    const installed = manager.installSkill(skillName, source, false, {
+    const installed = await installActiveFixtureSkill(manager, skillName, source, {
       managedSkill: createBundledSkillIdentity(`skill-${skillName}`, source),
     });
     const config = manager.getConfig();
@@ -564,7 +581,7 @@ describe('MCP skill install resilience', () => {
       const sourceIdentity = scenario === 'generated identity'
         ? createGeneratedSkillIdentity(skillName, source, 'sha256:reviewed-generated-fixture')
         : createBundledSkillIdentity(`skill-${skillName}`, source);
-      const installed = manager.installSkill(skillName, source, false, { managedSkill: sourceIdentity });
+      const installed = await installActiveFixtureSkill(manager, skillName, source, { managedSkill: sourceIdentity });
       const config = manager.getConfig();
       const installedPackagePath = path.join(installed, 'package.json');
 
@@ -723,102 +740,75 @@ describe('MCP skill install resilience', () => {
     await expect(manager.callTool('mcp_foo_bar_x', {})).rejects.toThrow(/Ambiguous MCP tool owner/);
   });
 
-  it('removes the npm skill workspace when dependency install fails', async () => {
-    const execMock = makeExec((_command, _options, callback) => {
-      callback(new Error('registry unavailable'), '', 'registry unavailable');
-    });
+  it('removes atomic staging when dependency preparation fails', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(new Error('registry unavailable'), '', 'registry unavailable'));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-
-    await expect(manager.installFromNpm('@scope/bad-skill')).rejects.toThrow('registry unavailable');
-
-    expect(fs.existsSync(path.join(skillsDir, 'scope-bad-skill'))).toBe(false);
+    const source = path.join(tempHome, 'dependency-failure-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'dependency-failure', dependencies: { 'lumi-audit-unavailable-dependency': '1.0.0' } }));
+    await expect(manager.installSkillValidated('dependency-failure', source)).rejects.toThrow('registry unavailable');
+    expect(execMock).toHaveBeenCalledOnce();
+    expect(fs.existsSync(path.join(skillsDir, 'dependency-failure'))).toBe(false);
+    expect(fs.readdirSync(skillsDir).filter(name => name.startsWith('.staging-'))).toEqual([]);
+    expect(manager.getConfig()).not.toHaveProperty('dependency-failure');
   });
 
-  it('rejects an empty normalized npm package without touching the installed skills root', async () => {
+  it('rejects an empty normalized installation name without touching the installed skills root', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    const skillsRoot = skillsDir;
-    fs.mkdirSync(skillsRoot, { recursive: true });
-    const sentinel = path.join(skillsRoot, 'keep-this-skill');
-    fs.mkdirSync(sentinel);
-    fs.writeFileSync(path.join(sentinel, 'index.ts'), 'export {};\n');
-
-    await expect(manager.installFromNpm('@')).rejects.toThrow(/Invalid npm skill package name/);
-
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const sentinel = path.join(skillsDir, 'keep-this-skill');
+    fs.mkdirSync(sentinel); fs.writeFileSync(path.join(sentinel, 'index.ts'), 'export {};\n');
+    await expect(manager.installSkillValidated('@', sentinel)).rejects.toThrow(/Invalid skill name/);
     expect(fs.existsSync(sentinel)).toBe(true);
     expect(execMock).not.toHaveBeenCalled();
   });
 
-  it('removes the GitHub checkout when npm install fails after clone', async () => {
-    const repoUrl = 'https://github.com/acme/failing-skill.git';
-    const execMock = makeExec((_command, _options, callback) => {
-      callback(new Error('dependency boom'), '', 'dependency boom');
-    });
-    const execFileMock = makeExecFile((file, args, _options, callback) => {
-      expect(file).toBe('git');
-      expect(args.slice(0, 4)).toEqual(['clone', '--depth', '1', repoUrl]);
-      const dest = args[4];
-      fs.mkdirSync(dest, { recursive: true });
-      fs.writeFileSync(path.join(dest, 'package.json'), JSON.stringify({
-        name: 'failing-skill',
-        version: '1.0.0',
-        lumi: { toolCount: 1 },
-      }, null, 2));
-      callback(null, '', '');
-    });
-    const { MCPClientManager } = await importClientWithExec(execMock, execFileMock);
-    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-
-    await expect(manager.installFromGitHub(repoUrl)).rejects.toThrow('dependency boom');
-
-    expect(execFileMock).toHaveBeenCalledOnce();
-    expect(fs.existsSync(path.join(skillsDir, 'failing-skill'))).toBe(false);
-  });
-
-  it('rejects unsupported GitHub URLs before cloning', async () => {
+  it('rolls back published files when atomic runtime registration fails', async () => {
     const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const execFileMock = makeExecFile((_file, _args, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock, execFileMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-
-    await expect(manager.installFromGitHub('https://github.com/acme/bad.git";calc"')).rejects.toThrow('Unsupported GitHub repository URL');
-
+    const source = path.join(tempHome, 'registration-failure-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'registration-failure', version: '1.0.0' }));
+    vi.spyOn(manager as any, 'registerLocalSkill').mockImplementation(() => { throw new Error('registration refused'); });
+    await expect(manager.installSkillValidated('registration-failure', source)).rejects.toThrow('registration refused');
+    expect(fs.existsSync(path.join(skillsDir, 'registration-failure'))).toBe(false);
+    expect(fs.readdirSync(skillsDir).filter(name => name.startsWith('.staging-'))).toEqual([]);
+    expect(manager.getConfig()).not.toHaveProperty('registration-failure');
     expect(execFileMock).not.toHaveBeenCalled();
-    expect(execMock).not.toHaveBeenCalled();
   });
 
-  it('keeps npm skills that need keys disabled and explicit in MCP config', async () => {
-    const npmPackage = '@vendor/keyed-skill';
-    const execMock = makeExec((_command, options, callback) => {
-      const depDir = path.join(options.cwd, 'node_modules', '@vendor', 'keyed-skill');
-      fs.mkdirSync(depDir, { recursive: true });
-      fs.writeFileSync(path.join(depDir, 'package.json'), JSON.stringify({
-        name: npmPackage,
-        version: '1.0.0',
-        description: 'Needs E2B',
-        lumi: {
-          runCommand: 'npx',
-          runArgs: ['-y', npmPackage],
-          requiresApiKey: true,
-          apiKeyEnv: 'E2B_API_KEY',
-          apiKeyUrl: 'https://e2b.dev',
-          toolCount: 2,
-        },
-      }, null, 2));
-      callback(null, '', '');
-    });
+  it('rejects URL-only installation sources without starting a checkout or package process', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
+    const execFileMock = makeExecFile((_file, _args, _options, callback) => callback(null, '', ''));
+    const { MCPClientManager } = await importClientWithExec(execMock, execFileMock);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    await expect(manager.installSkillValidated('url-only', 'https://github.com/acme/bad.git";calc"')).rejects.toThrow(/absolute|source directory/i);
+    expect(execFileMock).not.toHaveBeenCalled(); expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps reviewed package skills needing keys disabled and explicit in MCP config', async () => {
+    const execMock = makeExec((_command, _options, callback) => callback(null, '', ''));
     const { MCPClientManager } = await importClientWithExec(execMock);
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-
-    await manager.installFromNpm(npmPackage);
-
+    const source = path.join(tempHome, 'reviewed-keyed-source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
+      name: '@vendor/keyed-skill', version: '1.0.0', description: 'Needs E2B',
+      lumi: { runCommand: 'npx', runArgs: ['-y', '@vendor/keyed-skill'], requiresApiKey: true,
+        apiKeyEnv: 'E2B_API_KEY', apiKeyUrl: 'https://e2b.dev', toolCount: 2 },
+    }));
+    await manager.installSkillValidated('vendor-keyed-skill', source);
     const config = manager.getConfig()['vendor-keyed-skill'];
-    expect(config.enabled).toBe(false);
-    expect(config.requiresApiKey).toBe(true);
-    expect(config.apiKeyEnv).toBe('E2B_API_KEY');
-    expect(config.apiKeyUrl).toBe('https://e2b.dev');
+    expect(config.enabled).toBe(false); expect(config.requiresApiKey).toBe(true);
+    expect(config.apiKeyEnv).toBe('E2B_API_KEY'); expect(config.apiKeyUrl).toBe('https://e2b.dev');
+    expect(config.installationState).toBe('disabled'); expect(execMock).not.toHaveBeenCalled();
   });
 
   it('keeps local index skills that need keys disabled and explicit in MCP config', async () => {
@@ -841,7 +831,7 @@ describe('MCP skill install resilience', () => {
       },
     }, null, 2));
 
-    manager.installSkill('keyed-local', sourceDir);
+    await installActiveFixtureSkill(manager, 'keyed-local', sourceDir);
 
     const config = manager.getConfig()['keyed-local'];
     expect(config.enabled).toBe(false);
@@ -863,7 +853,7 @@ describe('MCP skill install resilience', () => {
       lumi: { toolCount: 1 },
     }, null, 2));
 
-    const destDir = manager.installSkill('../Unsafe Skill', sourceDir);
+    const destDir = await installActiveFixtureSkill(manager, '../Unsafe Skill', sourceDir);
 
     expect(destDir).toBe(path.join(skillsDir, 'unsafe-skill'));
     expect(fs.existsSync(path.join(tempHome, 'unsafe-skill'))).toBe(false);
@@ -941,7 +931,7 @@ describe('MCP skill install resilience', () => {
     fs.mkdirSync(source, { recursive: true });
     fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'locked-skill' }));
-    const installed = manager.installSkill('locked-skill', source);
+    const installed = await installActiveFixtureSkill(manager, 'locked-skill', source);
     const originalRmSync = fs.rmSync.bind(fs);
     const rm = vi.spyOn(fs, 'rmSync').mockImplementation(((target: fs.PathLike, options?: fs.RmDirOptions) => {
       if (path.resolve(String(target)) === path.resolve(installed)) throw new Error('injected lock');
@@ -1047,7 +1037,7 @@ describe('MCP skill install resilience', () => {
       version: '1.5.0',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('cad-drafting', originalSource, false, {
+    await installActiveFixtureSkill(manager, 'cad-drafting', originalSource, {
       managedSkill: createBundledSkillIdentity('skill-cad-drafting', originalSource),
     });
     expect(() => manager.assertLocalSkillRuntimeIdentity(
@@ -1098,7 +1088,7 @@ describe('MCP skill install resilience', () => {
       version: '1.6.1',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('cad-drafting', originalSource, false, {
+    await installActiveFixtureSkill(manager, 'cad-drafting', originalSource, {
       managedSkill: createBundledSkillIdentity('skill-cad-drafting', originalSource),
     });
 
@@ -1160,7 +1150,7 @@ describe('MCP skill install resilience', () => {
       version: '1.0.0',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('runtime-verified', source, false, {
+    await installActiveFixtureSkill(manager, 'runtime-verified', source, {
       managedSkill: createBundledSkillIdentity('skill-runtime-verified', source),
     });
     const installedEntry = path.join(skillsDir, 'runtime-verified', 'index.ts');
@@ -1184,7 +1174,7 @@ describe('MCP skill install resilience', () => {
       version: '1.0.0',
       lumi: { toolCount: 1 },
     }));
-    manager.installSkill('runtime-signature', source, false, {
+    await installActiveFixtureSkill(manager, 'runtime-signature', source, {
       managedSkill: createBundledSkillIdentity('skill-runtime-signature', source),
     });
 
@@ -1212,7 +1202,7 @@ describe('MCP skill install resilience', () => {
     fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
       name: 'lumi-skill-runtime-env', version: '1.0.0', lumi: { toolCount: 1 },
     }));
-    manager.installSkill('runtime-env', source, false, {
+    await installActiveFixtureSkill(manager, 'runtime-env', source, {
       managedSkill: createBundledSkillIdentity('skill-runtime-env', source),
     });
     const config = manager.getConfig();
@@ -1232,7 +1222,7 @@ describe('MCP skill install resilience', () => {
     fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({
       name: 'lumi-skill-runtime-cache', version: '1.0.0', lumi: { toolCount: 1 },
     }));
-    manager.installSkill('runtime-cache', source, false, {
+    await installActiveFixtureSkill(manager, 'runtime-cache', source, {
       managedSkill: createBundledSkillIdentity('skill-runtime-cache', source),
     });
     (manager as any).cacheToolDefinitions('runtime-cache', [{

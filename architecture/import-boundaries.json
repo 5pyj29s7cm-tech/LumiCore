@@ -88,12 +88,6 @@
       ],
       "reason": "Messaging accepted-turn and terminal-reply flush fence only; no root/table access."
     },
-    "routes/files.ts": {
-      "allowedExports": [
-        "flushDBOrThrow"
-      ],
-      "reason": "Knowledge file routes access bounded state through server/files/knowledge_state.ts and retain only the strict durability barrier here."
-    },
     "server/socket/chat/phases/resolve_chat_control_turn.ts": {
       "allowedExports": [
         "flushDBOrThrow"
@@ -135,6 +129,30 @@
         "flushDBOrThrow"
       ],
       "reason": "Durability-only responsibility moved from server/socket/voice_conversation_turn.ts; no database read, write or SQL grant."
+    },
+    "server/files/knowledge/uploads.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence transferred from routes/files.ts to its actual knowledge feature owner. This module may neither read/replace the database root nor execute SQL."
+    },
+    "server/files/knowledge/import_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence transferred from routes/files.ts to its actual knowledge feature owner. This module may neither read/replace the database root nor execute SQL."
+    },
+    "server/files/knowledge/access_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence transferred from routes/files.ts to its actual knowledge feature owner. This module may neither read/replace the database root nor execute SQL."
+    },
+    "server/files/knowledge/ingestion_routes.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence transferred from routes/files.ts to its actual knowledge feature owner. This module may neither read/replace the database root nor execute SQL."
     }
   },
   "approvedTableImporters": {

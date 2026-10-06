@@ -18,3 +18,5 @@ export const KNOWLEDGE_RESULT_MESSAGES = {
     statuses: { verified: 'verified', indexed_unverified: 'indexed but unverified', pending: 'pending', partial: 'partially processed', stale: 'needs an update', failed: 'failed', unsupported: 'unsupported format' },
   },
 };
+
+export const CN_KNOWLEDGE_UPLOAD_MESSAGE = (filename: string) => `文件已上传到组织知识库。\n\n文件名：${filename}`;
