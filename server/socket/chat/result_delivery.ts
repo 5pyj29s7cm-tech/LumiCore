@@ -58,24 +58,20 @@ export async function completeChatTurn(context: completeChatTurnInput) {
         isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
         trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
         toolRecords: context.taskAwareRecords(context.allToolRecords),
-        attempt: async ({ instruction, priorToolRecords, recordTool }) => {
+        attempt: async attempt => {
           console.warn('[ChatHandler] Recovering blocked execution internally.');
           context.llmWasCalled = true;
           const toolLifecycle = createToolLifecycleCallbacks({
             emit: context.emitToolLifecycle, correlationPrefix: 'guard-recovery',
             formatResult: context.formatToolResultForUi, includeFailedResult: true,
-            onRecord: record => { context.rememberRequestToolRecord(record); recordTool(record); },
+            onRecord: context.rememberRequestToolRecord,
             artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
           });
-          const recovery = await context.runAuthorizedTools({
+          const recovery = await context.runAuthorizedRecovery({
+            responseText: context.responseText, recovery: attempt,
+            model: {
             execution: context.executionPipeline,
-            messages: [
-              ...context.normalTurnMessages,
-              ...(String(context.responseText || '').trim()
-                ? [{ role: 'assistant' as const, content: context.responseText }]
-                : []),
-              { role: 'user', content: instruction },
-            ],
+            messages: context.normalTurnMessages,
             registry: toolRegistry,
             config: {
               provider: context.activeProvider,
@@ -94,17 +90,16 @@ export async function completeChatTurn(context: completeChatTurnInput) {
               source: 'chat_guard_recovery',
               onToolStart: toolLifecycle.onToolStart,
               ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
-              priorToolRecords,
               desktopExecutionTracker: context.desktopExecutionTracker,
               requestConfirmation: context.requestToolConfirmation,
             },
-              });
+            },
+          });
           recordTokenUsageBatch(context.uid, recovery.usageRecords, context.interactionId);
           return {
-            text: recovery.text,
-            completionGuard: recovery.completionGuard,
+            ...recovery,
             toolRecords: withDesktopExecutionReceipt(
-              recovery.toolCalls || [],
+              recovery.toolRecords || [],
               context.desktopExecutionTracker,
             ),
           };

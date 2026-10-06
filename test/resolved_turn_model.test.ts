@@ -1,4 +1,5 @@
 import './helpers';
+import { runResolvedLumiRecovery } from "../server/cognition/turn_recovery";
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { ToolRegistry } from '../server/tools/registry';
@@ -101,5 +102,53 @@ describe('admitted model mode across transport entries', () => {
     const input = admitted('rest_chat', 'Hello.');
     expect(() => runResolvedLumiTurn({ ...input, assertCurrent() { throw new Error('Owner revoked'); } })).toThrow('Owner revoked');
     expect(mocks.tools).not.toHaveBeenCalled(); expect(mocks.conversation).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('accepted recovery ownership', () => {
+  it.each(['chat', 'voice', 'messaging', 'rest_chat', 'mcp_chat'])('keeps the %s request, provider budget, receipts and failed response guard through recovery', async source => {
+    const model = admitted(source, 'Search the public web for synthetic examples.');
+    await runResolvedLumiTurn(model);
+    const prior = { id: 'prior-observation', name: 'web_search', arguments: { query: 'prior' }, result: 'Earlier source evidence' };
+    const record = { id: 'new-observation', name: 'web_search', arguments: { query: 'new' }, result: 'New source evidence' };
+    const guard = { text: 'The recovery response is incomplete.', blocked: true, reason: 'conversation_response_incomplete' };
+    const order: string[] = [], recordTool = vi.fn(() => { order.push('guard'); });
+    const onChunk = vi.fn();
+    mocks.tools.mockImplementationOnce(async (...args: any[]) => {
+      await args[3](record);
+      return { text: guard.text, toolCalls: [record], completionGuard: guard, usageRecords: [] };
+    });
+    const result = await runResolvedLumiRecovery({
+      model: { ...model, onStreamChunk: onChunk, context: { priorToolRecords: [] },
+        onToolCall: async () => { await Promise.resolve(); order.push('durable'); } },
+      responseText: 'An earlier rejected draft.',
+      recovery: { decision: { recoverable: true, reason: 'retry_real_tool_route' }, instruction: 'Continue only missing observation.', priorToolRecords: [prior], recordTool },
+    });
+    expect(result).toMatchObject({ text: guard.text, completionGuard: guard, toolRecords: [record] });
+    expect(order).toEqual(['durable', 'guard']); expect(recordTool).toHaveBeenCalledExactlyOnceWith(record); expect(onChunk).not.toHaveBeenCalled();
+    const call = mocks.tools.mock.calls[1];
+    expect(call[0]).toEqual([...model.messages, { role: 'assistant', content: 'An earlier rejected draft.' }, { role: 'user', content: 'Continue only missing observation.' }]);
+    expect(call[11].priorToolRecords).toEqual([prior]);
+    expect(call[11].requestId).toBe(model.execution.resolution.requestId);
+    expect(call[2].modelTurnState).toBe(mocks.tools.mock.calls[0][2].modelTurnState);
+    expect(call[10]).toBeUndefined();
+  });
+  it('keeps a non-executable recovery on the no-tool path even with a visible registry', async () => {
+    const model = admitted('mcp_chat', 'Hello.');
+    const recordTool = vi.fn();
+    const result = await runResolvedLumiRecovery({ model, responseText: '  ', recovery: {
+      decision: { recoverable: false, reason: 'conversation_requires_natural_clarification' },
+      instruction: 'Answer naturally.', priorToolRecords: [], recordTool,
+    } });
+    expect(result.text).toBe('A neutral answer.'); expect(mocks.tools).not.toHaveBeenCalled(); expect(recordTool).not.toHaveBeenCalled();
+    expect(mocks.conversation.mock.calls[0][0]).toEqual([...model.messages, { role: 'user', content: 'Answer naturally.' }]);
+  });
+  it('stops a revoked recovery owner before any provider or tool callback', async () => {
+    const model = admitted('chat', 'Search the public web for synthetic examples.'); const recordTool = vi.fn();
+    await expect(runResolvedLumiRecovery({ model: { ...model, assertCurrent() { throw new Error('Owner revoked'); } },
+      responseText: '', recovery: { decision: { recoverable: true, reason: 'retry_real_tool_route' }, instruction: 'Continue.', priorToolRecords: [], recordTool },
+    })).rejects.toThrow('Owner revoked');
+    expect(mocks.tools).not.toHaveBeenCalled(); expect(mocks.conversation).not.toHaveBeenCalled(); expect(recordTool).not.toHaveBeenCalled();
   });
 });

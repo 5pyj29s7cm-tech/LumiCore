@@ -1,4 +1,4 @@
-import { runResolvedLumiTurn } from "../../../cognition/turn_model";
+import { runResolvedLumiRecovery } from "../../../cognition/turn_recovery";
 import { logger } from "../../../../logger";
 import { extractTopics, trackTopic } from "../../../conversation/manager";
 import { finalizeLumiResponseForDelivery } from "../../../cognition/response_delivery";
@@ -37,17 +37,15 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
       isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
         trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
       toolRecords: context.taskAwareRecords(context.toolResults),
-      attempt: async ({ instruction, priorToolRecords, recordTool }) => {
+      attempt: async attempt => {
         logger.warn('[Audio] Recovering blocked execution internally.');
           context.turnAuthorization.assertCurrent();
-      const recoveryLifecycle = context.observeVoiceTools(recordTool);
-      const recovery = await runResolvedLumiTurn({
+      const recoveryLifecycle = context.observeVoiceTools();
+      const recovery = await runResolvedLumiRecovery({
+        responseText: context.responseText, recovery: attempt,
+        model: {
       execution: context.executionPipeline,
-        messages: [
-              ...context.recoveryConversationMessages,
-              { role: 'assistant', content: context.responseText },
-              { role: 'user', content: instruction },
-          ],
+        messages: context.recoveryConversationMessages,
         registry: toolRegistry,
         config: {
             provider: context.provider,
@@ -66,17 +64,16 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
             ...context.toolContext,
             ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
             source: 'voice_guard_recovery',
-            priorToolRecords,
             isCancelled: () => !context.isCurrentTurn(),
             onToolStart: recoveryLifecycle.onToolStart,
           },
         getters: context.llmGetters,
+        },
       });
         recordTokenUsageBatch(context.session.userId, recovery.usageRecords, () => `voice_guard_recovery_${Date.now()}`, 'voice');
         return {
-          text: recovery.text,
-          completionGuard: recovery.completionGuard,
-          toolRecords: withDesktopExecutionReceipt(recovery.toolCalls, context.desktopExecutionTracker),
+          ...recovery,
+          toolRecords: withDesktopExecutionReceipt(recovery.toolRecords || [], context.desktopExecutionTracker),
         };
       },
       refinalize: (candidateText, records, recoveryCompletionGuard) => {

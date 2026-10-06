@@ -1,5 +1,6 @@
+import { runResolvedLumiRecovery } from "../cognition/turn_recovery";
 import { runLumiTurn } from "../llm/lumi_turn";
-import { runResolvedLumiTurn } from "../cognition/turn_model";
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../cognition/turn_model";
 
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
@@ -319,7 +320,6 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
       });
       const restTurnDispatch = restExecutionPipeline.turnIntent;
       const restModelToolPolicy = restExecutionPipeline.authorizationPolicy;
-      const restModelToolProjection = restExecutionPipeline.modelToolProjection;
       const restToolSessionActive = restExecutionPipeline.executionRequested;
       const deferRestStream =
         restToolSessionActive
@@ -328,12 +328,9 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           flow: restTurnDispatch.flow,
         });
       const toolContext = {
-        requestId, resolutionId: restExecutionPipeline.resolution.id,
-        ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
+        requestId, ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
           && persistedTurn.taskId === businessMetadata?.conversationTaskId ? { turnRowId: persistedTurn.id } : {}),
         ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
-        currentTurnExecutionRequested: restExecutionPipeline.executionRequested,
-        trustedActionContinuation: restExecutionPipeline.trustedActionContinuation,
         userId,
         authenticated: Boolean(req.user),
         authRole: req.user?.role,
@@ -346,8 +343,6 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
         source: trustedLocalExecution ? 'rest_chat_local' : 'rest_chat',
         actionIntent: routeText,
         routedTaskText: restTurnDispatch.flow.routeText,
-        toolPolicy: restModelToolPolicy,
-        modelToolProjection: restModelToolProjection,
       };
       const systemInstruction = buildRestChatSystemInstruction({
         routeText,
@@ -400,12 +395,12 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           ...conversationMessages,
         ];
 
-        const runRestToolTurn = (
+        const buildRestModelInput = (
           turnMessages: any[],
           onToolRecord?: (record: ToolExecutionRecord) => void,
           onChunk?: (chunk: string) => void,
           source = toolContext.source,
-        ) => runResolvedLumiTurn({
+        ): ResolvedTurnModelInput => ({
       execution: restExecutionPipeline,
           assertCurrent: assertRequestActive,
           streaming: Boolean(onChunk),
@@ -426,7 +421,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
 
         const finalizeRestToolResult = async (
           candidateText: string,
-          result: Awaited<ReturnType<typeof runRestToolTurn>>,
+          result: Awaited<ReturnType<typeof runResolvedLumiTurn>>,
           source: string,
         ) => {
           assertRequestActive();
@@ -441,25 +436,13 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
             taskId: toolContext.taskId,
             requestId: toolContext.requestId,
             allowToolUse: restToolSessionActive,
-            attempt: async ({ instruction, recordTool }) => {
-              const recovery = await runRestToolTurn(
-                [
-                  ...normalizedMessages,
-                  ...(candidateText.trim()
-                    ? [{ role: 'assistant', content: candidateText }]
-                    : []),
-                  { role: 'user', content: instruction },
-                ],
-                recordTool,
-                undefined,
-                'rest_chat_guard_recovery',
-              );
-              usageRecords.push(...(recovery.usageRecords || []));
-              return {
-                text: recovery.text,
-                completionGuard: recovery.completionGuard,
-                toolRecords: recovery.toolCalls,
-              };
+            attempt: async attempt => {
+              const recovery = await runResolvedLumiRecovery({
+                model: buildRestModelInput(normalizedMessages, undefined, undefined, 'rest_chat_guard_recovery'),
+                responseText: candidateText, recovery: attempt,
+              });
+              usageRecords.push(...recovery.usageRecords);
+              return recovery;
             },
           });
           assertRequestActive();
@@ -481,11 +464,11 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           });
         }
         const restTextGate = createPreFinalizationTextGate();
-        const result = await runRestToolTurn(normalizedMessages, undefined, stream ? chunk => {
+        const result = await runResolvedLumiTurn(buildRestModelInput(normalizedMessages, undefined, stream ? chunk => {
           if (request.signal.aborted || deferRestStream) return;
           const safeText = restTextGate.push(chunk);
           if (safeText) res.write(`data: ${JSON.stringify({ chunk: safeText })}\n\n`);
-        } : undefined);
+        } : undefined));
         restTextGate.finish();
         const delivery = await finalizeRestToolResult(result.text || '', result, stream ? 'rest_chat_stream' : 'rest_chat');
         const finalized = delivery.outbound.finalization;

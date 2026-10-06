@@ -150,6 +150,32 @@ describe('remote channel execution evidence', () => {
     expect(f.task().status).toBe('blocked');
   });
 
+  it('keeps a recovery response blocked after a real read receipt when its model guard failed', async () => {
+    const f = fixture(); f.message.text = `Please read ${f.target} and report its exact contents.`;
+    const registry = new ToolRegistry();
+    registry.register({ name: 'read_file', description: 'Read the isolated receipt fixture', permission: 'public', securityLevel: 'safe',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      handler: async () => fs.readFileSync(f.target, 'utf8'),
+    });
+    model.run.mockResolvedValueOnce({ text: 'I have read the file and completed the task.', toolCalls: [], usageRecords: [] });
+    model.run.mockImplementationOnce(async (...args: any[]) => {
+      const record = await executeToolCall({ registry, id: f.id + '-recovery-read', name: 'read_file', arguments: { path: f.target }, context: args[11] });
+      expect(record.error).toBeUndefined(); await args[3]?.(record);
+      return { text: 'Quantity: 4; unit price: 25.', toolCalls: [record], usageRecords: [],
+        completionGuard: { text: 'The model response could not be completed.', blocked: true, reason: 'conversation_response_incomplete' } };
+    });
+    const remoteMemory = await import('../server/regions/packs/cn/remote_memory');
+    const learning = vi.spyOn(remoteMemory, 'persistRemotePostTurnLearning').mockResolvedValue();
+    try {
+    await routes.processWithPersonality(f.message, {});
+    expect(learning).not.toHaveBeenCalled();
+    expect(model.run).toHaveBeenCalledTimes(2); expect(f.receipts()).toHaveLength(1); expect(f.task().status).toBe('blocked');
+    const assistant = getMessages(f.task().conversationId).find(row => row.role === 'assistant');
+    expect(assistant?.toolCalls).toEqual([expect.objectContaining({ name: 'read_file', result: 'Quantity: 4; unit price: 25.' })]);
+    expect(assistant?.message).toContain('could not be completed');
+    } finally { learning.mockRestore(); }
+  });
+
   it('keeps archiving already started work when admission is closed for shutdown', async () => {
     const f = fixture(); f.install(true);
     await routes.processWithPersonality(f.message, {});

@@ -39,10 +39,14 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
     expect(voice).toContain('|| executionPipeline.trustedActionContinuation');
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    const modelOwner = readFileSync(path.join(root, 'server/cognition/turn_model.ts'), 'utf8');
+    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(modelOwner).toContain('toolPolicy: execution.authorizationPolicy');
+    expect(modelOwner).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
-    expect(rest).toContain('currentTurnExecutionRequested: restExecutionPipeline.executionRequested');
-    expect(rest).toContain('trustedActionContinuation: restExecutionPipeline.trustedActionContinuation');
+    expect(modelOwner).toContain('currentTurnExecutionRequested: true');
+    expect(modelOwner).toContain('trustedActionContinuation: execution.trustedActionContinuation');
+    expect(rest).not.toContain('const restModelToolProjection =');
 
     for (const source of [voice, rest]) {
       expect(source).not.toContain('buildModelCapabilityPolicy');

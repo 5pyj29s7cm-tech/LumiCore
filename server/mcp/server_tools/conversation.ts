@@ -1,4 +1,5 @@
-import { runResolvedLumiTurn } from "../../cognition/turn_model";
+import { runResolvedLumiRecovery } from "../../cognition/turn_recovery";
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
 import { bindCapabilityExecutionPlanTask } from "../../cognition/capability_execution_plan";
 import { TASK_TARGET_HISTORY_LIMIT } from "../../conversation/task_target_anchor";
 import { resolveConversationForEntry } from "../../conversation/entry_conversation";
@@ -88,12 +89,12 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
               emit('agent:tool_call', { correlationId: cid, name: record.name, status: 'completed', result: 'completed' });
             }
         };
-        const runMcpChatTurn = (
+        const buildMcpModelInput = (
           turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
           onToolRecord?: (record: ToolRecordEvent) => void,
           onChunk?: (chunk: string) => void,
           source: string = entry.source,
-        ) => runResolvedLumiTurn({
+        ): ResolvedTurnModelInput => ({
       execution: pipeline,
           assertCurrent: () => authorization.assertCurrent(),
           streaming: false,
@@ -107,19 +108,13 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
             signal: controller.signal,
           },
           onToolCall: onToolRecord,
-          maxIterations: Math.min(entry.maxIterations, pipeline.authorizationPolicy.maxIterations),
+          maxIterations: entry.maxIterations,
           onStreamChunk: onChunk,
           context: {
             userId: scope.userId,
             domain: scope.domain,
             orgId: scope.orgId,
-            toolPolicy: pipeline.authorizationPolicy,
-            requestId, conversationId, taskId, turnRowId, turnId: requestId,
-             resolutionId: pipeline.resolution.id,
-            currentTurnExecutionRequested: pipeline.executionRequested,
-            modelToolProjection: pipeline.modelToolProjection,
-            actionIntent: message, routedTaskText: pipeline.turnIntent.flow.routeText,
-            trustedActionContinuation: pipeline.trustedActionContinuation,
+            conversationId, taskId, turnRowId, actionIntent: message, routedTaskText: pipeline.turnIntent.flow.routeText,
             acceptedTaskTarget: pipeline.turnIntent.flow.acceptedTaskTarget,
             onToolRecord: record => receiptObserver?.onToolRecord(record),
             isCancelled: () => controller.signal.aborted || !authorization.isCurrent(),
@@ -142,36 +137,10 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
             toolRecords,
             source: background ? entry.source + '_background' : entry.source,
             allowToolUse: pipeline.executionRequested && !explicitMemory,
-            attempt: async ({ instruction, recordTool }) => {
-              const recovery = await runMcpChatTurn(
-                [
-                  ...messages,
-                  ...(candidateText
-                    ? [{ role: 'assistant' as const, content: candidateText }]
-                    : []),
-                  { role: 'user', content: instruction },
-                ],
-                record => {
-                  recordMcpChatTool(record);
-                  if (record.result !== undefined || record.error !== undefined) {
-                    recordTool({
-                      id: record.id,
-                      name: record.name,
-                      arguments: record.arguments || {},
-                      result: record.result || '',
-                      error: record.error,
-                    });
-                  }
-                },
-                undefined,
-                entry.source + '_guard_recovery',
-              );
-              return {
-                text: recovery.text,
-                completionGuard: recovery.completionGuard,
-                toolRecords: recovery.toolCalls,
-              };
-            },
+            attempt: recovery => runResolvedLumiRecovery({
+              model: buildMcpModelInput(messages, recordMcpChatTool, undefined, entry.source + '_guard_recovery'),
+              responseText: candidateText, recovery,
+            }),
           });
           let finalized = outbound.finalization;
           toolRecords.splice(0, toolRecords.length, ...outbound.toolRecords);
@@ -295,7 +264,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           const heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
           try {
             const response = explicitMemory ? { text: '', toolCalls: [], usageRecords: [] }
-              : await runMcpChatTurn(messages, recordMcpChatTool, chunk => bufferedChunks.push(chunk));
+              : await runResolvedLumiTurn(buildMcpModelInput(messages, recordMcpChatTool, chunk => bufferedChunks.push(chunk)));
             return await deliverFinalizedChatResponse(response, background);
           } catch (error) {
             if (authorization.isCurrent()) {

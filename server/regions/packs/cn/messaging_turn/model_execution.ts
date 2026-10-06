@@ -1,4 +1,5 @@
-import { runResolvedLumiTurn } from "../../../../cognition/turn_model";
+import { runResolvedLumiRecovery } from "../../../../cognition/turn_recovery";
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../../cognition/turn_model";
 import type { MessageHandler } from "../../../../messaging/types";
 import { MessagingAuthorizationRevokedError } from "../../../../messaging/turn_authorization";
 import { toolRegistry } from "../../../../tools/registry";
@@ -179,11 +180,11 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
 
     let completionGuard: LLMResult['completionGuard'];
     const entryHandled = Boolean(deterministicEntryReply);
-    const runMessagingToolTurn = (
+    const buildMessagingModelInput = (
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
       executionSource = context.source,
-    ) => runResolvedLumiTurn({
+    ): ResolvedTurnModelInput => ({
       execution: context.executionPlan,
       assertCurrent: () => assertMessagingAuthorization(context.msg),
       isCancelled: context.actionWasCancelled,
@@ -193,13 +194,13 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
       config: context.userLLMPrefs,
       onToolCall: record => { context.collectToolRecord(record); onToolRecord?.(record); },
       maxIterations: context.modelToolPolicy.maxIterations || context.executionDecision.maxIterations,
-      context: { ...context.remoteToolContext, source: executionSource, modelToolProjection: context.modelToolProjection },
+      context: { ...context.remoteToolContext, source: executionSource,  },
       getters: context.llm,
     });
 
     if (!entryHandled) {
       assertMessagingAuthorization(context.msg);
-      const result = await runMessagingToolTurn(context.messages);
+      const result = await runResolvedLumiTurn(buildMessagingModelInput(context.messages));
       responseText = result.text || '';
       completionGuard = result.completionGuard;
       context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
@@ -271,30 +272,19 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
       aborted: context.actionWasCancelled(),
       isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
       isAborted: context.actionWasCancelled,
-      attempt: async ({ instruction, recordTool }) => {
-        const recovery = await runMessagingToolTurn(
-          [
-            ...context.messages,
-            ...(deliveryText.trim()
-              ? [{ role: 'assistant' as const, content: deliveryText }]
-              : []),
-            { role: 'user', content: instruction },
-          ],
-          recordTool,
-          `${context.source}_guard_recovery`,
-        );
-        recordTokenUsageBatch(context.effectiveUserId, recovery.usageRecords || [], usageInteractionId, 'chat');
-        return {
-          text: recovery.text,
-          toolRecords: withCurrentMessagingDesktopExecutionReceipt(
-            recovery.toolCalls || [],
-            context.desktopExecutionTracker,
-            context.actionTaskExecution.state?.taskId,
-            context.requestId,
-          ),
-        };
+      trustedConfirmationRequestText: () => context.pendingConfirmationCreatedThisTurn
+        ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn) : undefined,
+      attempt: async attempt => {
+        const recovery = await runResolvedLumiRecovery({
+          model: buildMessagingModelInput(context.messages, undefined, `${context.source}_guard_recovery`),
+          responseText: deliveryText, recovery: attempt,
+        });
+        recordTokenUsageBatch(context.effectiveUserId, recovery.usageRecords, usageInteractionId, 'chat');
+        return { ...recovery, toolRecords: withCurrentMessagingDesktopExecutionReceipt(
+          recovery.toolRecords || [], context.desktopExecutionTracker, context.actionTaskExecution.state?.taskId, context.requestId,
+        ) };
       },
-      refinalize: (candidateText, records) => context.pendingConfirmationCreatedThisTurn
+      refinalize: (candidateText, records, recoveryCompletionGuard) => context.pendingConfirmationCreatedThisTurn
         ? {
             text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
             blocked: false,
@@ -303,6 +293,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
         : finalizeLumiResponse({
             taskText: context.routingText,
             responseText: candidateText,
+            completionGuard: recoveryCompletionGuard,
             toolRecords: currentMessagingFinalizationRecords({
               toolRecords: withCurrentMessagingDesktopExecutionReceipt(
                 records,
@@ -334,6 +325,10 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
     context.organizationWorkExecution?.assertCurrent();
     const committedText = await context.commitReply(finalized.text, {
       toolCalls: context.toolRecords,
+      ...(finalized.blocked && context.actionTaskExecution.state?.taskId ? { terminalTaskDisposition: {
+        outcome: 'blocked' as const, taskId: context.actionTaskExecution.state.taskId, requestId: context.requestId,
+        reason: finalized.reason || 'The remote response did not pass final verification.',
+      } } : {}),
       beforeFlush: superseded => {
         if (superseded) {
           context.settleSupersededRemoteTurn('The remote turn was superseded by a newer user message.');
@@ -379,7 +374,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
     // completed, making a model outage look like part of the task and
     // needlessly competing with receipt persistence. Learned state for these
     // commands comes from the authoritative organization transaction instead.
-    if (!entryHandled) {
+    if (!entryHandled && !outbound.finalization.blocked) {
       try {
         void persistRemotePostTurnLearning({
           message: context.msg,
