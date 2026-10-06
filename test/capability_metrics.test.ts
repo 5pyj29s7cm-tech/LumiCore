@@ -6,7 +6,7 @@ import {
   recordDesktopPlanCreated,
   recordKnowledgeCoverageEvaluation,
   recordKnowledgeRetrievalEvaluation,
-  recordRoutingShadowComparison,
+  recordExternalCapabilityValidation,
   resetCapabilityRuntimeMetricsForTests,
 } from '../server/runtime/capability_metrics';
 
@@ -27,7 +27,7 @@ describe('capability runtime metrics', () => {
       evidence: [],
       completionVerified: false,
     });
-    recordRoutingShadowComparison(false, true);
+    recordExternalCapabilityValidation(false, true);
 
     const metrics = getCapabilityRuntimeMetrics();
     expect(metrics.desktop).toMatchObject({

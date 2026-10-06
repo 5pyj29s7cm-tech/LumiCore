@@ -34,16 +34,16 @@ import {
   type LumiTurnDispatchInput,
 } from './turn_dispatch';
 import {
-  applyLumiRoutingShadowGuard,
-  compareLumiRoutingShadow,
-  type LumiRoutingShadowComparison,
-} from './routing_shadow_guard';
+  applyExternalCapabilityBoundary,
+  validateExternalCapabilityBoundary,
+  type LumiExternalCapabilityBoundary,
+} from './external_capability_boundary';
 import {
   buildCapabilityExecutionPlan,
   formatCapabilityExecutionPlanPrompt,
   type CapabilityExecutionPlan,
 } from './capability_execution_plan';
-import { recordRoutingShadowComparison } from '../runtime/capability_metrics';
+import { recordExternalCapabilityValidation } from '../runtime/capability_metrics';
 import { observeLayaDecision } from '../runtime/laya_shadow';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import { avatarAuthoringMutationInstruction } from './media_creation_intent';
@@ -80,7 +80,7 @@ export interface LumiExecutionPipeline {
   actionFollowupIntent: RecentActionFollowupIntent;
   taskRelation: ActiveTaskMessageResolution;
   intentTrace: LumiIntentTrace;
-  shadowComparison: LumiRoutingShadowComparison;
+  externalCapabilityBoundary: LumiExternalCapabilityBoundary;
 }
 
 export interface BuildLumiExecutionPipelineInput {
@@ -351,7 +351,7 @@ export function buildLumiExecutionPipeline(
     visibilityContext,
   });
   const unrestrictedManifest = input.registry.getCapabilityManifest(routedExecution.toolPolicy, { context: visibilityContext });
-  const shadowComparison = compareLumiRoutingShadow({
+  const externalCapabilityBoundary = validateExternalCapabilityBoundary({
     normalizedIntent,
     execution: routedExecution,
     manifest: unrestrictedManifest,
@@ -359,7 +359,7 @@ export function buildLumiExecutionPipeline(
   const constraintText = trustedActionContinuation && !preservedSourceOutputScope(actionText) ? effectiveText : actionText;
   const execution = restrictLumiExecutionTools(
     applyCurrentTurnNoMutationConstraint(
-      applyLumiRoutingShadowGuard(routedExecution, shadowComparison),
+      applyExternalCapabilityBoundary(routedExecution, externalCapabilityBoundary),
       input.registry,
       constraintText,
       visibilityContext,
@@ -467,11 +467,11 @@ export function buildLumiExecutionPipeline(
     text: input.traceText || decisionText,
     source: input.source || input.dispatch.source || input.dispatch.channel,
   }, analysis);
-  recordRoutingShadowComparison(shadowComparison.aligned, shadowComparison.externalCommitBlocked);
-  if (!shadowComparison.aligned) {
-    intentTrace.matchedRules.push({ layer: 'shadow_route', name: 'normalized-legacy-divergence' });
-    intentTrace.reasons.push(`shadow route:${shadowComparison.reason}`);
-    if (shadowComparison.externalCommitBlocked) {
+  recordExternalCapabilityValidation(externalCapabilityBoundary.aligned, externalCapabilityBoundary.externalCommitBlocked);
+  if (!externalCapabilityBoundary.aligned) {
+    intentTrace.matchedRules.push({ layer: 'external_capability', name: 'instruction-capability-mismatch' });
+    intentTrace.reasons.push(`external capability boundary:${externalCapabilityBoundary.reason}`);
+    if (externalCapabilityBoundary.externalCommitBlocked) {
       intentTrace.blockedBy.push('external_commit_route_divergence');
     }
   }
@@ -495,7 +495,7 @@ export function buildLumiExecutionPipeline(
     executionRequested,
     trustedActionContinuation,
     intentTrace,
-    shadowComparison,
+    externalCapabilityBoundary,
     actionFollowupIntent,
     taskRelation,
   };

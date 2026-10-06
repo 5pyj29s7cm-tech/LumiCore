@@ -107,7 +107,7 @@ export function recordDesktopExecutionReceipt(receipt: DesktopExecutionReceipt):
   if (receipt.applicationCertification === 'mismatch') counters.desktop.identityMismatches += 1;
 }
 
-export function recordRoutingShadowComparison(aligned: boolean, externalCommitBlocked: boolean): void {
+export function recordExternalCapabilityValidation(aligned: boolean, externalCommitBlocked: boolean): void {
   counters.routing.comparisons += 1;
   if (!aligned) counters.routing.divergences += 1;
   if (externalCommitBlocked) counters.routing.externalCommitBlocks += 1;

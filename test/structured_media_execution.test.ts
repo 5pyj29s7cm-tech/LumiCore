@@ -53,7 +53,7 @@ describe('media requests through the complete shared planning pipeline', () => {
       personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 10 },
     });
     expect({ intent: pipeline.normalizedIntent, execute: pipeline.executionRequested, tools: pipeline.modelToolProjection.toolNames,
-      comparison: pipeline.shadowComparison }).toMatchObject({ intent: { kind: 'media_generation' }, execute: true,
+      comparison: pipeline.externalCapabilityBoundary }).toMatchObject({ intent: { kind: 'media_generation' }, execute: true,
       tools: expect.arrayContaining(['generate_image']), comparison: { externalCommitBlocked: false } });
     expect(pipeline.authorizationPolicy.forbiddenTools).toContain('send_email');
     expect(pipeline.turnIntent.flow.routeText).toContain(state.goal);

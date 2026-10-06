@@ -1,18 +1,14 @@
 import type { CapabilityManifestEntry } from '../tools/types';
 import { restrictLumiExecutionTools, type LumiExecutionDecision } from './execution_decision';
-import type { NormalizedActionIntent, NormalizedSideEffectClass } from './normalized_action_intent';
+import type { NormalizedActionIntent } from './normalized_action_intent';
 
 const EXTERNAL_SIDE_EFFECTS = new Set([
   'external_state_change',
   'external_communication',
 ]);
 
-export interface LumiRoutingShadowComparison {
+export interface LumiExternalCapabilityBoundary {
   version: 1;
-  normalizedClass: NormalizedSideEffectClass;
-  legacyClass: NormalizedSideEffectClass;
-  normalizedKind: NormalizedActionIntent['kind'];
-  legacyExternalTools: string[];
   blockedExternalTools: string[];
   aligned: boolean;
   externalCommitBlocked: boolean;
@@ -25,22 +21,6 @@ function unique(values: string[]): string[] {
 
 function isExternal(entry: CapabilityManifestEntry): boolean {
   return entry.sideEffects.some(effect => EXTERNAL_SIDE_EFFECTS.has(effect.type));
-}
-
-function isLocalMutation(entry: CapabilityManifestEntry): boolean {
-  return entry.sideEffects.some(effect => (
-    effect.type === 'local_write'
-    || effect.type === 'local_state_change'
-    || effect.type === 'desktop_control'
-    || effect.type === 'process_execution'
-    || effect.type === 'installation'
-  ));
-}
-
-function classifyLegacyRoute(entries: CapabilityManifestEntry[]): NormalizedSideEffectClass {
-  if (entries.some(isExternal)) return 'external_commit';
-  if (entries.some(isLocalMutation)) return 'local_write';
-  return 'none';
 }
 
 function isExpectedExternalTool(
@@ -58,44 +38,37 @@ function isExpectedExternalTool(
 }
 
 /**
- * Compare the normalized safety route with the legacy capability route used
- * during the internal rollout. A disagreement can never authorize an external
- * side effect: all external-capability tools are removed from the executor
- * policy until both routes agree.
+ * Validate selected capabilities against the accepted normalized instruction.
+ * A non-committing instruction or a missing matching capability can never
+ * authorize an external side effect. Every policy view receives the same veto.
  */
-export function compareLumiRoutingShadow(input: {
+export function validateExternalCapabilityBoundary(input: {
   normalizedIntent: NormalizedActionIntent;
   execution: LumiExecutionDecision;
   manifest: CapabilityManifestEntry[];
-}): LumiRoutingShadowComparison {
+}): LumiExternalCapabilityBoundary {
   const routeNames = new Set(input.execution.toolRoute?.toolNames || []);
   const routedEntries = input.manifest.filter(entry => routeNames.has(entry.toolName));
-  const legacyExternalEntries = routedEntries.filter(isExternal);
+  const externalEntries = routedEntries.filter(isExternal);
   const allExternalTools = unique(input.manifest.filter(isExternal).map(entry => entry.toolName));
-  const normalizedClass = input.normalizedIntent.sideEffectClass;
-  const legacyClass = classifyLegacyRoute(routedEntries);
-  const expectsExternal = normalizedClass === 'external_commit';
-  const hasExpectedExternal = legacyExternalEntries.some(entry => (
+  const expectsExternal = input.normalizedIntent.sideEffectClass === 'external_commit';
+  const hasExpectedExternal = externalEntries.some(entry => (
     isExpectedExternalTool(input.normalizedIntent, entry)
   ));
-  const unexpectedExternal = !expectsExternal && legacyExternalEntries.length > 0;
+  const unexpectedExternal = !expectsExternal && externalEntries.length > 0;
   const missingOrWrongExternal = expectsExternal && !hasExpectedExternal;
   const aligned = !unexpectedExternal && !missingOrWrongExternal;
   const externalCommitBlocked = !aligned && (
-    expectsExternal || legacyExternalEntries.length > 0
+    expectsExternal || externalEntries.length > 0
   );
   const reason = aligned
-    ? 'normalized intent and legacy capability route agree on external side effects'
+    ? 'normalized intent and selected capabilities agree on external side effects'
     : unexpectedExternal
-      ? `normalized ${input.normalizedIntent.kind} is non-committing but the legacy route exposed external tools`
-      : `normalized ${input.normalizedIntent.kind} requires an external commit but the legacy route did not expose a matching external capability`;
+      ? `normalized ${input.normalizedIntent.kind} is non-committing but the selected route exposed external tools`
+      : `normalized ${input.normalizedIntent.kind} requires an external commit but the selected route did not expose a matching external capability`;
 
   return {
     version: 1,
-    normalizedClass,
-    legacyClass,
-    normalizedKind: input.normalizedIntent.kind,
-    legacyExternalTools: legacyExternalEntries.map(entry => entry.toolName),
     blockedExternalTools: externalCommitBlocked ? allExternalTools
       : input.normalizedIntent.kind === 'media_generation'
         ? allExternalTools.filter(name => !(input.normalizedIntent.mediaTools || [input.normalizedIntent.target]).includes(name as any)) : [],
@@ -105,15 +78,15 @@ export function compareLumiRoutingShadow(input: {
   };
 }
 
-export function applyLumiRoutingShadowGuard(
+export function applyExternalCapabilityBoundary(
   execution: LumiExecutionDecision,
-  comparison: LumiRoutingShadowComparison,
+  comparison: LumiExternalCapabilityBoundary,
 ): LumiExecutionDecision {
   return restrictLumiExecutionTools(execution, comparison.blockedExternalTools, [
-    '## External Commit Shadow Gate',
+    '## External Commit Authorization Boundary',
     comparison.externalCommitBlocked
-      ? `External commit tools are disabled for this turn because route comparison diverged: ${comparison.reason}.`
+      ? `External commit tools are disabled for this turn because the selected capabilities do not match the accepted instruction: ${comparison.reason}.`
       : 'Only the explicitly requested media generator is authorized among external tools. Unrelated external actions remain disabled.',
-    'Do not retry through a legacy, desktop, browser, or alternate-provider path.',
+    'Do not retry through a desktop, browser, or alternate-provider path.',
   ].join('\n'));
 }

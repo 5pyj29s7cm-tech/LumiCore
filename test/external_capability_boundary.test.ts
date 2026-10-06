@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { LumiExecutionDecision } from '../server/cognition/execution_decision';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import {
-  applyLumiRoutingShadowGuard,
-  compareLumiRoutingShadow,
-} from '../server/cognition/routing_shadow_guard';
+  applyExternalCapabilityBoundary,
+  validateExternalCapabilityBoundary,
+} from '../server/cognition/external_capability_boundary';
 import { executeForegroundMessagingAction } from '../server/cognition/foreground_messaging_execution';
 import { ToolRegistry } from '../server/tools/registry';
 import { buildModelCapabilityPolicy } from '../server/cognition/capability_selection';
@@ -58,7 +58,7 @@ const manifest: any[] = [
   },
 ];
 
-describe('normalized/legacy routing shadow guard', () => {
+describe('accepted instruction / selected capability boundary', () => {
   it('normalizes high-consequence external commits without relying on one action word', () => {
     expect(normalizeActionIntent('把这份合同提交到供应商门户')).toMatchObject({
       kind: 'external_submit', sideEffectClass: 'external_commit', operation: 'mutate',
@@ -72,15 +72,15 @@ describe('normalized/legacy routing shadow guard', () => {
   });
 
   it('blocks every external tool when a read is misrouted as send', () => {
-    const legacy = execution(['wechat_read_recent_chat', 'wechat_send_message']);
-    legacy.selfRepairToolPolicy = { ...legacy.baseToolPolicy };
-    legacy.clientActionToolPolicy = { ...legacy.baseToolPolicy };
-    const comparison = compareLumiRoutingShadow({
+    const routed = execution(['wechat_read_recent_chat', 'wechat_send_message']);
+    routed.selfRepairToolPolicy = { ...routed.baseToolPolicy };
+    routed.clientActionToolPolicy = { ...routed.baseToolPolicy };
+    const comparison = validateExternalCapabilityBoundary({
       normalizedIntent: normalizeActionIntent('看一下张勇最近给我发什么消息了'),
-      execution: legacy,
+      execution: routed,
       manifest,
     });
-    const guarded = applyLumiRoutingShadowGuard(legacy, comparison);
+    const guarded = applyExternalCapabilityBoundary(routed, comparison);
     expect(comparison.externalCommitBlocked).toBe(true);
     expect(guarded.toolPolicy.forbiddenTools).toContain('wechat_send_message');
     expect(buildModelCapabilityPolicy(guarded).forbiddenTools).toContain('wechat_send_message');
@@ -95,22 +95,22 @@ describe('normalized/legacy routing shadow guard', () => {
   });
 
   it('allows an exact outbound route to proceed to strict confirmation', () => {
-    const legacy = execution(['wechat_send_message']);
-    const comparison = compareLumiRoutingShadow({
+    const routed = execution(['wechat_send_message']);
+    const comparison = validateExternalCapabilityBoundary({
       normalizedIntent: normalizeActionIntent('给张勇发「明天上午十点开会」'),
-      execution: legacy,
+      execution: routed,
       manifest,
     });
     expect(comparison.aligned).toBe(true);
     expect(comparison.externalCommitBlocked).toBe(false);
-    expect(applyLumiRoutingShadowGuard(legacy, comparison)).toBe(legacy);
+    expect(applyExternalCapabilityBoundary(routed, comparison)).toBe(routed);
   });
 
-  it('fails closed when normalized send has no matching legacy commit route', () => {
-    const legacy = execution(['wechat_read_recent_chat']);
-    const comparison = compareLumiRoutingShadow({
+  it('fails closed when normalized send has no matching routed commit route', () => {
+    const routed = execution(['wechat_read_recent_chat']);
+    const comparison = validateExternalCapabilityBoundary({
       normalizedIntent: normalizeActionIntent('给张勇发「明天见」'),
-      execution: legacy,
+      execution: routed,
       manifest,
     });
     expect(comparison.externalCommitBlocked).toBe(true);

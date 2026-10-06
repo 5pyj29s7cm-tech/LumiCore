@@ -4,7 +4,7 @@
  * Spawns the ordered runtime entry as a child process and manages lifecycle:
  * - Exit code 42 → restart (self-upgrade)
  * - Crash (non-zero, non-42) → restart with backoff, max 3 retries
- * - 3 consecutive crash failures → git reset --hard + abort
+ * - 3 consecutive crash failures → abort; preserve Git state
  * - SIGINT/SIGTERM → clean shutdown (forward to child, exit 0)
  */
 
@@ -36,7 +36,7 @@ function consecutiveCrashes(): number {
   return crashTimestamps.length;
 }
 
-async function handleFatalCrashes() {
+function handleFatalCrashes(): never {
   console.error(`[Launcher] ${MAX_CRASH_RETRIES} crashes in ${CRASH_WINDOW_MS / 1000}s — ABORTING.`);
   console.error('[Launcher] Manual intervention required. Check the server logs above.');
   console.error('[Launcher] No automatic rollback performed — git state is preserved.');
@@ -153,7 +153,7 @@ function restartServer(): ChildProcess {
     shell: false,
   });
 
-  child.on('exit', async (code, signal) => {
+  child.on('exit', (code, signal) => {
     console.log(`[Launcher] Server exited — code=${code}, signal=${signal}`);
 
     if (signal === 'SIGINT' || signal === 'SIGTERM') {
@@ -173,11 +173,8 @@ function restartServer(): ChildProcess {
     const crashes = consecutiveCrashes();
 
     if (crashes >= MAX_CRASH_RETRIES) {
-      console.error(`[Launcher] ${MAX_CRASH_RETRIES} crashes in ${CRASH_WINDOW_MS / 1000}s. Rolling back...`);
-      await handleFatalCrashes();
-      crashTimestamps = [];
-      scheduleServerRestart(1000);
-      return;
+      console.error(`[Launcher] ${MAX_CRASH_RETRIES} crashes in ${CRASH_WINDOW_MS / 1000}s. Stopping; Git state is preserved.`);
+      handleFatalCrashes();
     }
 
     const delay = BACKOFF_BASE_MS * Math.pow(2, crashes - 1);
