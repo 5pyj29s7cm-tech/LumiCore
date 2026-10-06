@@ -1,3 +1,4 @@
+import { executeConfirmedToolStep } from '../../tools/confirmed_step';
 import type { prepareChatRuntimeControlAndModel } from './phases/prepare_chat_runtime_control_and_model';
 
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
@@ -5,14 +6,13 @@ import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 import { ToolExecutionRecord } from "../../tools/types";
 
 import { toolRegistry } from "../../tools/registry";
-import { executeToolCall } from "../../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, type LLMResult } from "../../llm/adapter";
 
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../../cognition/result_finalizer";
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
 
-import { consumePendingConfirmationDurably, formatPendingConfirmationRequest } from "../../tools/pending_confirmation";
+import { formatPendingConfirmationRequest } from "../../tools/pending_confirmation";
 
 import { setConversationActionExecutionStatus } from "../../conversation/manager";
 
@@ -32,13 +32,17 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
         const confirmedArgs = context.pendingConfirmation.exactArgs || {};
         const confirmedRecordId =
           `chat-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const consumed = await consumePendingConfirmationDurably(
-          context.uid,
-          context.pendingConfirmation.id,
-          context.pendingConfirmation.toolName,
-          confirmedArgs,
-          context.confirmationScope,
-        );
+        const confirmedRecord = await executeConfirmedToolStep({
+          userId: context.uid, pending: context.pendingConfirmation, scope: context.confirmationScope,
+          registry: toolRegistry,
+          id: confirmedRecordId,
+          context: {
+            ...context.toolContext,
+            source: 'chat_confirmation',
+            actionIntent: confirmedTask,
+            routedTaskText: confirmedTask,
+          },
+          onReady: () => {
         context.emitAgent('agent:status', { status: 'thinking', agentName: context.personality.name, phase: 'tool' });
         if (!isDirectDesktopTool(context.pendingConfirmation.toolName)) {
           context.emitToolLifecycle({
@@ -47,27 +51,9 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
             arguments: confirmedArgs,
           });
         }
-        const confirmedRecord = await executeToolCall({
-          registry: toolRegistry,
-          id: confirmedRecordId,
-          name: context.pendingConfirmation.toolName,
-          arguments: confirmedArgs,
-          context: {
-            ...context.toolContext,
-            source: 'chat_confirmation',
-            userConfirmed: true,
-            actionIntent: confirmedTask,
-            routedTaskText: confirmedTask,
+
           },
-          preflight: () => consumed
-            ? { allowed: true, arguments: confirmedArgs }
-            : {
-                allowed: false,
-                arguments: confirmedArgs,
-                reason: 'The one-time confirmation expired before execution.',
-              },
         });
-        confirmedRecord.executionOrigin = 'confirmed_action_resume';
         context.rememberRequestToolRecord(confirmedRecord);
         if (context.isChatCancelled()) throw new DOMException('Chat confirmation execution cancelled', 'AbortError');
         if (!isDirectDesktopTool(confirmedRecord.name)) {

@@ -1,3 +1,4 @@
+import { executeConfirmedToolStep } from '../../../tools/confirmed_step';
 import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
@@ -142,15 +143,20 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
     if (context.pendingConfirmation) {
       const confirmedTask = context.pendingConfirmation.actionIntent || context.actionIntentText;
       const confirmedArgs = context.pendingConfirmation.exactArgs || {};
-      const confirmationConsumed = await consumePendingConfirmationDurably(
-        context.session.userId,
-        context.pendingConfirmation.id,
-        context.pendingConfirmation.toolName,
-        confirmedArgs,
-        context.confirmationScope,
-      );
       const confirmationRecordId =
         `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const confirmationRecord = await executeConfirmedToolStep({
+        userId: context.session.userId, pending: context.pendingConfirmation, scope: context.confirmationScope,
+        registry: toolRegistry,
+        id: confirmationRecordId,
+        context: {
+          ...context.toolContext,
+          toolPolicy: context.routedToolPolicy,
+          requestConfirmation: undefined,
+          actionIntent: confirmedTask,
+          routedTaskText: confirmedTask,
+        },
+        onReady: () => {
       context.session.isBackgroundWork = true;
       context.session.activeWorkStatus = 'executing';
       context.session.activeWorkStep = `Running ${context.pendingConfirmation.toolName}`;
@@ -161,26 +167,8 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
           arguments: confirmedArgs,
         });
       }
-      const confirmationRecord = await executeToolCall({
-        registry: toolRegistry,
-        id: confirmationRecordId,
-        name: context.pendingConfirmation.toolName,
-        arguments: confirmedArgs,
-        context: {
-          ...context.toolContext,
-          toolPolicy: context.routedToolPolicy,
-          userConfirmed: true,
-          requestConfirmation: undefined,
-          actionIntent: confirmedTask,
-          routedTaskText: confirmedTask,
+
         },
-        preflight: () => confirmationConsumed
-          ? { allowed: true, arguments: confirmedArgs }
-          : {
-              allowed: false,
-              arguments: confirmedArgs,
-              reason: 'The one-time confirmation expired before execution.',
-            },
       });
       if (!context.isCurrentTurn()) {
         { return { terminal: true as const, context: undefined }; }
@@ -203,7 +191,6 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
         }
       }
       const confirmationSucceeded = toolRecordSucceeded(confirmationRecord);
-      confirmationRecord.executionOrigin = 'confirmed_action_resume';
       let confirmationRecords: ToolExecutionRecord[] = [confirmationRecord];
       let confirmationLlmWasCalled = false;
       const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
