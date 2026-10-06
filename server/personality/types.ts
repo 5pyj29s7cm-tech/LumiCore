@@ -41,9 +41,6 @@ export interface InternalResponsePreset {
   promptExtension: string;
 }
 
-/** @deprecated Serialized compatibility alias; use InternalResponsePreset. */
-export type ExecutionMode = InternalResponsePreset;
-
 export interface ExpressionStyle {
   /** Short persona description for self-reference, e.g. "futuristic AI architect" */
   persona: string;

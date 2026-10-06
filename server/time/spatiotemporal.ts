@@ -12,22 +12,6 @@ export interface SpatiotemporalPattern {
   evidence: string[];
 }
 
-export interface SpatiotemporalContext {
-  dateString: string;
-  dayOfWeek: string;
-  timeOfDay: string;
-  monthDay: string;
-  season: { season: string; seasonCN: string; emoji: string; mood: string };
-  holiday: { name: string; nameCN: string; mood?: string; daysUntil: number; isToday: boolean } | null;
-  isWeekend: boolean;
-  minutesSinceLastInteraction: number;
-  sessionDurationMinutes: number;
-  recentMemoryCount: number;
-  locationStats: { location: string; count: number }[];
-  currentLocation: string | null;
-  patterns: SpatiotemporalPattern[];
-}
-
 // ── Pattern Detection ──
 
 export function detectSpatiotemporalPatterns(userId: string, domain = 'personal', orgId = ''): SpatiotemporalPattern[] {

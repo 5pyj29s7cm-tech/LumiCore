@@ -24,8 +24,6 @@ export interface PetConfig {
   tags?: CustomPetTags; // generation tags (for custom pets)
 }
 
-export type AnimationName = 'idle' | 'run' | 'wave' | 'jump' | 'failed' | 'waiting' | 'review' | 'sleep';
-
 // ── Color Palette ──
 export interface PetPalette {
   body: string;

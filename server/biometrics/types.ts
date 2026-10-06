@@ -49,16 +49,6 @@ export interface FaceMatch {
   confidence: number;
 }
 
-export interface FaceVerificationResult {
-  matched: boolean;
-  isOwner: boolean;
-  isStranger: boolean;
-  topMatch?: FaceMatch;
-  allMatches: FaceMatch[];
-  threshold: 'high' | 'medium' | 'low' | 'reject';
-  source: 'local' | 'cloud';
-}
-
 // ── Presence ──
 
 export interface PresenceState {
@@ -104,13 +94,6 @@ export interface TripleLockConfig {
   enabled: boolean;
   pinHash?: string;           // bcrypt hash
   autoLockTimeoutMs: number;  // auto-lock after away (default 5 min)
-}
-
-export interface LockState {
-  locked: boolean;
-  factorsPassed: LockFactor[];
-  factorsNeeded: number;
-  securityLevel: SecurityLevel;
 }
 
 // ── Biometric DB Schema ──

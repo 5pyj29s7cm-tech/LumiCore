@@ -99,14 +99,6 @@ export interface NotificationItem {
   read: boolean;
 }
 
-export interface VoiceProfile {
-  userId: string;
-  voiceId: string;
-  name: string;
-  provider: string;
-  createdAt: string;
-}
-
 export interface Setting {
   key: string;
   value: string;

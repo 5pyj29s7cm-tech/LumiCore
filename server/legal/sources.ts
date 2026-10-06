@@ -455,28 +455,6 @@ export async function searchLegalAuthorityDatabase(params: {
   return results.slice(0, limit);
 }
 
-// ── 中国裁判文书网 (wenshu.court.gov.cn) ───────────────────────────────
-
-export interface JudgmentSearchParams {
-  keyword?: string;
-  caseNumber?: string;
-  court?: string;
-  causeOfAction?: string;
-  party?: string;
-  dateFrom?: string;
-  dateTo?: string;
-}
-
-export interface JudgmentResult {
-  title: string;
-  caseNumber: string;
-  court: string;
-  date: string;
-  causeOfAction: string;
-  parties: string;
-  url: string;
-}
-
 // ── 国家法律法规数据库 (flk.npc.gov.cn) ───────────────────────────────
 
 export interface StatuteSearchResult {

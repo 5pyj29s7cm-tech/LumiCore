@@ -140,27 +140,12 @@ export interface LAPTaskDelegateRequest extends LAPMessage {
   task: LAPTask;
 }
 
-export interface LAPTaskDelegateResponse {
-  accepted: boolean;
-  taskId: string;
-  status?: LAPTaskStatus;
-  result?: Record<string, any>;
-  error?: string;
-  lateResultAt?: string;
-  reason?: string;
-  estimatedCompletion?: string; // ISO timestamp or human-readable ETA
-}
-
 export interface LAPTaskResultRequest extends LAPMessage {
   method: 'lap.task.result';
   taskId: string;
   status: LAPTaskStatus;
   output?: Record<string, any>;
   error?: string;
-}
-
-export interface LAPTaskResultResponse {
-  acknowledged: boolean;
 }
 
 // 4. Negotiate
@@ -173,13 +158,6 @@ export interface LAPNegotiateRequest extends LAPMessage {
   proposal: Record<string, any>;
   mode: LAPNegotiateMode;
   maxRounds: number;
-}
-
-export interface LAPNegotiateResponse {
-  round: number;
-  accepted: boolean;
-  counterProposal?: Record<string, any>;
-  reasoning?: string;
 }
 
 // 5. Notify
@@ -198,20 +176,10 @@ export interface LAPRevokeRequest extends LAPMessage {
   reason: string;
 }
 
-export interface LAPRevokeResponse {
-  revoked: boolean;
-  affectedTasks: string[];
-}
-
 // 7. Heartbeat
 
 export interface LAPHeartbeatRequest extends LAPMessage {
   method: 'lap.heartbeat';
-}
-
-export interface LAPHeartbeatResponse {
-  alive: boolean;
-  serverTime: string;
 }
 
 // Union type for routing

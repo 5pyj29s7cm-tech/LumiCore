@@ -1,7 +1,5 @@
 
 
-export const CN_BROKEN_TEXT_MARKERS = ['锟', '鏂', '涓', '缁', '瀕', '濂', '娴', '浼', '忡', '鐹', '鍙'] as const;
-
 export const CN_FOUNDER_ALIASES = ['创始人'] as const;
 
 export const CN_WECHAT_ALIASES = ['微信'] as const;

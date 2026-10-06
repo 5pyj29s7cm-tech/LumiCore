@@ -29,16 +29,8 @@ type ClientActionRuntime = Pick<ReturnType<typeof useApp>, 'orgConnection' | 'wo
   }>;
 };
 
-export const normalizeDesktopSurfaceTarget = (value: string) => {
-  if (value === 'memory') return 'knowledge';
-  if (value === 'files') return 'knowledge';
-  if (value === 'sync') return 'devices';
-  if (value === 'avatar-studio' || value === 'sound') return 'personalization';
-  if (value === 'world' || value === 'nexus' || value === 'nexus-view' || value === 'cloud-canvas') return 'nexus';
-  if (value === 'chat' || value === 'command-center') return 'command-center';
-  if (value === 'memory-avatar' || value === 'memory-avatars' || value === 'sanctuary') return 'memory-avatar';
-  return value;
-};
+import { normalizeClientActionTarget as normalizeDesktopSurfaceTarget } from '../../../shared/client_surface_target';
+export { normalizeDesktopSurfaceTarget };
 
 async function waitForSurfaceCommit(target: string): Promise<true | undefined> {
   if (['home', 'nexus', 'app-launcher', 'org', 'knowledge', 'notifications', 'memory-avatar'].includes(target)) return;
