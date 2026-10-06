@@ -2,7 +2,7 @@ import type { ToolExecutionRecord } from '../tools/types';
 import fs from 'node:fs';
 import { artifactReadbackText, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
-import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
 
 export interface ArtifactContentRequirement {
   kind: 'text' | 'section' | 'blank_section';

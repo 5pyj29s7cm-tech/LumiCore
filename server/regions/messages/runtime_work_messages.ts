@@ -1,5 +1,5 @@
-import type { RuntimeWorkSnapshot, RuntimeWorkPhase } from '../../../runtime/work_control';
-import type { ToolExecutionRecord } from '../../../tools/types';
+import type { RuntimeWorkSnapshot, RuntimeWorkPhase } from "../../runtime/work_control";
+import type { ToolExecutionRecord } from "../../tools/types";
 const labels: Record<RuntimeWorkPhase, string> = {
     queued: '排队', working: '执行中', pausing: '正在暂停', paused: '已暂停', waiting_confirmation: '等待确认',
     cancelling: '正在取消', blocked: '受阻', completed: '已完成', failed: '失败', cancelled: '已取消',

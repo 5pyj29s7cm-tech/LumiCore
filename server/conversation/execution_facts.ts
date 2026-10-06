@@ -1,10 +1,10 @@
 import { readDatabaseTables } from '../../db_layer';
 import { projectConversationReceiptHistory } from './receipt_history';
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
-import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from '../regions/packs/cn/conversation_execution_facts_messages';
+import { CN_CONVERSATION_EXECUTION_FACT_MESSAGES } from "../regions/messages/conversation_execution_facts_messages";
 import { hasMixedStatusExecutionIntent, isPriorArtifactDeliveryQuestion, isPriorWorkDeliveryFactQuestion, isPriorTurnToolReceiptQuestion } from '../cognition/normalized_action_intent';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
-import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 
 export interface ConversationExecutionFactScope {
   conversationId: string;

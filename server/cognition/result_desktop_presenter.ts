@@ -1,16 +1,16 @@
 import { buildActionContract, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresMediaPlaybackAction, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { evaluateDesktopObservationEvidence, requiresActiveWindowObservation } from './desktop_observation';
 import type { ToolExecutionRecord } from '../tools/types';
 import { hasMatchingDesktopOpenEvidence, hasMatchingBrowserOpenEvidence } from './action_desktop_evidence';
 import { toolRecordSucceeded } from './task_execution_ledger';
-import { CN_VOICE_FAST_PATH_MESSAGES, formatCnClientActionTargetLabel } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_VOICE_FAST_PATH_MESSAGES, formatCnClientActionTargetLabel } from "../regions/messages/voice_fast_path_messages";
 import { normalizeActionIntent } from './normalized_action_intent';
 import { isVideoPlaybackRequest } from './media_intent';
 import { validatePlaybackVerification } from './playback_verification';
 import { artifactPathFromRecord } from '../tools/artifact_evidence';
-import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
+import { CN_TASK_TARGET_ANCHOR_MESSAGES } from "../regions/messages/task_target_anchor_messages";
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { resultTaskText, isChineseText, recordMatchesCurrentTurnIdentity, taskActionContract, hasResultCoreActionEvidence } from "./result_finalizer_support";
 

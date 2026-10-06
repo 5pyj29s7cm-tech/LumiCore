@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { getDataPath } from '../config/data_path';
 import * as EDB from './db';
 import { inspectLegalReasoningStructure } from '../regions/packs/cn/legal_reasoning_structure';
-import { CN_LEGAL_REASONING_DRAFT_MESSAGES } from '../regions/packs/cn/skill_messages';
+import { CN_LEGAL_REASONING_DRAFT_MESSAGES } from "../regions/messages/skill_messages";
 import {
   assertOrganizationResourceAccess,
   authorizeOrganizationResource,

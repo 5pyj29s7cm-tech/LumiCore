@@ -88,7 +88,7 @@ describe('task relations and one interactive decision policy', () => {
   });
   it('keeps file paths and posting verbs from selecting business analysis', async () => {
     const { buildActionContract } = await import('../server/cognition/action_contract');
-    const { businessToolHints } = await import('../server/regions/packs/cn/business_routing');
+    const { businessToolHints } = await import("../server/regions/routing/business_routing");
     for (const directory of ['Audit-Reports', 'content', 'campaign']) {
       const text = `把刚才的 CSV 做成 Excel，工作表叫订单，列为商品、数量、单价、金额。原文件不动，另存为 D:/${directory}/output.xlsx。保存后回读。`;
       expect(buildActionContract(text).kind).toBe('artifact_work');

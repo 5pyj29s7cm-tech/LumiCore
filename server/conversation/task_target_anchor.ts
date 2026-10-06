@@ -1,7 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { CN_TASK_TARGET_ANCHOR_MESSAGES } from '../regions/packs/cn/task_target_anchor_messages';
+import { CN_TASK_TARGET_ANCHOR_MESSAGES } from "../regions/messages/task_target_anchor_messages";
 import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
 import type { ToolExecutionRecord } from '../tools/types';

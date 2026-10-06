@@ -2,8 +2,8 @@ import { SECRET_DETAIL, STRUCTURED_SECRET_DETAIL, BEARER_SECRET, INTERNAL_GUARD_
 import type { ToolExecutionRecord } from '../tools/types';
 import { MISSING_TASK_INPUT_REASON } from './missing_task_input';
 import type { CompletionGuardResult } from '../work_product/completion_guard';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
-import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
+import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 import {
   sanitizeUserFacingNotification,
   sanitizeUserFacingExecutionOutput,

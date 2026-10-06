@@ -8,7 +8,7 @@ import { isAudioTranscriptionUnavailable, transcribeAudioFile } from '../stt/fil
 import {
   buildPixelPetDesignPrompt,
   CN_CREATIVE_PET_PATTERNS,
-} from '../regions/packs/cn/creative_pet_messages';
+} from "../regions/messages/creative_pet_messages";
 
 const asyncHandler = (fn: (req: Request, res: any, next?: NextFunction) => Promise<any>) =>
   (req: Request, res: any, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);

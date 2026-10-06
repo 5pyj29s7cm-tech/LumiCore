@@ -10,7 +10,7 @@ import { pushNotification } from '../routes/notifications';
 import { toolRegistry } from '../tools/registry';
 import { executeToolCallOrThrow } from '../tools/execution_engine';
 import type { ToolContext } from '../tools/types';
-import { DESKTOP_WECHAT_WATCH_MESSAGES } from '../regions/packs/cn/desktop_wechat_watch_messages';
+import { DESKTOP_WECHAT_WATCH_MESSAGES } from "../regions/messages/desktop_wechat_watch_messages";
 
 export type DesktopWechatWatchEventStatus =
   | 'detected'

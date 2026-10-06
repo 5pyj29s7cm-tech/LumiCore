@@ -75,7 +75,7 @@ import { formatClientSelfPromptForTurn } from "../client/self_model";
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, formatPendingConfirmationRequest, getPendingConfirmationDurably, isExplicitConfirmationReply, isConfirmationCancellation, recordPendingConfirmationDurably } from "../tools/pending_confirmation";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
 import { buildPendingAssistantOfferContextFromTranscript, resolvePendingRuntimeCleanupOffer } from '../cognition/pending_assistant_offer';
-import { formatRuntimeCleanupReceipt } from '../i18n/runtime_cleanup_messages';
+import { formatRuntimeCleanupReceipt } from "../regions/messages/runtime_cleanup_messages";
 import { admitAcceptedUserTurnDurably, resolveAcceptedTurnConfirmation, runAfterAcceptedUserTurnAdmission } from './action_turn_durability';
 
 import { personalityRegistry } from "../personality";
@@ -99,7 +99,8 @@ import { classifyRuntimeWorkIntent } from '../cognition/runtime_work_intent';
 
 import { buildResponseLanguageInstruction } from "../utils/language";
 
-import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_WORK_MESSAGES } from "../regions/messages/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/messages/task_execution_messages";
 import { buildVisionRoutingOverlay } from "../cognition/vision_routing";
 import { getScopedPreferredLLM } from "../llm/user_preferences";
 import { buildSocketNativeRequestBinding } from './native_request_binding';
@@ -2870,9 +2871,7 @@ async function executeChatModelAndDelivery(context: NonNullable<Awaited<ReturnTy
       await completeChatTurn(extendTurnBindings(context, {
     finalTaskRecords: finalTaskRecords as typeof finalTaskRecords,
   }));
-  return { terminal: false as const, context: extendTurnBindings(context, {
-
-  }) };
+  return { terminal: false as const, context };
 }
 
 async function processChatTurn(socket: Socket, llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen' | 'getOllama' | 'isOllamaAvailable' | 'getLmStudio' | 'isLmStudioAvailable'>>, sensoryFn: (uid: string) => any, userIdFn: (s: Socket) => string, io: Server, data: { text?: string; history?: any[]; attachments?: any[]; personalityId?: string; category?: string; agentId?: string; domain?: string; orgId?: string | null; mode?: string; operationMode?: string; source?: string; requestId?: string; conversationId?: string; controlTargetRequestId?: string; controlTargetTaskId?: string; controlTargetRevision?: number; mediaRequest?: unknown }, ack?: (payload: { ok: boolean; requestId?: string; receivedAt?: string; error?: string }) => void): Promise<void> {

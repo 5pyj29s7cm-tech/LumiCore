@@ -1,4 +1,4 @@
-import { CN_EXTERNAL_CLI_MESSAGES } from '../../regions/packs/cn/external_cli_messages';
+import { CN_EXTERNAL_CLI_MESSAGES } from "../../regions/messages/external_cli_messages";
 import { ToolRegistry } from '../registry';
 import { capabilityContract, capabilityEvidence } from '../capability_contracts';
 import { executeExternalCli, getExternalCliRun, inspectExternalClis } from '../../external_agents/cli_runtime';

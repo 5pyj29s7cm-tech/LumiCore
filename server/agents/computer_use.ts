@@ -30,7 +30,7 @@ import {
   type PlaybackSample,
   type VisualPlaybackObservation,
 } from '../cognition/playback_verification';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import {
   desktopFingerprintMatchesApplication,
   type ApplicationIdentity,

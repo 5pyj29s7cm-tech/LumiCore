@@ -7,12 +7,10 @@ import {
   normalizeActionIntent,
   type NormalizedActionIntent,
 } from './normalized_action_intent';
-import { matchesCnActionContinuation, matchesCnBoundArtifactEdit, matchesCnExplicitPlaybackRetry } from '../regions/packs/cn/action_continuation';
+import { matchesCnActionContinuation, matchesCnBoundArtifactEdit, matchesCnExplicitPlaybackRetry } from "../regions/input/zh_action_continuation";
 import { hasExplicitNoMutationInstruction } from './tool_intent';
-import {
-  CN_TASK_EXECUTION_MESSAGES,
-  formatCnToolFailureDetail,
-} from '../regions/packs/cn/voice_fast_path_messages';
+import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/messages/task_execution_messages";
 import { isGuardGeneratedConversationRecord } from '../conversation/guard_history';
 import { findLatestRepeatableAssistantReply } from '../conversation/assistant_restatement';
 import {

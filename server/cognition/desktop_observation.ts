@@ -1,6 +1,6 @@
 import type { ToolExecutionRecord } from '../tools/types';
-import { CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
-import { formatDesktopProcessCount } from '../i18n/naturalness_messages';
+import { CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
+import { formatDesktopProcessCount } from "../regions/messages/naturalness_messages";
 
 export interface DesktopObservationToolCall {
   name: 'desktop_active_window' | 'desktop_running_processes' | 'desktop_idle_time' | 'desktop_system_info' | 'desktop_list_apps' | 'desktop_list_files';

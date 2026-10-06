@@ -10,6 +10,7 @@ const violations = [];
 const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
   cwd: root, windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
 }).split('\0').filter(file => /^(?:server\/|shared\/|src\/|routes\/|server\.ts$)/.test(file) && /\.tsx?$/.test(file));
+if (files.some(file => file.startsWith('server/i18n/'))) violations.push('server/i18n duplicates the regional message resource owner');
 const databaseModule = path.join(root, 'db_layer');
 const importers = [];
 const databaseBindings = new Map();
@@ -40,6 +41,9 @@ for (const file of files) {
         ? node.arguments[0] : undefined;
     if (specifier && ts.isStringLiteral(specifier) && specifier.text.startsWith('.')) {
       const target = path.resolve(root, path.dirname(file), specifier.text).replace(/\.(?:[cm]?js|tsx?)$/, '');
+      if (file.startsWith('server/cognition/') && target.startsWith(path.join(root, 'server/regions/packs') + path.sep)) {
+        violations.push(file + ': core cognition must consume shared regional contracts, not import a concrete capability pack');
+      }
       if (target === databaseModule) {
         importsDatabase = true;
         if (ts.isImportDeclaration(node) && node.importClause?.namedBindings
@@ -94,7 +98,7 @@ if (process.argv.includes('--record-baseline')) {
   }
 }
 
-if (violations.length) { console.error('Database scope violations:\n' + violations.join('\n')); process.exitCode = 1; }
+if (violations.length) { console.error('Architecture scope violations:\n' + violations.join('\n')); process.exitCode = 1; }
 
 if (duplicateProviderTypes.length) {
   console.error('Duplicate provider getter types must use server/llm/provider_getters.ts:\n' + duplicateProviderTypes.join('\n'));

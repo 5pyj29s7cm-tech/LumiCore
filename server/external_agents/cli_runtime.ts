@@ -7,7 +7,7 @@ import { getDataPath, getGeneratedOutputDir } from '../config/data_path';
 import { ensurePrivateRuntimeDirectory } from '../config/runtime_file_security';
 import { requireNotStrict } from '../config/privacy';
 import { classifyExternalCliIntent, isExternalCliDelegation } from '../cognition/external_cli_intent';
-import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
+import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 import { runCliProcess, type CliProcessInput, type CliProcessResult } from './cli_process';
 
 export type ExternalCliProvider = 'codex' | 'claude';

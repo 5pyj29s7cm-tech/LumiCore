@@ -10,8 +10,8 @@ import {
   hasCurrentAppUiMutationEvidence,
   requiresCurrentAppUiMutation,
 } from '../cognition/action_contract';
-import { formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
-import { CN_COMPLETION_GUARD_MESSAGES } from '../regions/packs/cn/completion_guard_messages';
+import { formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
+import { CN_COMPLETION_GUARD_MESSAGES } from "../regions/messages/completion_guard_messages";
 import { normalizeActionIntent, isStoredMemoryRecallQuestion } from '../cognition/normalized_action_intent';
 import { formatGroundedKnowledgeObservation, isKnowledgeInventoryRequest } from '../cognition/knowledge_result';
 

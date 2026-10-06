@@ -31,7 +31,7 @@ import { getStoredOperationMode, saveStoredOperationMode } from '../../../cognit
 import { persistExplicitRemoteRelationshipMemories, persistRemotePostTurnLearning } from './remote_memory';
 import { generateSystemPrompt } from '../../../personality/engine';
 import { buildUnifiedLegalEntryPrompt } from '../../../cognition/legal_entry';
-import { CN_TASK_EXECUTION_MESSAGES } from './voice_fast_path_messages';
+import { CN_TASK_EXECUTION_MESSAGES } from "../../messages/task_execution_messages";
 import { createConversationReceiptObserver } from '../../../conversation/execution_receipt_archive';
 import { bindOrganizationWorkItemTask, registerOrganizationWorkExecution, routeOrganizationWork, setOrganizationWorkItemExecutionStatus, type OrganizationWorkExecution, type RouteOrganizationWorkResult } from '../../../org/work_routing';
 import { bindCapabilityExecutionPlanTask } from '../../../cognition/capability_execution_plan';
@@ -52,7 +52,7 @@ import { createTurnConfirmation } from '../../../tools/turn_confirmation';
 import { isRetiredOperationModeRequest } from '../../../cognition/operation_modes';
 import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
 import { executeToolCall } from '../../../tools/execution_engine';
-import { formatOperationModeSwitchResponse } from '../../../i18n/operation_mode_messages';
+import { formatOperationModeSwitchResponse } from "../../messages/operation_mode_messages";
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
 import { runToolSession } from "../../../llm/tool_session";
 import { providerGetterArguments } from "../../../llm/provider_getters";

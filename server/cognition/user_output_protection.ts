@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { ToolExecutionRecord } from '../tools/types';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
-import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from '../regions/packs/cn/user_output_protection_messages';
+import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from "../regions/messages/user_output_protection_messages";
 import {
   containsInternalExecutionLanguage,
   sanitizePublicExecutionText,

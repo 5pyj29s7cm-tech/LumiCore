@@ -68,7 +68,7 @@ import {
   sanitizePublicExecutionText,
   type PublicExecutionLanguage,
 } from '../../shared/public_execution_language';
-import { CN_AUTONOMOUS_CUSTOMER_MESSAGES } from '../regions/packs/cn/autonomous_customer_messages';
+import { CN_AUTONOMOUS_CUSTOMER_MESSAGES } from "../regions/messages/autonomous_customer_messages";
 import { isOrganizationMembershipAuthorizationCurrent, watchOrganizationMembershipAuthorization } from '../org/membership_authorization';
 import {
   canUseQueuedSelfImprovementStageAuthorization,

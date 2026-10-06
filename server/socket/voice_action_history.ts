@@ -1,4 +1,4 @@
-import { CN_VOICE_ACTION_HISTORY_MESSAGES as M } from '../regions/packs/cn/voice_action_history_messages';
+import { CN_VOICE_ACTION_HISTORY_MESSAGES as M } from "../regions/messages/voice_action_history_messages";
 import type { ToolExecutionRecord } from '../tools/types';
 import { hasVisibleAutoCadExecutionEvidence } from '../cognition/action_contract';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';

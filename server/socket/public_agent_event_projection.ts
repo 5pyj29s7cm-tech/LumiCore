@@ -3,7 +3,7 @@ import {
   type PublicExecutionIssue,
   type PublicExecutionLanguage,
 } from '../../shared/public_execution_language';
-import { CN_PUBLIC_AGENT_EVENT_MESSAGES } from '../regions/packs/cn/public_agent_event_messages';
+import { CN_PUBLIC_AGENT_EVENT_MESSAGES } from "../regions/messages/public_agent_event_messages";
 
 export type CustomerVisibleExecutionEvent =
   | 'agent:progress'

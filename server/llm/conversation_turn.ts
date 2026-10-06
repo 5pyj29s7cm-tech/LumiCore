@@ -16,7 +16,7 @@ import {
 import {
   CN_STREAM_INTERRUPTION_RECOVERY_INSTRUCTION,
   formatConversationIncompleteMessage,
-} from '../i18n/response_recovery_messages';
+} from "../regions/messages/response_recovery_messages";
 
 export interface ConversationTurnInput {
   messages: NormalizedMessage[];

@@ -1,4 +1,4 @@
-import { cnWorkTakeoverMessages, formatCnWorkTakeoverVerification } from '../../regions/packs/cn/work_takeover_messages';
+import { cnWorkTakeoverMessages, formatCnWorkTakeoverVerification } from "../../regions/messages/work_takeover_messages";
 import { resolveWorkTakeoverIntakeTask } from '../../work_takeover/intake';
 import { boundedWorkTakeoverSteps, runWorkTakeoverPreparation } from '../../work_takeover/preparation_loop';
 import { recordWorkTakeoverPacket } from '../../work_takeover/packet_recording';

@@ -11,7 +11,7 @@ import {
 } from '../server/conversation/action_ledger';
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
 import { ToolRegistry } from '../server/tools/registry';
-import { formatCnToolFailureDetail } from '../server/regions/packs/cn/voice_fast_path_messages';
+import { formatCnToolFailureDetail } from "../server/regions/messages/voice_fast_path_messages";
 
 const CUSTOMER_INTERNAL_EXECUTION_COPY = /(?:^|\n)\s*(?:\u72b6\u6001|\u8bc1\u636e|\u5177\u4f53\u963b\u585e|\u6267\u884c\u56de\u9988)\s*[:\uff1a]|\u56de\u6267|target_mismatch|terminalVerification|\b(?:taskId|requestId|desktop_open|client_action|desktop_execution_plan_receipt|verified|blocked|failed)\b|No successful current-turn tool execution/iu;
 

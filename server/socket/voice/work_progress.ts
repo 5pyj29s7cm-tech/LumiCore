@@ -1,4 +1,4 @@
-import { CN_VOICE_WORK_MESSAGES } from "../../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_WORK_MESSAGES } from "../../regions/messages/voice_fast_path_messages";
 import { Socket } from "socket.io";
 import { updateConversationActionFocus } from "../../conversation/manager";
 import { type AudioSession } from "./session";

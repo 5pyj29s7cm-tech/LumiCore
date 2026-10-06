@@ -1,6 +1,6 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
-import { KNOWLEDGE_RESULT_MESSAGES } from '../i18n/knowledge_result_messages';
+import { KNOWLEDGE_RESULT_MESSAGES } from "../regions/messages/knowledge_result_messages";
 
 /** Statistics prove an inventory/processing-state query, never a UI action or a content review. */
 export function isKnowledgeInventoryRequest(taskText: string): boolean {

@@ -4,7 +4,7 @@ import type { LLMGetters as LlmGetters } from '../llm/dispatch';
 import { type ConversationResourceLifetime } from '../cognition/conversation_execution';
 import { logger } from "../../logger";
 import { getOrCreateActiveConversation, addMessageIdempotent, getMessages, setConversationActionExecutionStatus } from "../conversation/manager";
-import { CN_VOICE_WORK_MESSAGES, formatCnToolFailureDetail } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_WORK_MESSAGES, formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 import { voiceDurabilityUnknownText } from './voice_durability';
 import { recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 import { commitChatTerminalBoundary } from './chat_terminal_boundary';

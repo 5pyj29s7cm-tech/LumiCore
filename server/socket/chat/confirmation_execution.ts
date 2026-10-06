@@ -28,7 +28,8 @@ import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, toolRecor
 
 import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
-import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES } from "../../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_FAST_PATH_MESSAGES } from "../../regions/messages/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../../regions/messages/task_execution_messages";
 
 import { isDirectDesktopTool } from "../desktop_relay";
 

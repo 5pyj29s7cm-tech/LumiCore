@@ -22,7 +22,7 @@ import {
   formatPendingConfirmationRequest,
   recordPendingConfirmation,
 } from '../server/tools/pending_confirmation';
-import { formatDesktopControlPausePresentation } from '../server/regions/packs/cn/desktop_control_messages';
+import { formatDesktopControlPausePresentation } from "../server/regions/messages/desktop_control_messages";
 
 function record(patch: Partial<ToolExecutionRecord> = {}): ToolExecutionRecord {
   return {

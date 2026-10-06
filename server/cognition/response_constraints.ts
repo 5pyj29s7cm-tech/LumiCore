@@ -1,4 +1,4 @@
-import { formatCnSentenceCountCorrectionInstruction } from '../i18n/response_recovery_messages';
+import { formatCnSentenceCountCorrectionInstruction } from "../regions/messages/response_recovery_messages";
 
 export interface ExplicitSentenceCountConstraint {
   expected: number;

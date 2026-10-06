@@ -4,7 +4,7 @@ import { executeToolCall } from '../tools/execution_engine';
 import type { ToolRegistry } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
 import type { ToolPolicy } from '../personality/types';
-import { formatRuntimeWorkRead } from '../regions/packs/cn/runtime_work_messages';
+import { formatRuntimeWorkRead } from "../regions/messages/runtime_work_messages";
 /** A read-only ledger request does not acquire or complete the conversation's writer lease. */
 export async function readRuntimeWorkForTurn(input: {
     resolution: TurnResolution;

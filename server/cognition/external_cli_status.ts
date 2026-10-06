@@ -2,7 +2,7 @@ import type { ToolExecutionRecord } from '../tools/types';
 import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
-import { CN_EXTERNAL_CLI_MESSAGES } from '../regions/packs/cn/external_cli_messages';
+import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 
 interface CliStatusTarget {
   provider: 'codex' | 'claude';

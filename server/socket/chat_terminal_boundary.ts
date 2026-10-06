@@ -7,7 +7,7 @@ import {
   type ConversationTerminalPersistenceUnknownProjection,
 } from '../conversation/manager';
 import { conversationExists, type RequestAuthorization } from '../conversation/lifecycle';
-import { CN_TASK_EXECUTION_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/messages/task_execution_messages";
 import { recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 
 /** Revoke unpublished success at the existing receipt fence, including during its SQLite write. */

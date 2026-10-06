@@ -3,7 +3,7 @@ import { classifySkillAuthoringIntent } from '../skills/authoring_intent';
 import { classifyExternalCliIntent, requestedCliProviders } from './external_cli_intent';
 import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { withoutLocationLiterals } from './location_literals';
-import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from '../regions/packs/cn/action_continuation';
+import { matchesCnTaskReceiptQuestion, matchesCnBoundArtifactEdit } from "../regions/input/zh_action_continuation";
 
 /** Read/search verbs in an explicitly forbidden clause are not requests.
  * Keep the original user message for the model and side-effect authorization.

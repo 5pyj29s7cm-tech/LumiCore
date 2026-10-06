@@ -10,7 +10,7 @@ import { executeToolCall } from "../../tools/execution_engine";
 
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
 
-import { formatRuntimeCleanupReceipt } from "../../i18n/runtime_cleanup_messages";
+import { formatRuntimeCleanupReceipt } from "../../regions/messages/runtime_cleanup_messages";
 
 import { personalityRegistry } from "../../personality";
 

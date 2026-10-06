@@ -1,6 +1,6 @@
 import type { ToolExecutionRecord } from '../tools/types';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 
 export const DESKTOP_COMPLETION_REVIEW_REASON = 'desktop_completion_needs_observation';
 

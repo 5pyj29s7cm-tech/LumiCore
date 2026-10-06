@@ -24,7 +24,7 @@ import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_executi
 import { isConfirmationBlockedToolRecord } from '../tools/confirmation_block';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { CapabilityExecutionPlan } from '../cognition/capability_execution_plan';
-import { CN_ACTION_LEDGER_MESSAGES } from '../regions/packs/cn/action_ledger_messages';
+import { CN_ACTION_LEDGER_MESSAGES } from "../regions/messages/action_ledger_messages";
 import { detectLanguage } from '../utils/language';
 
 export interface ConversationActionTaskRow {

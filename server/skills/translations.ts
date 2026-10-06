@@ -4,7 +4,7 @@
  */
 import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { logger } from '../../logger';
-import { CN_TIMER_SKILL_METADATA } from '../regions/packs/cn/skill_messages';
+import { CN_TIMER_SKILL_METADATA } from "../regions/messages/skill_messages";
 
 const SUPPORTED_LANGS = ['zh', 'en'];
 const BUILTIN_ZH_TRANSLATIONS: Record<string, TranslationEntry> = {

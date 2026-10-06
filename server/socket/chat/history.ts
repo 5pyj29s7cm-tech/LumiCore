@@ -2,7 +2,7 @@ import { isGuardGeneratedAssistantText } from "../../conversation/guard_history"
 import { NormalizedMessage } from "../../llm/providers";
 import { normalizeVoiceHistoryRecord } from "../voice_history";
 import { buildActionContract, summarizeActionContractBlocker } from "../../cognition/action_contract";
-import { CN_MESSAGING_MESSAGES } from "../../regions/packs/cn/messaging_messages";
+import { CN_MESSAGING_MESSAGES } from "../../regions/messages/messaging_messages";
 
 function stripHistoricalAttachmentBlocks(value: string): string {
   const text = String(value || '').trim();

@@ -4,7 +4,7 @@ import {
   formatCnClientDiagnosticFacts,
   formatCnMissingClientDiagnosticReceipts,
   type ClientDiagnosticFacts,
-} from '../regions/packs/cn/client_diagnostic_messages';
+} from "../regions/messages/client_diagnostic_messages";
 import { isCurrentClientDiagnosticRequest, isCoordinatedClientHealthRequest } from './tool_intent';
 
 export interface ClientDiagnosticToolCall {

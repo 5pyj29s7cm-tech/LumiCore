@@ -2,10 +2,10 @@ import { buildActionEvidenceContract, extractPrimaryTaskText, hasCoreActionEvide
 import type { ToolExecutionRecord } from '../tools/types';
 import { toolRecordSucceeded } from './task_execution_ledger';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
-import { formatInternalDispatchUnavailable } from '../i18n/naturalness_messages';
-import { CN_MESSAGING_MESSAGES } from '../regions/packs/cn/messaging_messages';
-import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from '../regions/packs/cn/voice_fast_path_messages';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { formatInternalDispatchUnavailable } from "../regions/messages/naturalness_messages";
+import { CN_MESSAGING_MESSAGES } from "../regions/messages/messaging_messages";
+import { CN_VOICE_FAST_PATH_MESSAGES, formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { type LumiResultFinalizerInput } from "./result_finalizer_types";
 
 export function resultTaskText(input: LumiResultFinalizerInput): string {

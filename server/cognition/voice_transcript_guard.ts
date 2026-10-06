@@ -4,7 +4,7 @@ import {
   endsWithCnDanglingConnector,
   isCnBareAction,
   isCnQuotedOrDiscussedText,
-} from '../regions/packs/cn/voice_transcript_guard_messages';
+} from "../regions/messages/voice_transcript_guard_messages";
 
 export type VoiceTranscriptGuardReason =
   | 'device_prompt_contamination'

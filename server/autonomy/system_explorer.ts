@@ -11,7 +11,7 @@ import {
   CN_COMMUNICATION_APP_PATTERN,
   CN_FINANCE_APP_PATTERN,
   CN_SYSTEM_EXPLORER_PROMPTS,
-} from "../regions/packs/cn/system_explorer_prompts";
+} from "../regions/messages/system_explorer_prompts";
 
 export interface SystemSnapshot {
   id: string;

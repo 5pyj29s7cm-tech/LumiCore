@@ -1,4 +1,4 @@
-import { buildMessageDraft } from '../../regions/packs/cn/external_app_messages';
+import { buildMessageDraft } from "../../regions/messages/external_app_messages";
 import { isMessagingSendConfirmationRequired } from '../../autonomy/safety_gate';
 import { analyzeWechatIntake } from '../../work_takeover/wechat_intake';
 import type { ToolRegistry } from '../registry';

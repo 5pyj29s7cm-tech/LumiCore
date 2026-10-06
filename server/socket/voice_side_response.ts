@@ -3,7 +3,7 @@ import { type AudioSession } from "./voice/session";
 import type { LLMGetters as LlmGetters } from '../llm/dispatch';
 import { classifyVoiceWorkInterruption } from "./voice_turn_state";
 import { buildActiveVoiceWorkProgressReply } from "./voice/work_progress";
-import { CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_WORK_MESSAGES } from "../regions/messages/voice_fast_path_messages";
 import { personalityRegistry } from "../personality";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { VOICE_CHAT_INPUT_BUDGET_TOKENS } from './voice_runtime_policy';

@@ -1,7 +1,7 @@
 import type { TurnAnalysis } from './turn_analysis';
 import { createToolRouteSelection } from './tool_route_selection';
 import { resolveExactToolScope } from './exact_tool_scope';
-import { businessToolHints } from '../regions/packs/cn/business_routing';
+import { businessToolHints } from "../regions/routing/business_routing";
 import { ToolPolicy } from '../personality/types';
 import { isExternalCliRequest, classifyExternalCliIntent, externalCliToolsForIntent } from './external_cli_intent';
 import { isAvatarAuthoringRequest } from './media_creation_intent';
@@ -44,7 +44,7 @@ import {
   BASELINE_TOOLS,
   ROUTES,
   type RouteDefinition,
-} from '../regions/packs/cn/tool_route_definitions';
+} from "../regions/routing/tool_route_definitions";
 import {
   isExplicitArtifactCreationText,
   isExternalCommitConfirmationOnlyRequest,

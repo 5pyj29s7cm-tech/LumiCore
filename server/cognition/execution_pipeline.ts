@@ -2,7 +2,7 @@ import { TurnAnalysis } from './turn_analysis';
 import { resolveUserTurn, type TurnResolution } from './turn_resolution';
 import { restrictToolPolicyForExecutionBoundary, restrictVisibleToolRouteForExecutionBoundary } from '../tools/remote_policy';
 import type { ToolPolicy } from '../personality/types';
-import { localBusinessAnalysisBoundary } from '../regions/packs/cn/business_routing';
+import { localBusinessAnalysisBoundary } from "../regions/routing/business_routing";
 import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope, structuredMediaToolCall, type StructuredMediaRequest } from '../../shared/media_generation';
 import type { ToolRegistry } from '../tools/registry';
 import { isCurrentContinuationTask, isTaskPreparationContinuation, type ConversationActionContinuationState, type RecentActionFollowupIntent } from './action_continuation';

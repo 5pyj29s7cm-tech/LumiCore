@@ -392,7 +392,7 @@ describe('messaging long connections and organization routing', () => {
       text: 'Open the calculator.',
     });
     const reply = await routes.processWithPersonality(second);
-    const { CN_TASK_EXECUTION_MESSAGES } = await import('../server/regions/packs/cn/voice_fast_path_messages');
+    const { CN_TASK_EXECUTION_MESSAGES } = await import("../server/regions/messages/task_execution_messages");
 
     expect(reply).toBe(CN_TASK_EXECUTION_MESSAGES.actionTurnBusy);
     expect(conversations.getOrCreateActiveConversation(userId, 'lumi', 'personal', '')).toMatchObject({

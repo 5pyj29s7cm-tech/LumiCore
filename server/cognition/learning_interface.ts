@@ -6,8 +6,8 @@ import {
   type CapabilityRoute,
 } from '../self_extension/capability_memory';
 import type { ToolExecutionRecord } from '../tools/types';
-import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
-import { CN_LEARNING_INTERFACE_MESSAGES } from '../regions/packs/cn/learning_interface_messages';
+import { CN_DURABLE_EXECUTION_MESSAGES } from "../regions/messages/durable_execution_messages";
+import { CN_LEARNING_INTERFACE_MESSAGES } from "../regions/messages/learning_interface_messages";
 import type { LumiTurnFlow } from './turn_flow';
 
 export type LumiLearningChannel = 'chat' | 'voice' | 'task' | 'workflow';

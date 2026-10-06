@@ -2,7 +2,7 @@ import { Server, Socket } from "socket.io";
 import type { LLMGetters as LlmGetters } from '../llm/dispatch';
 import { type AudioSession, getVoiceStateKey, normalizeVoiceSessionId, getAudioSession } from "./voice/session";
 import { getOrCreateActiveConversation, addMessageIdempotent, cancelConversationActionExecution, updateAssistantMessageTerminalPresentation } from "../conversation/manager";
-import { CN_TASK_EXECUTION_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/messages/task_execution_messages";
 import { buildForegroundTaskCompletionFeedback } from '../cognition/acceptance_evidence';
 import { getChatExecution, recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 import { voiceDurabilityUnknownText } from './voice_durability';

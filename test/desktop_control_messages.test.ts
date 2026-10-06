@@ -1,6 +1,6 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
-import { formatDesktopControlPausePresentation } from '../server/regions/packs/cn/desktop_control_messages';
+import { formatDesktopControlPausePresentation } from "../server/regions/messages/desktop_control_messages";
 
 describe('desktop control pause presentation', () => {
   it.each([

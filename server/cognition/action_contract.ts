@@ -16,7 +16,7 @@ import { classifyRuntimeWorkIntent } from './runtime_work_intent';
 import { buildDesktopObservationPlan, evaluateDesktopObservationEvidence, requiresActiveWindowObservation, requiresDesktopFileListingObservation } from './desktop_observation';
 import { isReadOnlyKnowledgeBaseInspectionRequest } from './knowledge_intent';
 import { isMediaPauseRequest } from './media_intent';
-import { CN_ACTION_CONTRACT_BLOCKERS, CN_RESULT_GROUNDING_MESSAGES } from '../regions/packs/cn/voice_fast_path_messages';
+import { CN_ACTION_CONTRACT_BLOCKERS, CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
 import { isRuntimeCleanupOfferAcceptanceText } from './pending_assistant_offer';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 import type { AcceptedTaskTarget } from '../conversation/task_target_anchor';

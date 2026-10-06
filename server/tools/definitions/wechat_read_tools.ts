@@ -1,4 +1,4 @@
-import { EXTERNAL_APP_MESSAGES } from '../../regions/packs/cn/external_app_messages';
+import { EXTERNAL_APP_MESSAGES } from "../../regions/messages/external_app_messages";
 import { providerGetterArguments } from "../../llm/provider_getters";
 import { analyzeScreen } from '../../llm/adapter';
 import type { ToolRegistry } from '../registry';

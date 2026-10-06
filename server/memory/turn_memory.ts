@@ -11,7 +11,7 @@ import { runtimeBackgroundWork } from '../runtime/shutdown_work';
 import { runAuthorizedEnrichment, type RequestAuthorization } from '../conversation/lifecycle';
 import { lightweightEvolve } from '../personality/evolution';
 import { personalityRegistry } from '../personality/registry';
-import { MEMORY_TURN_MESSAGES as copy } from '../i18n/memory_turn_messages';
+import { MEMORY_TURN_MESSAGES as copy } from "../regions/messages/memory_turn_messages";
 import { isSupportedUserIdentityMemory } from './extractor';
 
 // i18n-allow: intent recognition and localized memory operation receipts.

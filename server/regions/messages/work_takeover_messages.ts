@@ -1,4 +1,4 @@
-import type { WorkTakeoverResultVerification } from '../../../work_takeover/result_verifier';
+import type { WorkTakeoverResultVerification } from "../../work_takeover/result_verifier";
 
 export const cnWorkTakeoverMessages = {
   verificationLabel: '任务结果验证记录',

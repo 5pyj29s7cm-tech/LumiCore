@@ -3,7 +3,7 @@ import { normalizeActionIntent } from './normalized_action_intent';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { withoutLocationLiterals } from './location_literals';
-import { businessInstructionText } from '../regions/packs/cn/business_routing';
+import { businessInstructionText } from "../regions/routing/business_routing";
 import type { ToolExecutionRecord } from '../tools/types';
 import { resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { requiresRunningProcessObservation } from './desktop_observation';

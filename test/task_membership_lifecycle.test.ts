@@ -1,4 +1,4 @@
-import { CN_TASK_EXECUTION_MESSAGES } from '../server/regions/packs/cn/voice_fast_path_messages';
+import { CN_TASK_EXECUTION_MESSAGES } from "../server/regions/messages/task_execution_messages";
 import './helpers';
 import { beforeAll, afterAll, afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';

@@ -130,7 +130,8 @@ import {
 } from '../server/conversation/manager';
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import { registerChatHandler } from '../server/socket/chat';
-import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_WORK_MESSAGES } from '../server/regions/packs/cn/voice_fast_path_messages';
+import { CN_VOICE_WORK_MESSAGES } from "../server/regions/messages/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../server/regions/messages/task_execution_messages";
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
 

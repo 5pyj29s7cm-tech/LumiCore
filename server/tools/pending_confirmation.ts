@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { formatPendingConfirmationRequestMessage } from '../i18n/confirmation_messages';
+import { formatPendingConfirmationRequestMessage } from "../regions/messages/confirmation_messages";
 
 export interface PendingToolConfirmation {
   id: string;

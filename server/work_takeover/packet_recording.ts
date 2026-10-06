@@ -1,4 +1,4 @@
-import { cnWorkTakeoverMessages } from '../regions/packs/cn/work_takeover_messages';
+import { cnWorkTakeoverMessages } from "../regions/messages/work_takeover_messages";
 import { updateWorkTakeoverTask, type WorkTakeoverTask } from './tasks';
 import type { WorkTakeoverExecutionPlan } from './execution_planner';
 import type { WorkTakeoverPacket } from './task_packet';

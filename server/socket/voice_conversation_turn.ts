@@ -11,7 +11,8 @@ import { logger } from "../../logger";
 import { getConfiguredVoiceModel, getVoicePreference } from '../config/voice_preference';
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, getFallbackProvider as getTTSFallbackProvider, isTtsCancellationError, resolveEmotionVoice } from "../tts/adapter";
 import { isVoiceCorrectionContinuation, isVoiceCurrentActivityQuestion, isVoiceReferentialFollowup, mergeInterruptedVoiceTurn } from "./voice_turn_state";
-import { CN_TASK_EXECUTION_MESSAGES, CN_VOICE_FAST_PATH_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/packs/cn/voice_fast_path_messages";
+import { CN_VOICE_FAST_PATH_MESSAGES, CN_VOICE_WORK_MESSAGES } from "../regions/messages/voice_fast_path_messages";
+import { CN_TASK_EXECUTION_MESSAGES } from "../regions/messages/task_execution_messages";
 import { getConversationForScope, getOrCreateActiveConversation, getOrCreateConversationForTurn, addMessageIdempotent, getMessages, getMessagesByTokenBudget, extractTopics, trackTopic, getTopicContext, getConversationSummary, getConversationActionStatus, prepareConversationActionExecution, persistConversationExecutionPlan, completeConversationActionFromUserObservation, createDurableForegroundReleaseGate, setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, updateConversationActionFocus, type ForegroundRequestIdentity as VoiceForegroundRequestIdentity } from "../conversation/manager";
 import { buildForegroundWeChatSendArgs } from "../regions/packs/cn/foreground_wechat_intent";
 import { ensurePendingConfirmationPersistenceInitialized } from '../tools/pending_confirmation_repository';
@@ -85,9 +86,9 @@ import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../cogni
 import { runToolSession } from "../llm/tool_session";
 import { recordTokenUsageBatch } from "../llm/token_tracker";
 import { collectRecentActionToolRecords, describeRecentActionsFromHistory } from "./voice_action_history";
-import { formatOperationModeSwitchResponse } from "../i18n/operation_mode_messages";
+import { formatOperationModeSwitchResponse } from "../regions/messages/operation_mode_messages";
 import { buildForegroundMessagingArguments, executeForegroundMessagingAction } from "../cognition/foreground_messaging_execution";
-import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/packs/cn/messaging_messages";
+import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/messages/messaging_messages";
 import { NormalizedMessage } from "../llm/providers";
 import { normalizeVoiceHistory } from './voice_history';
 import { runConversationTurn } from "../llm/conversation_turn";
@@ -2315,9 +2316,7 @@ async function executeVoiceConfirmedAndDeterministicTurn(context: NonNullable<Aw
       });
       { return { terminal: true as const, context: undefined }; }
     }
-  return { terminal: false as const, context: extendTurnBindings(context, {
-
-  }) };
+  return { terminal: false as const, context };
 }
 
 async function executeVoiceModeAndMessagingTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceConfirmedAndDeterministicTurn>>["context"]>) {
@@ -2470,9 +2469,7 @@ async function executeVoiceModeAndMessagingTurn(context: NonNullable<Awaited<Ret
     }
 
     if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
-  return { terminal: false as const, context: extendTurnBindings(context, {
-
-  }) };
+  return { terminal: false as const, context };
 }
 
 async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>) {
@@ -2728,9 +2725,7 @@ async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<ty
     if (mainTerminalCommitted && !finalResponse.blocked) {
       context.persistVoiceLearning(context.responseText, { toolRecords: context.toolResults, logLabel: 'voice' });
     }
-  return { terminal: false as const, context: extendTurnBindings(context, {
-
-  }) };
+  return { terminal: false as const, context };
 }
 
 async function processAdmittedVoiceTurn(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: ConversationResourceLifetime = {}): Promise<void> {

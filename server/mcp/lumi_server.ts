@@ -47,7 +47,7 @@ import {
   publicMcpToolFailure,
   sanitizeMcpLogValue,
 } from './public_security';
-import { CN_MCP_MESSAGES } from '../regions/packs/cn/mcp_messages';
+import { CN_MCP_MESSAGES } from "../regions/messages/mcp_messages";
 import { attachMcpCallLifecycle, type McpCallLifecycle } from './lifecycle';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 

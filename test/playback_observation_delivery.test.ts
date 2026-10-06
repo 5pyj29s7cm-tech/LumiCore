@@ -48,7 +48,7 @@ import { toolRegistry } from '../server/tools/registry';
 import { registerComputerUseTool } from '../server/tools/definitions/computer_use_tool';
 import { capabilityContract } from '../server/tools/capability_contracts';
 import { buildPlaybackVerification, type PlaybackSample } from '../server/cognition/playback_verification';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../server/regions/packs/cn/execution_evidence_messages';
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../server/regions/messages/execution_evidence_messages";
 
 const task = '用爱奇艺播放蜡笔小新第一集';
 const getter = () => ({});

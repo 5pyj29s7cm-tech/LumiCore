@@ -3,8 +3,8 @@ import { promptBlockMessage, replacePromptBlock } from './prompt_blocks';
 import fs from 'fs';
 import { createModelTurnState, type ModelTurnState } from './model_turn_state';
 import { normalizeActionIntent } from '../cognition/normalized_action_intent';
-import { isCnLiteralTableFieldEdit } from '../regions/packs/cn/action_continuation';
-import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } from '../regions/packs/cn/voice_fast_path_messages';
+import { isCnLiteralTableFieldEdit } from "../regions/input/zh_action_continuation";
+import { CN_MODEL_FAILURE_BEFORE_EXECUTION, formatCnMediaGenerationFailure } from "../regions/messages/voice_fast_path_messages";
 import path from 'path';
 import { ToolRegistry } from '../tools/registry';
 import { ToolExecutionRecord, ToolContext, type NormalizedLLMResponse } from '../tools/types';
@@ -45,14 +45,14 @@ import {
   normalizePlannedToolScope,
 } from '../cognition/tool_planning';
 import type { UserLLMFallbackCandidate, UserLLMSelectionMode } from './user_preferences';
-import { CN_DURABLE_EXECUTION_MESSAGES } from '../i18n/durable_execution_messages';
-import { CN_EXECUTION_EVIDENCE_MESSAGES } from '../regions/packs/cn/execution_evidence_messages';
+import { CN_DURABLE_EXECUTION_MESSAGES } from "../regions/messages/durable_execution_messages";
+import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { redactDiagnosticSecrets } from '../client/diagnostic_sanitizer';
 import {
   buildDeterministicExplicitToolRecoveryCall,
   validateRuntimeOwnedDeterministicToolRecoveryCall,
 } from '../cognition/deterministic_tool_recovery';
-import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
+import { formatDesktopControlPausePresentation } from "../regions/messages/desktop_control_messages";
 import { buildTaskTargetAnchorProjection } from '../conversation/task_target_anchor';
 import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery, artifactRecordMatchesTurn, sameArtifactPath } from '../tools/artifact_evidence';
 import { requestedSingleArtifact } from '../cognition/artifact_write_scope';

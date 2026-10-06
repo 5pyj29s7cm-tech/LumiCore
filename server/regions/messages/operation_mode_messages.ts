@@ -1,4 +1,4 @@
-import type { OperationMode } from '../cognition/operation_modes';
+import type { OperationMode } from "../../cognition/operation_modes";
 
 const HAN_RE = /[\u3400-\u9fff]/u;
 

@@ -3,7 +3,7 @@ import { isRetiredOperationModeRequest, type OperationMode } from './operation_m
 import {
   formatCnCurrentOperationModeResponse,
   formatCnOperationModeInventoryResponse,
-} from '../regions/packs/cn/capability_meta_messages';
+} from "../regions/messages/capability_meta_messages";
 import { normalizeActionIntent } from './normalized_action_intent';
 import {
   LUMI_MEETING_CAPTURE_SURFACE,

@@ -1,4 +1,4 @@
-import { cnWorkTakeoverMessages } from '../../regions/packs/cn/work_takeover_messages';
+import { cnWorkTakeoverMessages } from "../../regions/messages/work_takeover_messages";
 import { randomUUID } from 'node:crypto';
 import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../db_layer';
 import { ensureBackgroundConversationActionTask, appendConversationActionReceipts } from '../../conversation/action_ledger';

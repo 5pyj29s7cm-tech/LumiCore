@@ -1,6 +1,6 @@
 import { finalizeLumiResponse } from './result_finalizer';
 import { shouldBlockForDesktopControlPause } from './desktop_control_pause';
-import { formatDesktopControlPausePresentation } from '../regions/packs/cn/desktop_control_messages';
+import { formatDesktopControlPausePresentation } from "../regions/messages/desktop_control_messages";
 import { formatPendingConfirmationRequest, type PendingToolConfirmation } from '../tools/pending_confirmation';
 import type { ToolExecutionRecord } from '../tools/types';
 
