@@ -1,3 +1,4 @@
+import { cnWorkTakeoverMessages } from '../regions/packs/cn/work_takeover_messages';
 import { updateWorkTakeoverTask, type WorkTakeoverTask } from './tasks';
 import type { WorkTakeoverExecutionPlan } from './execution_planner';
 import type { WorkTakeoverPacket } from './task_packet';
@@ -14,7 +15,7 @@ export function recordWorkTakeoverPacket(userId: string, task: WorkTakeoverTask,
     status: task.status === 'queued' ? 'in_progress' : task.status,
     artifact: {
       type: 'file',
-      label: '工作接管任务包',
+      label: cnWorkTakeoverMessages.packetLabel,
       path: packet.folderPath,
       content: packet.summary,
       status: 'prepared',

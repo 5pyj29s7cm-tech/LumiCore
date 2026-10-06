@@ -1,3 +1,4 @@
+import { cnWorkTakeoverMessages, formatCnWorkTakeoverVerification } from '../../regions/packs/cn/work_takeover_messages';
 import { resolveWorkTakeoverIntakeTask } from '../../work_takeover/intake';
 import { boundedWorkTakeoverSteps, runWorkTakeoverPreparation } from '../../work_takeover/preparation_loop';
 import { recordWorkTakeoverPacket } from '../../work_takeover/packet_recording';
@@ -113,21 +114,8 @@ export function registerWorkTakeoverCoordinationTools(registry: ToolRegistry): v
             : undefined,
           artifact: {
             type: 'checklist',
-            label: '任务结果验证记录',
-            content: [
-              verification.summary,
-              '',
-              ...verification.checks.map(item => `- ${item.passed ? '通过' : '待复核'}｜${item.label}：${item.detail}`),
-              verification.activeWindow
-                ? `\n活动窗口：${verification.activeWindow.processName} ${verification.activeWindow.title}`
-                : '\n活动窗口：未读取',
-              verification.screen?.captured
-                ? `屏幕截图：${verification.screen.width || '?'}x${verification.screen.height || '?'} ${verification.screen.format || ''}`.trim()
-                : '屏幕截图：未读取',
-              verification.detectedSurfaces.length
-                ? `检测到的外部表面：${verification.detectedSurfaces.join('、')}`
-                : '检测到的外部表面：暂无',
-            ].join('\n'),
+            label: cnWorkTakeoverMessages.verificationLabel,
+            content: formatCnWorkTakeoverVerification(verification),
             status: verification.passed ? 'prepared' : 'needs_review',
           },
           metadata: {

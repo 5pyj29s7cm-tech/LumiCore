@@ -1,3 +1,4 @@
+import { cnWorkTakeoverMessages } from '../../regions/packs/cn/work_takeover_messages';
 import { randomUUID } from 'node:crypto';
 import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../db_layer';
 import { ensureBackgroundConversationActionTask, appendConversationActionReceipts } from '../../conversation/action_ledger';
@@ -116,7 +117,7 @@ export function registerWorkTakeoverExecutionTools(registry: ToolRegistry): void
           updateWorkTakeoverTask(userId, task.id, {
             expectedRevision: task.revision || 0,
             status: 'blocked',
-            blockedBy: uniqueStrings([...task.blockedBy, `工具 ${toolName} 执行失败：${failure.error}`]),
+            blockedBy: uniqueStrings([...task.blockedBy, cnWorkTakeoverMessages.toolFailed(toolName, failure.error)]),
             metadata: {
               workTakeoverToolRuns: toolRunHistory(task, failure),
             },
@@ -145,10 +146,10 @@ export function registerWorkTakeoverExecutionTools(registry: ToolRegistry): void
         updatedTask = updateWorkTakeoverTask(userId, task.id, {
           expectedRevision: task.revision || 0,
           status: task.status === 'queued' ? 'in_progress' : task.status,
-          result: `工具 ${toolName} 已执行。\n${run.result}`,
+          result: cnWorkTakeoverMessages.toolExecuted(toolName, run.result),
           artifact: {
             type: 'other',
-            label: `工具执行结果：${toolName}`,
+            label: cnWorkTakeoverMessages.toolResultLabel(toolName),
             content: run.result,
             status: 'prepared',
           },
