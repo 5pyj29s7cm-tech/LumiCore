@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
+import { readImplementationSource } from '../../test/implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -153,7 +154,7 @@ describe('backend-owned privacy settings', () => {
   });
 
   it('is wired into the actual privacy section and removes the old absolute privacy claim', () => {
-    const settings = fs.readFileSync(path.join(process.cwd(), 'src/components/Settings.tsx'), 'utf8');
+    const settings = readImplementationSource(path.join(process.cwd(), 'src/components/Settings.tsx'), 'utf8');
     const section = settings.slice(settings.indexOf("case 'security':"), settings.indexOf("case 'hardware':"));
     expect(section).toContain('<PrivacyModeSettings locale={lang} workspace={workDomain} sessionId={user?.uid');
     const translations = fs.readFileSync(path.join(process.cwd(), 'src/lib/translations.ts'), 'utf8');
