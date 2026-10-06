@@ -1,3 +1,5 @@
+import { getMessageByRequestId } from './manager/request_identity';
+export { getMessageByRequestId } from './manager/request_identity';
 import { acceptConversationActionTurn } from "./action_turn_ledger";
 import { normalizeCompletionFeedbackForPersistence } from "./completion_feedback";
 import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
@@ -194,33 +196,7 @@ export type IdempotentConversationMessage = Parameters<typeof addMessage>[0] & {
  * mirrors the request id into externalMessageId because that column survives a
  * database restart; older in-memory rows can still be found through requestId.
  */
-export function getMessageByRequestId(input: {
-  userId: string;
-  agentId?: string;
-  conversationId?: string;
-  requestId: string;
-  role: string;
-  source?: string;
-  channel?: string;
-}): MessageRecord | null {
-  const requestId = String(input.requestId || '').trim();
-  if (!requestId) return null;
-  const source = String(input.source || '');
-  const channel = String(input.channel || '');
-  const row = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).find((item: any) => (
-    item.userId === input.userId
-    && (!input.agentId || item.agentId === input.agentId)
-    && (!input.conversationId || item.conversationId === input.conversationId)
-    && item.role === input.role
-    && (!source || item.source === source)
-    && (!channel || item.channel === channel)
-    && (
-      String(item.requestId || '') === requestId
-      || String(item.externalMessageId || '') === requestId
-    )
-  ));
-  return row || null;
-}
+
 
 /**
  * Persist one role exactly once for a received socket request. The monotonic

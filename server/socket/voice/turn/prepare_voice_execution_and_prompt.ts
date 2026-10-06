@@ -204,11 +204,11 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
     source: 'voice',
   };
   return { terminal: false as const, context: extendTurnBindings(context, {
-    provider: provider as typeof provider,
-    voiceModel: voiceModel as typeof voiceModel,
-    reasoningRoutePolicy: reasoningRoutePolicy as typeof reasoningRoutePolicy,
-    foregroundRequestIdentity: foregroundRequestIdentity as typeof foregroundRequestIdentity,
-    taskAwareRecords: taskAwareRecords as typeof taskAwareRecords,
-    voiceSystemPrompt: voiceSystemPrompt as typeof voiceSystemPrompt,
+    provider,
+    voiceModel,
+    reasoningRoutePolicy,
+    foregroundRequestIdentity,
+    taskAwareRecords,
+    voiceSystemPrompt,
   }) };
 }

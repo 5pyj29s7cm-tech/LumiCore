@@ -420,10 +420,10 @@ export async function resolveChatControlTurn(context: NonNullable<Awaited<Return
       { return { terminal: true as const, context: undefined }; }
     }
   return { terminal: false as const, context: extendTurnBindings(context, {
-    existingSession: existingSession as typeof existingSession,
-    activeConversationForStatus: activeConversationForStatus as typeof activeConversationForStatus,
-    controlTargetRequestId: controlTargetRequestId as typeof controlTargetRequestId,
-    controlTargetTaskId: controlTargetTaskId as typeof controlTargetTaskId,
-    controlTargetRevision: controlTargetRevision as typeof controlTargetRevision,
+    existingSession,
+    activeConversationForStatus,
+    controlTargetRequestId,
+    controlTargetTaskId,
+    controlTargetRevision,
   }) };
 }

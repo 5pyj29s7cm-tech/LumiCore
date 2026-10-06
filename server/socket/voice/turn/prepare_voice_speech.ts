@@ -351,11 +351,11 @@ export async function prepareVoiceSpeech(context: NonNullable<Awaited<ReturnType
     }
   };
   return { terminal: false as const, context: extendTurnBindings(context, {
-    queueFinalizedSpeech: queueFinalizedSpeech as typeof queueFinalizedSpeech,
+    queueFinalizedSpeech,
     get speculativeSpeech(): typeof speculativeSpeech { return speculativeSpeech; },
     set speculativeSpeech(value: typeof speculativeSpeech) { speculativeSpeech = value; },
     get turnSpeechAbort(): typeof turnSpeechAbort { return turnSpeechAbort; },
     set turnSpeechAbort(value: typeof turnSpeechAbort) { turnSpeechAbort = value; },
-    maybeStartSpeculativeSpeech: maybeStartSpeculativeSpeech as typeof maybeStartSpeculativeSpeech,
+    maybeStartSpeculativeSpeech,
   }) };
 }

@@ -237,10 +237,10 @@ export async function prepareChatExecutionLeaseAndTools(context: NonNullable<Awa
         });
       }
   return { terminal: false as const, context: extendTurnBindings(context, {
-    durableTaskId: durableTaskId as typeof durableTaskId,
-    taskAwareRecords: taskAwareRecords as typeof taskAwareRecords,
-    toolContext: toolContext as typeof toolContext,
-    priorTaskRecords: priorTaskRecords as typeof priorTaskRecords,
-    desktopRelay: desktopRelay as typeof desktopRelay,
+    durableTaskId,
+    taskAwareRecords,
+    toolContext,
+    priorTaskRecords,
+    desktopRelay,
   }) };
 }

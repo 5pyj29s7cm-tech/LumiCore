@@ -6,7 +6,8 @@ import { runtimeShutdownCancellation } from "../../../runtime/shutdown_work";
 import { shouldForwardPreFinalizationProgress } from "../../../cognition/response_delivery";
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { admitAcceptedUserTurnDurably, resolveAcceptedTurnConfirmation, runAfterAcceptedUserTurnAdmission } from "../../action_turn_durability";
-import { getOrCreateConversationForTurn, type ForegroundRequestIdentity as ChatForegroundRequestIdentity } from "../../../conversation/manager";
+import { type ForegroundRequestIdentity as ChatForegroundRequestIdentity } from "../../../conversation/manager";
+import { resolveConversationForEntry } from "../../../conversation/entry_conversation";
 import { isUserObservedTaskCompletion } from "../../../cognition/action_continuation";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
 import { beginQueuedChatExecution, beginChatSidecarExecution, markChatExecutionCancelling, persistChatSidecarCancellationIntent } from "../../chat_execution_registry";
@@ -154,13 +155,9 @@ export async function admitChatForegroundTurn(context: NonNullable<Awaited<Retur
     // Bind and persist the foreground user turn before it waits behind any
     // older lease. This keeps receive order durable even when the model/tool
     // phase is long or the process exits before a terminal assistant result.
-    const conversationTurn = getOrCreateConversationForTurn(
-      context.uid,
-      context.conversationAgentId,
-      context.resolvedDomain,
-      context.resolvedOrgId,
-      { userText: context.visibleUserText, conversationId: context.selectedConversationId },
-    );
+    const conversationTurn = resolveConversationForEntry(context.uid, context.requestScope, {
+      kind: 'chat', phase: 'admit', agentId: context.conversationAgentId, userText: context.visibleUserText,
+    }, context.selectedConversationId);
     let conversation = conversationTurn.conversation;
     const userObservedCompletionTaskId = context.attachments.length === 0
       && isUserObservedTaskCompletion(context.visibleUserText, conversation.actionContinuationState)
@@ -270,26 +267,26 @@ export async function admitChatForegroundTurn(context: NonNullable<Awaited<Retur
     let releaseDesktopControlLease: (() => void) | null = null;
     let foregroundRequestIdentity: ChatForegroundRequestIdentity | null = null;
   return { terminal: false as const, context: extendTurnBindings(context, {
-    stopAuthorizationWatch: stopAuthorizationWatch as typeof stopAuthorizationWatch,
-    abortController: abortController as typeof abortController,
-    markRequestCancellation: markRequestCancellation as typeof markRequestCancellation,
-    unregisterShutdownCancellation: unregisterShutdownCancellation as typeof unregisterShutdownCancellation,
+    stopAuthorizationWatch,
+    abortController,
+    markRequestCancellation,
+    unregisterShutdownCancellation,
     get releaseDesktopControlLease(): typeof releaseDesktopControlLease { return releaseDesktopControlLease; },
     set releaseDesktopControlLease(value: typeof releaseDesktopControlLease) { releaseDesktopControlLease = value; },
-    sessionLease: sessionLease as typeof sessionLease,
+    sessionLease,
     get foregroundRequestIdentity(): typeof foregroundRequestIdentity { return foregroundRequestIdentity; },
     set foregroundRequestIdentity(value: typeof foregroundRequestIdentity) { foregroundRequestIdentity = value; },
     get acknowledged(): typeof acknowledged { return acknowledged; },
     set acknowledged(value: typeof acknowledged) { acknowledged = value; },
-    activeMessageRelation: activeMessageRelation as typeof activeMessageRelation,
-    chatAdmission: chatAdmission as typeof chatAdmission,
+    activeMessageRelation,
+    chatAdmission,
     get conversation(): typeof conversation { return conversation; },
     set conversation(value: typeof conversation) { conversation = value; },
-    userObservedCompletionTaskId: userObservedCompletionTaskId as typeof userObservedCompletionTaskId,
-    acceptedUserMessageId: acceptedUserMessageId as typeof acceptedUserMessageId,
-    isChatCancelled: isChatCancelled as typeof isChatCancelled,
-    conversationTurn: conversationTurn as typeof conversationTurn,
-    confirmationResolution: confirmationResolution as typeof confirmationResolution,
-    forwardToolProgress: forwardToolProgress as typeof forwardToolProgress,
+    userObservedCompletionTaskId,
+    acceptedUserMessageId,
+    isChatCancelled,
+    conversationTurn,
+    confirmationResolution,
+    forwardToolProgress,
   }) };
 }

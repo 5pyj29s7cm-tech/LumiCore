@@ -217,7 +217,7 @@ export async function prepareChatRuntimeControlAndModel(context: NonNullable<Awa
     set activeProvider(value: typeof activeProvider) { activeProvider = value; },
     get activeModel(): typeof activeModel { return activeModel; },
     set activeModel(value: typeof activeModel) { activeModel = value; },
-    reasoningRoutePolicy: reasoningRoutePolicy as typeof reasoningRoutePolicy,
-    scheduleChatSummary: scheduleChatSummary as typeof scheduleChatSummary,
+    reasoningRoutePolicy,
+    scheduleChatSummary,
   }) };
 }

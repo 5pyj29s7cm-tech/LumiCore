@@ -252,13 +252,13 @@ export async function prepareChatPriorTaskQuery(context: NonNullable<Awaited<Ret
         : null;
       const runtimeCancellationRecheck = pendingRuntimeCancellationRecheck(previousActionState);
   return { terminal: false as const, context: extendTurnBindings(context, {
-    runtimeCancellationRecheck: runtimeCancellationRecheck as typeof runtimeCancellationRecheck,
-    previousActionState: previousActionState as typeof previousActionState,
-    acceptedFollowupIntent: acceptedFollowupIntent as typeof acceptedFollowupIntent,
-    confirmationNeedsFreshReview: confirmationNeedsFreshReview as typeof confirmationNeedsFreshReview,
-    asksAboutBoundConversationTask: asksAboutBoundConversationTask as typeof asksAboutBoundConversationTask,
-    asksAboutRecentConversationTask: asksAboutRecentConversationTask as typeof asksAboutRecentConversationTask,
-    acceptedNormalizedIntent: acceptedNormalizedIntent as typeof acceptedNormalizedIntent,
-    serverBoundRecheckTaskId: serverBoundRecheckTaskId as typeof serverBoundRecheckTaskId,
+    runtimeCancellationRecheck,
+    previousActionState,
+    acceptedFollowupIntent,
+    confirmationNeedsFreshReview,
+    asksAboutBoundConversationTask,
+    asksAboutRecentConversationTask,
+    acceptedNormalizedIntent,
+    serverBoundRecheckTaskId,
   }) };
 }

@@ -19,7 +19,7 @@ export async function executeChatModelAndDelivery(context: NonNullable<Awaited<R
       if (verifiedClientMode) saveStoredOperationMode(context.uid, verifiedClientMode);
       const finalTaskRecords = context.taskAwareRecords(context.allToolRecords);
       await completeChatTurn(extendTurnBindings(context, {
-    finalTaskRecords: finalTaskRecords as typeof finalTaskRecords,
+    finalTaskRecords,
   }));
   return { terminal: false as const, context };
 }

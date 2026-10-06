@@ -108,7 +108,7 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
       context.toolResults.push(...finalizedDesktopRecords.slice(context.toolResults.length));
     }
   return { terminal: false as const, context: extendTurnBindings(context, {
-    recoveryConversationMessages: recoveryConversationMessages as typeof recoveryConversationMessages,
-    effectiveModel: effectiveModel as typeof effectiveModel,
+    recoveryConversationMessages,
+    effectiveModel,
   }) };
 }

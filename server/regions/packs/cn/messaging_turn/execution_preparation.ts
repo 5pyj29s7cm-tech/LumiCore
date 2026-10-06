@@ -306,19 +306,19 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
   return { terminal: undefined, context: extendTurnBindings(context, {
     get organizationWorkRoute(): typeof organizationWorkRoute { return organizationWorkRoute; },
     set organizationWorkRoute(value: typeof organizationWorkRoute) { organizationWorkRoute = value; },
-    remoteToolContext: remoteToolContext as typeof remoteToolContext,
-    collectToolRecord: collectToolRecord as typeof collectToolRecord,
+    remoteToolContext,
+    collectToolRecord,
     get pendingConfirmationCreatedThisTurn(): typeof pendingConfirmationCreatedThisTurn { return pendingConfirmationCreatedThisTurn; },
     set pendingConfirmationCreatedThisTurn(value: typeof pendingConfirmationCreatedThisTurn) { pendingConfirmationCreatedThisTurn = value; },
-    taskAwareRecords: taskAwareRecords as typeof taskAwareRecords,
+    taskAwareRecords,
     get toolRecords(): typeof toolRecords { return toolRecords; },
     set toolRecords(value: typeof toolRecords) { toolRecords = value; },
-    desktopExecutionTracker: desktopExecutionTracker as typeof desktopExecutionTracker,
-    settleRemoteTask: settleRemoteTask as typeof settleRemoteTask,
-    userLLMPrefs: userLLMPrefs as typeof userLLMPrefs,
-    messages: messages as typeof messages,
-    settleTransferredExecution: settleTransferredExecution as typeof settleTransferredExecution,
-    settleSupersededRemoteTurn: settleSupersededRemoteTurn as typeof settleSupersededRemoteTurn,
+    desktopExecutionTracker,
+    settleRemoteTask,
+    userLLMPrefs,
+    messages,
+    settleTransferredExecution,
+    settleSupersededRemoteTurn,
   }) };
 }
 

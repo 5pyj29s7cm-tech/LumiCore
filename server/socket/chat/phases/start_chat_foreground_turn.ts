@@ -151,6 +151,6 @@ export async function startChatForegroundTurn(context: NonNullable<Awaited<Retur
       try { context.ack?.({ ok: true, requestId: context.requestId, receivedAt: new Date().toISOString() }); } catch {}
     }
   return { terminal: false as const, context: extendTurnBindings(context, {
-    releaseChatSession: releaseChatSession as typeof releaseChatSession,
+    releaseChatSession,
   }) };
 }

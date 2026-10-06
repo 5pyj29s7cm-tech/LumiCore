@@ -45,13 +45,13 @@ export async function prepareChatModelState(context: NonNullable<Awaited<ReturnT
     set responseText(value: typeof responseText) { responseText = value; },
     get normalTurnMessages(): typeof normalTurnMessages { return normalTurnMessages; },
     set normalTurnMessages(value: typeof normalTurnMessages) { normalTurnMessages = value; },
-    deferCompletionStream: deferCompletionStream as typeof deferCompletionStream,
-    chatTextGate: chatTextGate as typeof chatTextGate,
+    deferCompletionStream,
+    chatTextGate,
     get completionGuard(): typeof completionGuard { return completionGuard; },
     set completionGuard(value: typeof completionGuard) { completionGuard = value; },
     get llmWasCalled(): typeof llmWasCalled { return llmWasCalled; },
     set llmWasCalled(value: typeof llmWasCalled) { llmWasCalled = value; },
-    allToolRecords: allToolRecords as typeof allToolRecords,
-    sentiment: sentiment as typeof sentiment,
+    allToolRecords,
+    sentiment,
   }) };
 }

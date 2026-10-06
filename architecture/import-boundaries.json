@@ -1187,6 +1187,15 @@
         "readDatabaseTables"
       ],
       "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/request_identity.ts": {
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "tables": [
+        "interactions"
+      ],
+      "reason": "Accepted request identity lookup only. Conversation ownership is validated by the lifecycle owner."
     }
   },
   "approvedSqlImporters": {

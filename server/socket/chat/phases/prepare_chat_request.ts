@@ -15,7 +15,7 @@ import type { getPendingConfirmationDurably } from "../../../tools/pending_confi
 import { ensurePendingConfirmationPersistenceInitialized } from "../../../tools/pending_confirmation_repository";
 import { getMemoryAvatar } from "../../../memory_avatar/store";
 import { captureMemoryAvatarAuthorization } from "../../../memory_avatar/lifecycle";
-import { getMessageByRequestId, getConversationForScope, getOrCreateActiveConversation } from "../../../conversation/manager";
+import { resolveConversationForEntry } from "../../../conversation/entry_conversation";
 import { buildSocketNativeRequestBinding } from "../../native_request_binding";
 import type { createConversationReceiptObserver } from "../../../conversation/execution_receipt_archive";
 import { buildSocketToolSecurityContext, resolveAuthorizedSocketScope } from "../../scope";
@@ -156,38 +156,10 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
       return true;
     };
     const requestedConversationId = String(data.conversationId || '').trim();
-    const persistedRequestTurn = getMessageByRequestId({
-      userId: uid,
-      agentId: conversationAgentId,
-      requestId,
-      role: 'user',
-      source: eventSource,
-      channel: 'chat',
-    });
-    const persistedRequestConversation = persistedRequestTurn?.conversationId
-      ? getConversationForScope(
-          persistedRequestTurn.conversationId,
-          uid,
-          resolvedDomain,
-          resolvedOrgId,
-        )
-      : null;
-    const selectedConversation = persistedRequestConversation || (requestedConversationId
-      ? getConversationForScope(requestedConversationId, uid, resolvedDomain, resolvedOrgId)
-      : getOrCreateActiveConversation(uid, conversationAgentId, resolvedDomain, resolvedOrgId));
-    const explicitlyBoundConversation = Boolean(
-      requestedConversationId
-      && selectedConversation?.id === requestedConversationId,
-    );
-    if (
-      !selectedConversation
-      || selectedConversation.agentId !== conversationAgentId
-      || (
-        selectedConversation.status !== 'active'
-        && !persistedRequestTurn
-        && !explicitlyBoundConversation
-      )
-    ) {
+    const selectedConversation = resolveConversationForEntry(uid, requestScope, {
+      kind: 'chat', phase: 'select', agentId: conversationAgentId, requestId, source: eventSource,
+    }, requestedConversationId);
+    if (!selectedConversation) {
       try { ack?.({ ok: false, requestId, error: 'Conversation is unavailable for this user, agent, or workspace' }); } catch {}
       { return { terminal: true as const, context: undefined }; }
     }
@@ -203,67 +175,67 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
   return { terminal: false as const, context: {
     get selectedConversationId(): typeof selectedConversationId { return selectedConversationId; },
     set selectedConversationId(value: typeof selectedConversationId) { selectedConversationId = value; },
-    uid: uid as typeof uid,
-    resolvedDomain: resolvedDomain as typeof resolvedDomain,
-    resolvedOrgId: resolvedOrgId as typeof resolvedOrgId,
-    selectedConversation: selectedConversation as typeof selectedConversation,
-    visibleUserText: visibleUserText as typeof visibleUserText,
-    eventSource: eventSource as typeof eventSource,
-    requestId: requestId as typeof requestId,
+    uid,
+    resolvedDomain,
+    resolvedOrgId,
+    selectedConversation,
+    visibleUserText,
+    eventSource,
+    requestId,
     get collectRequestTerminalRecords(): typeof collectRequestTerminalRecords { return collectRequestTerminalRecords; },
     set collectRequestTerminalRecords(value: typeof collectRequestTerminalRecords) { collectRequestTerminalRecords = value; },
     get latestMediaArtifactReceipt(): typeof latestMediaArtifactReceipt { return latestMediaArtifactReceipt; },
     set latestMediaArtifactReceipt(value: typeof latestMediaArtifactReceipt) { latestMediaArtifactReceipt = value; },
-    conversationAgentId: conversationAgentId as typeof conversationAgentId,
-    turnAuthorization: turnAuthorization as typeof turnAuthorization,
-    socket: socket as typeof socket,
-    markTurnTiming: markTurnTiming as typeof markTurnTiming,
-    turnTiming: turnTiming as typeof turnTiming,
-    isMemoryAvatar: isMemoryAvatar as typeof isMemoryAvatar,
-    io: io as typeof io,
-    conversationAuthorization: conversationAuthorization as typeof conversationAuthorization,
-    addMessageIdempotent: addMessageIdempotent as typeof addMessageIdempotent,
-    ack: ack as typeof ack,
-    rejectRevokedRequest: rejectRevokedRequest as typeof rejectRevokedRequest,
-    data: data as typeof data,
-    storedUserContent: storedUserContent as typeof storedUserContent,
-    requestReceivedAt: requestReceivedAt as typeof requestReceivedAt,
-    toolSecurityContext: toolSecurityContext as typeof toolSecurityContext,
-    attachments: attachments as typeof attachments,
+    conversationAgentId,
+    turnAuthorization,
+    socket,
+    markTurnTiming,
+    turnTiming,
+    isMemoryAvatar,
+    io,
+    conversationAuthorization,
+    addMessageIdempotent,
+    ack,
+    rejectRevokedRequest,
+    data,
+    storedUserContent,
+    requestReceivedAt,
+    toolSecurityContext,
+    attachments,
     get pendingConfirmation(): typeof pendingConfirmation { return pendingConfirmation; },
     set pendingConfirmation(value: typeof pendingConfirmation) { pendingConfirmation = value; },
     get pendingConfirmationPrompt(): typeof pendingConfirmationPrompt { return pendingConfirmationPrompt; },
     set pendingConfirmationPrompt(value: typeof pendingConfirmationPrompt) { pendingConfirmationPrompt = value; },
-    llmGetters: llmGetters as typeof llmGetters,
-    formatToolResultForUi: formatToolResultForUi as typeof formatToolResultForUi,
-    memoryAvatar: memoryAvatar as typeof memoryAvatar,
-    personalityId: personalityId as typeof personalityId,
-    text: text as typeof text,
-    requestScope: requestScope as typeof requestScope,
+    llmGetters,
+    formatToolResultForUi,
+    memoryAvatar,
+    personalityId,
+    text,
+    requestScope,
     get chatContextBridge(): typeof chatContextBridge { return chatContextBridge; },
     set chatContextBridge(value: typeof chatContextBridge) { chatContextBridge = value; },
-    payloadMode: payloadMode as typeof payloadMode,
+    payloadMode,
     get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
     set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },
-    historyItems: historyItems as typeof historyItems,
-    sensoryFn: sensoryFn as typeof sensoryFn,
-    mediaRoutingEnvelope: mediaRoutingEnvelope as typeof mediaRoutingEnvelope,
-    structuredMediaRequest: structuredMediaRequest as typeof structuredMediaRequest,
-    category: category as typeof category,
+    historyItems,
+    sensoryFn,
+    mediaRoutingEnvelope,
+    structuredMediaRequest,
+    category,
     get requestTaskId(): typeof requestTaskId { return requestTaskId; },
     set requestTaskId(value: typeof requestTaskId) { requestTaskId = value; },
     get receiptObserver(): typeof receiptObserver { return receiptObserver; },
     set receiptObserver(value: typeof receiptObserver) { receiptObserver = value; },
-    allowLocalFileWrites: allowLocalFileWrites as typeof allowLocalFileWrites,
-    localWriteIntentReason: localWriteIntentReason as typeof localWriteIntentReason,
-    requestToolRecords: requestToolRecords as typeof requestToolRecords,
-    nativeRequestBinding: nativeRequestBinding as typeof nativeRequestBinding,
-    rememberRequestToolRecord: rememberRequestToolRecord as typeof rememberRequestToolRecord,
-    formatMediaArtifactReceiptForUi: formatMediaArtifactReceiptForUi as typeof formatMediaArtifactReceiptForUi,
-    runAuthorizedTools: runAuthorizedTools as typeof runAuthorizedTools,
-    history: history as typeof history,
-    allowAdaptiveLearning: allowAdaptiveLearning as typeof allowAdaptiveLearning,
-    buildNaturalReplyStyleOverlay: buildNaturalReplyStyleOverlay as typeof buildNaturalReplyStyleOverlay,
-    chatDurabilityUnknownText: chatDurabilityUnknownText as typeof chatDurabilityUnknownText,
+    allowLocalFileWrites,
+    localWriteIntentReason,
+    requestToolRecords,
+    nativeRequestBinding,
+    rememberRequestToolRecord,
+    formatMediaArtifactReceiptForUi,
+    runAuthorizedTools,
+    history,
+    allowAdaptiveLearning,
+    buildNaturalReplyStyleOverlay,
+    chatDurabilityUnknownText,
   } };
 }

@@ -217,7 +217,7 @@ export async function prepareVoiceRelease(context: NonNullable<Awaited<ReturnTyp
     isCurrent: context.isCurrentTurn,
   });
   return { terminal: false as const, context: extendTurnBindings(context, {
-    finishVoiceTerminal: finishVoiceTerminal as typeof finishVoiceTerminal,
-    releaseVoiceTurnResources: releaseVoiceTurnResources as typeof releaseVoiceTurnResources,
+    finishVoiceTerminal,
+    releaseVoiceTurnResources,
   }) };
 }

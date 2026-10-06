@@ -1,3 +1,4 @@
+import { resolveConversationForEntry } from '../conversation/entry_conversation';
 import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
@@ -6,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { flushDBOrThrow } from '../../db_layer';
 import { buildLumiExecutionPipeline } from '../cognition/execution_pipeline';
 import { createModelTurnState } from '../llm/model_turn_state';
-import { getConversationForScope, startIsolatedConversation, getMessages, addMessageIdempotent, prepareConversationActionExecution, startConversationActionExecutionHeartbeat } from '../conversation/manager';
+import { getConversationForScope, getMessages, addMessageIdempotent, prepareConversationActionExecution, startConversationActionExecutionHeartbeat } from '../conversation/manager';
 import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from '../conversation/lifecycle';
 import { captureChatAuthorization } from '../socket/chat_authorization';
 import { isExplicitMemoryRequest, persistTurnMemory } from '../memory/turn_memory';
@@ -150,11 +151,11 @@ function registerLumiChatTool({ mcp, bc, chatConversations, scope, isWorkViewer,
       let conversationId = '';
       const emit = (event: string, data: any) => bc(event, { ...data, requestId, conversationId, source: 'mcp_chat' });
       try {
-        const priorId = requestedConversationId || chatConversations.get(pid);
-        const candidate = priorId ? getConversationForScope(priorId, scope.userId, scope.domain, scope.orgId) : null;
-        const prior = candidate?.agentId === pid ? candidate : null;
-        if (requestedConversationId && !prior) throw new Error('Conversation is unavailable in this scope');
-        conversationId = prior?.id || startIsolatedConversation(scope.userId, pid, scope.domain, scope.orgId).id;
+        const prior = resolveConversationForEntry(scope.userId, scope, {
+          kind: 'mcp', agentId: pid, resumeConversationId: chatConversations.get(pid),
+        }, requestedConversationId);
+        if (!prior) throw new Error('Conversation is unavailable in this scope');
+        conversationId = prior.id;
         chatConversations.set(pid, conversationId);
         const authorization = combineRequestAuthorizations(captureChatAuthorization(scope.userId, scope),
           captureConversationAuthorization({ ...scope, agentId: pid }, () => conversationId));

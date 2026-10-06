@@ -1,3 +1,4 @@
+import { resolveConversationForEntry } from '../../../conversation/entry_conversation';
 import type { Server, Socket } from "socket.io";
 import { type AudioSession, getVoiceStateKey, type VoiceInputTiming } from "../session";
 import type { LLMGetters as LlmGetters } from "../../../llm/dispatch";
@@ -11,7 +12,7 @@ import { getActiveProvider as getTTSProvider } from "../../../tts/adapter";
 import { isVoiceCorrectionContinuation, isVoiceCurrentActivityQuestion, mergeInterruptedVoiceTurn } from "../../voice_turn_state";
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
-import { getConversationForScope, getOrCreateActiveConversation, getOrCreateConversationForTurn, addMessageIdempotent, getMessages, getMessagesByTokenBudget, type startConversationActionExecutionHeartbeat } from "../../../conversation/manager";
+import { getConversationForScope, addMessageIdempotent, getMessages, getMessagesByTokenBudget, type startConversationActionExecutionHeartbeat } from "../../../conversation/manager";
 import { buildForegroundWeChatSendArgs } from "../../../regions/packs/cn/foreground_wechat_intent";
 import { ensurePendingConfirmationPersistenceInitialized } from "../../../tools/pending_confirmation_repository";
 import { sanitizeVoiceAgentErrorPayload, voiceDurabilityUnknownText } from "../../voice_durability";
@@ -73,7 +74,8 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   let interruptedMerge = mergeInterruptedVoiceTurn(pendingInterruptedTurn, userText);
   if (!interruptedMerge.usedInterruptedTurn && isVoiceCorrectionContinuation(userText)) {
     try {
-      const conv = getOrCreateActiveConversation(session.userId, session.agentId, session.domain, session.orgId);
+      const conv = resolveConversationForEntry(session.userId, session, { kind: 'voice', phase: 'select', agentId: session.agentId });
+      if (!conv) throw new Error('Voice conversation is unavailable');
       const priorAction = getMessagesByTokenBudget(conv.id)
         .slice(-16)
         .reverse()
@@ -95,13 +97,9 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     logger.info(`[Audio] Applied correction to interrupted voice request: "${userText.slice(0, 80)}"`);
   }
 
-  const conversationTurn = getOrCreateConversationForTurn(
-    session.userId,
-    session.agentId,
-    session.domain,
-    session.orgId,
-    { userText: actionIntentText },
-  );
+  const conversationTurn = resolveConversationForEntry(session.userId, session, {
+    kind: 'voice', phase: 'admit', agentId: session.agentId, userText: actionIntentText,
+  });
   if (transcriptExecutionGuard.action === 'allow') {
     transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText, {
       pendingAction: conversationTurn.conversation.actionContinuationState?.unfinished === true,
@@ -357,63 +355,63 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     { return { terminal: true as const, context: undefined }; }
   }
   return { terminal: false as const, context: {
-    session: session as typeof session,
+    session,
     get transcriptExecutionGuard(): typeof transcriptExecutionGuard { return transcriptExecutionGuard; },
     set transcriptExecutionGuard(value: typeof transcriptExecutionGuard) { transcriptExecutionGuard = value; },
-    actionIntentText: actionIntentText as typeof actionIntentText,
-    requestId: requestId as typeof requestId,
-    inputTiming: inputTiming as typeof inputTiming,
-    pipelineAbort: pipelineAbort as typeof pipelineAbort,
-    userText: userText as typeof userText,
-    executionReceipts: executionReceipts as typeof executionReceipts,
-    turnAuthorization: turnAuthorization as typeof turnAuthorization,
-    emitAgent: emitAgent as typeof emitAgent,
-    socket: socket as typeof socket,
+    actionIntentText,
+    requestId,
+    inputTiming,
+    pipelineAbort,
+    userText,
+    executionReceipts,
+    turnAuthorization,
+    emitAgent,
+    socket,
     get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
     set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },
     get pendingConfirmationPrompt(): typeof pendingConfirmationPrompt { return pendingConfirmationPrompt; },
     set pendingConfirmationPrompt(value: typeof pendingConfirmationPrompt) { pendingConfirmationPrompt = value; },
-    voiceScope: voiceScope as typeof voiceScope,
-    sensoryFn: sensoryFn as typeof sensoryFn,
-    acceptedVoiceResolution: acceptedVoiceResolution as typeof acceptedVoiceResolution,
-    toolSecurityContext: toolSecurityContext as typeof toolSecurityContext,
-    conversationTurn: conversationTurn as typeof conversationTurn,
-    pendingAssistantOfferContext: pendingAssistantOfferContext as typeof pendingAssistantOfferContext,
-    userObservedCompletion: userObservedCompletion as typeof userObservedCompletion,
+    voiceScope,
+    sensoryFn,
+    acceptedVoiceResolution,
+    toolSecurityContext,
+    conversationTurn,
+    pendingAssistantOfferContext,
+    userObservedCompletion,
     get voiceUserMessageId(): typeof voiceUserMessageId { return voiceUserMessageId; },
     set voiceUserMessageId(value: typeof voiceUserMessageId) { voiceUserMessageId = value; },
     get pendingConfirmation(): typeof pendingConfirmation { return pendingConfirmation; },
     set pendingConfirmation(value: typeof pendingConfirmation) { pendingConfirmation = value; },
     get interruptedMerge(): typeof interruptedMerge { return interruptedMerge; },
     set interruptedMerge(value: typeof interruptedMerge) { interruptedMerge = value; },
-    normalizeAgentPayload: normalizeAgentPayload as typeof normalizeAgentPayload,
-    writeVoiceMessage: writeVoiceMessage as typeof writeVoiceMessage,
-    voiceTurnProvenance: voiceTurnProvenance as typeof voiceTurnProvenance,
-    executionScope: executionScope as typeof executionScope,
-    executionUnknownPayload: executionUnknownPayload as typeof executionUnknownPayload,
-    publishRecordedAgent: publishRecordedAgent as typeof publishRecordedAgent,
-    isCurrentTurn: isCurrentTurn as typeof isCurrentTurn,
+    normalizeAgentPayload,
+    writeVoiceMessage,
+    voiceTurnProvenance,
+    executionScope,
+    executionUnknownPayload,
+    publishRecordedAgent,
+    isCurrentTurn,
     get actionLeaseHeartbeat(): typeof actionLeaseHeartbeat { return actionLeaseHeartbeat; },
     set actionLeaseHeartbeat(value: typeof actionLeaseHeartbeat) { actionLeaseHeartbeat = value; },
     get confirmationScope(): typeof confirmationScope { return confirmationScope; },
     set confirmationScope(value: typeof confirmationScope) { confirmationScope = value; },
-    llmGetters: llmGetters as typeof llmGetters,
-    io: io as typeof io,
-    confirmationResolution: confirmationResolution as typeof confirmationResolution,
-    confirmationChannelScope: confirmationChannelScope as typeof confirmationChannelScope,
-    correctionRequiresFreshConfirmation: correctionRequiresFreshConfirmation as typeof correctionRequiresFreshConfirmation,
+    llmGetters,
+    io,
+    confirmationResolution,
+    confirmationChannelScope,
+    correctionRequiresFreshConfirmation,
     get trustedVoiceConfirmationText(): typeof trustedVoiceConfirmationText { return trustedVoiceConfirmationText; },
     set trustedVoiceConfirmationText(value: typeof trustedVoiceConfirmationText) { trustedVoiceConfirmationText = value; },
-    voiceStateKey: voiceStateKey as typeof voiceStateKey,
-    turnTtsSelection: turnTtsSelection as typeof turnTtsSelection,
-    persistVoiceUserMessage: persistVoiceUserMessage as typeof persistVoiceUserMessage,
-    resources: resources as typeof resources,
+    voiceStateKey,
+    turnTtsSelection,
+    persistVoiceUserMessage,
+    resources,
     get finalAgentResponseDelivered(): typeof finalAgentResponseDelivered { return finalAgentResponseDelivered; },
     set finalAgentResponseDelivered(value: typeof finalAgentResponseDelivered) { finalAgentResponseDelivered = value; },
     get recentVoiceHistory(): typeof recentVoiceHistory { return recentVoiceHistory; },
     set recentVoiceHistory(value: typeof recentVoiceHistory) { recentVoiceHistory = value; },
-    userObservedCompletionTask: userObservedCompletionTask as typeof userObservedCompletionTask,
-    modelTurnState: modelTurnState as typeof modelTurnState,
-    interruptedActivityResponse: interruptedActivityResponse as typeof interruptedActivityResponse,
+    userObservedCompletionTask,
+    modelTurnState,
+    interruptedActivityResponse,
   } };
 }

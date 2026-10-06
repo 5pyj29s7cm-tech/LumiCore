@@ -1,8 +1,9 @@
+import { resolveConversationForEntry } from '../../../conversation/entry_conversation';
 import { ensurePendingConfirmationPersistenceInitialized } from '../../../tools/pending_confirmation_repository';
 import { correlateMessagingReply } from './messaging_ingress_runtime';
 import type { IncomingMessage } from '../../../messaging/types';
 import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../../../db_layer';
-import { addMessageIdempotent, getConversationForScope, getOrCreateActiveConversation } from '../../../conversation/manager';
+import { addMessageIdempotent } from '../../../conversation/manager';
 import { admitAcceptedUserTurnDurably, type AcceptedUserTurnAdmission } from '../../../socket/action_turn_durability';
 import { type MessagingRouteOptions, type MessagingConversationUpdate, MessagingReplyDurabilityError } from "./messaging_finalization";
 import { getDisplayText, messagingConversationAgentId } from "./remote_materials";
@@ -23,13 +24,9 @@ export function conversationForMessagingTurn(message: IncomingMessage) {
   const domain = message.boundOrgId ? 'work' as const : 'personal' as const;
   const orgId = message.boundOrgId || '';
   const requestId = `${message.platform}_bot:${message.messageId}`;
-  const accepted = (readDatabaseTables(["conversations","interactions"]).interactions || []).find((row: any) => row.role === 'user'
-    && row.userId === message.boundUserId && (row.domain || 'personal') === domain && (row.orgId || '') === orgId
-    && row.requestId === requestId);
-  // A new active chat must not take ownership of an already accepted remote turn.
-  return accepted
-    ? getConversationForScope(accepted.conversationId, message.boundUserId, domain, orgId)
-    : getOrCreateActiveConversation(message.boundUserId, messagingConversationAgentId(message), domain, orgId);
+  return resolveConversationForEntry(message.boundUserId, { domain, orgId }, {
+    kind: 'messaging', agentId: messagingConversationAgentId(message), requestId,
+  });
 }
 
 export function persistBoundMessagingMessage(
