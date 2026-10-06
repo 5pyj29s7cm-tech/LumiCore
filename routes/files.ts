@@ -15,7 +15,8 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
-import { readDB, writeDB, flushDBOrThrow } from '../db_layer';
+import { flushDBOrThrow } from '../db_layer';
+import { readKnowledgeFileState, commitKnowledgeFileState } from '../server/files/knowledge_state';
 import { chunkText, ingestDocument, verifyIngestedDocument } from '../server/agents/rag';
 import type { KnowledgeIngestionManifest } from '../server/knowledge/ingestion_manifest';
 import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding } from '../server/memory/embedding_identity';
@@ -274,7 +275,7 @@ async function saveUploadedKnowledgeFile(
       } catch { continue; }
       authorization.assertCurrent();
       // A previous flush may have failed. Never return a success before retrying that boundary.
-      writeDB(db);
+      commitKnowledgeFileState(db);
       await flushDBOrThrow();
       authorization.assertCurrent();
       input.signal?.throwIfAborted();
@@ -286,7 +287,7 @@ async function saveUploadedKnowledgeFile(
     const meta = findFileMeta(db, entry.id, scope);
     if (!meta) throw new Error('Uploaded file metadata is unavailable');
     meta.uploadReceipt = { key, contentSha256: digest, response: entry };
-    writeDB(db);
+    commitKnowledgeFileState(db);
     await flushDBOrThrow();
     authorization.assertCurrent();
     input.signal?.throwIfAborted();
@@ -468,7 +469,7 @@ function resolveGeneratedDownloadPath(value: unknown, req?: Request): string {
   // files saved outside the shared output directory. Prose grants no access.
   const conversationId = String(req?.query.conversationId || '').trim();
   if (conversationId) {
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const conv = (db.conversations || []).find((item: any) => item.id === conversationId && item.userId === req?.user?.uid);
     const membershipMatches = conv && (!conv.orgId || conv.orgId === req?.user?.orgId);
     const ownedOutput = membershipMatches && (db.interactions || []).some((item: any) =>
@@ -1052,7 +1053,7 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
   legacyRevalidationRunning = true;
   let activeIdentity: { userId: string; filename: string } | null = null;
   try {
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const now = Date.now();
     const meta = (db.knowledgeFiles || []).find((item: any) => {
       const domain = normalizeFileDomain(item?.domain || (item?.orgId ? 'work' : 'personal'));
@@ -1083,7 +1084,7 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
       meta.status = 'indexed';
       meta.legacyRevalidationLastAt = new Date().toISOString();
       meta.legacyRevalidationError = 'Prior synthetic retrieval probes are not golden QA; owner-supplied cases are required.';
-      writeDB(db);
+      commitKnowledgeFileState(db);
       return 'unverified';
     }
     const filePath = path.join(personalKnowledgeDirectoryForMeta(meta, db), filename);
@@ -1100,7 +1101,7 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
       applyExtractionMeta(meta, extraction, null);
       applyIngestionManifest(meta, buildNonIndexedManifest(filePath || filename, extraction));
       meta.status = 'failed';
-      writeDB(db);
+      commitKnowledgeFileState(db);
       return 'failed';
     }
 
@@ -1109,7 +1110,7 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
       applyExtractionMeta(meta, extraction, null);
       applyIngestionManifest(meta, buildNonIndexedManifest(filePath, extraction));
       meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
-      writeDB(db);
+      commitKnowledgeFileState(db);
       return 'failed';
     }
 
@@ -1142,11 +1143,11 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
     applyIngestionManifest(meta, latestResult.manifest);
     meta.status = latestResult.manifest.status === 'partial' ? 'partial' : 'indexed';
     delete meta.legacyRevalidationRetryAt;
-    writeDB(db);
+    commitKnowledgeFileState(db);
     return latestResult.manifest.coverage.verified ? 'verified' : 'unverified';
   } catch (error: any) {
     try {
-      const db = readDB();
+      const db = readKnowledgeFileState();
       const candidate = activeIdentity
         ? (db.knowledgeFiles || []).find((item: any) => (
             String(item.userId || '') === activeIdentity!.userId
@@ -1157,7 +1158,7 @@ export async function revalidateOneLegacyKnowledgeFile(): Promise<'verified' | '
         const attempts = Number(candidate.legacyRevalidationAttempts || 1);
         candidate.legacyRevalidationError = String(error?.message || error).slice(0, 500);
         candidate.legacyRevalidationRetryAt = Date.now() + Math.min(24 * 60 * 60_000, 2 ** attempts * 60_000);
-        writeDB(db);
+        commitKnowledgeFileState(db);
       }
     } catch {}
     return 'failed';
@@ -1211,7 +1212,7 @@ function hasCurrentVerifiedManifest(meta: any, content: string, existingMemoryId
   if (!manifest || manifest.schemaVersion !== 1) return false;
   if (manifest.sourceRevision !== hashKnowledgeContent(content)) return false;
   const existing = new Set(existingMemoryIds);
-  const actualMemories = new Map((readDB().memories || [])
+  const actualMemories = new Map((readKnowledgeFileState().memories || [])
     .filter((memory: any) => existing.has(String(memory.id)))
     .map((memory: any) => [String(memory.id), memory]));
   return manifest.chunks.length > 0
@@ -1232,6 +1233,11 @@ function buildOrgArticleTags(filename: string, metadata?: MarkdownKnowledgeMetad
   ].map(tag => String(tag || '').trim()).filter(Boolean).slice(0, 20);
 }
 
+function sameKnowledgeFileOwnership(current: any, expected: any): boolean {
+  return Boolean(current && expected && ['filename', 'userId', 'domain', 'orgId', 'createdAt', 'indexingRevision']
+    .every(key => String(current[key] || '') === String(expected[key] || '')));
+}
+
 async function ensureOrgArticleFromFile(
   scope: FileScope,
   userId: string,
@@ -1245,19 +1251,20 @@ async function ensureOrgArticleFromFile(
   if (scope.domain !== 'work' || !scope.orgId) return null;
   const sourcePath = path.join(scope.dir, filename);
   const sourceStat = fs.statSync(sourcePath);
-  const fileMeta = findFileMeta(readDB(), filename, scope);
+  const fileState = readKnowledgeFileState();
+  const fileMeta = findFileMeta(fileState, filename, scope);
   if (!fileMeta) throw Object.assign(new Error('Knowledge file metadata is unavailable.'), { status: 409 });
   const indexCurrentArticle = async (article: any) => {
     // Bind before the first await so deletion owns the newly created article.
     fileMeta.orgArticleId = article.id;
-    writeDB(readDB());
+    commitKnowledgeFileState(fileState);
     await OrgKB.indexArticle(scope.orgId!, article.id, userId, { signal });
     signal?.throwIfAborted();
-    const currentMeta = findFileMeta(readDB(), filename, scope);
+    const currentMeta = findFileMeta(readKnowledgeFileState(), filename, scope);
     const currentArticle = OrgKB.getArticle(scope.orgId!, article.id);
     let currentStat: fs.Stats | undefined;
     try { currentStat = fs.statSync(sourcePath); } catch {}
-    if (!currentStat || currentMeta !== fileMeta || currentMeta.orgArticleId !== article.id || !currentArticle
+    if (!currentStat || !sameKnowledgeFileOwnership(currentMeta, fileMeta) || currentMeta.orgArticleId !== article.id || !currentArticle
       || currentStat.dev !== sourceStat.dev || currentStat.ino !== sourceStat.ino
       || currentStat.size !== sourceStat.size || currentStat.mtimeMs !== sourceStat.mtimeMs
       || currentStat.ctimeMs !== sourceStat.ctimeMs) {
@@ -1354,6 +1361,9 @@ async function saveKnowledgeFile(
       updatedAt: new Date().toISOString(),
     });
   }
+
+  findFileMeta(db, finalName, scope).indexingRevision = crypto.randomUUID();
+  commitKnowledgeFileState(db);
 
   const isImageUpload = IMAGE_KNOWLEDGE_EXTS.test(ext) || mimeType.startsWith('image/');
   const isAudioUpload = AUDIO_KNOWLEDGE_EXTS.test(ext) || mimeType.startsWith('audio/');
@@ -1490,7 +1500,7 @@ async function saveKnowledgeFile(
   input.signal?.throwIfAborted();
   input.assertAuthorized?.();
   assertSourceCurrent();
-  if (!findFileMeta(readDB(), finalName, scope)) throw Object.assign(new Error('Knowledge file was removed during indexing.'), { status: 409 });
+  if (!findFileMeta(readKnowledgeFileState(), finalName, scope)) throw Object.assign(new Error('Knowledge file was removed during indexing.'), { status: 409 });
   return entry;
 }
 
@@ -2044,7 +2054,7 @@ router.get('/files/list', requireAuth, async (req: Request, res: Response) => {
   try {
     const scope = getFileScope(req);
     const archived = await readRequestArchive(req, scope);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const fileMeta: Record<string, any> = {};
     if (db.knowledgeFiles) {
       for (const m of db.knowledgeFiles) {
@@ -2089,7 +2099,7 @@ router.get('/files/obsidian/status', requireAuth, (req: Request, res: Response) 
     assertLocalHostRequest(req);
     const userId = getUserId(req);
     const scope = getFileScope(req);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const vaults = readObsidianVaults(db, userId, scope).map(vault => {
       const exists = fs.existsSync(vault.path);
       const isDirectory = exists && fs.statSync(vault.path).isDirectory();
@@ -2122,13 +2132,13 @@ router.post('/files/obsidian/connect', requireAuth, requireUnifiedAdmin, require
     assertKnowledgeWriteAccess(scope);
     const { vaultPath, name } = req.body || {};
     if (!vaultPath) return res.status(400).json({ error: 'vaultPath is required' });
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const vault = upsertObsidianVault(db, userId, scope, { vaultPath, name });
     const scan = scanObsidianVault(vault.path, Number(req.body?.maxFiles) || OBSIDIAN_DEFAULT_MAX_FILES);
     vault.lastScanAt = new Date().toISOString();
     vault.lastNoteCount = scan.notes.length;
     writeObsidianVaults(db, userId, scope, readObsidianVaults(db, userId, scope).map(v => v.id === vault.id ? vault : v));
-    writeDB(db);
+    commitKnowledgeFileState(db);
     res.json({
       success: true,
       vault,
@@ -2148,7 +2158,7 @@ router.post('/files/obsidian/sync', requireAuth, requireUnifiedAdmin, requireUni
     const userId = getUserId(req);
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const vaultId = String(req.body?.vaultId || req.query.vaultId || '').trim();
     const vaults = readObsidianVaults(db, userId, scope);
     const targets = vaultId
@@ -2169,7 +2179,7 @@ router.post('/files/obsidian/sync', requireAuth, requireUnifiedAdmin, requireUni
       results.push(sync);
     }
     writeObsidianVaults(db, userId, scope, updatedVaults);
-    writeDB(db);
+    commitKnowledgeFileState(db);
 
     res.json({
       success: true,
@@ -2191,12 +2201,12 @@ router.delete('/files/obsidian/:id', requireAuth, (req: Request, res: Response) 
     const userId = getUserId(req);
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const vaults = readObsidianVaults(db, userId, scope);
     const next = vaults.filter(v => v.id !== req.params.id);
     if (next.length === vaults.length) return res.status(404).json({ error: 'Obsidian vault not found' });
     writeObsidianVaults(db, userId, scope, next);
-    writeDB(db);
+    commitKnowledgeFileState(db);
     res.json({ success: true });
   } catch (err: any) {
     sendRouteError(res, err);
@@ -2215,7 +2225,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
     const userId = getUserId(req);
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
     const saved: any[] = [];
@@ -2241,7 +2251,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
       }
     }
     authorization.assertCurrent();
-    writeDB(db);
+    commitKnowledgeFileState(db);
     await flushDBOrThrow();
     authorization.assertCurrent();
     request.signal.throwIfAborted();
@@ -2276,7 +2286,7 @@ router.post('/files/import-paths', requireUnifiedAuth, requireUnifiedAdmin, requ
     const userId = getUserId(req);
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
     const saved: any[] = [];
@@ -2313,7 +2323,7 @@ router.post('/files/import-paths', requireUnifiedAuth, requireUnifiedAdmin, requ
       return res.status(400).json({ error: skipped[0]?.error || 'No files imported', files: [], failed, skipped });
     }
 
-    writeDB(db);
+    commitKnowledgeFileState(db);
     await flushDBOrThrow();
     authorization.assertCurrent();
     request.signal.throwIfAborted();
@@ -2342,11 +2352,13 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
     const assertSourceCurrent = captureKnowledgeSource(filePath);
     const archived = await registerGeneratedKnowledgeFile(scope, safeName);
     assertSourceCurrent();
-    const db = readDB();
+    const db = readKnowledgeFileState();
     db.knowledgeFiles ||= [];
     let meta = db.knowledgeFiles.find((item: any) => item.filename === safeName && metaMatchesScope(item, scope));
     if (!meta) { meta = { agentIds: [], status: 'ready' }; db.knowledgeFiles.push(meta); }
     Object.assign(meta, archiveFileMeta(archived), { updatedAt: new Date().toISOString() });
+    meta.indexingRevision = crypto.randomUUID();
+    commitKnowledgeFileState(db);
     const generatedExtraction = extractGeneratedTextKnowledge(safeName, contentText);
     const generatedKnowledgeContent = generatedExtraction.content || contentText;
     if (meta) applyExtractionMeta(meta, generatedExtraction, generatedKnowledgeContent);
@@ -2386,8 +2398,8 @@ router.post('/files/save', requireAuth, async (req: Request, res: Response) => {
     }
     request.signal.throwIfAborted();
     assertSourceCurrent();
-    if (findFileMeta(readDB(), safeName, scope) !== meta) throw Object.assign(new Error('Knowledge file metadata changed during indexing.'), { status: 409 });
-    writeDB(db);
+    if (!sameKnowledgeFileOwnership(findFileMeta(readKnowledgeFileState(), safeName, scope), meta)) throw Object.assign(new Error('Knowledge file metadata changed during indexing.'), { status: 409 });
+    commitKnowledgeFileState(db);
     await flushDBOrThrow();
     request.signal.throwIfAborted();
     assertSourceCurrent();
@@ -2463,7 +2475,7 @@ router.get('/files/download/:id', requireAuth, async (req: Request, res: Respons
       res.setHeader('Content-Disposition', 'inline');
     } else {
       const archived = (await readRequestArchive(req, scope, safeName))[0];
-      const meta = findFileMeta(readDB(), safeName, scope, archived);
+      const meta = findFileMeta(readKnowledgeFileState(), safeName, scope, archived);
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(repairFilename(meta?.displayName || safeName))}`);
     }
     streamLocalFile(req, res, filePath, mime);
@@ -2510,14 +2522,14 @@ router.delete('/files/delete/:id', requireAuth, async (req: Request, res: Respon
     const safeName = path.basename(req.params.id);
     const filePath = path.join(scope.dir, safeName);
     if (!safeName || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const meta = findFileMeta(db, safeName, scope);
     const removedMemoryCount = removeFileMemoryReferences(db, safeName, scope);
     await mutateGeneratedArchiveFile(scope, safeName);
     if (db.knowledgeFiles) {
       removeFileMeta(db, safeName, scope);
     }
-    writeDB(db);
+    commitKnowledgeFileState(db);
     const removedOrgArticle = scope.domain === 'work' && scope.orgId && meta?.orgArticleId
       ? OrgKB.deleteArticle(scope.orgId, scope.userId, meta.orgArticleId)
       : false;
@@ -2545,7 +2557,7 @@ router.post('/files/rename', requireAuth, async (req: Request, res: Response) =>
 
     await mutateGeneratedArchiveFile(scope, path.basename(id), safeNewName);
 
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const oldName = path.basename(id);
     const renamedMemoryCount = renameFileMemoryReferences(db, oldName, safeNewName, newPath, scope);
     let orgArticleId = '';
@@ -2558,7 +2570,7 @@ router.post('/files/rename', requireAuth, async (req: Request, res: Response) =>
         orgArticleId = String(meta.orgArticleId || '');
       }
     }
-    writeDB(db);
+    commitKnowledgeFileState(db);
     if (scope.domain === 'work' && scope.orgId && orgArticleId) {
       OrgKB.updateArticle(scope.orgId, scope.userId, orgArticleId, { title: repairFilename(safeNewName) });
     }
@@ -2584,7 +2596,7 @@ router.get('/files/info/:id', requireAuth, async (req: Request, res: Response) =
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
     const archived = (await readRequestArchive(req, scope, safeName))[0];
     const st = fs.statSync(filePath);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const meta = findFileMeta(db, safeName, scope, archived);
     const currentManifest = readCurrentIngestionManifest(meta);
     res.json({
@@ -2634,7 +2646,7 @@ router.get('/files/ingestion/:id', requireAuth, (req: Request, res: Response) =>
   try {
     const scope = getFileScope(req);
     const safeName = path.basename(req.params.id);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const meta = findFileMeta(db, safeName, scope);
     if (!meta) return res.status(404).json({ error: 'Knowledge file metadata not found' });
     const manifest = scope.domain === 'work' && scope.orgId && meta.orgArticleId
@@ -2662,7 +2674,7 @@ router.post('/files/ingestion/:id/verify', requireAuth, async (req: Request, res
       return res.status(400).json({ error: 'cases must contain at least one golden question with a reference answer and expected chunk indexes' });
     }
     const safeName = path.basename(req.params.id);
-    const db = readDB();
+    const db = readKnowledgeFileState();
     const meta = findFileMeta(db, safeName, scope);
     if (!meta) return res.status(404).json({ error: 'Knowledge file metadata not found' });
 
@@ -2700,11 +2712,11 @@ router.post('/files/ingestion/:id/verify', requireAuth, async (req: Request, res
       );
     }
 
-    const latestDb = readDB();
+    const latestDb = readKnowledgeFileState();
     const latestMeta = findFileMeta(latestDb, safeName, scope);
     if (!latestMeta) return res.status(409).json({ error: 'Knowledge file metadata changed during verification' });
     applyIngestionManifest(latestMeta, verified);
-    writeDB(latestDb);
+    commitKnowledgeFileState(latestDb);
     res.json({
       success: true,
       ingestionStatus: verified.status,
@@ -2739,7 +2751,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
     const content = extraction.content;
 
     // Mark as indexing
-    const db = readDB();
+    const db = readKnowledgeFileState();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
     let meta = findFileMeta(db, safeName, scope, archived);
     if (!meta) {
@@ -2773,7 +2785,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       meta.status = 'indexed';
       if (content?.trim()) applyExtractionMeta(meta, extraction, content);
       delete meta.indexingAt;
-      writeDB(db);
+      commitKnowledgeFileState(db);
       await flushDBOrThrow();
       request.signal.throwIfAborted();
       return res.json({
@@ -2791,7 +2803,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
       const manifest = buildNonIndexedManifest(filePath, extraction);
       meta.status = extraction.status === 'partial' ? 'partial' : extraction.status;
       applyIngestionManifest(meta, manifest);
-      writeDB(db);
+      commitKnowledgeFileState(db);
       return res.status(415).json({
         error: extraction.error || extraction.warning || 'This file type has no extractable text or visual content for Lumi to absorb',
         extractionStatus: extraction.status,
@@ -2802,8 +2814,9 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
         coverage: manifest.coverage,
       });
     }
+    meta.indexingRevision = crypto.randomUUID();
     meta.indexingAt = new Date().toISOString();
-    writeDB(db);
+    commitKnowledgeFileState(db);
 
     if (scope.domain === 'work') {
       const article = await ensureOrgArticleFromFile(scope, userId, safeName, content, meta?.orgArticleId, extraction.sourceMetadata, request.signal);
@@ -2816,7 +2829,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
         : null;
       if (manifest) applyIngestionManifest(meta, manifest);
       delete meta.indexingAt;
-      writeDB(db);
+      commitKnowledgeFileState(db);
       await flushDBOrThrow();
       request.signal.throwIfAborted();
       res.json({
@@ -2850,7 +2863,7 @@ router.post('/files/ingest', requireAuth, async (req: Request, res: Response) =>
     applyExtractionMeta(meta, extraction, content);
     applyIngestionManifest(meta, result.manifest);
     delete meta.indexingAt;
-    writeDB(db);
+    commitKnowledgeFileState(db);
     await flushDBOrThrow();
     request.signal.throwIfAborted();
 

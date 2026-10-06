@@ -29,9 +29,15 @@ export function createTableSession<T extends string>(root: Record<string, any>, 
   });
 }
 
-function rowKey(groups: any[][]): string | undefined {
+function rowKey(groups: any[][], location: string): ((row: any) => string) | undefined {
   const rows = groups.flat();
-  return ['id', 'uid', 'key', 'fingerprint'].find(key => rows.every(row => plain(row) && typeof row[key] === 'string' && row[key]) && groups.every(group => new Set(group.map(row => row[key])).size === group.length));
+  const field = ['id', 'uid', 'key', 'fingerprint'].find(key => rows.every(row => plain(row) && typeof row[key] === 'string' && row[key]) && groups.every(group => new Set(group.map(row => row[key])).size === group.length));
+  if (field) return row => row[field];
+  if (location === 'knowledgeFiles' && rows.every(row => plain(row) && typeof row.filename === 'string' && row.filename)) {
+    const identity = (row: any) => JSON.stringify([row.filename, row.userId || '', row.domain || (row.orgId ? 'work' : 'personal'), row.orgId || '']);
+    if (groups.every(group => new Set(group.map(identity)).size === group.length)) return identity;
+  }
+  return undefined;
 }
 
 /** Three-way merge: independent fields survive; competing edits fail before acceptance. */
@@ -48,11 +54,11 @@ function merge(before: any, next: any, current: any, location: string): any {
     return result;
   }
   if (Array.isArray(before) && Array.isArray(next) && Array.isArray(current)) {
-    const key = rowKey([before, next, current]);
+    const key = rowKey([before, next, current], location);
     if (key) {
-      const oldRows = new Map(before.map(row => [row[key], row]));
-      const nextRows = new Map(next.map(row => [row[key], row]));
-      const currentRows = new Map(current.map(row => [row[key], row]));
+      const oldRows = new Map(before.map(row => [key(row), row]));
+      const nextRows = new Map(next.map(row => [key(row), row]));
+      const currentRows = new Map(current.map(row => [key(row), row]));
       const updates = new Map<string, any>();
       for (const id of new Set([...oldRows.keys(), ...nextRows.keys()])) {
         const old = oldRows.get(id), staged = nextRows.get(id), live = currentRows.get(id);
@@ -68,7 +74,7 @@ function merge(before: any, next: any, current: any, location: string): any {
           updates.set(id, merge(old, staged, live, location + '[' + id + ']'));
         }
       }
-      const result = current.flatMap(row => updates.has(row[key]) ? updates.get(row[key]) ? [updates.get(row[key])] : [] : [row]);
+      const result = current.flatMap(row => updates.has(key(row)) ? updates.get(key(row)) ? [updates.get(key(row))] : [] : [row]);
       for (const [id, value] of updates) if (value && !currentRows.has(id)) result.push(value);
       return result;
     }

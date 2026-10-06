@@ -93,6 +93,12 @@
         "flushDBOrThrow"
       ],
       "reason": "Messaging accepted-turn and terminal-reply flush fence only; no root/table access."
+    },
+    "routes/files.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Knowledge file routes access bounded state through server/files/knowledge_state.ts and retain only the strict durability barrier here."
     }
   },
   "approvedTableImporters": {
@@ -937,6 +943,21 @@
         "commitDatabaseTables"
       ],
       "reason": "Separated messaging conversation persistence retains exact ingress owner and accepted-turn identity; only declared conversation/interaction tables."
+    },
+    "server/files/knowledge_state.ts": {
+      "tables": [
+        "knowledgeFiles",
+        "memories",
+        "settings",
+        "users",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Active root file routes use detached six-table state with atomic deltas, scoped file ownership and indexing revisions; unrelated tables cannot be accessed."
     }
   },
   "approvedSqlImporters": {

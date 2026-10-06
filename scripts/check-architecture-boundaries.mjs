@@ -9,7 +9,7 @@ const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
 const violations = [];
 const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
   cwd: root, windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-}).split('\0').filter(file => /^(?:server\/|shared\/|src\/|server\.ts$)/.test(file) && /\.tsx?$/.test(file));
+}).split('\0').filter(file => /^(?:server\/|shared\/|src\/|routes\/|server\.ts$)/.test(file) && /\.tsx?$/.test(file));
 const databaseModule = path.join(root, 'db_layer');
 const importers = [];
 const databaseBindings = new Map();

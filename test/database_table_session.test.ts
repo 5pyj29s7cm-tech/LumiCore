@@ -45,3 +45,31 @@ describe('selected table transactions', () => {
     expect(() => { session.rows[0].value = 2; throw new Error('abort'); }).toThrow('abort'); expect(root.rows[0].value).toBe(1);
   });
 });
+
+describe('scoped knowledge file row identity', () => {
+  it('merges concurrent updates and additions without conflating the same filename across owners', () => {
+    const root = { knowledgeFiles: [
+      { filename: 'notes.txt', userId: 'alice', domain: 'personal', orgId: '', status: 'ready' },
+      { filename: 'notes.txt', userId: 'bob', domain: 'work', orgId: 'company', status: 'ready' },
+    ] };
+    const first = createTableSession(root, ['knowledgeFiles']); first.knowledgeFiles[0].status = 'indexed';
+    const second = createTableSession(root, ['knowledgeFiles']); second.knowledgeFiles[1].status = 'partial';
+    second.knowledgeFiles.push({ filename: 'other.txt', userId: 'alice', domain: 'personal', orgId: '', status: 'ready' });
+    apply(second, root); apply(first, root);
+    expect(root.knowledgeFiles.map(row => [row.filename, row.userId, row.status])).toEqual([
+      ['notes.txt', 'alice', 'indexed'], ['notes.txt', 'bob', 'partial'], ['other.txt', 'alice', 'ready'],
+    ]);
+  });
+  it('rejects an old indexing result after its exact owned file row was deleted', () => {
+    const root = { knowledgeFiles: [{ filename: 'notes.txt', userId: 'alice', status: 'ready' }] };
+    const indexing = createTableSession(root, ['knowledgeFiles']); indexing.knowledgeFiles[0].status = 'indexed';
+    const deleting = createTableSession(root, ['knowledgeFiles']); deleting.knowledgeFiles = []; apply(deleting, root);
+    expect(() => apply(indexing, root)).toThrow('conflicts'); expect(root.knowledgeFiles).toEqual([]);
+  });
+  it('does not guess an identity for ambiguous duplicate legacy rows', () => {
+    const root = { knowledgeFiles: [{ filename: 'notes.txt', status: 'ready' }, { filename: 'notes.txt', status: 'ready' }] };
+    const first = createTableSession(root, ['knowledgeFiles']); first.knowledgeFiles[0].status = 'indexed';
+    const second = createTableSession(root, ['knowledgeFiles']); second.knowledgeFiles[1].status = 'partial'; apply(second, root);
+    expect(() => apply(first, root)).toThrow('conflicts'); expect(root.knowledgeFiles[0].status).toBe('ready');
+  });
+});
