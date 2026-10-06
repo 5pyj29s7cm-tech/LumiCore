@@ -1,4 +1,4 @@
-import { runResolvedLumiTurn } from "../cognition/turn_model";
+import { runPreparedLumiTurn } from "../cognition/prepared_turn";
 import { reserveAnchoredEntryExecution } from "../conversation/entry_execution";
 
 import { attachAutonomousExecutionPlan, checkpointAutonomousTask, cancelTask, dequeue, markRunning, markCompleted, markCancelled, getRunningTask, heartbeatAutonomousTask, isTaskCancellationRequested, isTaskPauseRequested, markPaused, requestPauseAutonomousTask, recordAutonomousTaskFailure, getAutonomousTaskPriorRecords, persistAutonomousTaskQueue, prepareAutonomousTaskAction, reconcileExpiredAutonomousTasks, registerAutonomousTaskExecutor, releaseAutonomousTaskExecutor, settleAutonomousTaskAction, startAutonomousTaskAction } from "./task_queue";
@@ -26,7 +26,7 @@ import { inferAutonomousPublicLanguage, projectAutonomousCompletionFeedback, pro
 import { markLinkedPlanRunning, planScopeForTask, markLinkedPlanPaused, markLinkedPlanCancelled, publishAutonomousTaskInterruption, markLinkedPlanFailed, clipPlanResult } from './executor/linked_plan';
 import { buildAutonomousCapabilityPipeline } from './executor/tool_policy';
 import { upsertToolLedger } from './executor/receipts';
-import { evaluateAutonomousTaskOutcome, finalizeAutonomousTaskOutcomeForDelivery } from './executor/outcome';
+import { evaluateAutonomousTaskOutcome } from './executor/outcome';
 import { finalizeAutonomousTaskFailure } from './executor/failure';
 
 export type { LLMGetters } from './executor/contracts';
@@ -275,7 +275,10 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    const result = await runResolvedLumiTurn({
+    let outcome!: ReturnType<typeof evaluateAutonomousTaskOutcome>;
+    const completedTurn = await runPreparedLumiTurn({
+      source: 'autonomous', taskText: `${task.title}\n${task.description}`.trim(), taskId: task.id, requestId,
+      model: {
       execution: executionPipeline,
       assertCurrent: assertAuthorized, streaming: false,
       messages: messages,
@@ -303,55 +306,28 @@ export async function executeNextAutonomousTask(
       maxIterations: maxIterations,
       context: context,
       getters: { ...getters, getOpenAI: getters.getOpenAI || (() => null), getAnthropic: getters.getAnthropic || (() => null), getQwen: getters.getQwen || (() => null) },
+      isCancelled: context.isCancelled,
+      },
+      projectRecords: records => { for (const record of records) upsertToolLedger(toolLedger, record); return toolLedger; },
+      onResult: result => {
+        for (const record of result.toolCalls) upsertToolLedger(toolLedger, record);
+        recordAutonomousTokens(task.userId, result.usageRecords.reduce((sum, record) => sum + record.totalTokens, 0));
+      },
+      finalization: ({ result, responseText, toolRecords }) => {
+        outcome = evaluateAutonomousTaskOutcome(
+          `${task.title}\n${task.description}`.trim(), responseText, toolRecords, task,
+          { completionGuard: result.completionGuard, taskId: task.id, requestId, flow: executionPipeline.turnIntent.flow },
+        );
+        return { initialFinalization: { text: outcome.text, blocked: outcome.blocked, reason: outcome.reason },
+          // Retry authority remains in the durable autonomous queue.
+          allowToolUse: false, refinalize: text => ({ text, blocked: outcome.blocked, reason: outcome.reason }) };
+      },
     });
-
-    for (const record of result.toolCalls) upsertToolLedger(toolLedger, record);
-    authorizationWasRevoked();
+    const result = completedTurn.result;
     const toolCallCount = toolLedger.length;
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
-    recordAutonomousTokens(task.userId, tokensUsed);
 
-    if (isTaskPauseRequested(task.id, task.userId) && !isTaskCancellationRequested(task.id, task.userId)) {
-      markPaused(task.id);
-      markLinkedPlanPaused(task);
-      io.to(taskRoom).emit('autonomous:task_paused', {
-        taskId: task.id,
-        title: task.title,
-        timestamp: new Date().toISOString(),
-      });
-      return { executed: true, taskId: task.id, result: 'Paused' };
-    }
-    if (isTaskCancellationRequested(task.id, task.userId) || isRealtimeUserActive(task.userId)) {
-      const reason = isRealtimeUserActive(task.userId)
-        ? 'Cancelled because a live user voice session took priority'
-        : 'Cancelled by user';
-      const cancelled = markCancelled(task.id, reason);
-      markLinkedPlanCancelled(task);
-      const machineFeedback = buildTaskCompletionFeedback(cancelled?.terminalReceipt, task.title, {
-        status: cancelled?.status || 'cancelled',
-        reason,
-      });
-      io.to(taskRoom).emit('autonomous:task_cancelled', {
-        taskId: task.id,
-        title: task.title,
-        completionFeedback: projectAutonomousCompletionFeedback(machineFeedback),
-        timestamp: new Date().toISOString(),
-      });
-      return { executed: true, taskId: task.id, result: 'Cancelled by user' };
-    }
-
-    const outcome = evaluateAutonomousTaskOutcome(
-      `${task.title}\n${task.description}`.trim(),
-      result.text,
-      toolLedger,
-      task,
-      { completionGuard: result.completionGuard, taskId: task.id, requestId, flow: executionPipeline.turnIntent.flow },
-    );
-    const publicOutcome = await finalizeAutonomousTaskOutcomeForDelivery(
-      `${task.title}\n${task.description}`.trim(),
-      outcome,
-      toolLedger,
-    );
+    const publicOutcome = completedTurn.finalized;
     // Final response preparation is asynchronous. A stop arriving during it
     // takes priority over verification, including a pausing task whose lease
     // intentionally no longer admits normal completion/failure transitions.
