@@ -113,7 +113,7 @@ describe('socket channel projection contract', () => {
     ['server/socket/voice.ts', 'actionIntentText'],
   ])('projects every normalized event at the %s boundary', (relativePath, taskExpression) => {
     const code = source(relativePath);
-    expect(code).toContain("import { projectCustomerVisibleExecutionEvent } from './public_agent_event_projection';");
+    expect(code).toMatch(/import\s*\{\s*projectCustomerVisibleExecutionEvent\s*\}\s*from\s*['"]\.\/public_agent_event_projection['"]/);
     const normalizer = code.slice(
       code.indexOf('const normalizeAgentPayload = ('),
       code.indexOf('const publishRecordedAgent', code.indexOf('const normalizeAgentPayload = (')),
