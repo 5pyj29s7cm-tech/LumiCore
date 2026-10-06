@@ -1,6 +1,6 @@
 import type { ToolExecutionRecord } from "../../tools/types";
 import type { AutonomousTask } from "../task_queue";
-import { finalizeLumiResponse } from "../../cognition/result_finalizer";
+import { finalizeLumiResponse, type LumiResultFinalizerInput } from "../../cognition/result_finalizer";
 import { finalizeExecutionForOutboundDelivery } from "../../cognition/execution_guard_recovery";
 import { buildActionContract, hasCoreActionEvidence } from "../../cognition/action_contract";
 import { parseStructuredToolResult, isSuccessfulAutonomousToolRecord } from './receipts';
@@ -99,12 +99,14 @@ export function evaluateAutonomousTaskOutcome(
   responseText: string,
   toolRecords: ToolExecutionRecord[],
   task?: Partial<Pick<AutonomousTask, 'id' | 'idempotencyKey'>>,
+  evaluation: Pick<LumiResultFinalizerInput, 'completionGuard' | 'taskId' | 'requestId' | 'flow'> = {},
 ): AutonomousTaskOutcome {
   const candidateText = String(responseText || '').trim();
   const selfImprovementTask = Boolean(selfImprovementProposalId(task));
   const verifiedSelfImprovementStage = hasVerifiedSelfImprovementStageReceipt(task, toolRecords);
+  const modelBlocked = evaluation.completionGuard?.blocked === true;
   const finalized = finalizeLumiResponse({
-    taskText,
+    ...evaluation, taskText,
     responseText: candidateText || 'Autonomous task returned no final summary.',
     toolRecords,
     source: 'autonomous',
@@ -119,14 +121,17 @@ export function evaluateAutonomousTaskOutcome(
     && !hasCoreActionEvidence(actionContract, toolRecords, taskText);
   const selfImprovementEvidenceMissing = selfImprovementTask && !verifiedSelfImprovementStage;
   const verified = (
-    (!finalized.blocked || verifiedSelfImprovementStage)
+    !modelBlocked
+    && (!finalized.blocked || verifiedSelfImprovementStage)
     && !missingSummary
     && !reportedIncomplete
     && !missingEvidence
     && !missingCoreEvidence
     && !selfImprovementEvidenceMissing
   );
-  const reason = selfImprovementEvidenceMissing
+  const reason = modelBlocked
+    ? evaluation.completionGuard?.reason || 'The autonomous model response did not complete.'
+    : selfImprovementEvidenceMissing
     ? 'The autonomous self-improvement task did not produce an exact verified isolated-stage receipt for its bound proposal.'
     : finalized.blocked && !verifiedSelfImprovementStage
     ? finalized.reason || 'Autonomous completion claim was not supported by its tool ledger.'
@@ -141,7 +146,7 @@ export function evaluateAutonomousTaskOutcome(
           : finalized.reason || '';
 
   return {
-    text: verifiedSelfImprovementStage ? candidateText : finalized.text,
+    text: modelBlocked ? evaluation.completionGuard!.text : verifiedSelfImprovementStage ? candidateText : finalized.text,
     blocked: (finalized.blocked && !verifiedSelfImprovementStage) || !verified,
     verified,
     reason,

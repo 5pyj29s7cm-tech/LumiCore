@@ -345,6 +345,7 @@ export async function executeNextAutonomousTask(
       result.text,
       toolLedger,
       task,
+      { completionGuard: result.completionGuard, taskId: task.id, requestId, flow: executionPipeline.turnIntent.flow },
     );
     const publicOutcome = await finalizeAutonomousTaskOutcomeForDelivery(
       `${task.title}\n${task.description}`.trim(),
