@@ -12,7 +12,7 @@ import { toolRegistry } from "../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
 
-import { recoverBlockedExecutionOnce } from "../../cognition/execution_guard_recovery";
+import { finalizeLumiResponseForDelivery } from "../../cognition/response_delivery";
 
 import { createTurnResponseFinalizer } from "../../cognition/turn_response_finalizer";
 
@@ -43,10 +43,10 @@ export async function completeChatTurn(context: completeChatTurnInput) {
         responseText: context.responseText, completionGuard: context.completionGuard,
         toolRecords: context.finalTaskRecords, source: 'chat',
       });
-      const guardRecovery = await recoverBlockedExecutionOnce({
-        task: context.executionTaskText,
+      const guardRecovery = await finalizeLumiResponseForDelivery({
+        taskText: context.executionTaskText, source: 'chat',
         responseText: context.responseText,
-        finalization: finalResponse,
+        initialFinalization: finalResponse,
         allowToolUse: context.toolSessionActive,
         pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
         requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
@@ -56,6 +56,7 @@ export async function completeChatTurn(context: completeChatTurnInput) {
         // outer chat catch publish the misleading "task stopped" terminal.
         isAborted: context.isChatCancelled,
         isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+        trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
         toolRecords: context.taskAwareRecords(context.allToolRecords),
         attempt: async ({ instruction, priorToolRecords, recordTool }) => {
           console.warn('[ChatHandler] Recovering blocked execution internally.');
@@ -108,7 +109,7 @@ export async function completeChatTurn(context: completeChatTurnInput) {
             ),
           };
         },
-        finalize: (candidateText, records, recoveryCompletionGuard) => {
+        refinalize: (candidateText, records, recoveryCompletionGuard) => {
           const recoveredRecords = withDesktopExecutionReceipt(records, context.desktopExecutionTracker);
           return responseFinalizer.finalize({
             responseText: candidateText, completionGuard: recoveryCompletionGuard,

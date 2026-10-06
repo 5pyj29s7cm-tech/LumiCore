@@ -204,3 +204,28 @@ it('retains a blocked completion guard when a recovery returns otherwise valid s
   expect(delivered.recoveryFailed).toBe(true);
   expect(delivered.toolRecords).toEqual(records);
 });
+
+it('requires the new exact confirmation even when the prior reply was not blocked', async () => {
+  let attempts = 0;
+  const delivered = await finalizeLumiResponseForDelivery({
+    taskText: 'Send the message to the newly corrected recipient.', responseText: 'Ready.',
+    source: 'fresh_confirmation_fixture', allowToolUse: true, requiresFreshConfirmation: true,
+    initialFinalization: { text: 'Ready.', blocked: false }, toolRecords: [],
+    attempt: async () => { attempts += 1; return { text: 'Ready.' }; },
+    refinalize: text => ({ text, blocked: false }),
+  });
+  expect(attempts).toBe(1);
+  expect(delivered.finalization.blocked).toBe(true);
+  expect(delivered.recoveryFailed).toBe(true);
+});
+
+it.each([true, false])('exposes waiting confirmation only for an exact currently pending proposal: %s', async pending => {
+  const text = 'Please confirm the exact message for the specified recipient.';
+  const delivered = await finalizeLumiResponseForDelivery({
+    taskText: 'Send the message.', responseText: text, source: 'confirmation_fixture',
+    initialFinalization: { text, blocked: false, reason: 'waiting_confirmation' }, toolRecords: [],
+    pendingConfirmation: pending, trustedConfirmationRequestText: () => text,
+  });
+  expect(delivered.finalization.text).toBe(text);
+  expect(delivered.finalization.reason).toBe(pending ? 'waiting_confirmation' : 'execution_recovery_incomplete');
+});

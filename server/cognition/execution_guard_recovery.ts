@@ -831,6 +831,8 @@ export interface OutboundExecutionFinalizationInput<
   TFinalization extends ExecutionGuardRecoveryFinalization,
 > extends Omit<ExecutionGuardRecoveryRunInput<TFinalization>, 'attempt'> {
   attempt?: ExecutionGuardRecoveryRunInput<TFinalization>['attempt'];
+  /** Server-formatted text of the exact pending proposal, read after any recovery. */
+  trustedConfirmationRequestText?: () => string | undefined;
 }
 
 /**
@@ -861,6 +863,8 @@ export async function finalizeExecutionForOutboundDelivery<
       task: input.task,
       toolRecords: recovered.toolRecords,
       intent: recovered.decision.intent,
+      trustedConfirmationRequestText: input.pendingConfirmation || input.isPendingConfirmation?.()
+        ? input.trustedConfirmationRequestText?.() : undefined,
     },
   ) as TFinalization;
   return {

@@ -175,7 +175,7 @@ export function createPreFinalizationTextGate(): PreFinalizationTextGate {
 
 type LumiOutboundInput = OutboundExecutionFinalizationInput<LumiResultFinalizerResult>;
 export interface LumiResponseDeliveryInput extends LumiResultFinalizerInput,
-  Partial<Pick<LumiOutboundInput, 'allowToolUse' | 'attempt' | 'pendingConfirmation' | 'aborted' | 'isPendingConfirmation' | 'isAborted'>> {
+  Partial<Pick<LumiOutboundInput, 'allowToolUse' | 'attempt' | 'pendingConfirmation' | 'requiresFreshConfirmation' | 'aborted' | 'isPendingConfirmation' | 'isAborted' | 'trustedConfirmationRequestText'>> {
   initialFinalization?: LumiResultFinalizerResult;
   refinalize?: LumiOutboundInput['finalize'];
 }
@@ -193,8 +193,10 @@ export function finalizeLumiResponseForDelivery(input: LumiResponseDeliveryInput
     finalization: input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard),
     allowToolUse: input.allowToolUse === true,
     pendingConfirmation: input.pendingConfirmation,
+    requiresFreshConfirmation: input.requiresFreshConfirmation,
     aborted: input.aborted,
     isPendingConfirmation: input.isPendingConfirmation,
+    trustedConfirmationRequestText: input.trustedConfirmationRequestText,
     isAborted: input.isAborted,
     toolRecords,
     attempt: input.attempt,

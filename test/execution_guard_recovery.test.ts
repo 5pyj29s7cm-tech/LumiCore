@@ -1152,7 +1152,7 @@ describe('execution guard recovery', () => {
     const voiceSource = readVoiceImplementationSource();
 
     for (const source of [chatSource, voiceSource]) {
-      expect(source).toContain('await recoverBlockedExecutionOnce({');
+      expect(source).toContain('await finalizeLumiResponseForDelivery({');
       expect(source).toContain('pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn)');
       expect(source).toContain('requiresFreshConfirmation: correctionRequiresFreshConfirmation');
       expect(source).toContain('priorToolRecords,');
@@ -1191,7 +1191,7 @@ describe('execution guard recovery', () => {
       if (cancellationCheck === 'isAborted: isChatCancelled') {
         expect(source).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
       }
-      const recoveryStart = source.indexOf('const guardRecovery = await recoverBlockedExecutionOnce({');
+      const recoveryStart = source.indexOf('const guardRecovery = await finalizeLumiResponseForDelivery({');
       expect(recoveryStart).toBeGreaterThanOrEqual(0);
       const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
       expect(recoveryBlock).toContain(cancellationCheck);

@@ -1,7 +1,7 @@
 import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { logger } from "../../../../logger";
 import { extractTopics, trackTopic } from "../../../conversation/manager";
-import { recoverBlockedExecutionOnce } from "../../../cognition/execution_guard_recovery";
+import { finalizeLumiResponseForDelivery } from "../../../cognition/response_delivery";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../../../personality/state";
@@ -23,10 +23,10 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
     let finalResponse = responseFinalizer.finalize({
       responseText: context.responseText, completionGuard: context.completionGuard, toolRecords: context.taskAwareRecords(context.toolResults), source: 'voice',
     });
-    const guardRecovery = await recoverBlockedExecutionOnce({
-      task: context.routedUserText,
+    const guardRecovery = await finalizeLumiResponseForDelivery({
+      taskText: context.routedUserText, source: 'voice',
       responseText: context.responseText,
-      finalization: finalResponse,
+      initialFinalization: finalResponse,
       allowToolUse: context.toolSessionActive,
       pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
       requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
@@ -35,6 +35,7 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
       // resumable customer-visible state and must not become AbortError.
       isAborted: () => !context.isCurrentTurn(),
       isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+        trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
       toolRecords: context.taskAwareRecords(context.toolResults),
       attempt: async ({ instruction, priorToolRecords, recordTool }) => {
         logger.warn('[Audio] Recovering blocked execution internally.');
@@ -78,7 +79,7 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
           toolRecords: withDesktopExecutionReceipt(recovery.toolCalls, context.desktopExecutionTracker),
         };
       },
-      finalize: (candidateText, records, recoveryCompletionGuard) => {
+      refinalize: (candidateText, records, recoveryCompletionGuard) => {
         const recoveredRecords = context.taskAwareRecords(records);
         return responseFinalizer.finalize({
           responseText: candidateText, completionGuard: recoveryCompletionGuard,

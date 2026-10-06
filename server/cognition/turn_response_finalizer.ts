@@ -21,6 +21,10 @@ export function createTurnResponseFinalizer(input: Pick<FinalizerInput, 'taskTex
   });
   return {
     isDesktopPaused,
+    confirmationRequestText: () => {
+      const pending = input.pendingConfirmation();
+      return pending ? formatPendingConfirmationRequest(pending) : undefined;
+    },
     finalize: (candidate: Pick<FinalizerInput, 'responseText' | 'completionGuard' | 'toolRecords' | 'source'>): ReturnType<typeof finalizeLumiResponse> => {
       const pending = input.pendingConfirmation();
       const result = pending
