@@ -7,7 +7,7 @@ import { buildLumiExecutionPipeline, type BuildLumiExecutionPipelineInput, type 
 import { reserveConversationExecution } from './conversation_execution';
 import { mergeToolExecutionRecords } from './task_execution_ledger';
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from './turn_model';
-import { runPreparedLumiTurn } from './prepared_turn';
+import { runPreparedLumiTurn, type PreparedLumiTurnInput } from './prepared_turn';
 import type { LumiResultFinalizerResult } from './result_finalizer_types';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { NormalizedMessage } from '../llm/providers';
@@ -32,6 +32,7 @@ export interface AssembledLumiTurnData {
   model: (Omit<ToolSessionOptions, 'messages'> & { streaming?: boolean; taskText?: string }) | Omit<ConversationTurnInput, 'messages'>;
   /** Stateless external entries supply their already normalized provider messages. */
   messages?: NormalizedMessage[];
+  prepared?: Pick<PreparedLumiTurnInput, 'projectRecords' | 'finalization' | 'onResult' | 'onRecoveryStart' | 'onRecoveryUsage' | 'recovery'>;
 }
 export interface ExecutedLumiTurn {
   execution: LumiExecutionPipeline;
@@ -40,6 +41,7 @@ export interface ExecutedLumiTurn {
   finalized: LumiResultFinalizerResult;
   toolRecords: ToolExecutionRecord[];
   usageRecords: Awaited<ReturnType<typeof runResolvedLumiTurn>>['usageRecords'];
+  modelResult: Awaited<ReturnType<typeof runResolvedLumiTurn>>;
 }
 export interface LumiEntryTurnInput<T> {
   entry: LumiTurnEntryDescriptor;
@@ -50,7 +52,11 @@ export interface LumiEntryTurnInput<T> {
   externalTask?: { taskId?: string; turnRowId?: string };
   authorization: RequestAuthorization;
   controller: AbortController;
-  planning: Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>;
+  planning: Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>
+    | (() => Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>);
+  onFailure?: (error: unknown) => Promise<T> | T;
+  /** External ledgers finish their durable terminal state before the FIFO owner is released. */
+  settle?: () => Promise<void>;
   /** Entry enrichment returns data; ownership, planning and execution remain here. */
   assemble(execution: LumiExecutionPipeline): AssembledLumiTurnData | Promise<AssembledLumiTurnData>;
   explicitMemory?: () => Promise<MemoryReceipt>;
@@ -67,11 +73,9 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   const userText = input.userText;
   const conversationPersistence = input.persistence !== 'external';
   const externalTask = Object.freeze({ ...input.externalTask });
-  const planning = { ...input.planning, dispatch: { ...input.planning.dispatch } };
-  authorization.assertCurrent();
-  const admission = identity.conversationId ? reserveConversationExecution({ ...identity, source: entry.queueSource || entry.source }, identity.requestId, controller.signal,
-    { authorization, abort: reason => { if (!controller.signal.aborted) controller.abort(reason); } }) : undefined;
-  if (conversationPersistence && !identity.conversationId) throw new Error('A conversation entry requires its accepted transcript');
+  const capturedPlanning = typeof input.planning === 'function' ? input.planning
+    : { ...input.planning, dispatch: { ...input.planning.dispatch } };
+  let admission: ReturnType<typeof reserveConversationExecution> | undefined;
   let heartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | undefined;
   let taskId: string | undefined;
   let turnRowId: string | undefined;
@@ -90,9 +94,15 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     authorization.assertCurrent();
   };
   try {
+    authorization.assertCurrent();
+    admission = identity.conversationId ? reserveConversationExecution({ ...identity, source: entry.queueSource || entry.source }, identity.requestId, controller.signal,
+      { authorization, abort: reason => { if (!controller.signal.aborted) controller.abort(reason); } }) : undefined;
+    if (conversationPersistence && !identity.conversationId) throw new Error('A conversation entry requires its accepted transcript');
     await admission?.waitForTurn(); assertCurrent();
     const conversation = identity.conversationId ? getConversationForScope(identity.conversationId, identity.userId, identity.domain, identity.orgId) : null;
     if (identity.conversationId && !conversation) throw Object.assign(new Error('The accepted conversation is unavailable'), { code: 'CONVERSATION_ENTRY_UNAVAILABLE' });
+    const planning = typeof capturedPlanning === 'function' ? capturedPlanning() : capturedPlanning;
+    assertCurrent();
     const execution = buildLumiExecutionPipeline({ ...planning, requestId: identity.requestId,
       ...(conversationPersistence && conversation ? { actionTaskState: conversation.actionContinuationState,
         persistedConversationHistory: getMessages(identity.conversationId, TASK_TARGET_HISTORY_LIMIT) } : {}),
@@ -118,7 +128,7 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     ];
     const toolModel = 'registry' in assembled.model ? assembled.model : undefined;
     const model: ResolvedTurnModelInput = { ...assembled.model, execution, messages, assertCurrent,
-      config: { ...assembled.model.config, conversationId: identity.conversationId, requestId: identity.requestId, signal: controller.signal },
+      config: { ...assembled.model.config, conversationId: identity.conversationId || undefined, requestId: identity.requestId, signal: controller.signal },
       ...(toolModel ? { context: { ...toolModel.context, ...identity, taskId, turnRowId,
         source: entry.source, executionSignal: controller.signal, isCancelled: () => controller.signal.aborted || !authorization.isCurrent(),
         onToolRecord: async record => { await receiptObserver?.onToolRecord(record); await toolModel.context?.onToolRecord?.(record); },
@@ -126,7 +136,11 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     };
     const completed = await runPreparedLumiTurn({ model, taskText: userText, taskId, requestId: identity.requestId,
       source: input.deliverySource || entry.source, skipModel: Boolean(input.explicitMemory),
-      projectRecords: records => mergeToolExecutionRecords(toolRecords, records) });
+      ...assembled.prepared,
+      projectRecords: records => {
+        const merged = mergeToolExecutionRecords(toolRecords, records);
+        return assembled.prepared?.projectRecords?.(merged) || merged;
+      } });
     toolRecords = completed.toolRecords;
     const usageRecords = completed.usageRecords;
     let finalized = completed.finalized; assertCurrent();
@@ -135,12 +149,16 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
       finalized = { ...finalized, text: receipt.text || entry.failureText,
         blocked: receipt.status === 'failed' || receipt.status === 'skipped', reason: 'memory_' + receipt.status };
     }
-    const executed = { execution, taskId, turnRowId, finalized, toolRecords, usageRecords };
+    const executed = { execution, taskId, turnRowId, finalized, toolRecords, usageRecords, modelResult: completed.result };
     await input.beforeCommit?.(executed); assertCurrent();
     await commit(finalized, finalized.reason || entry.source); assertCurrent();
     return await input.deliver(executed);
   } catch (error) {
     if (userMessageId && authorization.isCurrent()) await commit({ text: entry.failureText, blocked: true, reason: entry.failureReason }, entry.failureReason);
+    if (input.onFailure) return await input.onFailure(error);
     throw error;
-  } finally { heartbeat?.stop(); admission?.release(); }
+  } finally {
+    heartbeat?.stop();
+    try { await input.settle?.(); } finally { admission?.release(); }
+  }
 }

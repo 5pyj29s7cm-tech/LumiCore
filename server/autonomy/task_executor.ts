@@ -1,5 +1,6 @@
-import { runPreparedLumiTurn } from "../cognition/prepared_turn";
-import { reserveAnchoredEntryExecution } from "../conversation/entry_execution";
+import { runLumiEntryTurn } from "../cognition/turn_execution";
+import { resolveConversationForEntry } from "../conversation/entry_conversation";
+import { captureConversationAuthorization, captureRequestAuthorization, type RequestAuthorization } from "../conversation/lifecycle";
 
 import { attachAutonomousExecutionPlan, checkpointAutonomousTask, cancelTask, dequeue, markRunning, markCompleted, markCancelled, getRunningTask, heartbeatAutonomousTask, isTaskCancellationRequested, isTaskPauseRequested, markPaused, requestPauseAutonomousTask, recordAutonomousTaskFailure, getAutonomousTaskPriorRecords, persistAutonomousTaskQueue, prepareAutonomousTaskAction, reconcileExpiredAutonomousTasks, registerAutonomousTaskExecutor, releaseAutonomousTaskExecutor, settleAutonomousTaskAction, startAutonomousTaskAction } from "./task_queue";
 import { toolExecutionInputDigests } from "../tools/execution_engine";
@@ -24,7 +25,7 @@ import type { LLMGetters } from './executor/contracts';
 import { retryAutonomousTaskFinalizations, stageAutonomousTaskFinalization, persistAutonomousTaskFinalizations, hasPendingAutonomousTaskFinalization } from './executor/durable_finalization';
 import { inferAutonomousPublicLanguage, projectAutonomousCompletionFeedback, projectAutonomousCustomerMessage } from './executor/customer_projection';
 import { markLinkedPlanRunning, planScopeForTask, markLinkedPlanPaused, markLinkedPlanCancelled, publishAutonomousTaskInterruption, markLinkedPlanFailed, clipPlanResult } from './executor/linked_plan';
-import { buildAutonomousCapabilityPipeline } from './executor/tool_policy';
+import { autonomousTurnPlanningData } from './executor/tool_policy';
 import { upsertToolLedger } from './executor/receipts';
 import { evaluateAutonomousTaskOutcome } from './executor/outcome';
 import { finalizeAutonomousTaskFailure } from './executor/failure';
@@ -49,10 +50,10 @@ export async function executeNextAutonomousTask(
   userId?: string,
   options: { taskId?: string; signal?: AbortSignal; isAuthorized?: () => boolean } = {},
 ): Promise<{ executed: boolean; taskId?: string; result?: string }> {
-  let conversationExecution: ReturnType<typeof reserveAnchoredEntryExecution>;
+  let conversationAuthority: RequestAuthorization | undefined;
   let taskIsAuthorized = () => true;
   const isAuthorized = () => {
-    try { return taskIsAuthorized() && options.isAuthorized?.() !== false && (!conversationExecution || conversationExecution.isCurrent()); } catch { return false; }
+    try { return taskIsAuthorized() && options.isAuthorized?.() !== false && (!conversationAuthority || conversationAuthority.isCurrent()); } catch { return false; }
   };
   const rejectUnauthorizedAdmission = async () => {
     if (options.taskId && cancelTask(options.taskId, userId)) await persistAutonomousTaskQueue();
@@ -155,18 +156,46 @@ export async function executeNextAutonomousTask(
     timestamp: new Date().toISOString(),
   });
 
+  let entryOwnsSettlement = false;
+  const settleTaskState = async () => {
+    clearInterval(leaseHeartbeat);
+    try {
+      await persistAutonomousTaskFinalizations(io);
+    } catch (error) {
+      if (hasPendingAutonomousTaskFinalization(task.id)) {
+        io.to(taskRoom).emit('autonomous:task_failed', {
+          taskId: task.id, title: task.title, status: 'blocked', finalized: false, verified: false, blocked: true,
+          error: publicLanguage === 'zh'
+            ? CN_AUTONOMOUS_CUSTOMER_MESSAGES.finalizationPending
+            : 'The work finished, but its final state could not be saved. Saving must succeed before completion can be confirmed.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      throw error;
+    }
+  };
   try {
     const requestId = 'autonomy:' + running.leaseId;
-    conversationExecution = reserveAnchoredEntryExecution({
-      userId: task.userId, scope: taskScope, entry: { kind: 'autonomy' },
-      conversationId: running.conversationId, requestId, signal: executionAbort.signal,
-      abort: reason => { if (!executionAbort.signal.aborted) executionAbort.abort(reason); },
-    });
-    await conversationExecution?.waitForTurn();
-    assertAuthorized();
-    executionAbort.signal.throwIfAborted();
-    const currentGate = getGateConfig(task.userId);
-    const maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
+    const conversation = resolveConversationForEntry(task.userId, taskScope, { kind: 'autonomy' }, running.conversationId);
+    if (!conversation && running.conversationId) throw Object.assign(new Error('The bound conversation is unavailable or unauthorized in this execution scope'), { code: 'CONVERSATION_ENTRY_UNAVAILABLE' });
+    conversationAuthority = conversation ? captureConversationAuthorization({ userId: task.userId, domain: taskScope.domain, orgId: taskScope.orgId, agentId: conversation.agentId }, () => conversation.id) : undefined;
+    const authorization = captureRequestAuthorization(isAuthorized, 'Task authorization was revoked');
+    let maxIterations = 0;
+    let outcome!: ReturnType<typeof evaluateAutonomousTaskOutcome>;
+    entryOwnsSettlement = true;
+    return await runLumiEntryTurn({
+      entry: { source: 'autonomous', queueSource: 'autonomy', channel: task.source === 'scheduler' ? 'scheduler' : 'autonomy', historyLimit: 0,
+        failureText: 'Autonomous task execution failed.', failureReason: 'autonomous_execution_failed' },
+      identity: { userId: task.userId, agentId: conversation?.agentId || 'lumi', conversationId: conversation?.id || '', requestId,
+        domain: taskScope.domain, orgId: taskScope.orgId || '' },
+      userText: task.description || task.title, persistence: 'external', externalTask: { taskId: running.id },
+      authorization, controller: executionAbort,
+      planning: () => {
+        const currentGate = getGateConfig(task.userId);
+        maxIterations = currentGate.autonomyLevel === 'full' ? 50 : 30;
+        return autonomousTurnPlanningData(running, maxIterations, toolRegistry);
+      },
+      assemble: executionPipeline => {
     // Build desktop relay using the user's registered desktop client, not a broad user-room broadcast.
     const desktopRelay = createDesktopRelay({
       io,
@@ -182,7 +211,6 @@ export async function executeNextAutonomousTask(
     });
     releaseDesktopControlLease = () => desktopRelay.releaseControlLease('autonomous_task_complete');
 
-    const executionPipeline = buildAutonomousCapabilityPipeline(running, maxIterations, toolRegistry, requestId);
     sideEffectClass = executionPipeline.executionPlan.risk.sideEffectClass;
     attachAutonomousExecutionPlan(
       running.id,
@@ -204,7 +232,7 @@ export async function executeNextAutonomousTask(
       userId: task.userId,
       domain: taskScope.domain,
       orgId: taskScope.orgId,
-      conversationId: conversationExecution?.conversation.id,
+      conversationId: conversation?.id,
       taskId: running.id, requestId, resolutionId: executionPipeline.resolution.id,
       currentTurnExecutionRequested: executionPipeline.executionRequested,
       desktopRelay: task.mode === 'desktop' ? desktopRelay : undefined,
@@ -275,15 +303,12 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    let outcome!: ReturnType<typeof evaluateAutonomousTaskOutcome>;
-    const completedTurn = await runPreparedLumiTurn({
-      source: 'autonomous', taskText: `${task.title}\n${task.description}`.trim(), taskId: task.id, requestId,
-      model: {
+        return { systemPrompt: '', messages, model: {
       execution: executionPipeline,
       assertCurrent: assertAuthorized, streaming: false,
       messages: messages,
       registry: toolRegistry,
-      config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: conversationExecution?.conversation.id, signal: executionAbort.signal },
+      config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: conversation?.id, signal: executionAbort.signal },
       onToolCall: async (record) => {
         await settleAutonomousTaskAction(running.id, running.leaseId!, record);
         upsertToolLedger(toolLedger, record);
@@ -307,7 +332,7 @@ export async function executeNextAutonomousTask(
       context: context,
       getters: { ...getters, getOpenAI: getters.getOpenAI || (() => null), getAnthropic: getters.getAnthropic || (() => null), getQwen: getters.getQwen || (() => null) },
       isCancelled: context.isCancelled,
-      },
+        }, prepared: {
       projectRecords: records => { for (const record of records) upsertToolLedger(toolLedger, record); return toolLedger; },
       onResult: result => {
         for (const record of result.toolCalls) upsertToolLedger(toolLedger, record);
@@ -322,8 +347,11 @@ export async function executeNextAutonomousTask(
           // Retry authority remains in the durable autonomous queue.
           allowToolUse: false, refinalize: text => ({ text, blocked: outcome.blocked, reason: outcome.reason }) };
       },
-    });
-    const result = completedTurn.result;
+        } };
+      },
+      deliver: async completedTurn => {
+    const result = completedTurn.modelResult;
+    const executionPipeline = completedTurn.execution;
     const toolCallCount = toolLedger.length;
     const tokensUsed = result.usageRecords.reduce((sum, r) => sum + r.totalTokens, 0);
 
@@ -469,32 +497,23 @@ export async function executeNextAutonomousTask(
     } });
 
     return returnResult;
+      },
+      onFailure: err => finalizeAutonomousTaskFailure(err, { task, running, io, taskRoom, toolLedger, sideEffectClass, leaseLost, publicLanguage, authorizationWasRevoked }),
+      settle: settleTaskState,
+    });
   } catch (err: any) {
+    if (entryOwnsSettlement) throw err;
     return finalizeAutonomousTaskFailure(err, { task, running, io, taskRoom, toolLedger, sideEffectClass, leaseLost, publicLanguage, authorizationWasRevoked });
   } finally {
-    clearInterval(leaseHeartbeat);
     options.signal?.removeEventListener('abort', onParentCancelled);
     voicePriority.signal.removeEventListener('abort', onVoicePriority);
     voicePriority.dispose();
     releaseDesktopControlLease();
-    try {
-      await persistAutonomousTaskFinalizations(io);
-    } catch (error) {
-      if (hasPendingAutonomousTaskFinalization(task.id)) {
-        io.to(taskRoom).emit('autonomous:task_failed', {
-          taskId: task.id, title: task.title, status: 'blocked', finalized: false, verified: false, blocked: true,
-          error: publicLanguage === 'zh'
-            ? CN_AUTONOMOUS_CUSTOMER_MESSAGES.finalizationPending
-            : 'The work finished, but its final state could not be saved. Saving must succeed before completion can be confirmed.',
-          timestamp: new Date().toISOString(),
-        });
-      }
-      throw error;
-    } finally {
-      // The live owner outlasts both its handler and terminal persistence.
+    try { if (!entryOwnsSettlement) await settleTaskState(); }
+    finally {
+      // The live executor outlasts both its handler and terminal persistence.
       membershipAuthority?.dispose();
       releaseAutonomousTaskExecutor(task.id, running.leaseId);
-      conversationExecution?.release();
     }
   }
 }

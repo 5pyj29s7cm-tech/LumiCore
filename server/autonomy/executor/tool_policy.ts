@@ -1,6 +1,6 @@
 import { toolRegistry, type ToolRegistry } from "../../tools/registry";
 import type { AutonomousTask } from "../task_queue";
-import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from "../../cognition/execution_pipeline";
+import { buildLumiExecutionPipeline, type LumiExecutionPipeline, type BuildLumiExecutionPipelineInput } from "../../cognition/execution_pipeline";
 
 /** Tight tool policy for autonomous background work — more conservative than user-initiated mode */
 const AUTONOMOUS_POLICY = {
@@ -84,16 +84,14 @@ export function buildAutonomousToolPolicy(
   return narrowForRecovery({ ...AUTONOMOUS_POLICY, maxIterations });
 }
 
-export function buildAutonomousCapabilityPipeline(
+export function autonomousTurnPlanningData(
   task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
     & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
   maxIterations: number,
   registry: ToolRegistry = toolRegistry,
-  requestId?: string,
-): LumiExecutionPipeline {
+): BuildLumiExecutionPipelineInput {
   const policy = buildAutonomousToolPolicy(task, maxIterations);
-  return buildLumiExecutionPipeline({
-    requestId,
+  return {
     dispatch: {
       userId: task.userId, domain: task.domain, orgId: task.orgId,
       text: task.description || task.title,
@@ -109,5 +107,15 @@ export function buildAutonomousCapabilityPipeline(
     traceText: task.description || task.title,
     source: `autonomous:${task.source}`,
     taskId: task.id,
-  });
+  };
+}
+
+export function buildAutonomousCapabilityPipeline(
+  task: Pick<AutonomousTask, 'id' | 'userId' | 'description' | 'source' | 'title'>
+    & Partial<Pick<AutonomousTask, 'idempotencyKey' | 'executionPlan' | 'recovery' | 'domain' | 'orgId'>>,
+  maxIterations: number,
+  registry: ToolRegistry = toolRegistry,
+  requestId?: string,
+): LumiExecutionPipeline {
+  return buildLumiExecutionPipeline({ ...autonomousTurnPlanningData(task, maxIterations, registry), requestId });
 }

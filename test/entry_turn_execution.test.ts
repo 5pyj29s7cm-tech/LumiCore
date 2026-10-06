@@ -27,15 +27,16 @@ function fixture(previous?: { userId: string; conversationId: string }, source =
   });
   const authorization = captureRequestAuthorization(() => true, 'Fixture was revoked');
   const controller = new AbortController();
+  const planning = { dispatch: { userId, text: 'Search the public web for synthetic examples.', channel: 'chat' as const, source, domain: 'personal' as const, orgId: '' }, registry,
+    personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 3 }, executionBoundary: 'remote_restricted' as const };
   const input: LumiEntryTurnInput<ExecutedLumiTurn> = {
     entry: { source, channel: 'chat', historyLimit: 30, failureText: 'The turn could not finish.', failureReason: 'fixture_failure' },
     identity, userText: 'Search the public web for synthetic examples.', authorization, controller,
-    planning: { dispatch: { userId, text: 'Search the public web for synthetic examples.', channel: 'chat', source, domain: 'personal', orgId: '' }, registry,
-      personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 3 }, executionBoundary: 'remote_restricted' },
+    planning,
     assemble: () => ({ systemPrompt: 'Use real current-turn evidence.', model: { registry, config: { provider: 'deepseek', model: 'fixture', userId }, getters: {}, maxIterations: 3 } }),
     deliver: result => result,
   };
-  return { identity, input, registry };
+  return { identity, input, registry, planning };
 }
 async function verifiedStep(registry: ToolRegistry, args: any[]) {
   const context = args[11];
@@ -79,7 +80,7 @@ describe('entry turn execution ownership', () => {
     const running = runLumiEntryTurn(first.input); await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(1));
     const queued = runLumiEntryTurn(second.input);
     second.input.identity.conversationId = elsewhere.identity.conversationId; second.input.identity.userId = elsewhere.identity.userId;
-    second.input.entry.source = 'mutated'; second.input.planning.dispatch.userId = elsewhere.identity.userId;
+    second.input.entry.source = 'mutated'; second.planning.dispatch.userId = elsewhere.identity.userId;
     release(); const [, result] = await Promise.all([running, queued]);
     expect(result.execution.resolution.requestId).toBe(expected.requestId);
     expect(readDB().conversationActionReceipts.find((row: any) => row.requestId === expected.requestId)).toMatchObject({ conversationId: expected.conversationId });
@@ -108,5 +109,41 @@ describe('entry turn execution ownership', () => {
     const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === item.identity.requestId);
     expect(readDB().conversationActionTasks.find((row: any) => row.id === turn.taskId)?.status).toBe('blocked');
     expect(getMessages(item.identity.conversationId, 20).at(-1)).toMatchObject({ requestId: item.identity.requestId, role: 'assistant', message: 'The turn could not finish.' });
+  });
+  it('holds an external ledger turn through settlement before resolving a later entry', async () => {
+    const first = fixture(); const second = fixture(first.identity, 'rest_chat');
+    first.input.persistence = 'external';
+    let release!: () => void; const held = new Promise<void>(done => { release = done; });
+    const events: string[] = [];
+    first.input.settle = async () => { events.push('saving'); await held; events.push('saved'); };
+    const resolveSecondPlan = vi.fn(() => { events.push('planned'); return second.planning; });
+    second.input.planning = resolveSecondPlan;
+    model.mockImplementationOnce((...args) => verifiedStep(first.registry, args))
+      .mockImplementationOnce((...args) => verifiedStep(second.registry, args));
+    const running = runLumiEntryTurn(first.input);
+    await vi.waitFor(() => expect(events).toEqual(['saving']));
+    const queued = runLumiEntryTurn(second.input);
+    try {
+      expect(resolveSecondPlan).not.toHaveBeenCalled(); expect(model).toHaveBeenCalledTimes(1);
+      expect(getMessages(first.identity.conversationId, 20)).toHaveLength(0);
+      expect(getConversationExecution({ ...second.identity, source: second.input.entry.source }, second.identity.requestId)?.state).toBe('queued');
+    } finally { release(); }
+    await Promise.all([running, queued]);
+    expect(events).toEqual(['saving', 'saved', 'planned']);
+    expect(getConversationExecution({ ...first.identity, source: first.input.entry.source }, first.identity.requestId)).toBeUndefined();
+    expect(getMessages(first.identity.conversationId, 20).every(row => row.requestId === second.identity.requestId)).toBe(true);
+  });
+  it('settles a revoked external attempt without starting a model or writing a transcript', async () => {
+    const item = fixture(); const events: string[] = [];
+    const assemble = vi.fn(item.input.assemble);
+    const result = await runLumiEntryTurn({ ...item.input, persistence: 'external', assemble,
+      authorization: captureRequestAuthorization(() => false, 'Revoked before queue admission'),
+      onFailure: error => { expect(error).toMatchObject({ name: 'AbortError' }); events.push('failed'); return 'blocked'; },
+      deliver: () => 'delivered', settle: async () => { events.push('saved'); },
+    });
+    expect(result).toBe('blocked'); expect(events).toEqual(['failed', 'saved']);
+    expect(model).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled();
+    expect(getMessages(item.identity.conversationId, 20)).toHaveLength(0);
+    expect(getConversationExecution({ ...item.identity, source: item.input.entry.source }, item.identity.requestId)).toBeUndefined();
   });
 });
