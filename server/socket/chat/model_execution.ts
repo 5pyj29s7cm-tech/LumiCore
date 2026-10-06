@@ -3,14 +3,14 @@ import type { ToolContext } from "../../tools/types";
 
 import { normalizeChatHistoryRecord } from "./history";
 
-import { type ToolSessionOptions } from "../../llm/tool_session";
+import { runLumiTurn, type ToolSessionOptions } from "../../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
 
 import { isExplicitMemoryRequest } from "../../memory/turn_memory";
 import { Socket } from "socket.io";
 
 import { NormalizedMessage, StreamCallback } from "../../llm/providers";
-import { runConversationTurn } from "../../llm/conversation_turn";
+
 
 import { ToolExecutionRecord } from "../../tools/types";
 import { type MediaArtifactReceipt } from "../media_artifact_receipt";
@@ -163,7 +163,7 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
           requestConfirmation: context.requestToolConfirmation,
         },
       })
-    : await runConversationTurn({
+    : await runLumiTurn({
         messages, config, onChunk, getters: context.llmGetters,
         isCancelled: context.isChatCancelled,
         assertCurrent: () => context.turnAuthorization.assertCurrent(),

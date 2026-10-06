@@ -29,7 +29,7 @@ describe('voice provider prompt contract', () => {
   });
 
   it('delegates tool projection to the shared adapter', () => {
-    expect(source).toContain('runToolSession({');
+    expect(source).toContain('runLumiTurn({');
     expect(source).toContain('modelToolProjection');
     expect(source).not.toContain('resolveRequiredToolNamesForModel(');
     expect(source).not.toContain('protectedToolNames: toolDeclarations.map');

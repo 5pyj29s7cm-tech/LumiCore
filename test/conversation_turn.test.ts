@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as providers from '../server/llm/providers';
-import { runConversationTurn, type ConversationTurnInput } from '../server/llm/conversation_turn';
+import { runLumiTurn, type ConversationTurnInput } from '../server/llm/lumi_turn';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { resetCircuit } from '../server/cloud/circuit_breaker';
 import type { NormalizedLLMResponse } from '../server/tools/types';
@@ -31,7 +31,7 @@ describe('shared no-tool conversation turn', () => {
       await finish;
       yield { choices: [{ delta: { content: '我可以和你聊天。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 } };
     });
-    const pending = runConversationTurn(input({
+    const pending = runLumiTurn(input({
       getters: { ...getters, getDeepSeek: () => ({ chat: { completions: { create } } }) },
       onChunk: chunk => { chunks.push(chunk); firstChunk(); },
     }));
@@ -52,7 +52,7 @@ describe('shared no-tool conversation turn', () => {
       yield { choices: [{ delta: { content: attempt === 1 ? '我是 Lumi。' : '我是 Lumi。我可以和你聊天。' }, finish_reason: 'stop' }], usage: { prompt_tokens: attempt, completion_tokens: attempt, total_tokens: attempt * 2 } };
     });
     const chunks: string[] = [];
-    const result = await runConversationTurn(input({
+    const result = await runLumiTurn(input({
       getters: { ...getters, getDeepSeek: () => ({ chat: { completions: { create } } }) },
       onChunk: chunk => chunks.push(chunk),
     }));
@@ -68,7 +68,7 @@ describe('shared no-tool conversation turn', () => {
     const model = vi.spyOn(providers, 'makeLLMCallStreaming')
       .mockResolvedValueOnce(response('我是 Lumi。我可以帮你。', { streamIncomplete: true }))
       .mockResolvedValueOnce(response('我是 Lumi。我可以和你聊天。'));
-    const result = await runConversationTurn(input());
+    const result = await runLumiTurn(input());
     expect(result).toMatchObject({ completion: 'complete', corrected: true, text: '我是 Lumi。我可以和你聊天。' });
     expect(model.mock.calls[1][0].at(-1)?.content).toContain('流式连接中断');
   });
@@ -82,7 +82,7 @@ describe('shared no-tool conversation turn', () => {
     const model = vi.spyOn(providers, 'makeLLMCallStreaming')
       .mockResolvedValueOnce(response('我是 Lumi。'))
       .mockResolvedValueOnce(second);
-    const result = await runConversationTurn(input());
+    const result = await runLumiTurn(input());
     expect(model).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ completion: 'incomplete', corrected: false, toolCalls: [], completionGuard: { blocked: true } });
     const final = finalizeLumiResponse({ taskText: '请用两句话介绍自己。', responseText: result.text, completionGuard: result.completionGuard, source: 'chat' });
@@ -96,7 +96,7 @@ describe('shared no-tool conversation turn', () => {
         return response(null);
       })
       .mockResolvedValueOnce(response(null));
-    const result = await runConversationTurn(input());
+    const result = await runLumiTurn(input());
     expect(result.completion).toBe('incomplete');
     expect(model).toHaveBeenCalledTimes(2);
   });
@@ -109,7 +109,7 @@ describe('shared no-tool conversation turn', () => {
       onChunk('late draft');
       return response('我是 Lumi。');
     });
-    await expect(runConversationTurn(input({ config: { ...config, signal: controller.signal }, onChunk: chunk => chunks.push(chunk) }))).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(runLumiTurn(input({ config: { ...config, signal: controller.signal }, onChunk: chunk => chunks.push(chunk) }))).rejects.toMatchObject({ name: 'AbortError' });
     expect(model).toHaveBeenCalledTimes(1);
     expect(chunks).toEqual([]);
   });
@@ -120,7 +120,7 @@ describe('shared no-tool conversation turn', () => {
       current = false;
       return response('我是 Lumi。');
     });
-    await expect(runConversationTurn(input({ assertCurrent: () => { if (!current) throw new Error('owner revoked'); } }))).rejects.toThrow('owner revoked');
+    await expect(runLumiTurn(input({ assertCurrent: () => { if (!current) throw new Error('owner revoked'); } }))).rejects.toThrow('owner revoked');
     expect(model).toHaveBeenCalledTimes(1);
   });
 
@@ -131,7 +131,7 @@ describe('shared no-tool conversation turn', () => {
         routing: { requestedProvider: 'deepseek', requestedModel: 'conversation-fixture', selectedProvider: 'openai', selectedModel: 'configured-backup', selectionMode: 'ordered_fallback', fallbackReason: 'primary unavailable', attempts: [] },
       }))
       .mockRejectedValueOnce(new Error('repair provider unavailable'));
-    const result = await runConversationTurn(input());
+    const result = await runLumiTurn(input());
     expect(result).toMatchObject({ completion: 'incomplete', completionGuard: { blocked: true, reason: 'conversation_repair_failed' } });
     expect(result.usageRecords).toEqual([expect.objectContaining({ provider: 'openai', model: 'configured-backup', totalTokens: 5 })]);
   });
@@ -146,8 +146,43 @@ describe('shared no-tool conversation turn', () => {
         onCorrectionChunk('我是 Lumi。我可以帮你。');
         return response('我是 Lumi。我可以帮你。');
       });
-    await expect(runConversationTurn(input({ config: { ...config, signal: controller.signal }, onChunk }))).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(runLumiTurn(input({ config: { ...config, signal: controller.signal }, onChunk }))).rejects.toMatchObject({ name: 'AbortError' });
     expect(model).toHaveBeenCalledTimes(2);
     expect(onChunk).not.toHaveBeenCalled();
+  });
+});
+
+describe('buffered transports use the shared completion policy', () => {
+  it('corrects the real buffered provider answer once and accounts for both attempts', async () => {
+    let attempt = 0;
+    const create = vi.fn(async () => ({ choices: [{ message: { content: ++attempt === 1 ? '我是 Lumi。' : '我是 Lumi。我可以和你聊天。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }));
+    const onChunk = vi.fn();
+    const result = await runLumiTurn(input({ streaming: false, onChunk,
+      getters: { ...getters, getDeepSeek: () => ({ chat: { completions: { create } } }) },
+    }));
+    expect(result).toMatchObject({ completion: 'complete', corrected: true, text: '我是 Lumi。我可以和你聊天。' });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.usageRecords.map(record => record.totalTokens)).toEqual([5, 5]);
+    expect(onChunk).not.toHaveBeenCalled();
+    for (const args of create.mock.calls) expect((args as unknown as [any])[0].stream).not.toBe(true);
+  });
+  it('does not repair or deliver a buffered result after its owner is revoked', async () => {
+    let current = true;
+    const model = vi.spyOn(providers, 'makeLLMCall').mockImplementationOnce(async () => { current = false; return response('我是 Lumi。'); });
+    await expect(runLumiTurn(input({ streaming: false, assertCurrent: () => { if (!current) throw new Error('owner revoked'); } }))).rejects.toThrow('owner revoked');
+    expect(model).toHaveBeenCalledOnce();
+  });
+  it('does not call a buffered provider after cancellation', async () => {
+    const model = vi.spyOn(providers, 'makeLLMCall');
+    await expect(runLumiTurn(input({ streaming: false, isCancelled: () => true }))).rejects.toMatchObject({ name: 'AbortError' });
+    expect(model).not.toHaveBeenCalled();
+  });
+  it('retains an incomplete buffered result as blocked at the outbound boundary', async () => {
+    const model = vi.spyOn(providers, 'makeLLMCall').mockResolvedValue(response(''));
+    const result = await runLumiTurn(input({ streaming: false }));
+    const { finalizeLumiResponseForDelivery } = await import('../server/cognition/response_delivery');
+    const outbound = await finalizeLumiResponseForDelivery({ taskText: '请用两句话介绍自己。', responseText: result.text, completionGuard: result.completionGuard, source: 'rest_chat' });
+    expect(outbound.finalization).toMatchObject({ blocked: true, reason: 'conversation_response_incomplete' });
+    expect(model).toHaveBeenCalledTimes(2);
   });
 });

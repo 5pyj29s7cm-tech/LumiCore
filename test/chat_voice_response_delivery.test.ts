@@ -17,7 +17,7 @@ describe('chat and voice finalized delivery paths', () => {
     expect(voice).not.toContain('executeSkillWorkflowAdapter');
     expect(voice).not.toContain('finalizedWorkflowSpeech');
     expect(voice).toContain('queueFinalizedSpeech(input.speechText!)');
-    expect(voice).toContain('runToolSession({');
+    expect(voice).toContain('runLumiTurn({');
   });
 
   it('does not run named workflow regex shortcuts in main chat', () => {

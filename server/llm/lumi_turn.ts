@@ -1,10 +1,11 @@
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "./provider_getters";
 import {
+  makeLLMCall,
   makeLLMCallStreaming,
   type NormalizedMessage,
   type StreamCallback,
 } from './providers';
-import type { LLMConfig, LLMResult, LLMUsageRecord } from './adapter';
+import { runWithTools, type LLMConfig, type LLMResult, type LLMUsageRecord } from './adapter';
 
 import type { NormalizedLLMResponse } from '../tools/types';
 import { resolveConversationModelConfig } from './conversation_profile';
@@ -21,7 +22,9 @@ import {
 export interface ConversationTurnInput {
   messages: NormalizedMessage[];
   config: LLMConfig;
-  getters: SharedProviderGetters;
+  getters: Partial<SharedProviderGetters>;
+  /** Buffered transports retain the same completion and correction policy. */
+  streaming?: boolean;
   onChunk?: StreamCallback;
   isCancelled?: () => boolean;
   /** Revalidate the original owner/conversation before every provider call. */
@@ -35,11 +38,11 @@ export interface ConversationTurnResult extends LLMResult {
 }
 
 /**
- * Text and voice use the same no-tool response policy. Only the first draft
+ * All channels use the same no-tool response policy. Only the first draft
  * streams to the caller; at most one complete replacement is then selected.
  * This helper never authorizes or dispatches tools.
  */
-export async function runConversationTurn(input: ConversationTurnInput): Promise<ConversationTurnResult> {
+async function executeConversationTurn(input: ConversationTurnInput): Promise<ConversationTurnResult> {
   const { getters } = input;
   const usageRecords: LLMUsageRecord[] = [];
   const userContent = [...input.messages].reverse().find(message => message.role === 'user')?.content;
@@ -72,12 +75,14 @@ export async function runConversationTurn(input: ConversationTurnInput): Promise
   };
   const callModel = async (messages: NormalizedMessage[], onChunk: StreamCallback) => {
     assertActive();
-    const response = await makeLLMCallStreaming(
+    const response = input.streaming === false
+      ? await makeLLMCall(messages, [], config, ...providerGetterArguments(getters, 'primary'))
+      : await makeLLMCallStreaming(
       messages, [], config, chunk => {
         if (config.signal?.aborted || input.isCancelled?.()) return;
         onChunk(chunk);
       },
-      ...providerGetterArguments(getters),
+      ...providerGetterArguments(getters, 'primary'),
     );
     recordUsage(response);
     assertActive();
@@ -135,4 +140,33 @@ export async function runConversationTurn(input: ConversationTurnInput): Promise
   const correctedText = String(corrected.text || '').trim();
   if (!isComplete(corrected, correctedText)) return incomplete('conversation_response_incomplete');
   return { text: correctedText, toolCalls: [], usageRecords, completion: 'complete', corrected: true };
+}
+
+type ToolLoopArguments = Parameters<typeof runWithTools>;
+
+/** Named channel inputs; the adapter retains sole ownership of execution and budgets. */
+export interface ToolSessionOptions {
+  messages: ToolLoopArguments[0];
+  registry: ToolLoopArguments[1];
+  config: ToolLoopArguments[2];
+  onToolCall?: ToolLoopArguments[3];
+  maxIterations?: ToolLoopArguments[4];
+  onStreamChunk?: ToolLoopArguments[10];
+  context?: ToolLoopArguments[11];
+  getters?: Partial<SharedProviderGetters>;
+}
+/** One model executor for all transport entries; presence of the admitted registry selects the tool path. */
+export function runLumiTurn(input: ConversationTurnInput): Promise<ConversationTurnResult>;
+export function runLumiTurn(input: ToolSessionOptions): ReturnType<typeof runWithTools>;
+export function runLumiTurn(input: ToolSessionOptions | ConversationTurnInput): ReturnType<typeof runWithTools> | Promise<ConversationTurnResult> {
+  if (!('registry' in input)) return executeConversationTurn(input);
+
+  const getters = input.getters || {};
+  return runWithTools(
+    input.messages, input.registry, input.config, input.onToolCall, input.maxIterations,
+    getters.getDeepSeek, getters.getGemini, getters.getOpenAI, getters.getAnthropic,
+    getters.getQwen, input.onStreamChunk, input.context, getters.getOllama,
+    getters.getLmStudio, getters.getArk, getters.getXiaomi, getters.getKimi,
+    getters.getGlm, getters.getRelay,
+  );
 }

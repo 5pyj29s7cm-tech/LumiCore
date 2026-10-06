@@ -15,7 +15,7 @@ import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAt
 export { buildChatAttachmentContext } from "./chat/attachments";
 import { buildClientSurfaceContinuationBridge, isShortClientContinuation, getVerifiedClientModeChange } from "./chat/client_surface";
 export { buildClientSurfaceContinuationBridge } from "./chat/client_surface";
-import { runToolSession, type ToolSessionOptions } from "../llm/tool_session";
+import { runLumiTurn, type ToolSessionOptions } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createTurnConfirmation } from '../tools/turn_confirmation';
 import { readRuntimeWorkForTurn } from '../cognition/runtime_work_read';
@@ -267,7 +267,7 @@ async function prepareChatRequest(socket: Socket, llmGetters: SharedProviderGett
       turnAuthorization.assertCurrent();
       // Preserve the accepted conversation and transport provenance through
       // every execution/recovery path, including reusable workflow traces.
-      return runToolSession({ ...input, getters: llmGetters, config: { ...input.config, modelTurnState, conversationId: selectedConversationId || input.config.conversationId, workflowSource: eventSource } });
+      return runLumiTurn({ ...input, getters: llmGetters, config: { ...input.config, modelTurnState, conversationId: selectedConversationId || input.config.conversationId, workflowSource: eventSource } });
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;

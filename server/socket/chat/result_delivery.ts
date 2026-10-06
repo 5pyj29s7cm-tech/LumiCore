@@ -2,7 +2,7 @@ import type { ToolContext } from "../../tools/types";
 import type { ChatMessageWriter } from "./message_writer";
 
 
-import { type ToolSessionOptions } from "../../llm/tool_session";
+import { type ToolSessionOptions } from "../../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
 
 import { scheduleTurnMemory } from "../../memory/turn_memory";

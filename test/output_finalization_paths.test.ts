@@ -201,8 +201,8 @@ describe('finalized output paths', () => {
     // at only the runWithTools call would miss speech queued from onChunk.
     const modelCandidateStart = voice.indexOf('const modelConfig: LLMConfig = {');
     const sharedTurnStart = voice.indexOf('const result = toolSessionActive', modelCandidateStart);
-    const sharedToolStart = voice.indexOf('await runToolSession({', sharedTurnStart);
-    const sharedConversationStart = voice.indexOf('await runConversationTurn({', sharedTurnStart);
+    const sharedToolStart = voice.indexOf('await runLumiTurn({', sharedTurnStart);
+    const sharedConversationStart = voice.indexOf('await runLumiTurn({', sharedToolStart + 1);
     const finalizerStart = voice.indexOf('let finalResponse = responseFinalizer.finalize({', sharedTurnStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await finishVoiceTerminal({', finalizerStart);
     const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
@@ -269,7 +269,7 @@ describe('finalized output paths', () => {
       expect(entry).not.toContain('executeSkillWorkflowAdapter');
       expect(entry).not.toContain('preMatchedQuickResult');
       expect(entry).not.toContain('quickFinalized');
-      expect(entry).toContain('runToolSession({');
+      expect(entry).toContain('runLumiTurn({');
     }
   });
 
@@ -370,7 +370,7 @@ describe('finalized output paths', () => {
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
     expect(messaging).toContain('`${source}_guard_recovery`');
     expect(delivery.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(1);
-    expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source)');
+    expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard)');
     expect(delivery).toContain('input.refinalize || ((candidateText, records) => finalize(candidateText, records, `${input.source}_guard_recovery`))');
     expect(rest).not.toMatch(/\bfinalizeLumiResponse\(\{/);
     expect(mcp).not.toMatch(/\bfinalizeLumiResponse\(\{/);

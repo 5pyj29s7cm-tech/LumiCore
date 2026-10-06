@@ -47,16 +47,16 @@ import { buildLumiOperatingKernelPrompt } from '../../../cognition/operating_ker
 import { buildResponseLanguageInstruction } from '../../../utils/language';
 import { getUserPreferredLLMConfig } from '../../../llm/user_preferences';
 import { resolveModelRequestInputBudget } from '../../../llm/request_context_budget';
-import { makeLLMCall, type NormalizedMessage } from '../../../llm/providers';
+import { type NormalizedMessage } from '../../../llm/providers';
 import { createTurnConfirmation } from '../../../tools/turn_confirmation';
 import { isRetiredOperationModeRequest } from '../../../cognition/operation_modes';
 import { buildOperationModeMetaResponse } from '../../../cognition/capability_meta';
 import { executeToolCall } from '../../../tools/execution_engine';
 import { formatOperationModeSwitchResponse } from "../../messages/operation_mode_messages";
 import { handleRemoteLegalNoticeIntake } from './legal_notice_intake';
-import { runToolSession } from "../../../llm/tool_session";
-import { providerGetterArguments } from "../../../llm/provider_getters";
-import { recordTokenUsage, recordTokenUsageBatch } from '../../../llm/token_tracker';
+import { runLumiTurn } from "../../../llm/lumi_turn";
+import type { LLMResult } from '../../../llm/adapter';
+import { recordTokenUsageBatch } from '../../../llm/token_tracker';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
 import { WeComAdapter, type WeComConfig } from '../../../messaging/wecom';
 import { type MessagingRouteOptions, type IncomingMessageTransport, flushMessagingStateOrThrow, isMessagingReplyDurabilityError, buildRemoteRuntimeEvidenceContext, type MessagingDesktopRelay, type MessagingDesktopLifecycle, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "./messaging_finalization";
@@ -1689,12 +1689,13 @@ async function executeMessagingModelTurn(context: MessagingModelContext): Promis
     }
     if (deterministicEntryReply && !responseText) responseText = deterministicEntryReply;
 
+    let completionGuard: LLMResult['completionGuard'];
     const entryHandled = Boolean(deterministicEntryReply);
     const runMessagingToolTurn = (
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
       executionSource = context.source,
-    ) => runToolSession({
+    ) => runLumiTurn({
       messages: turnMessages,
       registry: toolRegistry,
       config: context.userLLMPrefs,
@@ -1706,16 +1707,15 @@ async function executeMessagingModelTurn(context: MessagingModelContext): Promis
 
     if (!entryHandled && !context.toolSessionActive) {
       assertMessagingAuthorization(context.msg);
-      const response = await makeLLMCall(
-        context.messages,
-        [],
-        context.userLLMPrefs,
-        ...providerGetterArguments(context.llm ?? {}, "primary"),
-      );
-      responseText = response.text || '';
-      if (response.usage) {
-        recordTokenUsage(context.effectiveUserId, context.userLLMPrefs.provider, context.userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
-      }
+      const result = await runLumiTurn({
+        messages: context.messages, config: context.userLLMPrefs,
+        getters: context.llm ?? {}, streaming: false, taskText: context.routingText,
+        assertCurrent: () => assertMessagingAuthorization(context.msg),
+        isCancelled: context.actionWasCancelled,
+      });
+      responseText = result.text;
+      completionGuard = result.completionGuard;
+      recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
     } else if (!entryHandled) {
       const result = await runMessagingToolTurn(context.messages);
       responseText = result.text || '';
@@ -1764,6 +1764,7 @@ async function executeMessagingModelTurn(context: MessagingModelContext): Promis
         : finalizeLumiResponse({
             taskText: context.routingText,
             responseText: deliveryText,
+            completionGuard,
             toolRecords: preDeliveryRecords,
             source: context.source,
             flow: context.turnFlow,

@@ -3,7 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { buildModelSelfAwareness } from '../server/cognition/vision_routing';
 import { dispatchLLMCall, dispatchLLMCallStreaming, type LLMGetters } from '../server/llm/dispatch';
-import { runConversationTurn } from '../server/llm/conversation_turn';
+import { runLumiTurn } from '../server/llm/lumi_turn';
 import { resetCircuit } from '../server/cloud/circuit_breaker';
 import type { NormalizedMessage } from '../server/llm/providers';
 
@@ -75,7 +75,7 @@ describe('model identity follows the executing candidate', () => {
   it('uses the same fallback identity for a normal no-tool conversation without a repair call', async () => {
     const { getters, primaryCreate, localCreate } = clients(true);
     const chunks: string[] = [];
-    const result = await runConversationTurn({ messages: messages(), config, getters,
+    const result = await runLumiTurn({ messages: messages(), config, getters,
       onChunk: chunk => chunks.push(chunk), taskText: 'Which model is answering this message?' });
     expect(result).toMatchObject({ completion: 'complete', corrected: false, text: 'synthetic local answer', toolCalls: [] });
     expect(result.usageRecords).toContainEqual(expect.objectContaining({ provider: backup.provider, model: backup.model,

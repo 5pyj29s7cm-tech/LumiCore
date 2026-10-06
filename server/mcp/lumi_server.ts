@@ -1,4 +1,4 @@
-import { runToolSession } from "../llm/tool_session";
+import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import { mergeToolExecutionRecords } from '../cognition/task_execution_ledger';
@@ -209,7 +209,7 @@ function registerLumiChatTool({ mcp, bc, chatConversations, scope, isWorkViewer,
           onToolRecord?: (record: ToolRecordEvent) => void,
           onChunk?: (chunk: string) => void,
           source = 'mcp_chat',
-        ) => runToolSession({
+        ) => runLumiTurn({
           messages: turnMessages,
           registry: tr,
           config: {
@@ -240,7 +240,7 @@ function registerLumiChatTool({ mcp, bc, chatConversations, scope, isWorkViewer,
           getters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         });
         const deliverFinalizedChatResponse = async (
-          response: Awaited<ReturnType<typeof runToolSession>>,
+          response: Awaited<ReturnType<typeof runLumiTurn>>,
           background: boolean,
         ) => {
           const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || []);
@@ -766,7 +766,7 @@ function registerLumiRouteTaskTool({ mcp, isWorkViewer, viewerMutationDenied, re
           turnMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
           onToolRecord?: (record: ToolRecordEvent) => void,
           source = 'mcp_route_task',
-        ) => runToolSession({
+        ) => runLumiTurn({
           messages: turnMessages,
           registry: tr,
           config: { ...routeLLM, maxTokens: 4096 },

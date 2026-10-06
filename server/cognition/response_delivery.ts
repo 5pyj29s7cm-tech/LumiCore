@@ -174,7 +174,7 @@ export function createPreFinalizationTextGate(): PreFinalizationTextGate {
 }
 
 type LumiOutboundInput = OutboundExecutionFinalizationInput<LumiResultFinalizerResult>;
-export interface LumiResponseDeliveryInput extends Omit<LumiResultFinalizerInput, 'completionGuard'>,
+export interface LumiResponseDeliveryInput extends LumiResultFinalizerInput,
   Partial<Pick<LumiOutboundInput, 'allowToolUse' | 'attempt' | 'pendingConfirmation' | 'aborted' | 'isPendingConfirmation' | 'isAborted'>> {
   initialFinalization?: LumiResultFinalizerResult;
   refinalize?: LumiOutboundInput['finalize'];
@@ -183,14 +183,14 @@ export interface LumiResponseDeliveryInput extends Omit<LumiResultFinalizerInput
 /** Shared result verification and bounded recovery; each channel supplies its scoped receipts. */
 export function finalizeLumiResponseForDelivery(input: LumiResponseDeliveryInput) {
   const toolRecords = input.toolRecords || [];
-  const finalize = (responseText: string, records: NonNullable<LumiResultFinalizerInput['toolRecords']>, source: string) => finalizeLumiResponse({
+  const finalize = (responseText: string, records: NonNullable<LumiResultFinalizerInput['toolRecords']>, source: string, completionGuard?: LumiResultFinalizerInput['completionGuard']) => finalizeLumiResponse({
     taskText: input.taskText, responseText, toolRecords: records, source,
-    flow: input.flow, taskId: input.taskId, requestId: input.requestId,
+    flow: input.flow, taskId: input.taskId, requestId: input.requestId, completionGuard,
   });
   return finalizeExecutionForOutboundDelivery({
     task: input.taskText,
     responseText: input.responseText,
-    finalization: input.initialFinalization || finalize(input.responseText, toolRecords, input.source),
+    finalization: input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard),
     allowToolUse: input.allowToolUse === true,
     pendingConfirmation: input.pendingConfirmation,
     aborted: input.aborted,

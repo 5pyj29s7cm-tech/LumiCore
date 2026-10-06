@@ -3,7 +3,7 @@ import type { ToolContext } from "../../tools/types";
 import type { ChatMessageWriter } from "./message_writer";
 
 
-import { type ToolSessionOptions } from "../../llm/tool_session";
+import { type ToolSessionOptions } from "../../llm/lumi_turn";
 
 import { Socket } from "socket.io";
 

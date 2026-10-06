@@ -1,4 +1,4 @@
-import { runToolSession } from "../llm/tool_session";
+import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
 import { reserveConversationExecution } from '../cognition/conversation_execution';
@@ -6,9 +6,7 @@ import { getConversationActionTurn } from '../conversation/action_turn_ledger';
 import { getIndustryWorkflowTask, interruptIndustryWorkflow, observeIndustryWorkflowTool, recordIndustryWorkflowExecution, validateIndustryWorkflowSourceInput } from '../industry/workflow_service';
 import { Router } from "express";
 import { requireNotStrict } from '../config/privacy';
-import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createCallerKeyProvider } from '../llm/caller_key_provider';
 
 import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from "../llm/providers";
@@ -359,32 +357,25 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
       if (isBYOK) {
         requireNotStrict('Chat with a supplied cloud API key');
         const llmStart = Date.now();
-        if (provider === "gemini") {
-          const client = new GoogleGenerativeAI(userKey);
-          const modelInstance = client.getGenerativeModel({ model: model || "gemini-2.0-flash", systemInstruction });
-          const contents = conversationMessages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
-          responseText = (await modelInstance.generateContent({ contents }, { signal: request.signal })).response.text();
-        } else if (provider === "anthropic") {
-          const client = new Anthropic({ apiKey: userKey });
-          const response = await client.messages.create({
-            model: model || "claude-sonnet-4-6",
-            max_tokens: 1024,
-            system: systemInstruction,
-            messages: conversationMessages,
-          }, { signal: request.signal });
-          responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-        } else {
-          const client = new OpenAI({ apiKey: userKey, baseURL: provider === "deepseek" ? "https://api.deepseek.com/v1" : provider === "qwen" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" : undefined });
-          const response = await client.chat.completions.create({
-            model: model || (provider === "deepseek" ? "deepseek-v4-flash" : provider === "qwen" ? "qwen-plus" : "gpt-4o"),
-            messages: buildRestProviderMessages(messages, prompt, systemInstruction),
-          }, { signal: request.signal });
-          responseText = response.choices[0].message.content || '';
-        }
+        const caller = createCallerKeyProvider(provider, model, userKey);
+        const result = await runLumiTurn({
+          messages: caller.provider === 'gemini' || caller.provider === 'anthropic'
+            ? [{ role: 'system', content: systemInstruction }, ...conversationMessages]
+            : buildRestProviderMessages(messages, prompt, systemInstruction),
+          config: { provider: caller.provider, model: caller.model,
+            selectionMode: 'pinned', noImplicitFailover: true, allowCloudFallback: false,
+            fallbackCandidates: [], signal: request.signal, source: 'rest_chat', requestId,
+            ...(caller.provider === 'anthropic' ? { maxTokens: 1024 } : {}),
+          },
+          getters: caller.getters, streaming: false, taskText: routeText,
+          assertCurrent: assertRequestActive,
+        });
+        responseText = result.text;
         request.signal.throwIfAborted();
         const outbound = await finalizeRestChatResponse({
           taskText: routeText,
           responseText,
+          completionGuard: result.completionGuard,
           source: 'rest_chat',
           flow: restTurnDispatch.flow,
         });
@@ -410,7 +401,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           onToolRecord?: (record: ToolExecutionRecord) => void,
           onChunk?: (chunk: string) => void,
           source = toolContext.source,
-        ) => runToolSession({
+        ) => runLumiTurn({
           messages: turnMessages,
           registry: toolRegistry,
           config: { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },

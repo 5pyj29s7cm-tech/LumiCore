@@ -9,6 +9,7 @@ vi.mock('../server/llm/adapter', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
+import * as providers from '../server/llm/providers';
 import { makeApp, JWT_SECRET } from './helpers';
 import { mountChatRoutes } from '../server/routes/chat_routes';
 import {
@@ -270,5 +271,36 @@ describe('REST chat remote execution boundary', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
     expect(mocks.runWithTools).not.toHaveBeenCalled();
+  });
+
+  it('uses only the supplied request key through the pinned shared model executor', async () => {
+    const model = vi.spyOn(providers, 'makeLLMCall').mockResolvedValue({ text: 'Hello from Lumi.', toolCalls: null });
+    try {
+      const response = await fetch(baseUrl + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': 'synthetic-request-key' },
+        body: JSON.stringify({ provider: 'openai', model: 'request-model', message: 'Hello' }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ text: 'Hello from Lumi.', finalized: true, blocked: false });
+      expect(model).toHaveBeenCalledOnce();
+      const [, tools, config, getDeepSeek, getGemini, getOpenAI, getAnthropic, getQwen] = model.mock.calls[0];
+      expect(tools).toEqual([]);
+      expect(config).toMatchObject({ provider: 'openai', model: 'request-model', selectionMode: 'pinned', noImplicitFailover: true, allowCloudFallback: false, fallbackCandidates: [] });
+      expect(config.userId).toBeUndefined();
+      expect(getOpenAI?.().apiKey).toBe('synthetic-request-key');
+      expect(getDeepSeek()).toBeNull(); expect(getGemini()).toBeNull();
+      expect(getAnthropic).toBeUndefined(); expect(getQwen).toBeUndefined();
+    } finally { model.mockRestore(); }
+  });
+  it('does not deliver an empty supplied-key response as a completed answer', async () => {
+    const model = vi.spyOn(providers, 'makeLLMCall').mockResolvedValue({ text: '', toolCalls: null });
+    try {
+      const response = await fetch(baseUrl + '/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': 'synthetic-request-key' },
+        body: JSON.stringify({ provider: 'openai', message: 'Hello' }),
+      });
+      expect(await response.json()).toMatchObject({ finalized: true, blocked: true, reason: 'conversation_response_incomplete' });
+      expect(model).toHaveBeenCalledTimes(2);
+    } finally { model.mockRestore(); }
   });
 });

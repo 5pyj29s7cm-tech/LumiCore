@@ -83,7 +83,7 @@ import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, i
 import { resolveExactConversationCorrection } from "../conversation/exact_correction";
 import { executeToolCall } from "../tools/execution_engine";
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../cognition/result_finalizer";
-import { runToolSession } from "../llm/tool_session";
+
 import { recordTokenUsageBatch } from "../llm/token_tracker";
 import { collectRecentActionToolRecords, describeRecentActionsFromHistory } from "./voice_action_history";
 import { formatOperationModeSwitchResponse } from "../regions/messages/operation_mode_messages";
@@ -91,7 +91,7 @@ import { buildForegroundMessagingArguments, executeForegroundMessagingAction } f
 import { formatCnVoiceWeChatSendError, formatCnVoiceWeChatSendResult } from "../regions/messages/messaging_messages";
 import { NormalizedMessage } from "../llm/providers";
 import { normalizeVoiceHistory } from './voice_history';
-import { runConversationTurn } from "../llm/conversation_turn";
+import { runLumiTurn } from "../llm/lumi_turn";
 import { createTurnResponseFinalizer } from '../cognition/turn_response_finalizer';
 import { extractSentiment } from "../cognition/sentiment";
 import { himTick } from "../personality/him";
@@ -2193,7 +2193,7 @@ async function executeVoiceConfirmedAndDeterministicTurn(context: NonNullable<Aw
         // task. Continue the remaining plan immediately with the exact confirmed
         // receipt in context; a later hard boundary will stop once again.
         context.turnAuthorization.assertCurrent();
-        const continuation = await runToolSession({
+        const continuation = await runLumiTurn({
           messages: [
             { role: 'system', content: context.voiceSystemPrompt },
             ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {
@@ -2528,7 +2528,7 @@ async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typ
     markVoiceLatencyMilestone(context.requestId, 'firstModelRequestAt');
     const toolLifecycle = context.observeVoiceTools(record => context.toolResults.push(record));
     const result = context.toolSessionActive
-      ? await runToolSession({
+      ? await runLumiTurn({
         messages: messages,
         registry: toolRegistry,
         config: modelConfig,
@@ -2543,7 +2543,7 @@ async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typ
           },
         getters: context.llmGetters,
       })
-      : await runConversationTurn({
+      : await runLumiTurn({
           messages,
           config: modelConfig,
           onChunk,
@@ -2602,7 +2602,7 @@ async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<ty
         logger.warn('[Audio] Recovering blocked execution internally.');
           context.turnAuthorization.assertCurrent();
       const recoveryLifecycle = context.observeVoiceTools(recordTool);
-      const recovery = await runToolSession({
+      const recovery = await runLumiTurn({
         messages: [
               ...context.recoveryConversationMessages,
               { role: 'assistant', content: context.responseText },

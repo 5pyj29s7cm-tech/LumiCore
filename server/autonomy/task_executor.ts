@@ -1,8 +1,8 @@
-import { runToolSession } from "../llm/tool_session";
+import { runLumiTurn } from "../llm/lumi_turn";
 import { type ProviderGetters as SharedProviderGetters } from "../llm/provider_getters";
 /**
  * Autonomous Task Executor — processes the autonomous task queue.
- * Executes tasks via runToolSession with tighter safety policy than user-initiated autonomous mode.
+ * Executes tasks via runLumiTurn with tighter safety policy than user-initiated autonomous mode.
  */
 import {
   attachAutonomousExecutionPlan,
@@ -880,7 +880,7 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    const result = await runToolSession({
+    const result = await runLumiTurn({
       messages: messages,
       registry: toolRegistry,
       config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: running.conversationId, signal: executionAbort.signal },
