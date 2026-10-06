@@ -4,7 +4,7 @@ import { preparePlannedConversationExecution } from '../conversation/planned_exe
 import { createConversationReceiptObserver } from '../conversation/execution_receipt_archive';
 import type { RequestAuthorization } from '../conversation/lifecycle';
 import { buildLumiExecutionPipeline, type BuildLumiExecutionPipelineInput, type LumiExecutionPipeline } from './execution_pipeline';
-import { reserveConversationExecution } from './conversation_execution';
+import { reserveConversationExecution, type ConversationResourceLifetime } from './conversation_execution';
 import { mergeToolExecutionRecords } from './task_execution_ledger';
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from './turn_model';
 import { runPreparedLumiTurn, type PreparedLumiTurnInput } from './prepared_turn';
@@ -55,6 +55,7 @@ export interface LumiEntryTurnInput<T> {
   externalTask?: { taskId?: string; turnRowId?: string };
   authorization: RequestAuthorization;
   controller: AbortController;
+  resource?: ConversationResourceLifetime;
   planning: Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>
     | (() => Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>
       | { terminal: T } | Promise<Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'> | { terminal: T }>);
@@ -80,6 +81,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   const externalTask = Object.freeze({ ...input.externalTask });
   const capturedPlanning = typeof input.planning === 'function' ? input.planning
     : { ...input.planning, dispatch: { ...input.planning.dispatch } };
+  const capturedAdmission = input.resource?.admission;
+  const ownedByDurableRelease = Boolean(capturedAdmission && input.resource?.ownedByDurableRelease);
   let admission: ReturnType<typeof reserveConversationExecution> | undefined;
   let heartbeat: ReturnType<typeof startConversationActionExecutionHeartbeat> | undefined;
   let taskId: string | undefined;
@@ -101,8 +104,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   };
   try {
     authorization.assertCurrent();
-    admission = identity.conversationId ? reserveConversationExecution({ ...identity, source: entry.queueSource || entry.source }, identity.requestId, controller.signal,
-      { authorization, abort: reason => { if (!controller.signal.aborted) controller.abort(reason); } }) : undefined;
+    admission = capturedAdmission || (identity.conversationId ? reserveConversationExecution({ ...identity, source: entry.queueSource || entry.source }, identity.requestId, controller.signal,
+      { authorization, abort: reason => { if (!controller.signal.aborted) controller.abort(reason); } }) : undefined);
     if (conversationPersistence && !identity.conversationId) throw new Error('A conversation entry requires its accepted transcript');
     await admission?.waitForTurn(); assertCurrent();
     const conversation = identity.conversationId ? getConversationForScope(identity.conversationId, identity.userId, identity.domain, identity.orgId) : null;
@@ -173,6 +176,6 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     throw error;
   } finally {
     heartbeat?.stop();
-    try { await input.settle?.(); } finally { admission?.release(); }
+    try { await input.settle?.(); } finally { if (!ownedByDurableRelease) admission?.release(); }
   }
 }

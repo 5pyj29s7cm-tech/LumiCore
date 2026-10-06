@@ -9,7 +9,9 @@ import { prepareChatRequest } from './chat/phases/prepare_chat_request';
 import { prepareChatEvents } from './chat/phases/prepare_chat_events';
 import { resolveChatControlTurn } from './chat/phases/resolve_chat_control_turn';
 import { admitChatForegroundTurn } from './chat/phases/admit_chat_foreground_turn';
-import { startChatForegroundTurn } from './chat/phases/start_chat_foreground_turn';
+import { startChatForegroundTurn, prepareChatForegroundLifetime, completeQueuedChatFailure } from './chat/phases/start_chat_foreground_turn';
+import { runLumiEntryTurn } from '../cognition/turn_execution';
+import { prepareChatModelTurn } from './chat/model_execution';
 import { prepareChatPriorTaskQuery } from './chat/phases/prepare_chat_prior_task_query';
 import { prepareChatConversationContext } from './chat/phases/prepare_chat_conversation_context';
 import { prepareChatTerminalWriters } from './chat/phases/prepare_chat_terminal_writers';
@@ -38,26 +40,43 @@ async function processChatTurn(socket: Socket, llmGetters: SharedProviderGetters
   if (resolveChatControlTurnResult.terminal) return;
   const admitChatForegroundTurnResult = await admitChatForegroundTurn(resolveChatControlTurnResult.context);
   if (admitChatForegroundTurnResult.terminal) return;
-  const startChatForegroundTurnResult = await startChatForegroundTurn(admitChatForegroundTurnResult.context);
-  if (startChatForegroundTurnResult.terminal) return;
-  const context = startChatForegroundTurnResult.context;
-  try {
-  const prepareChatPriorTaskQueryResult = await prepareChatPriorTaskQuery(context);
-  if (prepareChatPriorTaskQueryResult.terminal) return;
-  const prepareChatConversationContextResult = await prepareChatConversationContext(prepareChatPriorTaskQueryResult.context);
-  if (prepareChatConversationContextResult.terminal) return;
-  const prepareChatTerminalWritersResult = await prepareChatTerminalWriters(prepareChatConversationContextResult.context);
-  if (prepareChatTerminalWritersResult.terminal) return;
-  const prepareChatExecutionLeaseAndToolsResult = await prepareChatExecutionLeaseAndTools(prepareChatTerminalWritersResult.context);
-  if (prepareChatExecutionLeaseAndToolsResult.terminal) return;
-  const prepareChatRuntimeControlAndModelResult = await prepareChatRuntimeControlAndModel(prepareChatExecutionLeaseAndToolsResult.context);
-  if (prepareChatRuntimeControlAndModelResult.terminal) return;
-  const prepareChatModelStateResult = await prepareChatModelState(prepareChatRuntimeControlAndModelResult.context);
-  if (prepareChatModelStateResult.terminal) return;
-  const executeChatModelAndDeliveryResult = await executeChatModelAndDelivery(prepareChatModelStateResult.context);
-  if (executeChatModelAndDeliveryResult.terminal) return;
-
-  }  catch (error: any) {
+  const context = prepareChatForegroundLifetime(admitChatForegroundTurnResult.context);
+  let started = false;
+  let conversationSetup: Extract<Awaited<ReturnType<typeof prepareChatConversationContext>>, { terminal: false }> | undefined;
+  let modelContext: NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']> | undefined;
+  await runLumiEntryTurn<void>({
+    entry: { source: 'chat', channel: 'chat', historyLimit: 0, failureText: 'The chat turn could not finish.', failureReason: 'chat_execution_failed' },
+    identity: { userId: context.uid, agentId: context.conversationAgentId, conversationId: context.selectedConversationId,
+      requestId: context.requestId, domain: context.resolvedDomain, orgId: context.resolvedOrgId },
+    userText: context.visibleUserText, persistence: 'preaccepted', authorization: context.turnAuthorization, controller: context.abortController,
+    resource: { admission: context.sessionLease, ownedByDurableRelease: true },
+    planning: async () => {
+      const foreground = await startChatForegroundTurn(context);
+      if (foreground.terminal) return { terminal: undefined };
+      started = true;
+      const prior = await prepareChatPriorTaskQuery(foreground.context);
+      if (prior.terminal) return { terminal: undefined };
+      const prepared = await prepareChatConversationContext(prior.context);
+      if (prepared.terminal === true) return { terminal: undefined };
+      conversationSetup = prepared;
+      return prepared.planning;
+    },
+    assemble: async execution => {
+      const conversation = await conversationSetup!.resume(execution);
+      const terminalWriters = await prepareChatTerminalWriters(conversation.context);
+      if (terminalWriters.terminal) return { terminal: undefined };
+      const tools = await prepareChatExecutionLeaseAndTools(terminalWriters.context);
+      if (tools.terminal) return { terminal: undefined };
+      const control = await prepareChatRuntimeControlAndModel(tools.context);
+      if (control.terminal) return { terminal: undefined };
+      const prepared = await prepareChatModelState(control.context);
+      if (prepared.terminal) return { terminal: undefined };
+      modelContext = prepared.context;
+      return prepareChatModelTurn(modelContext);
+    },
+    deliver: async result => { await executeChatModelAndDelivery(modelContext!, result); },
+    onFailure: async (error: any) => {
+      if (!started && context.abortController.signal.aborted) { await completeQueuedChatFailure(context); return; }
       if (context.isChatCancelled() || error?.name === 'AbortError') {
         const cancelledText = CN_TASK_EXECUTION_MESSAGES.cancelled;
         const cancelledRecords = context.collectRequestTerminalRecords();
@@ -134,10 +153,9 @@ async function processChatTurn(socket: Socket, llmGetters: SharedProviderGetters
         }),
         errorContext: 'Unhandled chat failure terminal',
       });
-    } finally {
-
-      await context.releaseChatSession();
-  }
+    },
+    settle: async () => { await context.releaseChatSession(); },
+  });
 }
 
 export function registerChatHandler(

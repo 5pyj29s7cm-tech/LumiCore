@@ -7,7 +7,7 @@ import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_
 
 import { toolRegistry } from "../../tools/registry";
 
-import { buildLumiExecutionPipeline } from "../../cognition/execution_pipeline";
+import type { LumiExecutionPipeline, BuildLumiExecutionPipelineInput } from "../../cognition/execution_pipeline";
 
 import { restrictSystemPromptForExecutionBoundary } from "../../tools/remote_policy";
 
@@ -111,7 +111,7 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         context.mediaRoutingEnvelope,
       ].filter(Boolean).join('\n\n');
 
-      const executionPipeline = buildLumiExecutionPipeline({
+      const planning: BuildLumiExecutionPipelineInput = {
         requestId: context.requestId, userText: context.visibleUserText || context.text, acceptedResolution: context.acceptedTurnResolution,
         structuredMediaRequest: context.structuredMediaRequest,
         dispatch: {
@@ -139,7 +139,8 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         executionBoundary: context.toolSecurityContext.executionBoundary,
         traceText: currentTurnDecisionText,
         source: context.eventSource,
-      });
+      };
+      return { planning, assemble: async (executionPipeline: LumiExecutionPipeline) => {
       context.resolvedTaskRelation = executionPipeline.taskRelation;
       const turnDispatch = executionPipeline.turnIntent;
       const turnFlow = turnDispatch.flow;
@@ -191,4 +192,5 @@ export async function prepareChatPromptContext(context: prepareChatPromptContext
         }
       } catch {}
 return { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText };
+      } };
 }

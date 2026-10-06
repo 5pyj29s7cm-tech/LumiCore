@@ -1152,10 +1152,12 @@ describe('execution guard recovery', () => {
     const voiceSource = readVoiceImplementationSource();
 
     for (const source of [chatSource, voiceSource]) {
-      expect(source).toContain('await runPreparedLumiTurn({');
       expect(source).toContain('pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn)');
       expect(source).toContain('requiresFreshConfirmation: correctionRequiresFreshConfirmation');
     }
+    expect(chatSource).toContain('await runLumiEntryTurn<void>({');
+    expect(voiceSource).toContain('await runPreparedLumiTurn({');
+    expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('await runPreparedLumiTurn({');
     const recoveryOwner = readImplementationSource(path.join(root, 'server/cognition/turn_recovery.ts'), 'utf8');
     expect(recoveryOwner).toContain('...model.messages');
     expect(recoveryOwner).toContain('priorToolRecords: recovery.priorToolRecords');
@@ -1166,7 +1168,10 @@ describe('execution guard recovery', () => {
     expect(driver).toContain('await runResolvedLumiTurn(input.model)');
     expect(driver).toContain('await runResolvedLumiRecovery({ model, responseText, recovery })');
     expect(driver).toContain('await finalizeLumiResponseForDelivery({');
-    expect(chatSource).toContain('model: { execution: executionPipeline, messages, registry: toolRegistry');
+    const chatData = readFileSync(path.join(root, 'server/socket/chat/model_execution.ts'), 'utf8');
+    expect(chatData).toContain('systemPrompt: context.effectiveSystemPrompt, messages, taskText: context.executionTaskText');
+    expect(chatData).toContain('model: { registry: toolRegistry');
+    expect(chatData).not.toContain('runPreparedLumiTurn(');
     expect(chatSource).not.toContain('normalTurnMessages');
     expect(chatSource).not.toContain('runAuthorizedRecovery');
     expect(chatSource).toContain('...toolSecurityContext,');
@@ -1200,7 +1205,7 @@ describe('execution guard recovery', () => {
       if (cancellationCheck === 'isAborted: isChatCancelled') {
         expect(source).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
       }
-      const recoveryStart = source.indexOf('const completed = await runPreparedLumiTurn({');
+      const recoveryStart = source.indexOf(cancellationCheck === 'isAborted: isChatCancelled' ? 'prepared: { projectRecords,' : 'const completed = await runPreparedLumiTurn({');
       expect(recoveryStart).toBeGreaterThanOrEqual(0);
       const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
       expect(recoveryBlock).toContain(cancellationCheck);

@@ -1,4 +1,4 @@
-import { runPreparedLumiTurn } from "../../cognition/prepared_turn";
+import type { AssembledLumiTurnData } from "../../cognition/turn_execution";
 import { createTurnResponseFinalizer } from "../../cognition/turn_response_finalizer";
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { mergeToolExecutionRecords } from "../../cognition/task_execution_ledger";
@@ -23,7 +23,7 @@ import { buildModelSelfAwareness } from "../../cognition/vision_routing";
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
 type executeChatModelTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']>;
-export async function executeChatModelTurn(context: executeChatModelTurnInput) {
+export async function prepareChatModelTurn(context: executeChatModelTurnInput) {
 
   // LumiCore owns every normal and complex task through this single model/tool path.
 
@@ -102,10 +102,10 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
   const recoveryLifecycle = createToolLifecycleCallbacks({ emit: context.emitToolLifecycle, correlationPrefix: 'guard-recovery',
     formatResult: context.formatToolResultForUi, includeFailedResult: true, onRecord: context.rememberRequestToolRecord,
     artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error) });
-  const completed = await runPreparedLumiTurn({
-    source: 'chat', taskText: context.executionTaskText, taskId: context.durableTaskId, requestId: context.requestId,
-    toolRecords: context.taskAwareRecords(context.allToolRecords), projectRecords,
-    model: { execution: context.executionPipeline, messages, registry: toolRegistry,
+  return {
+    systemPrompt: context.effectiveSystemPrompt, messages, taskText: context.executionTaskText,
+    task: { taskId: context.durableTaskId, turnRowId: context.actionTaskExecution.turnRowId },
+    model: { registry: toolRegistry,
       assertCurrent: () => context.turnAuthorization.assertCurrent(), isCancelled: context.isChatCancelled,
       config: { ...config, modelTurnState: context.modelTurnState, conversationId: context.conversationId, workflowSource: context.eventSource,
         ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}) },
@@ -115,6 +115,7 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
         onToolStart: toolLifecycle.onToolStart, priorToolRecords: context.priorTaskRecords,
         ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
         desktopExecutionTracker: context.desktopExecutionTracker, requestConfirmation: context.requestToolConfirmation } },
+    prepared: { projectRecords,
     recovery: { maxIterations: Math.max(2, Math.min(12, context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 8)),
       onToolCall: recoveryLifecycle.onToolCall, context: { onToolStart: recoveryLifecycle.onToolStart, source: 'chat_guard_recovery' } },
     finalization: ({ responseText, result, toolRecords }) => ({
@@ -137,10 +138,6 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
         provider: context.toolSessionActive ? context.activeProvider : result.usageRecords.at(-1)?.provider || context.activeProvider,
         totalTokens: totalUsage, mode: 'chat', timestamp: new Date().toISOString() });
     },
-  });
-  const currentRecords = completed.toolRecords.filter(record => !context.priorTaskRecords.some(prior => prior.id
-    ? prior.id === record.id : prior.name === record.name && prior.result === record.result && prior.error === record.error));
-  context.allToolRecords.splice(0, context.allToolRecords.length, ...mergeToolExecutionRecords(context.allToolRecords, currentRecords));
-  context.responseText = completed.finalized.text;
-  return completed.finalized;
+    },
+  } satisfies AssembledLumiTurnData;
 }

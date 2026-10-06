@@ -267,7 +267,7 @@ describe('finalized output paths', () => {
       expect(entry).not.toContain('executeSkillWorkflowAdapter');
       expect(entry).not.toContain('preMatchedQuickResult');
       expect(entry).not.toContain('quickFinalized');
-      expect(entry).toContain('runPreparedLumiTurn({');
+      expect(entry).toContain(file.endsWith('/chat.ts') ? 'runLumiEntryTurn<void>({' : 'runPreparedLumiTurn({');
     }
   });
 

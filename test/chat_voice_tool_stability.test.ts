@@ -14,13 +14,15 @@ describe('chat and voice tool-call stability', () => {
     const pipeline = readImplementationSource(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
 
     for (const source of [chat, voice]) {
-      expect(source).toContain('buildLumiExecutionPipeline');
       expect(source).toContain('buildDesktopExecutionStabilityPolicy');
       expect(source).toContain('actuationTools: desktopExecutionPolicy.actuationTools');
       expect(source).toContain('toolPolicy');
       expect(source).toContain('requestConfirmation');
       expect(source).toContain('supervisedExternalCommits');
     }
+    expect(chat).toContain('await runLumiEntryTurn<void>({');
+    expect(voice).toContain('buildLumiExecutionPipeline');
+    expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('buildLumiExecutionPipeline({');
     expect(pipeline).toContain('buildLumiTurnDispatch');
     expect(pipeline).toContain('buildLumiExecutionDecision');
     expect(pipeline).toContain('buildLumiCapabilitySelection');
@@ -42,7 +44,7 @@ describe('chat and voice tool-call stability', () => {
     expect(rest).toContain('return await runLumiEntryTurn({');
     expect(rest).toContain('maxIterations: execution.authorizationPolicy.maxIterations || 3');
     const modelOwner = readFileSync(path.join(root, 'server/cognition/turn_model.ts'), 'utf8');
-    expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('...assembled.model, execution, messages, assertCurrent');
+    expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('...assembled.model, execution, messages,');
     expect(modelOwner).toContain('toolPolicy: execution.authorizationPolicy');
     expect(modelOwner).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('const deferRestStream = execution.executionRequested');
@@ -163,9 +165,11 @@ describe('chat and voice tool-call stability', () => {
       expect(source).toContain('retrieveChunks');
       expect(source).toContain('searchKnowledgeBase');
       expect(source).toContain('ragKnowledge');
-      expect(source).toContain('## Company Knowledge Base');
+
       expect(source).toContain("domain === 'work'");
     }
+    expect(readFileSync(path.join(root, 'server/socket/chat/prompt_context.ts'), 'utf8')).toContain('## Company Knowledge Base');
+    expect(voice).toContain('## Company Knowledge Base');
     expect(voice).toContain('voiceScope.orgId');
     expect(voice).toContain('cite article titles');
     expect(messaging).toContain('searchOrgKnowledge(msg.boundOrgId');

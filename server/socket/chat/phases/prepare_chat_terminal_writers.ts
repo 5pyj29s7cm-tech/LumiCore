@@ -21,7 +21,7 @@ import { commitChatTerminalBoundary } from "../../chat_terminal_boundary";
 import type { ActiveTaskMessageResolution } from "../../../cognition/task_concurrency";
 import type { prepareChatConversationContext } from './prepare_chat_conversation_context';
 
-export async function prepareChatTerminalWriters(context: NonNullable<Awaited<ReturnType<typeof prepareChatConversationContext>>["context"]>) {
+export async function prepareChatTerminalWriters(context: NonNullable<Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof prepareChatConversationContext>>["resume"]>>>["context"]>) {
 
       const interactionId = crypto.randomUUID();
 

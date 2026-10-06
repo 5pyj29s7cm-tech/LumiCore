@@ -65,9 +65,12 @@ describe('chat task feedback binding integration', () => {
     const prepare = chat.indexOf('preparePlannedConversationExecution({', plannerContext);
     const owner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
     expect(plannerContext).toBeGreaterThan(-1);
-    const acceptedRelation = chat.indexOf('resolvedTaskRelation = executionPipeline.taskRelation;');
-    expect(acceptedRelation).toBeGreaterThan(plannerContext);
-    expect(prepare).toBeGreaterThan(acceptedRelation);
+    const prompt = readFileSync('server/socket/chat/prompt_context.ts', 'utf8');
+    const acceptedRelation = prompt.indexOf('context.resolvedTaskRelation = executionPipeline.taskRelation;');
+    expect(acceptedRelation).toBeGreaterThan(prompt.indexOf('assemble: async (executionPipeline: LumiExecutionPipeline)'));
+    expect(prepare).toBeGreaterThan(plannerContext);
+    const entry = readFileSync('server/socket/chat.ts', 'utf8');
+    expect(entry.indexOf('await conversationSetup!.resume(execution)')).toBeLessThan(entry.indexOf('await prepareChatTerminalWriters(conversation.context)'));
     expect(owner).toContain("['continue', 'correction', 'accept', 'retry']");
     expect(owner).toContain('const relation = execution.taskRelation;');
     expect(owner).toContain('forceTask, forceResume:');
@@ -79,8 +82,8 @@ describe('chat task feedback binding integration', () => {
     const persistUser = chat.indexOf('persistAcceptedUserTurn: () => addMessageIdempotent({', admission);
     const flush = chat.indexOf('flush: flushDBOrThrow', persistUser);
     const accepted = chat.indexOf('const acceptedUserMessageId = chatAdmission.persisted;', flush);
-    const wait = chat.indexOf('await sessionLease.waitForTurn()', accepted);
-    const refresh = chat.indexOf('const refreshedConversation = getConversationForScope(', wait);
+    const wait = chat.indexOf('await runLumiEntryTurn<void>({', accepted);
+    const refresh = chat.indexOf('const refreshedConversation = getConversationForScope(', accepted);
     const stale = chat.indexOf("resolvedTaskRelation.binding === 'stale'", refresh);
     const bind = chat.indexOf('preparePlannedConversationExecution({', stale);
 
@@ -90,7 +93,13 @@ describe('chat task feedback binding integration', () => {
     expect(flush).toBeGreaterThan(persistUser);
     expect(accepted).toBeGreaterThan(flush);
     expect(wait).toBeGreaterThan(accepted);
-    expect(refresh).toBeGreaterThan(wait);
+    expect(refresh).toBeGreaterThan(accepted);
+    const core = readFileSync('server/cognition/turn_execution.ts', 'utf8');
+    expect(core).toContain('admission = capturedAdmission ||');
+    expect(core.indexOf('await admission?.waitForTurn();')).toBeLessThan(core.indexOf('await capturedPlanning()'));
+    const entry = readFileSync('server/socket/chat.ts', 'utf8');
+    expect(entry).toContain('resource: { admission: context.sessionLease, ownedByDurableRelease: true }');
+    expect(entry).toContain('settle: async () => { await context.releaseChatSession(); }');
     expect(stale).toBeGreaterThan(refresh);
     expect(bind).toBeGreaterThan(stale);
     expect(chat.slice(bind, bind + 650)).toContain('userMessageId: acceptedUserMessageId');

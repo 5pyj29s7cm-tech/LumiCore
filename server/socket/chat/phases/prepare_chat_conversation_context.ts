@@ -13,11 +13,12 @@ import { getConversationActionStateByTaskId, getLatestConversationActionState } 
 import { buildRecentActionContinuationBridge } from "../../../cognition/action_continuation";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
 import { formatActiveTaskRelationContext } from "../../../cognition/task_concurrency";
+import type { LumiExecutionPipeline } from "../../../cognition/execution_pipeline";
 import type { prepareChatPriorTaskQuery } from './prepare_chat_prior_task_query';
 
 export async function prepareChatConversationContext(context: NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>["context"]>) {
 
-      if (await answerPriorTaskStatus(context)) { return { terminal: true as const, context: undefined }; }
+      if (await answerPriorTaskStatus(context)) { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
 
       let { relevantMemories, ragChunks, emotionalState, personalityConfig, kbContext, isNovel, himState, emotionKey } = await retrieveChatContext(context);
 
@@ -58,7 +59,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
             errorContext: 'Pending confirmation cancellation terminal',
           });
           await context.releaseChatSession();
-          { return { terminal: true as const, context: undefined }; }
+          { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
         }
         const boundTerminalTask = context.resolvedTaskRelation.taskId
           ? getConversationActionStateByTaskId(readDatabaseTables(["conversationActionTurns","conversations","interactions","conversationActionTasks","conversationActionReceipts"]), {
@@ -96,7 +97,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
             errorContext: 'Terminal task cancellation no-op',
           });
           await context.releaseChatSession();
-          { return { terminal: true as const, context: undefined }; }
+          { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
         }
         const responseText = CN_TASK_EXECUTION_MESSAGES.noPendingOperation;
         await context.commitDeterministicTerminal({
@@ -106,7 +107,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
           errorContext: 'No pending confirmation terminal',
         });
         await context.releaseChatSession();
-        { return { terminal: true as const, context: undefined }; }
+        { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
       }
 
       const persistedConversationHistory = conversationId
@@ -152,7 +153,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
         } catch {}
         return 'assistant';
       })();
-      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText } = await prepareChatPromptContext(extendTurnBindings(context, {
+      const preparedPrompt = await prepareChatPromptContext(extendTurnBindings(context, {
     get relevantMemories(): typeof relevantMemories { return relevantMemories; },
     set relevantMemories(value: typeof relevantMemories) { relevantMemories = value; },
     get ragChunks(): typeof ragChunks { return ragChunks; },
@@ -168,6 +169,8 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     get kbContext(): typeof kbContext { return kbContext; },
     set kbContext(value: typeof kbContext) { kbContext = value; },
   }));
+  return { terminal: false as const, context: undefined, planning: preparedPrompt.planning, resume: async (resolvedExecution: LumiExecutionPipeline) => {
+      let { turnFlow, executionPipeline, personality, effectiveSystemPrompt, executionTaskText, completionTaskText } = await preparedPrompt.assemble(resolvedExecution);
   return { terminal: false as const, context: extendTurnBindings(context, {
     get turnFlow(): typeof turnFlow { return turnFlow; },
     set turnFlow(value: typeof turnFlow) { turnFlow = value; },
@@ -193,4 +196,5 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
     get emotionKey(): typeof emotionKey { return emotionKey; },
     set emotionKey(value: typeof emotionKey) { emotionKey = value; },
   }) };
+  } };
 }

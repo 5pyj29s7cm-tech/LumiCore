@@ -8,7 +8,7 @@ import { beginChatExecutionDurably, recordChatExecutionPersistenceUnknownDurably
 import type { admitChatForegroundTurn } from './admit_chat_foreground_turn';
 import { convergeChatForegroundRequestBeforeRelease, chatDurabilityUnknownText } from './shared';
 
-export async function startChatForegroundTurn(context: NonNullable<Awaited<ReturnType<typeof admitChatForegroundTurn>>["context"]>) {
+export function prepareChatForegroundLifetime(context: NonNullable<Awaited<ReturnType<typeof admitChatForegroundTurn>>["context"]>) {
 
     const releaseChatTransportResources = (): void => {
       context.stopAuthorizationWatch();
@@ -93,10 +93,10 @@ export async function startChatForegroundTurn(context: NonNullable<Awaited<Retur
         taskRelation: context.resolvedTaskRelation,
       });
     }
-    if (!await context.sessionLease.waitForTurn().then(() => true, error => {
-      if (!context.abortController.signal.aborted) throw error;
-      return false;
-    })) {
+  return extendTurnBindings(context, { releaseChatSession });
+}
+
+export async function completeQueuedChatFailure(context: ReturnType<typeof prepareChatForegroundLifetime>) {
       const waitTimedOut = context.sessionLease.state === 'timed_out';
       const terminalText = waitTimedOut
         ? CN_TASK_EXECUTION_MESSAGES.queueWaitTimedOut
@@ -110,9 +110,10 @@ export async function startChatForegroundTurn(context: NonNullable<Awaited<Retur
         }),
         errorContext: waitTimedOut ? 'Queued wait timeout terminal' : 'Queued cancellation terminal',
       });
-      await releaseChatSession();
-      { return { terminal: true as const, context: undefined }; }
-    }
+      await context.releaseChatSession();
+}
+
+export async function startChatForegroundTurn(context: ReturnType<typeof prepareChatForegroundLifetime>) {
     let superseded = null as Awaited<ReturnType<typeof beginChatExecutionDurably>>;
     try {
       superseded = await runAfterAcceptedUserTurnAdmission(
@@ -141,7 +142,7 @@ export async function startChatForegroundTurn(context: NonNullable<Awaited<Retur
         console.error('[ChatHandler] Replacement unknown receipt persistence failed:', unknownError);
       }
       context.publishRecordedAgent('agent:response', unknownPayload);
-      await releaseChatSession();
+      await context.releaseChatSession();
       { return { terminal: true as const, context: undefined }; }
     }
     if (superseded?.terminalEvent && context.turnAuthorization.isCurrent()) {
@@ -150,7 +151,5 @@ export async function startChatForegroundTurn(context: NonNullable<Awaited<Retur
     if (!context.acknowledged) {
       try { context.ack?.({ ok: true, requestId: context.requestId, receivedAt: new Date().toISOString() }); } catch {}
     }
-  return { terminal: false as const, context: extendTurnBindings(context, {
-    releaseChatSession,
-  }) };
+  return { terminal: false as const, context };
 }

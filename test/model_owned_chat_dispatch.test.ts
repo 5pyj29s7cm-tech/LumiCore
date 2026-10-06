@@ -223,7 +223,7 @@ describe('model-owned main chat architecture', () => {
 
     expect(rest).toContain('return await runLumiEntryTurn({');
     expect(rest).toContain('maxIterations: execution.authorizationPolicy.maxIterations || 3');
-    expect(readFileSync('server/cognition/turn_execution.ts', 'utf8')).toContain('...assembled.model, execution, messages, assertCurrent');
+    expect(readFileSync('server/cognition/turn_execution.ts', 'utf8')).toContain('...assembled.model, execution, messages,');
     expect(readFileSync('server/cognition/turn_model.ts', 'utf8')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).not.toContain('buildModelToolProjection');
