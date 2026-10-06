@@ -98,6 +98,7 @@ export function useVoiceCallControls(previousBindings: ReturnType<typeof useVoic
         voiceId: preferredVoiceIdRef.current || requestedVoiceId,
         personalityId,
         agentId,
+        conversationId: options.conversationId,
         transcriptionOnly: options.transcriptionOnly === true,
         meetingId: options.transcriptionOnly ? options.meetingId : undefined,
         domain: options.domain || 'personal',

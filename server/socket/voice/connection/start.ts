@@ -1,3 +1,4 @@
+import { resolveConversationForEntry } from '../../../conversation/entry_conversation';
 import { type AudioSession, normalizeVoiceSessionId, getAudioSession } from "../session";
 import { logger } from "../../../../logger";
 import { normalizeMeetingId } from "../../meeting_recordings";
@@ -22,6 +23,7 @@ export type StandardVoiceStartRequest = {
     voiceId?: string;
     personalityId?: string;
     agentId?: string;
+    conversationId?: string;
     transcriptionOnly?: boolean;
     meetingId?: string;
     domain?: 'personal' | 'work';
@@ -124,6 +126,12 @@ export async function handleStandardVoiceStart(runtime: VoiceConnectionRuntime, 
     const sessionScope = resolveSocketScope(runtime.socket, session.userId, data);
     session.domain = sessionScope.domain;
     session.orgId = sessionScope.orgId;
+    session.conversationId = String(data.conversationId || '').trim() || undefined;
+    if (session.conversationId && !resolveConversationForEntry(session.userId, sessionScope,
+      { kind: 'voice', phase: 'select', agentId: session.agentId }, session.conversationId)) {
+      await runtime.stopVoiceCall(session, { source: 'voice_conversation_unavailable', error: { code: 'CONVERSATION_UNAVAILABLE', message: 'The selected conversation is unavailable. Start a new authorized call.' } });
+      return;
+    }
     if (runtime.socket.data?.authenticatedOrgId && sessionScope.domain !== 'work') {
       await runtime.stopVoiceCall(session, { source: 'voice_authorization_revoked', error: { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.' } });
       return;

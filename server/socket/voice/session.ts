@@ -20,6 +20,8 @@ export interface AudioSession {
   personalityId: string;
   userId: string;
   agentId: string;
+  /** Transcript selected by this call; independent of the current active chat. */
+  conversationId?: string;
   domain: 'personal' | 'work';
   orgId: string;
   authorization?: ReturnType<typeof captureChatAuthorization>;

@@ -228,15 +228,6 @@ export function useChatIdentityAndState({
   const endLocalVoiceSession = localVoiceSession.endCall;
   const switchLocalVoice = localVoiceSession.switchVoice;
   const agentId = agent?.id || 'lumi';
-  const startVoiceSession = voiceSession?.onStart
-    ?? (() => {
-      void localVoiceSession.startCall(
-        selectedVoiceId,
-        'lumi',
-        agentId,
-        { domain: activeDomain, orgId: activeOrgId },
-      );
-    });
   const endVoiceSession = voiceSession?.onEnd ?? (() => localVoiceSession.endCall());
   const lastSharedTranscriptRef = useRef<{ key: string; at: number } | null>(null);
 
@@ -472,7 +463,7 @@ export function useChatIdentityAndState({
     resolvedAppearanceMode, prefersReducedMotion, mediaStudioMode, mediaGenerationStatus, mediaGenerationDetail,
     mediaSources, mediaGenerationRetryRequest, isWorkChat, chatSongOpen, isDraggingFiles, isCommandCenterUtility,
     onCommandCenterViewChange, onOpenNexus, voices, voicePickerRef, setSelectedVoiceId, audioLevel,
-    startVoiceSession, endVoiceSession, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel,
+    voiceSession, endVoiceSession, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel,
     runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryLoading,
     conversationHistoryLoadingMore, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText,
     visibleSuggestions, searchError, isSearchingHistory, copiedId, isOptimizing, attachmentUploadFailures,

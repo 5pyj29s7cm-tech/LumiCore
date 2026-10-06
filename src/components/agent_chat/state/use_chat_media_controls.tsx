@@ -7,7 +7,7 @@ import { normalizeStructuredMediaRequest } from "../../../../shared/media_genera
 import type { useChatRequestControls } from './use_chat_request_controls';
 
 export function useChatMediaControls(previousBindings: ReturnType<typeof useChatRequestControls>) {
-  const { refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, mediaSourceFileInputRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t } = previousBindings;
+  const { refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, mediaSourceFileInputRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t, voiceSession } = previousBindings;
 
 
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
@@ -252,6 +252,14 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     return () => window.removeEventListener('lumi:submit-command-input', submitCommandInput);
   }, [draftTextRef, isOpen, pendingAttachmentsRef, sendText]);
 
+  const startVoiceSession = () => {
+    const conversationId = attachmentConversationIdRef.current || undefined;
+    if (voiceSession) voiceSession.onStart(conversationId);
+    else void localVoiceSession.startCall(selectedVoiceId, 'lumi', agentId, {
+      domain: activeDomain, orgId: activeOrgId, conversationId,
+    });
+  };
+
   const toggleListening = () => {
     if (isListening) {
       if (inputDictationActiveRef.current) {
@@ -272,6 +280,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
         setIsListening(true);
         localVoiceSession.startCall(selectedVoiceId, 'lumi', agentId, {
           transcriptionOnly: true,
+          conversationId: attachmentConversationIdRef.current || undefined,
           domain: activeDomain,
           orgId: activeOrgId,
         }).catch((err: any) => {
@@ -288,6 +297,6 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
   return {
     ...previousBindings, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, requestMediaSourceImage, generateMediaFromStudio,
     closeMediaGenerationStudio, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
-    handleSendMessage, toggleListening
+    handleSendMessage, toggleListening, startVoiceSession
   } as const;
 }

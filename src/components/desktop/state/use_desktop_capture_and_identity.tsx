@@ -388,8 +388,8 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     if (operationMode === 'meeting') setOperationMode('assistant');
   }, [callState, endCall, meetingPreferenceScopeKey, meetingVoiceActiveRef, operationMode, setOperationMode]);
 
-  const startStandardVoiceCall = useCallback(() => {
-    void startCall(selectedVoiceId, 'lumi', 'lumi', getVoiceScopeOptions());
+  const startStandardVoiceCall = useCallback((conversationId?: string) => {
+    void startCall(selectedVoiceId, 'lumi', 'lumi', { ...getVoiceScopeOptions(), conversationId });
   }, [getVoiceScopeOptions, selectedVoiceId, startCall]);
 
   const stopMeetingAudio = useCallback((options: { refineTranscript?: boolean; refinementId?: string } = {}) => {

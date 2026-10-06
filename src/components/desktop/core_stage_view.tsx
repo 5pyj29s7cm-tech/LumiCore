@@ -49,7 +49,7 @@ export function renderDesktopCoreStage({ selectedPet, setPersonalizationSection,
                 </button>
                 {/* Voice call button below pet */}
                 <button
-                  onClick={callState === 'idle' ? startStandardVoiceCall : endVoiceCallFromUI}
+                  onClick={callState === 'idle' ? () => startStandardVoiceCall() : endVoiceCallFromUI}
                   className={`w-12 h-12 rounded-full border transition-all flex items-center justify-center ${
                     callState !== 'idle'
                       ? 'bg-red-500/20 border-red-500/40 text-red-400'

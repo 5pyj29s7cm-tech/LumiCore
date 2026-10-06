@@ -118,7 +118,7 @@ callState: ReturnType<typeof useVoiceCall>["callState"];
 petReaction: { animation: string; until: number; };
 equippedAccessories: string[];
 audioLevel: number;
-startStandardVoiceCall: () => void;
+startStandardVoiceCall: (conversationId?: string) => void;
 endVoiceCallFromUI: () => void;
 operationMode: OperationMode;
 openMeetingModeWithConfirm: () => void;

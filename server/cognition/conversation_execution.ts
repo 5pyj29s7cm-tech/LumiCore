@@ -1,4 +1,5 @@
 import { SerialExecutionQueue } from './serial_execution_queue';
+import type { RequestAuthorization } from '../conversation/lifecycle';
 export interface ConversationExecutionScope {
     userId: string;
     domain?: 'personal' | 'work';
@@ -14,7 +15,8 @@ export function conversationExecutionKey(scope: ConversationExecutionScope): str
 }
 const queue = new SerialExecutionQueue();
 /** Transport source is provenance, never the mutex resource. Controls keep their exact existing request fences. */
-export function reserveConversationExecution(scope: ConversationExecutionScope, requestId: string, signal?: AbortSignal) {
+export function reserveConversationExecution(scope: ConversationExecutionScope, requestId: string, signal?: AbortSignal, guard?: { authorization: RequestAuthorization; abort(reason: unknown): void }) {
+    guard?.authorization.assertCurrent();
     const key = conversationExecutionKey(scope);
     if (!requestId || queue.getByRequestId(key, requestId, scope.source))
         throw new Error('This conversation request already owns an execution admission');
@@ -24,6 +26,10 @@ export function reserveConversationExecution(scope: ConversationExecutionScope, 
         abort();
     else
         signal?.addEventListener('abort', abort, { once: true });
+    const revoke = () => guard?.abort(lease.signal.reason);
+    if (guard) lease.controller.signal.addEventListener('abort', revoke, { once: true });
+    if (lease.signal.aborted) revoke();
+    const stopAuthorization = guard?.authorization.watch(lease.controller);
     return {
         get controller() { return lease.controller; },
         get state() { return lease.state; },
@@ -31,8 +37,9 @@ export function reserveConversationExecution(scope: ConversationExecutionScope, 
         async waitForTurn(): Promise<void> {
             if (!await lease.waitForTurn())
                 throw signal?.reason || lease.signal.reason || new Error('Conversation execution admission cancelled');
+            guard?.authorization.assertCurrent();
         },
-        release() { signal?.removeEventListener('abort', abort); lease.release(); },
+        release() { stopAuthorization?.(); lease.controller.signal.removeEventListener('abort', revoke); signal?.removeEventListener('abort', abort); lease.release(); },
     };
 }
 /** Control lookup stays source-scoped while all admissions share one conversation FIFO. */

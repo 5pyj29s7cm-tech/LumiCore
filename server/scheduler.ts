@@ -1,466 +1,43 @@
 import { createScheduledBuiltinTasks } from "./scheduler/builtins";
-﻿// Proactive agent scheduler - cron-like check-ins
-// Each check-in fires a socket event to the UI so the user sees "Lumi checked in"
-
-import crypto from 'node:crypto';
-import { Server as SocketIOServer } from 'socket.io';
-import { getDueReminders, type Reminder } from './memory';
-
-
-
-
-
-
-
-import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../db_layer';
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import { finalizeLumiResponse } from './cognition/result_finalizer';
-import { sanitizeExecutionResponseForDelivery } from './cognition/execution_guard_recovery';
-import { authorizeCapabilityPlanTool, buildScheduledCapabilityExecutionPlan, type CapabilityExecutionPlan } from './cognition/capability_execution_plan';
+import crypto from "node:crypto";
+import type { Server as SocketIOServer } from "socket.io";
+import type { Reminder } from "./memory";
+import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from "../db_layer";
+import { authorizeCapabilityPlanTool, type CapabilityExecutionPlan } from "./cognition/capability_execution_plan";
 import { getScheduledCapabilityExecutionStatus, persistScheduledCapabilityExecution } from "./conversation/ledger/scheduler";
-import type {
-  CapabilityLane,
-  CapabilityOperation,
-  CapabilitySideEffect,
-  ToolExecutionRecord,
-} from './tools/types';
+import type { ScheduledTask, ScheduledTaskExecutionContract, ScheduledDelivery, ScheduledTaskResult, ScheduledTaskRunStatus } from './scheduler/contracts';
+import type { ScheduledInFlightHandler } from './scheduler/execution_phase';
+import { hydrateRuntimeState, loadDisabledState, stageRuntimeState } from './scheduler/runtime_state';
+import { redactSchedulerDiagnostic } from './scheduler/diagnostics';
+import { requiresStrictScheduledPersistence, getScheduledTaskTimeoutMs, getScheduledTaskExecutionContract } from './scheduler/execution_contract';
+import { awaitExecutionPhase, ScheduledTaskExecutionError, executionOperationsSettled } from './scheduler/execution_phase';
+import { buildScheduledProactiveInteractionId } from './scheduler/execution_identity';
+import { finalizeScheduledDelivery } from './scheduler/delivery_finalization';
+import { parseSchedule, nextCronTime } from './scheduler/schedule';
+import { buildScheduledTaskExecutionPlan } from './scheduler/capability_plan';
+import { buildScheduledTaskRecord } from './scheduler/execution_record';
+import { resolveScheduledUserIds } from './scheduler/user_selection';
+import { createReminderCheckTask } from './scheduler/reminder_check';
 
-import { redactDiagnosticSecrets } from './client/diagnostic_sanitizer';
-
-export interface ScheduledDelivery {
-  userId: string;
-  message: string;
-  domain?: 'personal' | 'work';
-  orgId?: string;
-  /** Model-authored user-visible text must pass the shared output finalizer. */
-  modelGenerated?: boolean;
-  /** Server-owned reminder claims, committed together with the delivery row. */
-  reminderIds?: string[];
-}
-
-type ScheduledTaskResult = string | ScheduledDelivery[] | null;
-
-export interface ScheduledDeliveryFinalization {
-  delivery: ScheduledDelivery | null;
-  finalized: boolean;
-  blocked: boolean;
-  reason: string;
-}
-
-export function finalizeScheduledDelivery(
-  taskId: string,
-  delivery: ScheduledDelivery,
-): ScheduledDeliveryFinalization {
-  if (!delivery.modelGenerated) {
-    return {
-      delivery,
-      finalized: false,
-      blocked: false,
-      reason: '',
-    };
-  }
-
-  const taskText = `Scheduled proactive message (${taskId}): ${delivery.message}`;
-  const finalized = sanitizeExecutionResponseForDelivery(finalizeLumiResponse({
-    taskText,
-    responseText: delivery.message,
-    toolRecords: [],
-    source: `scheduler_${taskId}`,
-  }), { task: taskText, toolRecords: [] });
-  if (finalized.blocked) {
-    return {
-      delivery: null,
-      finalized: true,
-      blocked: true,
-      reason: finalized.reason || 'Scheduled model output failed final verification.',
-    };
-  }
-  return {
-    delivery: {
-      ...delivery,
-      message: finalized.text,
-    },
-    finalized: true,
-    blocked: false,
-    reason: finalized.reason || '',
-  };
-}
-
-export type ScheduledExecutionClass =
-  | 'maintenance'
-  | 'proactive_delivery'
-  | 'client_probe'
-  | 'autonomous_orchestration';
-
-export type ScheduledTaskRunStatus =
-  | 'idle'
-  | 'executing'
-  | 'cancelling'
-  | 'completed'
-  | 'blocked'
-  | 'failed'
-  | 'timed_out'
-  | 'cancelled'
-  | 'unknown';
-
-export interface ScheduledTaskExecutionContract {
-  timeoutMs: number;
-  outcome: 'durable_terminal_receipt' | 'coalesced_probe_receipt';
-  successCriteria: string[];
-  evidence: string[];
-  stopping: string[];
-  retry: {
-    maxRetriesPerSlot: 0;
-    onUnknownOutcome: 'reconcile_then_stop';
-  };
-  concurrency: {
-    maxConcurrentRuns: 1;
-    policy: 'skip_while_running';
-  };
-  finalAcceptance:
-    | 'scheduler_persisted_verified_terminal_receipt'
-    | 'scheduler_coalesced_verified_probe_receipt';
-}
-
-export interface ScheduledTaskExecutionContext {
-  signal: AbortSignal;
-  taskId: string;
-  executionId: string;
-  startedAt: string;
-  deadline: string;
-  contract: ScheduledTaskExecutionContract;
-}
-
-export interface ScheduledTask {
-  id: string;
-  cron: string;
-  lastRun: string | null;
-  /** Explicit semantic boundary compiled before the handler may run. */
-  executionClass: ScheduledExecutionClass;
-  handler: (context?: ScheduledTaskExecutionContext) => Promise<ScheduledTaskResult>;
-  /** Per-task wall-clock bound. Defaults are selected from executionClass. */
-  timeoutMs?: number;
-  /** If true, result is stored internally but NOT broadcast as a proactive notification */
-  quiet?: boolean;
-  /** If false, task is paused and will not fire */
-  enabled?: boolean;
-  /** Client probes that may return user-visible deliveries must opt in before admission. */
-  deliveryPolicy?: 'none' | 'scoped';
-  /**
-   * Collapse successful runs into a bounded audit summary. Compact is the
-   * safe default; use full only when every successful slot is itself a
-   * business record. Failures and unknown outcomes are always preserved.
-   */
-  auditMode?: 'full' | 'compact';
-  lastStatus?: ScheduledTaskRunStatus;
-  lastError?: string | null;
-  lastDurationMs?: number | null;
-  lastStartedAt?: string | null;
-  nextRun?: string | null;
-  persistenceStatus?: 'ok' | 'coalesced' | 'failed';
-  lastPersistenceError?: string | null;
-  /** Durable unknown-outcome fence. Cleared only by explicit reconciliation. */
-  requiresReconciliation?: boolean;
-  quarantinedExecutionId?: string | null;
-  quarantineReason?: string | null;
-  reconciledAt?: string | null;
-  reconciliationResolution?: 'confirmed_no_side_effect' | 'accepted_unknown_outcome' | null;
-}
-
-const SCHEDULER_RUNTIME_STATE_SETTING = 'scheduler_task_runtime_state_v1';
-
-const DEFAULT_TASK_TIMEOUT_MS: Record<ScheduledExecutionClass, number> = {
-  client_probe: 30_000,
-  proactive_delivery: 2 * 60_000,
-  maintenance: 5 * 60_000,
-  autonomous_orchestration: 15 * 60_000,
-};
-
-const TASK_TIMEOUT_ENV: Record<ScheduledExecutionClass, string> = {
-  client_probe: 'LUMI_SCHEDULER_CLIENT_PROBE_TIMEOUT_MS',
-  proactive_delivery: 'LUMI_SCHEDULER_PROACTIVE_DELIVERY_TIMEOUT_MS',
-  maintenance: 'LUMI_SCHEDULER_MAINTENANCE_TIMEOUT_MS',
-  autonomous_orchestration: 'LUMI_SCHEDULER_AUTONOMOUS_ORCHESTRATION_TIMEOUT_MS',
-};
-
-function normalizedTimeout(value: unknown): number | null {
-  const timeout = Number(value);
-  return Number.isFinite(timeout) && timeout >= 10 && timeout <= 60 * 60_000
-    ? Math.round(timeout)
-    : null;
-}
-
-/** Keep scheduler state and logs diagnostic without retaining credentials. */
-export function redactSchedulerDiagnostic(value: unknown): string {
-  return redactDiagnosticSecrets(value instanceof Error ? value.message : value)
-    .replace(/\[redacted(?: private key)?\]/giu, '[REDACTED]')
-    .slice(0, 2_000);
-}
-
-/** High-frequency client probes use the DB layer's coalesced flush budget. */
-export function requiresStrictScheduledPersistence(
-  executionClass: ScheduledExecutionClass,
-  hasUserDelivery = false,
-): boolean {
-  return hasUserDelivery || executionClass !== 'client_probe';
-}
-
-/** Resolve a bounded wall-clock timeout with task override > class env > safe class default. */
-export function getScheduledTaskTimeoutMs(
-  executionClass: ScheduledExecutionClass,
-  override?: number,
-): number {
-  return normalizedTimeout(override)
-    ?? normalizedTimeout(process.env[TASK_TIMEOUT_ENV[executionClass]])
-    ?? DEFAULT_TASK_TIMEOUT_MS[executionClass];
-}
-
-export function getScheduledTaskExecutionContract(
-  task: Pick<ScheduledTask, 'executionClass' | 'timeoutMs' | 'deliveryPolicy'>,
-  hasUserDelivery = false,
-): ScheduledTaskExecutionContract {
-  const strictPersistence = requiresStrictScheduledPersistence(
-    task.executionClass,
-    hasUserDelivery || task.deliveryPolicy === 'scoped',
-  );
-  return {
-    timeoutMs: getScheduledTaskTimeoutMs(task.executionClass, task.timeoutMs),
-    outcome: strictPersistence ? 'durable_terminal_receipt' : 'coalesced_probe_receipt',
-    successCriteria: [
-      'handler_settled_before_deadline',
-      'declared_deliveries_persisted_before_emission',
-      strictPersistence
-        ? 'verified_terminal_receipt_persisted'
-        : 'verified_probe_receipt_accepted_for_coalesced_persistence',
-    ],
-    evidence: [
-      'capability_execution_plan',
-      'scheduler_task_handler_terminal_receipt',
-      'scoped_delivery_receipt_when_applicable',
-    ],
-    stopping: [
-      'success_criteria_met',
-      'wall_clock_timeout',
-      'abort_signal',
-      'capability_policy_block',
-      'previous_slot_outcome_unknown',
-    ],
-    retry: {
-      maxRetriesPerSlot: 0,
-      onUnknownOutcome: 'reconcile_then_stop',
-    },
-    concurrency: {
-      maxConcurrentRuns: 1,
-      policy: 'skip_while_running',
-    },
-    finalAcceptance: strictPersistence
-      ? 'scheduler_persisted_verified_terminal_receipt'
-      : 'scheduler_coalesced_verified_probe_receipt',
-  };
-}
-
-export type ParsedSchedule =
-  | { type: 'interval'; intervalMs: number }
-  | { type: 'cron'; fields: number[] };
-
-const SCHEDULE_ALIASES: Record<string, ParsedSchedule> = {
-  every_10s: { type: 'interval', intervalMs: 10 * 1000 },
-  every_1m: { type: 'interval', intervalMs: 60 * 1000 },
-  every_5m: { type: 'interval', intervalMs: 5 * 60 * 1000 },
-  every_10m: { type: 'interval', intervalMs: 10 * 60 * 1000 },
-  every_30m: { type: 'interval', intervalMs: 30 * 60 * 1000 },
-  every_hour: { type: 'interval', intervalMs: 60 * 60 * 1000 },
-  every_1h: { type: 'interval', intervalMs: 60 * 60 * 1000 },
-  every_6h: { type: 'interval', intervalMs: 6 * 60 * 60 * 1000 },
-  every_24h: { type: 'interval', intervalMs: 24 * 60 * 60 * 1000 },
-  every_7d: { type: 'interval', intervalMs: 7 * 24 * 60 * 60 * 1000 },
-  daily_9am: { type: 'cron', fields: [0, 9, -1, -1, -1] },
-  evening_8pm: { type: 'cron', fields: [0, 20, -1, -1, -1] },
-};
-
-const SCHEDULED_EXECUTION_POLICIES: Record<ScheduledExecutionClass, {
-  lane: CapabilityLane;
-  operation: CapabilityOperation;
-  sideEffectClass: 'local_write';
-  sideEffects: CapabilitySideEffect[];
-}> = {
-  maintenance: {
-    lane: 'system',
-    operation: 'mutate',
-    sideEffectClass: 'local_write',
-    sideEffects: [{ type: 'local_write', scope: 'declared scheduler maintenance state', reversible: true }],
-  },
-  proactive_delivery: {
-    lane: 'system',
-    operation: 'communicate',
-    sideEffectClass: 'local_write',
-    sideEffects: [
-      { type: 'local_write', scope: 'scoped proactive interaction ledger', reversible: true },
-      { type: 'local_state_change', scope: 'local Lumi notification queue', reversible: true },
-    ],
-  },
-  client_probe: {
-    lane: 'client',
-    operation: 'communicate',
-    sideEffectClass: 'local_write',
-    sideEffects: [{ type: 'local_state_change', scope: 'connected Lumi client session', reversible: true }],
-  },
-  autonomous_orchestration: {
-    lane: 'agents',
-    operation: 'mutate',
-    sideEffectClass: 'local_write',
-    sideEffects: [{ type: 'local_write', scope: 'autonomous local task queue and receipts', reversible: true }],
-  },
-};
-
-/** Parse supported fixed aliases or simple five-field cron expressions. */
-export function parseSchedule(cron: string): ParsedSchedule {
-  const normalized = String(cron || '').trim();
-  const alias = SCHEDULE_ALIASES[normalized];
-  if (alias) {
-    return alias.type === 'interval'
-      ? { ...alias }
-      : { ...alias, fields: [...alias.fields] };
-  }
-
-  const parts = normalized.split(/\s+/);
-  if (parts.length !== 5) {
-    throw new Error(`Unsupported schedule expression: "${normalized}"`);
-  }
-
-  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
-  const fields = parts.map((part, index) => {
-    if (part === '*') return -1;
-    if (!/^\d+$/.test(part)) {
-      throw new Error(`Unsupported cron field "${part}" in "${normalized}"`);
-    }
-    const value = Number(part);
-    const [min, max] = ranges[index];
-    if (value < min || value > max) {
-      throw new Error(`Cron field "${part}" is out of range in "${normalized}"`);
-    }
-    return value;
-  });
-  return { type: 'cron', fields };
-}
-
-/** Stable within one cron/interval slot, so restarts cannot replay that slot. */
-export function buildScheduledExecutionId(
-  taskId: string,
-  cron: string,
-  at: Date = new Date(),
-): string {
-  const parsed = parseSchedule(cron);
-  const slot = parsed.type === 'interval'
-    ? Math.floor(at.getTime() / parsed.intervalMs)
-    : at.toISOString().slice(0, 16);
-  const digest = crypto.createHash('sha256')
-    .update(JSON.stringify({ taskId, cron, slot }))
-    .digest('hex')
-    .slice(0, 24);
-  return `scheduler_${digest}`;
-}
-
-export function buildScheduledTaskExecutionPlan(
-  task: Pick<ScheduledTask, 'id' | 'cron' | 'executionClass'>,
-  at: Date = new Date(),
-): CapabilityExecutionPlan {
-  const policy = SCHEDULED_EXECUTION_POLICIES[task.executionClass];
-  if (!policy) throw new Error(`Scheduler task '${task.id}' has no declared execution policy.`);
-  return buildScheduledCapabilityExecutionPlan({
-    taskId: buildScheduledExecutionId(task.id, task.cron, at),
-    scheduledTaskId: task.id,
-    lane: policy.lane,
-    operation: policy.operation,
-    sideEffectClass: policy.sideEffectClass,
-    sideEffects: policy.sideEffects,
-  });
-}
-
-export function buildScheduledProactiveInteractionId(
-  executionId: string,
-  deliveryIndex: number,
-  delivery: Pick<ScheduledDelivery, 'userId' | 'domain' | 'orgId'>,
-): string {
-  return `proactive_${crypto.createHash('sha256')
-    .update(JSON.stringify({
-      executionId,
-      deliveryIndex,
-      userId: delivery.userId,
-      domain: delivery.domain,
-      orgId: delivery.orgId,
-    }))
-    .digest('hex')
-    .slice(0, 24)}`;
-}
-
-/**
- * Scheduler work is user-scoped and must never treat arbitrary actor IDs from
- * memories/interactions (agent IDs, MCP actors, "unknown", and similar
- * provenance labels) as Lumi users. Registered users are the authoritative
- * identity source. The anonymous fallback is retained only for pre-account
- * local installations that have not created a user record yet.
- */
-export function resolveScheduledUserIds(db: any): string[] {
-  const registered = new Set<string>();
-  for (const user of Array.isArray(db?.users) ? db.users : []) {
-    const uid = String(user?.uid || '').trim();
-    if (uid) registered.add(uid);
-  }
-  return registered.size > 0 ? [...registered] : ['anonymous'];
-}
-
-
-class ScheduledTaskExecutionError extends Error {
-  constructor(
-    message: string,
-    readonly code:
-      | 'scheduler_handler_timed_out'
-      | 'scheduler_execution_timed_out'
-      | 'scheduler_handler_aborted'
-      | 'scheduler_delivery_withheld'
-      | 'scheduler_delivery_invalid',
-  ) {
-    super(message);
-    this.name = 'ScheduledTaskExecutionError';
-  }
-}
-
-interface ScheduledInFlightHandler {
-  lifecycleGeneration: number;
-  controller: AbortController;
-  task: ScheduledTask;
-  plan: CapabilityExecutionPlan | null;
-  contract: ScheduledTaskExecutionContract;
-  startedAt: Date;
-  deadline: Date;
-  deadlineTimer: NodeJS.Timeout;
-  phase: 'planning' | 'admission_persistence' | 'handler' | 'delivery' | 'terminal_persistence';
-  handlerStarted: boolean;
-  handlerSettled: boolean;
-  handlerOutcome?: 'fulfilled' | 'rejected';
-  schedulerFinished: boolean;
-  pendingLateSettlement: boolean;
-  lateSettlementFinalizing: boolean;
-  pendingDurableOperations: Set<Promise<unknown>>;
-  durableOperationRejected: boolean;
-  lateSettlementPendingHandler: boolean;
-  lateSettlementPendingDurability: boolean;
-  compactAudit: boolean;
-}
+export type { ScheduledDelivery } from './scheduler/contracts';
+export type { ScheduledDeliveryFinalization } from './scheduler/contracts';
+export { finalizeScheduledDelivery } from './scheduler/delivery_finalization';
+export type { ScheduledExecutionClass } from './scheduler/contracts';
+export type { ScheduledTaskRunStatus } from './scheduler/contracts';
+export type { ScheduledTaskExecutionContract } from './scheduler/contracts';
+export type { ScheduledTaskExecutionContext } from './scheduler/contracts';
+export type { ScheduledTask } from './scheduler/contracts';
+export { redactSchedulerDiagnostic } from './scheduler/diagnostics';
+export { requiresStrictScheduledPersistence } from './scheduler/execution_contract';
+export { getScheduledTaskTimeoutMs } from './scheduler/execution_contract';
+export { getScheduledTaskExecutionContract } from './scheduler/execution_contract';
+export type { ParsedSchedule } from './scheduler/schedule';
+export { parseSchedule } from './scheduler/schedule';
+export { buildScheduledExecutionId } from './scheduler/execution_identity';
+export { buildScheduledTaskExecutionPlan } from './scheduler/capability_plan';
+export { buildScheduledProactiveInteractionId } from './scheduler/execution_identity';
+export { resolveScheduledUserIds } from './scheduler/user_selection';
+export { createReminderCheckTask } from './scheduler/reminder_check';
 
 export class Scheduler {
   private tasks: ScheduledTask[] = [];
@@ -491,9 +68,9 @@ export class Scheduler {
   }
 
   register(task: ScheduledTask) {
-    this.hydrateRuntimeState(task);
+    hydrateRuntimeState(task);
     // Restore enable/disable state from persistence
-    const storedDisabled = this.loadDisabledState();
+    const storedDisabled = loadDisabledState();
     if (storedDisabled.has(task.id)) {
       task.enabled = false;
       this.disabledTasks.add(task.id);
@@ -520,24 +97,10 @@ export class Scheduler {
     this.scheduleTask(task);
   }
 
-  /** Load disabled task IDs from DB */
-  private loadDisabledState(): Set<string> {
-    try {
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
-      const setting = (db.settings || []).find((s: any) => s.key === 'scheduler_disabled_tasks');
-      if (setting?.value) {
-        return new Set(JSON.parse(setting.value));
-      }
-    } catch (error: any) {
-      console.error('[Scheduler] Failed to load disabled task state:', redactSchedulerDiagnostic(error));
-    }
-    return new Set();
-  }
-
   /** Persist disabled task IDs to DB */
   private persistDisabledState() {
     try {
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+      const db = readDatabaseTables(["settings"]);
       let setting = (db.settings || []).find((s: any) => s.key === 'scheduler_disabled_tasks');
       const value = JSON.stringify([...this.disabledTasks]);
       if (setting) {
@@ -550,115 +113,6 @@ export class Scheduler {
     } catch (error: any) {
       console.error('[Scheduler] Failed to persist disabled task state:', redactSchedulerDiagnostic(error));
     }
-  }
-
-  private hydrateRuntimeState(task: ScheduledTask) {
-    task.lastStatus = task.lastStatus || (task.lastRun ? 'completed' : 'idle');
-    task.lastError = task.lastError ? redactSchedulerDiagnostic(task.lastError) : null;
-    task.lastDurationMs = task.lastDurationMs ?? null;
-    task.lastStartedAt = task.lastStartedAt ?? null;
-    task.nextRun = task.nextRun ?? null;
-    task.persistenceStatus = task.persistenceStatus || 'ok';
-    task.lastPersistenceError = task.lastPersistenceError
-      ? redactSchedulerDiagnostic(task.lastPersistenceError)
-      : null;
-    task.requiresReconciliation = task.requiresReconciliation === true;
-    task.quarantinedExecutionId = task.quarantinedExecutionId || null;
-    task.quarantineReason = task.quarantineReason
-      ? redactSchedulerDiagnostic(task.quarantineReason)
-      : null;
-    task.reconciledAt = task.reconciledAt || null;
-    task.reconciliationResolution = task.reconciliationResolution || null;
-    try {
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
-      const setting = (db.settings || []).find((candidate: any) => (
-        candidate.key === SCHEDULER_RUNTIME_STATE_SETTING
-      ));
-      if (!setting?.value) return;
-      const stored = typeof setting.value === 'string' ? JSON.parse(setting.value) : setting.value;
-      const snapshot = stored && typeof stored === 'object' ? stored[task.id] : null;
-      if (!snapshot || typeof snapshot !== 'object') return;
-      if (typeof snapshot.lastRun === 'string' || snapshot.lastRun === null) task.lastRun = snapshot.lastRun;
-      if (typeof snapshot.lastStatus === 'string') task.lastStatus = snapshot.lastStatus;
-      if (typeof snapshot.lastError === 'string' || snapshot.lastError === null) {
-        task.lastError = snapshot.lastError ? redactSchedulerDiagnostic(snapshot.lastError) : null;
-      }
-      if (Number.isFinite(snapshot.lastDurationMs) || snapshot.lastDurationMs === null) {
-        task.lastDurationMs = snapshot.lastDurationMs;
-      }
-      if (typeof snapshot.lastStartedAt === 'string' || snapshot.lastStartedAt === null) {
-        task.lastStartedAt = snapshot.lastStartedAt;
-      }
-      if (typeof snapshot.nextRun === 'string' || snapshot.nextRun === null) task.nextRun = snapshot.nextRun;
-      if (['ok', 'coalesced', 'failed'].includes(snapshot.persistenceStatus)) {
-        task.persistenceStatus = snapshot.persistenceStatus;
-      }
-      if (typeof snapshot.lastPersistenceError === 'string' || snapshot.lastPersistenceError === null) {
-        task.lastPersistenceError = snapshot.lastPersistenceError
-          ? redactSchedulerDiagnostic(snapshot.lastPersistenceError)
-          : null;
-      }
-      task.requiresReconciliation = snapshot.requiresReconciliation === true;
-      task.quarantinedExecutionId = typeof snapshot.quarantinedExecutionId === 'string'
-        ? snapshot.quarantinedExecutionId
-        : null;
-      task.quarantineReason = typeof snapshot.quarantineReason === 'string'
-        ? redactSchedulerDiagnostic(snapshot.quarantineReason)
-        : null;
-      task.reconciledAt = typeof snapshot.reconciledAt === 'string' ? snapshot.reconciledAt : null;
-      task.reconciliationResolution = [
-        'confirmed_no_side_effect',
-        'accepted_unknown_outcome',
-      ].includes(snapshot.reconciliationResolution)
-        ? snapshot.reconciliationResolution
-        : null;
-      if (snapshot.lastStatus === 'executing' || snapshot.lastStatus === 'cancelling') {
-        task.lastStatus = 'unknown';
-        task.lastError = 'The previous scheduler process stopped before handler settlement and a terminal receipt; side-effect outcome remains unknown.';
-        task.requiresReconciliation = true;
-        task.quarantineReason = task.lastError;
-      }
-    } catch (error: any) {
-      task.persistenceStatus = 'failed';
-      task.lastPersistenceError = redactSchedulerDiagnostic(error);
-      console.error(`[Scheduler] Failed to restore runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
-    }
-  }
-
-  private stageRuntimeState(db: any, task: ScheduledTask) {
-    if (!db.settings) db.settings = [];
-    let setting = db.settings.find((candidate: any) => candidate.key === SCHEDULER_RUNTIME_STATE_SETTING);
-    let stored: Record<string, any> = {};
-    if (setting?.value) {
-      try {
-        const parsed = typeof setting.value === 'string' ? JSON.parse(setting.value) : setting.value;
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) stored = parsed;
-      } catch (error: any) {
-        console.error('[Scheduler] Invalid persisted runtime state was replaced:', redactSchedulerDiagnostic(error));
-      }
-    }
-    stored[task.id] = {
-      lastRun: task.lastRun ?? null,
-      lastStatus: task.lastStatus || 'idle',
-      lastError: task.lastError ? redactSchedulerDiagnostic(task.lastError) : null,
-      lastDurationMs: task.lastDurationMs ?? null,
-      lastStartedAt: task.lastStartedAt ?? null,
-      nextRun: task.nextRun ?? null,
-      persistenceStatus: task.persistenceStatus || 'ok',
-      lastPersistenceError: task.lastPersistenceError
-        ? redactSchedulerDiagnostic(task.lastPersistenceError)
-        : null,
-      requiresReconciliation: task.requiresReconciliation === true,
-      quarantinedExecutionId: task.quarantinedExecutionId || null,
-      quarantineReason: task.quarantineReason
-        ? redactSchedulerDiagnostic(task.quarantineReason)
-        : null,
-      reconciledAt: task.reconciledAt || null,
-      reconciliationResolution: task.reconciliationResolution || null,
-    };
-    const value = JSON.stringify(stored);
-    if (setting) setting.value = value;
-    else db.settings.push({ key: SCHEDULER_RUNTIME_STATE_SETTING, value });
   }
 
   private async persistDbWithRuntimeState(
@@ -674,7 +128,7 @@ export class Scheduler {
     task.persistenceStatus = strict ? 'ok' : 'coalesced';
     task.lastPersistenceError = null;
     if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-    this.stageRuntimeState(db, task);
+    stageRuntimeState(db, task);
     try {
       this.writeDatabase(db);
       if (strict) {
@@ -682,7 +136,7 @@ export class Scheduler {
           ? this.trackDurableOperation(this.strictFlush(), execution)
           : this.strictFlush();
         await (execution
-          ? this.awaitExecutionPhase(flush, execution, execution.phase)
+          ? awaitExecutionPhase(flush, execution, execution.phase)
           : flush);
       }
     } catch (error: any) {
@@ -702,8 +156,8 @@ export class Scheduler {
         task.lastPersistenceError = null;
       }
       if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
-      this.stageRuntimeState(db, task);
+      const db = readDatabaseTables(["settings"]);
+      stageRuntimeState(db, task);
       this.writeDatabase(db);
       if (preservePersistenceFailure) {
         task.persistenceStatus = 'failed';
@@ -727,7 +181,7 @@ export class Scheduler {
       task.lastPersistenceError = null;
     }
     if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-    this.stageRuntimeState(db, task);
+    stageRuntimeState(db, task);
     try {
       this.writeDatabase(db);
       if (preservePersistenceFailure) {
@@ -821,35 +275,6 @@ export class Scheduler {
     return execution;
   }
 
-  private async awaitExecutionPhase<T>(
-    operation: Promise<T>,
-    execution: ScheduledInFlightHandler,
-    phase: ScheduledInFlightHandler['phase'],
-  ): Promise<T> {
-    execution.phase = phase;
-    if (execution.controller.signal.aborted) {
-      throw execution.controller.signal.reason;
-    }
-    let removeAbortListener = () => {};
-    const interrupted = new Promise<never>((_resolve, reject) => {
-      const onAbort = () => reject(
-        execution.controller.signal.reason instanceof Error
-          ? execution.controller.signal.reason
-          : new ScheduledTaskExecutionError(
-            'Scheduled execution was aborted while an operation was still settling.',
-            'scheduler_handler_aborted',
-          ),
-      );
-      execution.controller.signal.addEventListener('abort', onAbort, { once: true });
-      removeAbortListener = () => execution.controller.signal.removeEventListener('abort', onAbort);
-    });
-    try {
-      return await Promise.race([operation, interrupted]);
-    } finally {
-      removeAbortListener();
-    }
-  }
-
   private trackDurableOperation<T>(
     operation: Promise<T>,
     execution: ScheduledInFlightHandler,
@@ -861,10 +286,6 @@ export class Scheduler {
       () => this.markDurableOperationSettled(execution.task.id, execution, tracked, 'rejected'),
     );
     return tracked;
-  }
-
-  private executionOperationsSettled(execution: ScheduledInFlightHandler): boolean {
-    return execution.handlerSettled && execution.pendingDurableOperations.size === 0;
   }
 
   disableTask(id: string): boolean {
@@ -889,7 +310,7 @@ export class Scheduler {
     const pendingSettlement = this.inFlightHandlers.get(id);
     if (
       (!pendingSettlement?.pendingLateSettlement
-        || this.executionOperationsSettled(pendingSettlement))
+        || executionOperationsSettled(pendingSettlement))
       && !task.requiresReconciliation
     ) {
       this.scheduleTask(task);
@@ -938,7 +359,7 @@ export class Scheduler {
       queued: this.maintenanceQueue.some(entry => entry.task.id === task.id),
       settlementPending: Boolean(
         this.inFlightHandlers.get(task.id)?.pendingLateSettlement
-        && !this.executionOperationsSettled(this.inFlightHandlers.get(task.id)!)
+        && !executionOperationsSettled(this.inFlightHandlers.get(task.id)!)
       ),
       executionClass: task.executionClass,
       timeoutMs: getScheduledTaskTimeoutMs(task.executionClass, task.timeoutMs),
@@ -1008,7 +429,7 @@ export class Scheduler {
         persistenceStatus: task.persistenceStatus, lastPersistenceError: task.lastPersistenceError,
         replayed: false }),
     });
-    this.stageRuntimeState(candidateDb, reconciledTask);
+    stageRuntimeState(candidateDb, reconciledTask);
     try {
       this.writeDatabase(candidateDb);
       await this.strictFlush();
@@ -1239,7 +660,7 @@ export class Scheduler {
       // process memory. The strict flush is the delivery evidence boundary.
       const deliveryFlush = this.trackDurableOperation(this.strictFlush(), execution);
       try {
-        await this.awaitExecutionPhase(deliveryFlush, execution, 'delivery');
+        await awaitExecutionPhase(deliveryFlush, execution, 'delivery');
         if (execution.controller.signal.aborted) throw execution.controller.signal.reason;
       } catch (error) {
         task.persistenceStatus = 'failed';
@@ -1260,7 +681,7 @@ export class Scheduler {
         );
         if (!execution.controller.signal.aborted) {
           try {
-            await this.awaitExecutionPhase(rollbackFlush, execution, 'delivery');
+            await awaitExecutionPhase(rollbackFlush, execution, 'delivery');
           } catch (rollbackError: any) {
             task.lastPersistenceError = redactSchedulerDiagnostic(
               `${task.lastPersistenceError || 'Delivery persistence failed'}; durable rollback failed: ${rollbackError}`,
@@ -1350,12 +771,12 @@ export class Scheduler {
           || !this.tasks.some(item => item === task)
         ) return;
         // Schedule next run
-        const nextMs = this.nextCronTime(parsed.fields!);
+        const nextMs = nextCronTime(parsed.fields!);
         task.nextRun = new Date(Date.now() + nextMs).toISOString();
         this.persistRuntimeState(task);
         this.setTaskTimeout(task.id, runAndReschedule, nextMs, taskScheduleGeneration);
       };
-      const firstMs = this.nextCronTime(parsed.fields!);
+      const firstMs = nextCronTime(parsed.fields!);
       task.nextRun = new Date(Date.now() + firstMs).toISOString();
       this.persistRuntimeState(task);
       this.setTaskTimeout(task.id, runAndReschedule, firstMs, taskScheduleGeneration);
@@ -1422,7 +843,7 @@ export class Scheduler {
       if (previousStatus) {
         if (previousStatus === 'executing') {
           const unknownAt = new Date();
-          const record = this.buildScheduledTaskRecord(plan, {
+          const record = buildScheduledTaskRecord(plan, {
             verified: false,
             status: 'unknown',
             error: 'scheduler_previous_outcome_unknown',
@@ -1458,7 +879,7 @@ export class Scheduler {
         plan,
         status: authorization.allowed ? 'executing' : 'blocked',
         blocker: authorization.allowed ? '' : redactSchedulerDiagnostic(authorization.reason),
-        records: authorization.allowed ? [] : [this.buildScheduledTaskRecord(plan, {
+        records: authorization.allowed ? [] : [buildScheduledTaskRecord(plan, {
           verified: false,
           status: 'blocked',
           error: redactSchedulerDiagnostic(authorization.reason),
@@ -1534,7 +955,7 @@ export class Scheduler {
         scheduledTaskId: task.id,
         plan,
         status: 'completed',
-        records: [this.buildScheduledTaskRecord(plan, {
+        records: [buildScheduledTaskRecord(plan, {
           verified: true,
           status: 'verified',
           delivery,
@@ -1719,7 +1140,7 @@ export class Scheduler {
             plan,
             status: 'blocked',
             blocker,
-            records: [this.buildScheduledTaskRecord(plan, {
+            records: [buildScheduledTaskRecord(plan, {
               verified: false,
               status: receiptStatus,
               error: errorCode,
@@ -1791,7 +1212,7 @@ export class Scheduler {
   private maybeReleaseExecutionFence(taskId: string, inFlight: ScheduledInFlightHandler) {
     if (
       !inFlight.schedulerFinished
-      || !this.executionOperationsSettled(inFlight)
+      || !executionOperationsSettled(inFlight)
       || this.inFlightHandlers.get(taskId) !== inFlight
     ) return;
     if (inFlight.pendingLateSettlement) {
@@ -1843,7 +1264,7 @@ export class Scheduler {
           plan: inFlight.plan,
           status: 'blocked',
           blocker: message,
-          records: [this.buildScheduledTaskRecord(inFlight.plan, {
+          records: [buildScheduledTaskRecord(inFlight.plan, {
             verified: false,
             status: 'unknown',
             error: timeout
@@ -1914,7 +1335,7 @@ export class Scheduler {
       () => this.markHandlerSettled(task.id, execution, 'fulfilled'),
       () => this.markHandlerSettled(task.id, execution, 'rejected'),
     );
-    return this.awaitExecutionPhase(handler, execution, 'handler');
+    return awaitExecutionPhase(handler, execution, 'handler');
   }
 
   private captureScheduledLedgerCheckpoint(
@@ -1954,75 +1375,6 @@ export class Scheduler {
     };
   }
 
-  private buildScheduledTaskRecord(
-    plan: CapabilityExecutionPlan,
-    input: {
-      verified: boolean;
-      status: 'verified' | 'blocked' | 'failed' | 'unknown';
-      error?: string;
-      delivery?: { deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number };
-      durationMs: number;
-      contract: ScheduledTaskExecutionContract;
-      stoppingReason: string;
-    },
-  ): ToolExecutionRecord {
-    const node = plan.nodes.find(candidate => candidate.toolName === 'scheduler_task_handler');
-    if (!node) throw new Error('Scheduled capability plan is missing its handler adapter.');
-    const receipt = {
-      status: input.status,
-      verified: input.verified,
-      scheduledTaskId: plan.intent.target,
-      durationMs: input.durationMs,
-      outcome: input.verified ? 'accepted' : input.status,
-      successCriteria: input.contract.successCriteria,
-      successCriteriaMet: input.verified ? input.contract.successCriteria : [],
-      evidence: input.contract.evidence,
-      stoppingReason: input.stoppingReason,
-      retry: input.contract.retry,
-      concurrency: input.contract.concurrency,
-      finalAcceptance: input.contract.finalAcceptance,
-      ...(input.delivery || {}),
-    };
-    return {
-      id: `receipt_${plan.taskId}_${input.status}`,
-      taskId: plan.taskId,
-      turnId: plan.taskId,
-      requestId: plan.taskId,
-      resolutionId: 'resolution:' + plan.taskId,
-      idempotencyKey: `${plan.taskId}:scheduler_task_handler:${input.status}`,
-      name: 'scheduler_task_handler',
-      arguments: { scheduledTaskId: plan.intent.target, executionId: plan.taskId },
-      result: JSON.stringify(receipt),
-      receipt,
-      ...(input.error ? { error: redactSchedulerDiagnostic(input.error) } : {}),
-      capability: {
-        capabilityId: node.capabilityId,
-        lane: node.lane,
-        operation: node.operation,
-        risk: node.risk,
-        sideEffects: node.sideEffects.map(effect => ({ ...effect })),
-        verification: {
-          ...node.verification,
-          requiredFields: [...node.verification.requiredFields],
-          requiredValues: node.verification.requiredValues ? { ...node.verification.requiredValues } : undefined,
-          requiredArtifacts: [...(node.verification.requiredArtifacts || [])],
-          requiredArtifactCollections: [...(node.verification.requiredArtifactCollections || [])],
-          successStatuses: [...(node.verification.successStatuses || [])],
-          failureStatuses: [...(node.verification.failureStatuses || [])],
-          successSignals: [...node.verification.successSignals],
-          limitations: [...node.verification.limitations],
-        },
-      },
-      terminalVerification: {
-        status: input.verified ? 'verified' : input.status === 'failed' ? 'failed' : 'unverified',
-        strategy: 'terminal_receipt',
-        reason: input.verified
-          ? 'Main scheduler accepted the outcome after persisting its verified terminal receipt.'
-          : input.error ? redactSchedulerDiagnostic(input.error) : input.status,
-      },
-    };
-  }
-
   private setTaskTimeout(
     id: string,
     callback: () => void | Promise<void>,
@@ -2044,37 +1396,6 @@ export class Scheduler {
 
     this.timers.set(id, timer);
     return timer;
-  }
-
-  /** Compute milliseconds until the next cron match */
-  private nextCronTime(fields: number[]): number {
-    const [minute, hour, dom, month, dow] = fields;
-    const now = new Date();
-    let next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes() + 1, 0, 0);
-
-    // Try up to 366 days ahead (cover a full year)
-    for (let i = 0; i < 366 * 24 * 60; i++) {
-      const m = next.getMinutes();
-      const h = next.getHours();
-      const d = next.getDate();
-      const mo = next.getMonth() + 1;
-      const w = next.getDay();
-
-      const mMatch = minute < 0 || m === minute;
-      const hMatch = hour < 0 || h === hour;
-      const domMatch = dom < 0 || d === dom;
-      const monMatch = month < 0 || mo === month;
-      const dowMatch = dow < 0 || w === dow;
-
-      if (mMatch && hMatch && domMatch && monMatch && dowMatch) {
-        const ms = next.getTime() - now.getTime();
-        return Math.max(1000, ms); // Minimum 1 second
-      }
-
-      next = new Date(next.getTime() + 60000); // +1 minute
-    }
-
-    return 60 * 60 * 1000; // Fallback: 1 hour
   }
 
   stop(options: { drainSettledHandlers?: boolean } = {}) {
@@ -2104,39 +1425,6 @@ export class Scheduler {
 }
 
 export const scheduler = new Scheduler();
-
-/** Select due reminders only; the scheduler owns their atomic delivery commit. */
-export function createReminderCheckTask(): ScheduledTask {
-  return {
-    id: 'reminder_check',
-    cron: 'every_1m',
-    lastRun: null,
-    executionClass: 'proactive_delivery',
-    handler: async () => {
-      const due = getDueReminders();
-      const grouped = new Map<string, ScheduledDelivery>();
-      for (const reminder of due) {
-        const domain = reminder.domain || 'personal';
-        // Malformed work scope must never be downgraded to personal delivery.
-        if (!['personal', 'work'].includes(domain) || (domain === 'work' && !reminder.orgId)) continue;
-        const orgId = domain === 'work' ? reminder.orgId || '' : '';
-        const key = JSON.stringify([reminder.userId, domain, orgId]);
-        const existing = grouped.get(key);
-        if (existing) {
-          existing.message += ` | ${reminder.content}`;
-          existing.reminderIds!.push(reminder.id);
-        } else grouped.set(key, {
-          userId: reminder.userId,
-          message: `Reminder: ${reminder.content}`,
-          domain: domain as 'personal' | 'work',
-          orgId,
-          reminderIds: [reminder.id],
-        });
-      }
-      return grouped.size > 0 ? [...grouped.values()] : null;
-    },
-  };
-}
 
 /**
  * Register built-in proactive tasks.
@@ -2176,5 +1464,3 @@ export function registerScheduledTasks(
     createReminderCheckTask, redactSchedulerDiagnostic });
   for (const task of tasks) scheduler.register(task);
 }
-
-

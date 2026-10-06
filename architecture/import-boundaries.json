@@ -1197,6 +1197,15 @@
         "interactions"
       ],
       "reason": "Accepted request identity lookup only. Conversation ownership is validated by the lifecycle owner."
+    },
+    "server/scheduler/runtime_state.ts": {
+      "tables": [
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Scheduler disable and runtime-state hydration reads settings only; execution fences and writers remain with Scheduler."
     }
   },
   "approvedSqlImporters": {

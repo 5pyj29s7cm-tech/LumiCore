@@ -18,7 +18,7 @@ export interface AgentChatVoiceSession {
   callState: CallState;
   audioLevel: number;
   error: string | null;
-  onStart: () => void;
+  onStart: (conversationId?: string) => void;
   onEnd: () => void;
 }
 

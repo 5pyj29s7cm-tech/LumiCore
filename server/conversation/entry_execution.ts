@@ -16,24 +16,15 @@ export function reserveAnchoredEntryExecution(input: {
     userId: input.userId, domain: input.scope.domain === 'work' ? 'work' : 'personal',
     orgId: input.scope.orgId, agentId: conversation.agentId,
   }, () => conversation.id);
-  authorization.assertCurrent();
   const admission = reserveConversationExecution({
     userId: input.userId, domain: input.scope.domain === 'work' ? 'work' : 'personal',
     orgId: input.scope.orgId, conversationId: conversation.id, source: input.entry.kind,
-  }, input.requestId, input.signal);
-  const cancel = () => input.abort(admission.controller.signal.reason);
-  admission.controller.signal.addEventListener('abort', cancel, { once: true });
-  if (admission.controller.signal.aborted) cancel();
-  const stopWatch = authorization.watch(admission.controller);
+  }, input.requestId, input.signal, { authorization, abort: input.abort });
   return {
     conversation,
     isCurrent: authorization.isCurrent,
     assertCurrent: authorization.assertCurrent,
-    async waitForTurn() { await admission.waitForTurn(); authorization.assertCurrent(); },
-    release() {
-      stopWatch();
-      admission.controller.signal.removeEventListener('abort', cancel);
-      admission.release();
-    },
+    waitForTurn: admission.waitForTurn,
+    release: admission.release,
   };
 }

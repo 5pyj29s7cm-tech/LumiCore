@@ -1,3 +1,4 @@
+import { captureConversationAuthorization, combineRequestAuthorizations } from '../../../conversation/lifecycle';
 import { resolveConversationForEntry } from '../../../conversation/entry_conversation';
 import type { Server, Socket } from "socket.io";
 import { type AudioSession, getVoiceStateKey, type VoiceInputTiming } from "../session";
@@ -38,8 +39,8 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     { return { terminal: true as const, context: undefined }; }
   }
 
-  const turnAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
-  if (!turnAuthorization.isCurrent()) { return { terminal: true as const, context: undefined }; }
+  const scopeAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
+  if (!scopeAuthorization.isCurrent()) { return { terminal: true as const, context: undefined }; }
   let transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
   if (transcriptExecutionGuard.action === 'clarify') {
     logger.warn(
@@ -74,7 +75,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   let interruptedMerge = mergeInterruptedVoiceTurn(pendingInterruptedTurn, userText);
   if (!interruptedMerge.usedInterruptedTurn && isVoiceCorrectionContinuation(userText)) {
     try {
-      const conv = resolveConversationForEntry(session.userId, session, { kind: 'voice', phase: 'select', agentId: session.agentId });
+      const conv = resolveConversationForEntry(session.userId, session, { kind: 'voice', phase: 'select', agentId: session.agentId }, session.conversationId);
       if (!conv) throw new Error('Voice conversation is unavailable');
       const priorAction = getMessagesByTokenBudget(conv.id)
         .slice(-16)
@@ -99,7 +100,11 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
 
   const conversationTurn = resolveConversationForEntry(session.userId, session, {
     kind: 'voice', phase: 'admit', agentId: session.agentId, userText: actionIntentText,
-  });
+  }, session.conversationId);
+  session.conversationId = conversationTurn.conversation.id;
+  const turnAuthorization = combineRequestAuthorizations(scopeAuthorization, captureConversationAuthorization({
+    userId: session.userId, domain: session.domain, orgId: session.orgId, agentId: session.agentId,
+  }, () => conversationTurn.conversation.id));
   if (transcriptExecutionGuard.action === 'allow') {
     transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText, {
       pendingAction: conversationTurn.conversation.actionContinuationState?.unfinished === true,
@@ -309,10 +314,10 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     { return { terminal: true as const, context: undefined }; }
   }
   voiceUserMessageId = voiceAdmission.persisted;
-  resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal);
+  resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal,{authorization:turnAuthorization,abort:reason=>{if(!pipelineAbort.signal.aborted)pipelineAbort.abort(reason);}});
   await resources.admission.waitForTurn();
   turnAuthorization.assertCurrent();
-  conversationTurn.conversation = getConversationForScope(conversationTurn.conversation.id,session.userId,voiceScope.domain,voiceScope.orgId) || conversationTurn.conversation;
+  conversationTurn.conversation = getConversationForScope(conversationTurn.conversation.id,session.userId,voiceScope.domain,voiceScope.orgId)!;
   if (conversationTurn.rolledOver && conversationTurn.previousConversationId) {
     await runAfterAcceptedUserTurnAdmission(voiceAdmission, () => (
       clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({

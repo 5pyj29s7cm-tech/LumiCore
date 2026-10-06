@@ -295,7 +295,7 @@ describe('finalized output paths', () => {
     const feed = source('src/components/AutonomousFeed.tsx');
     const desktop = source('src/components/DesktopUI.tsx');
     const proactive = source('src/components/ProactiveNotifications.tsx');
-    const scheduler = source('server/scheduler.ts') + source('server/scheduler/builtins/personal_memory.ts') + source('server/scheduler/builtins/growth.ts');
+    const scheduler = source('server/scheduler.ts') + source('server/scheduler/delivery_finalization.ts') + source('server/scheduler/builtins/personal_memory.ts') + source('server/scheduler/builtins/growth.ts');
 
     expect(autonomous).toContain('evaluateAutonomousTaskOutcome');
     expect(autonomous).toContain('finalizeAutonomousTaskOutcomeForDelivery');

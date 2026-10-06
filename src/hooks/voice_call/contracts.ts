@@ -32,6 +32,7 @@ export interface UseVoiceCallOptions {
 export interface StartCallOptions {
   transcriptionOnly?: boolean;
   meetingId?: string;
+  conversationId?: string;
   domain?: 'personal' | 'work';
   orgId?: string;
 }
@@ -48,6 +49,7 @@ export interface VoiceStartPayload {
   agentId?: string;
   transcriptionOnly: boolean;
   meetingId?: string;
+  conversationId?: string;
   domain: 'personal' | 'work';
   orgId?: string;
   sessionId: string;
