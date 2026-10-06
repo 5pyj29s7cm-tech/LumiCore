@@ -271,62 +271,6 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
     const conversationMessages = buildRestConversationMessages(messages, prompt);
     // History informs interpretation; only the latest user message authorizes work.
     const routeText = businessSource || (conversationMessages.slice().reverse().find(item => item.role === 'user')?.content || '').trim().slice(-12000);
-    const restExecutionPipeline = buildLumiExecutionPipeline({
-      requestId,
-      dispatch: {
-        userId,
-        text: routeText,
-        channel: 'chat',
-        source: 'rest_chat',
-        category: 'command',
-        domain,
-        orgId,
-        operationMode: 'assistant',
-        targetIsLumi: true,
-      },
-      registry: toolRegistry,
-      personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
-      executionBoundary,
-      isSanctuary: !req.user,
-    });
-    const restTurnDispatch = restExecutionPipeline.turnIntent;
-    const restModelToolPolicy = restExecutionPipeline.authorizationPolicy;
-    const restModelToolProjection = restExecutionPipeline.modelToolProjection;
-    const restToolSessionActive = restExecutionPipeline.executionRequested;
-    const deferRestStream =
-      restToolSessionActive
-      || shouldDeferModelOutputUntilFinalized({
-        taskText: routeText,
-        flow: restTurnDispatch.flow,
-      });
-    const toolContext = {
-      requestId, resolutionId: restExecutionPipeline.resolution.id,
-      ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
-        && persistedTurn.taskId === businessMetadata?.conversationTaskId ? { turnRowId: persistedTurn.id } : {}),
-      ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
-      currentTurnExecutionRequested: restExecutionPipeline.executionRequested,
-      trustedActionContinuation: restExecutionPipeline.trustedActionContinuation,
-      userId,
-      authenticated: Boolean(req.user),
-      authRole: req.user?.role,
-      orgRole: req.user?.orgRole,
-      localExecution: trustedLocalExecution,
-      executionBoundary,
-      domain,
-      orgId,
-      llmGetters: llm,
-      source: trustedLocalExecution ? 'rest_chat_local' : 'rest_chat',
-      actionIntent: routeText,
-      routedTaskText: restTurnDispatch.flow.routeText,
-      toolPolicy: restModelToolPolicy,
-      modelToolProjection: restModelToolProjection,
-    };
-    const systemInstruction = buildRestChatSystemInstruction({
-      routeText,
-      domain,
-      orgId,
-      source: 'rest_chat',
-    });
 
     const preferred = getUserPreferredLLMConfig(userId, { domain, orgId });
     const provider = isBYOK ? reqProvider : preferred.provider;
@@ -355,6 +299,63 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
       });
       await admission?.waitForTurn();
       assertRequestActive();
+      const restExecutionPipeline = buildLumiExecutionPipeline({
+        requestId,
+        dispatch: {
+          userId,
+          text: routeText,
+          channel: 'chat',
+          source: 'rest_chat',
+          category: 'command',
+          domain,
+          orgId,
+          operationMode: 'assistant',
+          targetIsLumi: true,
+        },
+        registry: toolRegistry,
+        personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
+        executionBoundary,
+        isSanctuary: !req.user,
+      });
+      const restTurnDispatch = restExecutionPipeline.turnIntent;
+      const restModelToolPolicy = restExecutionPipeline.authorizationPolicy;
+      const restModelToolProjection = restExecutionPipeline.modelToolProjection;
+      const restToolSessionActive = restExecutionPipeline.executionRequested;
+      const deferRestStream =
+        restToolSessionActive
+        || shouldDeferModelOutputUntilFinalized({
+          taskText: routeText,
+          flow: restTurnDispatch.flow,
+        });
+      const toolContext = {
+        requestId, resolutionId: restExecutionPipeline.resolution.id,
+        ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
+          && persistedTurn.taskId === businessMetadata?.conversationTaskId ? { turnRowId: persistedTurn.id } : {}),
+        ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
+        currentTurnExecutionRequested: restExecutionPipeline.executionRequested,
+        trustedActionContinuation: restExecutionPipeline.trustedActionContinuation,
+        userId,
+        authenticated: Boolean(req.user),
+        authRole: req.user?.role,
+        orgRole: req.user?.orgRole,
+        localExecution: trustedLocalExecution,
+        executionBoundary,
+        domain,
+        orgId,
+        llmGetters: llm,
+        source: trustedLocalExecution ? 'rest_chat_local' : 'rest_chat',
+        actionIntent: routeText,
+        routedTaskText: restTurnDispatch.flow.routeText,
+        toolPolicy: restModelToolPolicy,
+        modelToolProjection: restModelToolProjection,
+      };
+      const systemInstruction = buildRestChatSystemInstruction({
+        routeText,
+        domain,
+        orgId,
+        source: 'rest_chat',
+      });
+
       let responseText = '';
 
       if (isBYOK) {

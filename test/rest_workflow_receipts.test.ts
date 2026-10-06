@@ -12,7 +12,7 @@ import { ToolRegistry, toolRegistry } from '../server/tools/registry';
 import { registerAllTools } from '../server/tools/definitions';
 import * as org from '../server/org/db';
 
-const model = vi.hoisted(() => ({ run: vi.fn(), flushGate: null as Promise<void> | null, flushReached: false, failFlush: false }));
+const model = vi.hoisted(() => ({ run: vi.fn(), plan: vi.fn(), flushGate: null as Promise<void> | null, flushReached: false, failFlush: false }));
 vi.mock('../server/llm/adapter', async original => ({
   ...(await original<typeof import('../server/llm/adapter')>()), runWithTools: model.run,
 }));
@@ -24,6 +24,14 @@ vi.mock('../db_layer', async original => {
     await actual.flushDBOrThrow();
   } };
 });
+vi.mock('../server/cognition/execution_pipeline', async original => {
+  const actual = await original<typeof import('../server/cognition/execution_pipeline')>();
+  return { ...actual, buildLumiExecutionPipeline: (...args: Parameters<typeof actual.buildLumiExecutionPipeline>) => {
+    model.plan(...args);
+    return actual.buildLumiExecutionPipeline(...args);
+  } };
+});
+import { reserveConversationExecution, getConversationExecution } from '../server/cognition/conversation_execution';
 let baseUrl: string;
 let cleanup: () => void;
 let sequence = 0;
@@ -169,4 +177,29 @@ describe('REST workflow canonical receipt lifecycle', () => {
     expect(model.run).not.toHaveBeenCalled();
     expect(getOrCreateActiveConversation(f.scope.userId, 'lumi', f.scope.domain, f.scope.orgId).id).toBe(active.id);
   });
+});
+
+it.each([false, true])('plans a queued REST workflow only after admission, revocation=%s', async revoke => {
+  const f = fixture(revoke); f.install('normal');
+  const anchor = f.task().metadata.industryWorkflow;
+  const resource = { ...f.scope, conversationId: anchor.conversationId, source: 'rest' };
+  const prior = reserveConversationExecution({ ...resource, source: 'chat' }, 'older-fixture-request');
+  await prior.waitForTurn();
+  const planningAtArrival = model.plan.mock.calls.length;
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = f.send();
+    await vi.waitFor(() => expect(getConversationExecution(resource, anchor.requestId)).toBeDefined());
+    expect(model.run).not.toHaveBeenCalled();
+    expect(model.plan).toHaveBeenCalledTimes(planningAtArrival);
+    if (revoke) {
+      org.removeMember(f.scope.orgId, f.scope.userId);
+      await vi.waitFor(() => expect(getConversationExecution(resource, anchor.requestId)?.signal.aborted).toBe(true));
+    }
+  } finally { prior.release(); }
+  const response = await pending!;
+  expect(response.status).toBe(revoke ? 403 : 200);
+  expect(model.plan).toHaveBeenCalledTimes(planningAtArrival + (revoke ? 0 : 1));
+  if (revoke) expect(model.run).not.toHaveBeenCalled();
+  else expect(model.run).toHaveBeenCalledOnce();
 });
