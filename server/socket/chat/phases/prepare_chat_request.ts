@@ -1,4 +1,3 @@
-import { runResolvedLumiRecovery, type ResolvedTurnRecoveryInput } from "../../../cognition/turn_recovery";
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../cognition/turn_model";
 import { createChatMessageWriter } from "../message_writer";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "../attachments";
@@ -152,13 +151,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
       // every execution/recovery path, including reusable workflow traces.
       return runResolvedLumiTurn({ ...input, assertCurrent: () => turnAuthorization.assertCurrent(), getters: llmGetters, config: { ...input.config, modelTurnState, conversationId: selectedConversationId || input.config.conversationId, workflowSource: eventSource } });
     };
-    const runAuthorizedRecovery = (input: ResolvedTurnRecoveryInput) => {
-      turnAuthorization.assertCurrent();
-      return runResolvedLumiRecovery({ ...input, model: { ...input.model,
-        assertCurrent: () => turnAuthorization.assertCurrent(), getters: llmGetters,
-        config: { ...input.model.config, modelTurnState, conversationId: selectedConversationId || input.model.config.conversationId, workflowSource: eventSource },
-      } });
-    };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;
       try { ack?.({ ok: false, requestId, error: !conversationAuthorization.isCurrent() ? 'Conversation is no longer available. Start a new conversation.' : isMemoryAvatar ? 'Memory avatar or its sources changed. Start a new request.' : 'Organization access changed. Start a new request in an available workspace.' }); } catch {}
@@ -242,7 +234,7 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     rememberRequestToolRecord,
     formatMediaArtifactReceiptForUi,
     runAuthorizedTools,
-    runAuthorizedRecovery,
+    modelTurnState,
     history,
     allowAdaptiveLearning,
     buildNaturalReplyStyleOverlay,

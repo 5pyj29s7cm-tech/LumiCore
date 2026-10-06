@@ -1,4 +1,6 @@
-import { runResolvedLumiTurn } from "../../../cognition/turn_model";
+import { runPreparedLumiTurn } from "../../../cognition/prepared_turn";
+import { createTurnResponseFinalizer } from "../../../cognition/turn_response_finalizer";
+import { mergeToolExecutionRecords } from "../../../cognition/task_execution_ledger";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { logger } from "../../../../logger";
 import { getMessagesByTokenBudget } from "../../../conversation/manager";
@@ -35,7 +37,6 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
       ...voiceHistory,
       { role: 'user', content: context.userText, sourceMessageId: context.voiceUserMessageId },
     ];
-    const recoveryConversationMessages = messages;
 
     const modelConfig: LLMConfig = {
       modelTurnState: context.modelTurnState,
@@ -67,43 +68,40 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
     // decide to repeat a tool, end an unfinished task or discard a receipt.
     markVoiceLatencyMilestone(context.requestId, 'firstModelRequestAt');
     const toolLifecycle = context.observeVoiceTools(record => context.toolResults.push(record));
-    const result = await runResolvedLumiTurn({
-      execution: context.executionPipeline,
-        assertCurrent: () => context.turnAuthorization.assertCurrent(),
-        isCancelled: () => !context.isCurrentTurn(),
-        taskText: context.userText,
-        messages: messages,
-        registry: toolRegistry,
-        config: modelConfig,
-        onToolCall: toolLifecycle.onToolCall,
-        maxIterations: context.maxIterations,
-        onStreamChunk: onChunk,
-        context: {
-            ...context.toolContext,
-            ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
-            priorToolRecords: context.taskAwareRecords(context.toolResults),
-            onToolStart: toolLifecycle.onToolStart,
-          },
-        getters: context.llmGetters,
-      });
-    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
-    context.responseText = result.text || '';
-    context.completionGuard = result.completionGuard;
-    recordTokenUsageBatch(context.session.userId, result.usageRecords, context.requestId, 'voice');
-
-    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
-
-    if (context.pendingConfirmationCreatedThisTurn) {
-      context.responseText = context.trustedVoiceConfirmationText!;
-    }
-
-    context.modelTextGate.finish();
-    const finalizedDesktopRecords = withDesktopExecutionReceipt(context.toolResults, context.desktopExecutionTracker);
-    if (finalizedDesktopRecords.length > context.toolResults.length) {
-      context.toolResults.push(...finalizedDesktopRecords.slice(context.toolResults.length));
-    }
-  return { terminal: false as const, context: extendTurnBindings(context, {
-    recoveryConversationMessages,
-    effectiveModel,
-  }) };
+    const responseFinalizer = createTurnResponseFinalizer({
+      taskText: context.actionIntentText, flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
+      controlPauseReason: () => context.desktopRelay.getControlPauseReason(), pauseTaskText: context.routedUserText,
+    });
+    const projectRecords = (records: import('../../../tools/types').ToolExecutionRecord[]) => withDesktopExecutionReceipt(
+      context.taskAwareRecords(mergeToolExecutionRecords(context.toolResults, records)), context.desktopExecutionTracker);
+    const recoveryLifecycle = context.observeVoiceTools();
+    const completed = await runPreparedLumiTurn({
+      source: 'voice', taskText: context.routedUserText, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      toolRecords: context.taskAwareRecords(context.toolResults), projectRecords,
+      model: { execution: context.executionPipeline, assertCurrent: () => context.turnAuthorization.assertCurrent(),
+        isCancelled: () => !context.isCurrentTurn(), taskText: context.userText,
+        messages, registry: toolRegistry, config: modelConfig, onToolCall: toolLifecycle.onToolCall,
+        maxIterations: context.maxIterations, onStreamChunk: onChunk, getters: context.llmGetters,
+        context: { ...context.toolContext,
+          ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
+          priorToolRecords: context.taskAwareRecords(context.toolResults), onToolStart: toolLifecycle.onToolStart } },
+      recovery: { maxIterations: Math.max(2, Math.min(12, context.routedToolPolicy.maxIterations || context.maxIterations || 8)),
+        onToolCall: recoveryLifecycle.onToolCall, context: { source: 'voice_guard_recovery', isCancelled: () => !context.isCurrentTurn(), onToolStart: recoveryLifecycle.onToolStart } },
+      finalization: ({ responseText, result, toolRecords }) => ({
+        initialFinalization: responseFinalizer.finalize({ responseText, completionGuard: result.completionGuard, toolRecords, source: 'voice' }),
+        pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
+        aborted: !context.isCurrentTurn() || responseFinalizer.isDesktopPaused(toolRecords),
+        isAborted: () => !context.isCurrentTurn(), isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+        trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
+        refinalize: (candidateText, records, completionGuard) => responseFinalizer.finalize({ responseText: candidateText, completionGuard,
+          toolRecords: projectRecords(records), source: 'voice_guard_recovery' }),
+      }),
+      onRecoveryUsage: records => { recordTokenUsageBatch(context.session.userId, records, () => 'voice_guard_recovery_' + Date.now(), 'voice'); },
+      onResult: result => { context.modelTextGate.finish(); recordTokenUsageBatch(context.session.userId, result.usageRecords, context.requestId, 'voice'); },
+    });
+    if (!context.isCurrentTurn()) return { terminal: true as const, context: undefined };
+    context.responseText = completed.finalized.text;
+    context.toolResults = completed.toolRecords;
+    return { terminal: false as const, context: extendTurnBindings(context, { finalResponse: completed.finalized }) };
 }

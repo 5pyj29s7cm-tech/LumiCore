@@ -1152,10 +1152,9 @@ describe('execution guard recovery', () => {
     const voiceSource = readVoiceImplementationSource();
 
     for (const source of [chatSource, voiceSource]) {
-      expect(source).toContain('await finalizeLumiResponseForDelivery({');
+      expect(source).toContain('await runPreparedLumiTurn({');
       expect(source).toContain('pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn)');
       expect(source).toContain('requiresFreshConfirmation: correctionRequiresFreshConfirmation');
-      expect(source).toContain('recovery: attempt');
     }
     const recoveryOwner = readImplementationSource(path.join(root, 'server/cognition/turn_recovery.ts'), 'utf8');
     expect(recoveryOwner).toContain('...model.messages');
@@ -1163,9 +1162,13 @@ describe('execution guard recovery', () => {
     expect(recoveryOwner).toContain('await model.onToolCall?.(record);');
     expect(recoveryOwner).toContain('recovery.recordTool({');
     expect(recoveryOwner.indexOf('await model.onToolCall?.(record);')).toBeLessThan(recoveryOwner.indexOf('recovery.recordTool({'));
-    expect(chatSource).toContain('messages: normalTurnMessages');
-    expect(chatSource).toContain('normalTurnMessages = messages;');
-    expect(chatSource).toContain('runAuthorizedRecovery({');
+    const driver = readFileSync(path.join(root, 'server/cognition/prepared_turn.ts'), 'utf8');
+    expect(driver).toContain('await runResolvedLumiTurn(input.model)');
+    expect(driver).toContain('await runResolvedLumiRecovery({ model, responseText, recovery })');
+    expect(driver).toContain('await finalizeLumiResponseForDelivery({');
+    expect(chatSource).toContain('model: { execution: executionPipeline, messages, registry: toolRegistry');
+    expect(chatSource).not.toContain('normalTurnMessages');
+    expect(chatSource).not.toContain('runAuthorizedRecovery');
     expect(chatSource).toContain('...toolSecurityContext,');
     expect(chatSource).toContain('executionBoundary');
     expect(chatSource).not.toContain('const guardRecovery = decideExecutionGuardRecovery');
@@ -1197,13 +1200,14 @@ describe('execution guard recovery', () => {
       if (cancellationCheck === 'isAborted: isChatCancelled') {
         expect(source).toContain('const isChatCancelled = () => !turnAuthorization.isCurrent() || abortController.signal.aborted');
       }
-      const recoveryStart = source.indexOf('const guardRecovery = await finalizeLumiResponseForDelivery({');
+      const recoveryStart = source.indexOf('const completed = await runPreparedLumiTurn({');
       expect(recoveryStart).toBeGreaterThanOrEqual(0);
       const recoveryBlock = source.slice(recoveryStart, recoveryStart + 13_000);
       expect(recoveryBlock).toContain(cancellationCheck);
       expect(recoveryBlock).not.toMatch(/isAborted:\s*\(\)\s*=>[^\n]*desktopPauseBlocksCurrentTask/u);
-      expect(recoveryBlock).toContain('return responseFinalizer.finalize({');
-      expect(recoveryBlock).toContain('toolRecords: recoveredRecords');
+      expect(recoveryBlock).toContain('refinalize:');
+      expect(recoveryBlock).toContain('responseFinalizer.finalize({');
+      expect(recoveryBlock).toContain('toolRecords: projectRecords(records)');
       expect(source).toContain('controlPauseReason: () => desktopRelay.getControlPauseReason()');
     }
     const finalizer = readImplementationSource(path.join(root, 'server/cognition/turn_response_finalizer.ts'), 'utf8');

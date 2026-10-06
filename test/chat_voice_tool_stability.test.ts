@@ -93,7 +93,7 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('buildRestProviderMessages');
     expect(restChat).toContain('buildRestConversationMessages');
     expect(restChat).toContain('runLumiEntryTurn({');
-    expect(readFileSync(path.join(process.cwd(), 'server/cognition/turn_execution.ts'), 'utf8')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(readFileSync(path.join(process.cwd(), 'server/cognition/prepared_turn.ts'), 'utf8')).toContain('await finalizeLumiResponseForDelivery({');
     expect(restChat).toContain("source: 'rest_chat'");
     expect(restChat).toContain('blocked: finalized.blocked');
   });

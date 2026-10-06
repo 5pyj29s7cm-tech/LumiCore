@@ -1,7 +1,5 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { executeConfirmedChatTurn } from "../confirmation_execution";
-import type { NormalizedMessage } from "../../../llm/providers";
-import type { LLMResult } from "../../../llm/adapter";
 import { createPreFinalizationTextGate, shouldDeferModelOutputUntilFinalized } from "../../../cognition/response_delivery";
 import { extractSentiment } from "../../../cognition/sentiment";
 import type { prepareChatRuntimeControlAndModel } from './prepare_chat_runtime_control_and_model';
@@ -11,14 +9,8 @@ export async function prepareChatModelState(context: NonNullable<Awaited<ReturnT
       if (context.pendingConfirmation) { await executeConfirmedChatTurn(context); { return { terminal: true as const, context: undefined }; } }
 
       let responseText = '';
-      let completionGuard: LLMResult['completionGuard'];
       let llmWasCalled = false;
       const allToolRecords = context.requestToolRecords;
-      // Keep the same token-budgeted conversation that drove the normal turn
-      // available to the one-shot execution recovery. Falling back to only the
-      // latest task makes the recovery model forget constraints and prior user
-      // corrections precisely when it needs them most.
-      let normalTurnMessages: NormalizedMessage[] = [];
       // ── Model-owned natural-language dispatch ──
       // Natural-language chat has no deterministic quick-command path. Surface
       // recognition and legacy quick matches are advisory inputs to the shared
@@ -43,12 +35,8 @@ export async function prepareChatModelState(context: NonNullable<Awaited<ReturnT
   return { terminal: false as const, context: extendTurnBindings(context, {
     get responseText(): typeof responseText { return responseText; },
     set responseText(value: typeof responseText) { responseText = value; },
-    get normalTurnMessages(): typeof normalTurnMessages { return normalTurnMessages; },
-    set normalTurnMessages(value: typeof normalTurnMessages) { normalTurnMessages = value; },
     deferCompletionStream,
     chatTextGate,
-    get completionGuard(): typeof completionGuard { return completionGuard; },
-    set completionGuard(value: typeof completionGuard) { completionGuard = value; },
     get llmWasCalled(): typeof llmWasCalled { return llmWasCalled; },
     set llmWasCalled(value: typeof llmWasCalled) { llmWasCalled = value; },
     allToolRecords,

@@ -49,9 +49,11 @@ describe('cross-channel action turn ownership wiring', () => {
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
     for (const code of [chat, voice]) {
-      expect(code).toContain('attempt: async attempt =>');
-      expect(code).toContain('recovery: attempt');
+      expect(code).toContain('await runPreparedLumiTurn({');
     }
+    const driver = readFileSync('server/cognition/prepared_turn.ts', 'utf8');
+    expect(driver).toContain('attempt: async recovery =>');
+    expect(driver).toContain('await runResolvedLumiRecovery({ model, responseText, recovery })');
     const recoveryOwner = readFileSync('server/cognition/turn_recovery.ts', 'utf8');
     expect(recoveryOwner).toContain('priorToolRecords: recovery.priorToolRecords');
     expect(recoveryOwner).toContain('completionGuard: result.completionGuard');

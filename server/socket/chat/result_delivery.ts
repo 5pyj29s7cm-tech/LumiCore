@@ -5,16 +5,11 @@ import { scheduleTurnMemory } from "../../memory/turn_memory";
 import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
 import { pushNotification } from "../../routes/notifications";
 
-import { ToolExecutionRecord } from "../../tools/types";
 
-import { toolRegistry } from "../../tools/registry";
 
-import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
 
-import { finalizeLumiResponseForDelivery } from "../../cognition/response_delivery";
 
-import { createTurnResponseFinalizer } from "../../cognition/turn_response_finalizer";
 
 import { formatPendingConfirmationRequest } from "../../tools/pending_confirmation";
 
@@ -26,113 +21,12 @@ import { RECONFIRMATION_REQUIRED_BLOCKER } from "../../cognition/action_continua
 
 import { summarizeToolRecordForPersistence } from "../../cognition/tool_record_status";
 
-import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
-import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
-type completeChatTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']> & { finalTaskRecords: ToolExecutionRecord[] };
+type completeChatTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']> & { finalResponse: import('../../cognition/result_finalizer_types').LumiResultFinalizerResult };
 export async function completeChatTurn(context: completeChatTurnInput) {
 
-      const responseFinalizer = createTurnResponseFinalizer({
-        taskText: context.executionTaskText, flow: context.turnFlow, taskId: context.durableTaskId, requestId: context.requestId,
-        pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
-        controlPauseReason: () => context.desktopRelay.getControlPauseReason(),
-      });
-      const desktopPauseBlocksCurrentTask = (records = context.taskAwareRecords(context.allToolRecords)) => responseFinalizer.isDesktopPaused(records);
-      let finalResponse = responseFinalizer.finalize({
-        responseText: context.responseText, completionGuard: context.completionGuard,
-        toolRecords: context.finalTaskRecords, source: 'chat',
-      });
-      const guardRecovery = await finalizeLumiResponseForDelivery({
-        taskText: context.executionTaskText, source: 'chat',
-        responseText: context.responseText,
-        initialFinalization: finalResponse,
-        allowToolUse: context.toolSessionActive,
-        pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
-        requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
-        aborted: context.abortController.signal.aborted || desktopPauseBlocksCurrentTask(),
-        // A physical-input pause revokes further desktop authority, but it is
-        // not a user cancellation.  Treating the pause as AbortError made the
-        // outer chat catch publish the misleading "task stopped" terminal.
-        isAborted: context.isChatCancelled,
-        isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
-        trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
-        toolRecords: context.taskAwareRecords(context.allToolRecords),
-        attempt: async attempt => {
-          console.warn('[ChatHandler] Recovering blocked execution internally.');
-          context.llmWasCalled = true;
-          const toolLifecycle = createToolLifecycleCallbacks({
-            emit: context.emitToolLifecycle, correlationPrefix: 'guard-recovery',
-            formatResult: context.formatToolResultForUi, includeFailedResult: true,
-            onRecord: context.rememberRequestToolRecord,
-            artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
-          });
-          const recovery = await context.runAuthorizedRecovery({
-            responseText: context.responseText, recovery: attempt,
-            model: {
-            execution: context.executionPipeline,
-            messages: context.normalTurnMessages,
-            registry: toolRegistry,
-            config: {
-              provider: context.activeProvider,
-              model: context.activeModel,
-              userId: context.uid,
-              domain: context.resolvedDomain,
-              orgId: context.resolvedOrgId,
-              signal: context.abortController.signal,
-              ...context.reasoningRoutePolicy,
-            },
-            onToolCall: toolLifecycle.onToolCall,
-            maxIterations: Math.max(2, Math.min(12, context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 8)),
-            context: {
-              ...context.toolContext,
-              taskRevision: context.actionTaskExecution.state?.revision,
-              source: 'chat_guard_recovery',
-              onToolStart: toolLifecycle.onToolStart,
-              ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
-              desktopExecutionTracker: context.desktopExecutionTracker,
-              requestConfirmation: context.requestToolConfirmation,
-            },
-            },
-          });
-          recordTokenUsageBatch(context.uid, recovery.usageRecords, context.interactionId);
-          return {
-            ...recovery,
-            toolRecords: withDesktopExecutionReceipt(
-              recovery.toolRecords || [],
-              context.desktopExecutionTracker,
-            ),
-          };
-        },
-        refinalize: (candidateText, records, recoveryCompletionGuard) => {
-          const recoveredRecords = withDesktopExecutionReceipt(records, context.desktopExecutionTracker);
-          return responseFinalizer.finalize({
-            responseText: candidateText, completionGuard: recoveryCompletionGuard,
-            toolRecords: recoveredRecords, source: 'chat_guard_recovery',
-          });
-        },
-      });
-      for (const record of guardRecovery.toolRecords) {
-        const isPriorTaskReceipt = context.priorTaskRecords.some(item => (
-          record.id
-            ? item.id === record.id
-            : item.name === record.name && item.result === record.result && item.error === record.error
-        ));
-        if (isPriorTaskReceipt) continue;
-        const duplicate = record.id
-          ? context.allToolRecords.some(item => item.id === record.id)
-          : context.allToolRecords.some(item => (
-              item.name === record.name
-              && item.result === record.result
-              && item.error === record.error
-            ));
-        if (!duplicate) context.allToolRecords.push(record);
-      }
-      const recoveredDesktopRecords = withDesktopExecutionReceipt(context.allToolRecords, context.desktopExecutionTracker);
-      if (recoveredDesktopRecords.length > context.allToolRecords.length) {
-        context.allToolRecords.push(...recoveredDesktopRecords.slice(context.allToolRecords.length));
-      }
-      finalResponse = guardRecovery.finalization;
+      let finalResponse = context.finalResponse;
       context.responseText = finalResponse.text;
       if (finalResponse.blocked) {
         console.warn('[ChatHandler] Completion claim blocked:', finalResponse.reason);

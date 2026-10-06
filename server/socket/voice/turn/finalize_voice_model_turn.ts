@@ -1,93 +1,14 @@
-import { runResolvedLumiRecovery } from "../../../cognition/turn_recovery";
 import { logger } from "../../../../logger";
 import { extractTopics, trackTopic } from "../../../conversation/manager";
-import { finalizeLumiResponseForDelivery } from "../../../cognition/response_delivery";
-import { toolRegistry } from "../../../tools/registry";
-import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../../../personality/state";
-import { recordTokenUsageBatch } from "../../../llm/token_tracker";
 
-import { createTurnResponseFinalizer } from "../../../cognition/turn_response_finalizer";
 import { extractSentiment } from "../../../cognition/sentiment";
 import { himTick } from "../../../personality/him";
 import type { executeVoiceModelTurn } from './execute_voice_model_turn';
 
 export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModelTurn>>["context"]>) {
 
-    const responseFinalizer = createTurnResponseFinalizer({
-      taskText: context.actionIntentText, flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
-      pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
-      controlPauseReason: () => context.desktopRelay.getControlPauseReason(), pauseTaskText: context.routedUserText,
-    });
-    const desktopPauseBlocksCurrentTask = (records = context.taskAwareRecords(context.toolResults)) => responseFinalizer.isDesktopPaused(records);
-    let finalResponse = responseFinalizer.finalize({
-      responseText: context.responseText, completionGuard: context.completionGuard, toolRecords: context.taskAwareRecords(context.toolResults), source: 'voice',
-    });
-    const guardRecovery = await finalizeLumiResponseForDelivery({
-      taskText: context.routedUserText, source: 'voice',
-      responseText: context.responseText,
-      initialFinalization: finalResponse,
-      allowToolUse: context.toolSessionActive,
-      pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
-      requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
-      aborted: !context.isCurrentTurn() || desktopPauseBlocksCurrentTask(),
-      // Losing the current voice turn is cancellation. A desktop pause is a
-      // resumable customer-visible state and must not become AbortError.
-      isAborted: () => !context.isCurrentTurn(),
-      isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
-        trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
-      toolRecords: context.taskAwareRecords(context.toolResults),
-      attempt: async attempt => {
-        logger.warn('[Audio] Recovering blocked execution internally.');
-          context.turnAuthorization.assertCurrent();
-      const recoveryLifecycle = context.observeVoiceTools();
-      const recovery = await runResolvedLumiRecovery({
-        responseText: context.responseText, recovery: attempt,
-        model: {
-      execution: context.executionPipeline,
-        messages: context.recoveryConversationMessages,
-        registry: toolRegistry,
-        config: {
-            provider: context.provider,
-            model: context.effectiveModel,
-            modelTurnState: context.modelTurnState,
-            userId: context.session.userId,
-            domain: context.voiceScope.domain,
-            orgId: context.voiceScope.orgId,
-            signal: context.pipelineAbort.signal,
-            inputTokenBudget: context.voiceInputTokenBudget,
-            ...context.reasoningRoutePolicy,
-          },
-        onToolCall: recoveryLifecycle.onToolCall,
-        maxIterations: Math.max(2, Math.min(12, context.routedToolPolicy.maxIterations || context.maxIterations || 8)),
-        context: {
-            ...context.toolContext,
-            ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
-            source: 'voice_guard_recovery',
-            isCancelled: () => !context.isCurrentTurn(),
-            onToolStart: recoveryLifecycle.onToolStart,
-          },
-        getters: context.llmGetters,
-        },
-      });
-        recordTokenUsageBatch(context.session.userId, recovery.usageRecords, () => `voice_guard_recovery_${Date.now()}`, 'voice');
-        return {
-          ...recovery,
-          toolRecords: withDesktopExecutionReceipt(recovery.toolRecords || [], context.desktopExecutionTracker),
-        };
-      },
-      refinalize: (candidateText, records, recoveryCompletionGuard) => {
-        const recoveredRecords = context.taskAwareRecords(records);
-        return responseFinalizer.finalize({
-          responseText: candidateText, completionGuard: recoveryCompletionGuard,
-          toolRecords: recoveredRecords, source: 'voice_guard_recovery',
-        });
-      },
-    });
-    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
-    finalResponse = guardRecovery.finalization;
-    context.toolResults = withDesktopExecutionReceipt(guardRecovery.toolRecords, context.desktopExecutionTracker);
-    context.responseText = finalResponse.text;
+    const finalResponse = context.finalResponse;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
     }

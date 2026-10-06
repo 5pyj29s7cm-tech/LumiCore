@@ -73,9 +73,10 @@ describe('finalized output paths', () => {
     expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
     expect(rest).toContain('execution.authorizationPolicy.maxIterations || 3');
     expect(rest).toContain('runLumiEntryTurn({');
-    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await runPreparedLumiTurn({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(source('server/cognition/response_delivery.ts')).toContain('finalizeExecutionForOutboundDelivery');
-    expect(source('server/cognition/turn_execution.ts')).toContain("source: entry.source + '_guard_recovery'");
+    expect(source('server/cognition/prepared_turn.ts')).toContain("input.model.context?.source || input.model.config.source || source) + '_guard_recovery'");
     expect(rest).toContain('finalized: true');
     expect(rest).toContain('blocked: finalized.blocked');
   });
@@ -141,8 +142,9 @@ describe('finalized output paths', () => {
     expect(mcp).toContain('const responsePromise = runLumiEntryTurn({');
     expect(source('server/mcp/server_tools/conversation.ts')).not.toContain('finalizeLumiResponseForDelivery({');
     expect(mcp).not.toContain('runResolvedLumiTurn(');
-    expect(driver).toContain('await finalizeLumiResponseForDelivery({');
-    expect(driver).toContain("source: entry.source + '_guard_recovery'");
+    expect(driver).toContain('await runPreparedLumiTurn({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain("input.model.context?.source || input.model.config.source || source) + '_guard_recovery'");
     expect(driver.indexOf('await commit(finalized,')).toBeLessThan(driver.indexOf('return await input.deliver(executed)'));
     expect(mcp).toContain('const deliver = async ({ finalized, toolRecords }: ExecutedLumiTurn)');
     expect(mcp).toContain("source: 'mcp_chat', action: 'chat'");
@@ -174,8 +176,8 @@ describe('finalized output paths', () => {
 
     expect(mcp).toContain("source: 'mcp_route_task'");
     expect(mcp).toContain("runMcpConversationTurn(runtime, { message: task, personalityId: 'lumi' }, MCP_TASK_ENTRY)");
-    expect(source('server/cognition/turn_execution.ts')).toContain('toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || [])');
-    expect(source('server/cognition/turn_execution.ts')).toContain('toolRecords, taskId, requestId: identity.requestId');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('mergeToolExecutionRecords(input.toolRecords || [], result.toolCalls || [])');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('taskId: input.taskId, requestId: input.requestId');
     expect(mcp).toContain('result: response.content[0].text');
     expect(mcp).toContain('text: delivered.finalized.text');
     expect(mcp).not.toContain("action: 'route_task', status: 'completed'");
@@ -200,42 +202,31 @@ describe('finalized output paths', () => {
 
   it('never queues model candidate speech before the shared voice finalizer', () => {
     const voice = source('server/socket/voice.ts');
+    const driver = source('server/cognition/prepared_turn.ts');
+    const modelEntry = source('server/socket/voice/turn/execute_voice_model_turn.ts');
+    const deliveryEntry = source('server/socket/voice/turn/finalize_voice_model_turn.ts');
     const terminalBoundaryStart = voice.indexOf('const commitVoiceTerminal = async');
     const terminalBoundaryEnd = voice.indexOf('const maxIterations =', terminalBoundaryStart);
     const terminalBoundary = voice.slice(terminalBoundaryStart, terminalBoundaryEnd);
-    // Include the stream callback as well as both shared entry points. Starting
-    // at only the runWithTools call would miss speech queued from onChunk.
-    const modelCandidateStart = voice.indexOf('const modelConfig: LLMConfig = {');
-    const sharedTurnStart = voice.indexOf('const result = await runResolvedLumiTurn({', modelCandidateStart);
-    const sharedPlanStart = voice.indexOf('execution: executionPipeline', sharedTurnStart);
-    const modelOwner = source('server/cognition/turn_model.ts');
-    const finalizerStart = voice.indexOf('let finalResponse = responseFinalizer.finalize({', sharedTurnStart);
-    const finalCommitStart = voice.indexOf('mainTerminalCommitted = await finishVoiceTerminal({', finalizerStart);
-    const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
-    const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);
-
+    const modelStart = driver.indexOf('await runResolvedLumiTurn(input.model)');
+    const finalizerStart = driver.indexOf('await finalizeLumiResponseForDelivery({');
+    expect(modelStart).toBeGreaterThan(0); expect(finalizerStart).toBeGreaterThan(modelStart);
+    expect(modelEntry).toContain('const completed = await runPreparedLumiTurn({');
+    expect(modelEntry).toContain('execution: context.executionPipeline');
+    expect(modelEntry).toContain('context.responseText = completed.finalized.text;');
+    expect(deliveryEntry).toContain('const finalResponse = context.finalResponse;');
+    expect(deliveryEntry).toContain('mainTerminalCommitted = await context.finishVoiceTerminal({');
+    expect(deliveryEntry).not.toContain('runResolvedLumiRecovery');
+    expect(source('server/cognition/turn_model.ts')).toContain('if (!execution.executionRequested)');
     expect(terminalBoundaryStart).toBeGreaterThan(0);
-    expect(modelCandidateStart).toBeGreaterThan(0);
-    expect(sharedTurnStart).toBeGreaterThan(modelCandidateStart);
-    expect(sharedPlanStart).toBeGreaterThan(sharedTurnStart);
-    expect(modelOwner).toContain('if (!execution.executionRequested)');
-    expect(modelOwner).toContain('return runLumiTurn({');
-    expect(finalizerStart).toBeGreaterThan(sharedPlanStart);
-    expect(finalCommitStart).toBeGreaterThan(finalizerStart);
     expect(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt(')).toBeGreaterThan(0);
-    expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(
-      terminalBoundary.indexOf('persistAuthorizedTerminalReceipt('),
-    );
-    expect(terminalBoundary.indexOf('queueFinalizedSpeech(input.speechText!)')).toBeGreaterThan(
-      terminalBoundary.indexOf('publishCommitted:'),
-    );
-    expect(modelCandidatePath).not.toContain('flushSentence(');
-    expect(modelCandidatePath).not.toContain('queueFinalizedSpeech(');
-    expect(modelCandidatePath).toContain('const onChunk = (chunk: string) => {');
-    expect(modelCandidatePath).toContain("responseText = result.text || '';");
-    expect(modelCandidatePath).toContain('completionGuard = result.completionGuard;');
-    expect(finalCommitPath).toContain('speechText: responseText');
-    expect(voice.slice(finalizerStart, finalCommitStart + 1_000)).not.toContain('modelGateSnapshot');
+    expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt('));
+    expect(terminalBoundary.indexOf('queueFinalizedSpeech(input.speechText!)')).toBeGreaterThan(terminalBoundary.indexOf('publishCommitted:'));
+    expect(modelEntry).not.toContain('flushSentence('); expect(modelEntry).not.toContain('queueFinalizedSpeech(');
+    expect(modelEntry).toContain('const onChunk = (chunk: string) => {');
+    expect(modelEntry).toContain('context.modelTextGate.finish();');
+    expect(deliveryEntry).toContain('speechText: context.responseText');
+    expect(deliveryEntry).not.toContain('modelGateSnapshot');
   });
 
   it('quarantines blocked early-return socket responses from history and learning', () => {
@@ -276,7 +267,7 @@ describe('finalized output paths', () => {
       expect(entry).not.toContain('executeSkillWorkflowAdapter');
       expect(entry).not.toContain('preMatchedQuickResult');
       expect(entry).not.toContain('quickFinalized');
-      expect(entry).toContain('runResolvedLumiTurn({');
+      expect(entry).toContain('runPreparedLumiTurn({');
     }
   });
 
@@ -290,7 +281,8 @@ describe('finalized output paths', () => {
     expect(chat).toContain('execution.authorizationPolicy.maxIterations || 3');
     expect(driver).toContain('...assembled.model, execution, messages, assertCurrent');
     expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
-    expect(driver).toContain('await finalizeLumiResponseForDelivery({');
+    expect(driver).toContain('await runPreparedLumiTurn({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(chat).toContain("source: 'rest_chat'");
     expect(chat).toContain('blocked: finalized.blocked');
     expect(chat).toContain('reason: finalized.reason');
@@ -373,10 +365,12 @@ describe('finalized output paths', () => {
 
     const delivery = source('server/cognition/response_delivery.ts');
     expect(rest).toContain('runLumiEntryTurn({');
-    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await runPreparedLumiTurn({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(delivery).toContain('finalizeExecutionForOutboundDelivery({');
     expect(mcp).toContain('runLumiEntryTurn({');
-    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await runPreparedLumiTurn({');
+    expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
     expect(messaging).toContain('`${source}_guard_recovery`');

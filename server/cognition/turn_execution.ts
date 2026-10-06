@@ -7,8 +7,7 @@ import { buildLumiExecutionPipeline, type BuildLumiExecutionPipelineInput, type 
 import { reserveConversationExecution } from './conversation_execution';
 import { mergeToolExecutionRecords } from './task_execution_ledger';
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from './turn_model';
-import { runResolvedLumiRecovery } from './turn_recovery';
-import { finalizeLumiResponseForDelivery } from './response_delivery';
+import { runPreparedLumiTurn } from './prepared_turn';
 import type { LumiResultFinalizerResult } from './result_finalizer_types';
 import type { ToolExecutionRecord } from '../tools/types';
 import type { NormalizedMessage } from '../llm/providers';
@@ -125,25 +124,12 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
         onToolRecord: async record => { await receiptObserver?.onToolRecord(record); await toolModel.context?.onToolRecord?.(record); },
       }, onToolCall: async record => { toolRecords = mergeToolExecutionRecords(toolRecords, [record]); await toolModel.onToolCall?.(record); } } : {}),
     };
-    const result: Awaited<ReturnType<typeof runResolvedLumiTurn>> = input.explicitMemory ? { text: '', toolCalls: [], usageRecords: [] }
-      : await runResolvedLumiTurn(model);
-    assertCurrent();
-    toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || []);
-    const candidateText = String(result.text || 'No response.').trim();
-    const usageRecords = [...(result.usageRecords || [])];
-    const outbound = await finalizeLumiResponseForDelivery({ taskText: userText, responseText: candidateText,
-      completionGuard: result.completionGuard,
-      toolRecords, taskId, requestId: identity.requestId, flow: execution.turnIntent.flow,
-      source: input.deliverySource?.() || entry.source,
-      allowToolUse: execution.executionRequested && !input.explicitMemory,
-      isAborted: () => controller.signal.aborted, isPendingConfirmation: () => false,
-      attempt: async recovery => { const attempt = await runResolvedLumiRecovery({
-        model: { ...model, context: { ...('context' in model ? model.context : {}), source: entry.source + '_guard_recovery' } },
-        responseText: candidateText, recovery,
-      }); usageRecords.push(...attempt.usageRecords); return attempt; },
-    });
-    toolRecords = outbound.toolRecords;
-    let finalized = outbound.finalization; assertCurrent();
+    const completed = await runPreparedLumiTurn({ model, taskText: userText, taskId, requestId: identity.requestId,
+      source: input.deliverySource || entry.source, skipModel: Boolean(input.explicitMemory),
+      projectRecords: records => mergeToolExecutionRecords(toolRecords, records) });
+    toolRecords = completed.toolRecords;
+    const usageRecords = completed.usageRecords;
+    let finalized = completed.finalized; assertCurrent();
     if (input.explicitMemory) {
       const receipt = await input.explicitMemory(); assertCurrent();
       finalized = { ...finalized, text: receipt.text || entry.failureText,

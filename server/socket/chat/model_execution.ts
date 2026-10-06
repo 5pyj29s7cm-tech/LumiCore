@@ -1,3 +1,7 @@
+import { runPreparedLumiTurn } from "../../cognition/prepared_turn";
+import { createTurnResponseFinalizer } from "../../cognition/turn_response_finalizer";
+import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
+import { mergeToolExecutionRecords } from "../../cognition/task_execution_ledger";
 import type { prepareChatModelState } from './phases/prepare_chat_model_state';
 
 import { normalizeChatHistoryRecord } from "./history";
@@ -63,7 +67,6 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
   if (modelIdentityRead) messages.splice(0, messages.length,
     { role: 'system', content: 'Read model_configuration_get with role reasoning to answer the current model question. Report the current-turn activeCall when supplied, otherwise label the value as configuration. Do not change settings or test providers.' },
     { role: 'user', content: context.text, sourceMessageId: context.acceptedUserMessageId });
-  context.normalTurnMessages = messages;
 
   context.markTurnTiming('modelStart');
   console.log('[ChatHandler] Calling Path C with provider:', context.activeProvider, 'model:', context.activeModel, 'tools:', context.toolSessionActive ? 'active' : 'conversation');
@@ -89,39 +92,55 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
     domain: context.resolvedDomain, orgId: context.resolvedOrgId,
     signal: context.abortController.signal, ...context.reasoningRoutePolicy,
   };
-  const result = await context.runAuthorizedTools({
-            execution: context.executionPipeline,
-        messages,
-        registry: toolRegistry,
-        config: { ...config, ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}) },
-        onToolCall: toolLifecycle.onToolCall,
-        maxIterations: context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 25,
-        onStreamChunk: onChunk,
-        context: {
-          ...context.toolContext,
-          taskRevision: context.actionTaskExecution.state?.revision,
-          source: 'chat',
-          onToolStart: toolLifecycle.onToolStart,
-          priorToolRecords: context.priorTaskRecords,
-          ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
-          desktopExecutionTracker: context.desktopExecutionTracker,
-          requestConfirmation: context.requestToolConfirmation,
-        },
-      });
-  if (!context.toolSessionActive) context.markTurnTiming('modelEnd');
-  context.responseText = result.text || '';
-  context.completionGuard = result.completionGuard;
-  context.llmWasCalled = !context.toolSessionActive || result.usageRecords.length > 0;
-  const totalUsage = recordTokenUsageBatch(context.uid, result.usageRecords, context.interactionId);
-  if (context.turnAuthorization.isCurrent()) context.socket.emit('token:usage_update', {
-    userId: context.uid,
-    provider: context.toolSessionActive ? context.activeProvider : result.usageRecords.at(-1)?.provider || context.activeProvider,
-    totalTokens: totalUsage, mode: 'chat', timestamp: new Date().toISOString(),
+  const responseFinalizer = createTurnResponseFinalizer({
+    taskText: context.executionTaskText, flow: context.turnFlow, taskId: context.durableTaskId, requestId: context.requestId,
+    pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
+    controlPauseReason: () => context.desktopRelay.getControlPauseReason(),
   });
-  // The tool loop may cooperatively return a cancellation summary rather
-  // than throw. Do not feed that through ordinary completion guards: the
-  // outer cancellation boundary owns the only durable terminal outcome.
-  if (context.isChatCancelled()) {
-    throw new DOMException('Chat execution cancelled', 'AbortError');
-  }
+  const projectRecords = (records: import('../../tools/types').ToolExecutionRecord[]) => withDesktopExecutionReceipt(
+    context.taskAwareRecords(mergeToolExecutionRecords(context.allToolRecords, records)), context.desktopExecutionTracker);
+  const recoveryLifecycle = createToolLifecycleCallbacks({ emit: context.emitToolLifecycle, correlationPrefix: 'guard-recovery',
+    formatResult: context.formatToolResultForUi, includeFailedResult: true, onRecord: context.rememberRequestToolRecord,
+    artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error) });
+  const completed = await runPreparedLumiTurn({
+    source: 'chat', taskText: context.executionTaskText, taskId: context.durableTaskId, requestId: context.requestId,
+    toolRecords: context.taskAwareRecords(context.allToolRecords), projectRecords,
+    model: { execution: context.executionPipeline, messages, registry: toolRegistry,
+      assertCurrent: () => context.turnAuthorization.assertCurrent(), isCancelled: context.isChatCancelled,
+      config: { ...config, modelTurnState: context.modelTurnState, conversationId: context.conversationId, workflowSource: context.eventSource,
+        ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}) },
+      onToolCall: toolLifecycle.onToolCall, maxIterations: context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 25,
+      onStreamChunk: onChunk, getters: context.llmGetters,
+      context: { ...context.toolContext, taskRevision: context.actionTaskExecution.state?.revision, source: 'chat',
+        onToolStart: toolLifecycle.onToolStart, priorToolRecords: context.priorTaskRecords,
+        ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
+        desktopExecutionTracker: context.desktopExecutionTracker, requestConfirmation: context.requestToolConfirmation } },
+    recovery: { maxIterations: Math.max(2, Math.min(12, context.modelCapabilityPolicy.maxIterations || context.personality.toolPolicy.maxIterations || 8)),
+      onToolCall: recoveryLifecycle.onToolCall, context: { onToolStart: recoveryLifecycle.onToolStart, source: 'chat_guard_recovery' } },
+    finalization: ({ responseText, result, toolRecords }) => ({
+      initialFinalization: responseFinalizer.finalize({ responseText, completionGuard: result.completionGuard, toolRecords, source: 'chat' }),
+      pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
+      aborted: context.abortController.signal.aborted || responseFinalizer.isDesktopPaused(toolRecords),
+      isAborted: context.isChatCancelled, isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+      trustedConfirmationRequestText: responseFinalizer.confirmationRequestText,
+      refinalize: (candidateText, records, completionGuard) => responseFinalizer.finalize({ responseText: candidateText, completionGuard,
+        toolRecords: projectRecords(records), source: 'chat_guard_recovery' }),
+    }),
+    onRecoveryStart: () => { context.llmWasCalled = true; },
+    onRecoveryUsage: records => { recordTokenUsageBatch(context.uid, records, context.interactionId); },
+    onResult: result => {
+      context.chatTextGate.finish();
+      if (!context.toolSessionActive) context.markTurnTiming('modelEnd');
+      context.llmWasCalled = !context.toolSessionActive || result.usageRecords.length > 0;
+      const totalUsage = recordTokenUsageBatch(context.uid, result.usageRecords, context.interactionId);
+      if (context.turnAuthorization.isCurrent()) context.socket.emit('token:usage_update', { userId: context.uid,
+        provider: context.toolSessionActive ? context.activeProvider : result.usageRecords.at(-1)?.provider || context.activeProvider,
+        totalTokens: totalUsage, mode: 'chat', timestamp: new Date().toISOString() });
+    },
+  });
+  const currentRecords = completed.toolRecords.filter(record => !context.priorTaskRecords.some(prior => prior.id
+    ? prior.id === record.id : prior.name === record.name && prior.result === record.result && prior.error === record.error));
+  context.allToolRecords.splice(0, context.allToolRecords.length, ...mergeToolExecutionRecords(context.allToolRecords, currentRecords));
+  context.responseText = completed.finalized.text;
+  return completed.finalized;
 }
