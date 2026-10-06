@@ -26,7 +26,7 @@
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "lint": "npm run check:architecture && npm run lint:i18n && npm run lint:hooks && npm run lint:hooks:critical && tsc --noEmit",
     "lint:hooks": "eslint \"src/**/*.{ts,tsx}\" --quiet",
-    "lint:hooks:critical": "eslint src/components/AgentChatPage.tsx src/components/DesktopUI.tsx src/hooks/useVoiceCall.ts src/hooks/useVoiceprint.ts src/hooks/useWakeWord.ts --max-warnings 0",
+    "lint:hooks:critical": "eslint src/components/AgentChatPage.tsx src/components/DesktopUI.tsx src/components/agent_chat/state src/components/desktop/state src/hooks/useVoiceCall.ts src/hooks/useVoiceprint.ts src/hooks/useWakeWord.ts --max-warnings 0",
     "lint:i18n": "node scripts/check-i18n-boundaries.mjs",
     "lint:i18n:baseline": "node scripts/check-i18n-boundaries.mjs --write-baseline",
     "test": "node scripts/run-vitest.mjs",

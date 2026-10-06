@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
@@ -5,7 +6,7 @@ import ts from 'typescript';
 
 const sources = new Map<string, ts.SourceFile>();
 export function readSourceAst(file: string): ts.SourceFile {
-  if (!sources.has(file)) sources.set(file, ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+  if (!sources.has(file)) sources.set(file, ts.createSourceFile(file, readImplementationSource(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
   return sources.get(file)!;
 }
 

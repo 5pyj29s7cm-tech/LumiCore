@@ -657,12 +657,13 @@ describe('voice foreground release convergence', () => {
     const ownerTry = turnSource.indexOf('  try {', ownerStart);
     const clarificationPhase = turnSource.indexOf('await executeVoiceConfirmedAndDeterministicTurn(', ownerTry);
     const modelPhase = turnSource.indexOf('await executeVoiceModelTurn(', ownerTry);
-    const phaseStart = turnSource.indexOf('async function executeVoiceConfirmedAndDeterministicTurn(');
+    const clarificationSource = readFileSync('server/socket/voice/turn/execute_voice_confirmed_and_deterministic_turn.ts', 'utf8');
+    const phaseStart = clarificationSource.indexOf('async function executeVoiceConfirmedAndDeterministicTurn(');
     expect(ownerTry).toBeGreaterThan(ownerStart);
     expect(clarificationPhase).toBeGreaterThan(ownerTry);
     expect(modelPhase).toBeGreaterThan(clarificationPhase);
-    expect(turnSource.indexOf("if (context.transcriptExecutionGuard.action === 'clarify')", phaseStart))
-      .toBeLessThan(turnSource.indexOf('await persistTurnMemory(', phaseStart));
+    expect(clarificationSource.indexOf("if (context.transcriptExecutionGuard.action === 'clarify')", phaseStart))
+      .toBeLessThan(clarificationSource.indexOf('await persistTurnMemory(', phaseStart));
     expect(source).toContain("releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.')");
 
     const outerFailureStart = source.indexOf("logger.error('[Voice Error]:', err);");

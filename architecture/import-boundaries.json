@@ -70,12 +70,6 @@
       ],
       "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
     },
-    "server/socket/voice_conversation_turn.ts": {
-      "allowedExports": [
-        "flushDBOrThrow"
-      ],
-      "reason": "Voice conversation turn strict terminal fence only; storage operations remain in scoped repositories."
-    },
     "server/socket/voice_input_pipeline.ts": {
       "allowedExports": [
         "flushDBOrThrow"
@@ -99,6 +93,48 @@
         "flushDBOrThrow"
       ],
       "reason": "Knowledge file routes access bounded state through server/files/knowledge_state.ts and retain only the strict durability barrier here."
+    },
+    "server/socket/chat/phases/resolve_chat_control_turn.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/chat.ts; no database read, write or SQL grant."
+    },
+    "server/socket/chat/phases/admit_chat_foreground_turn.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/chat.ts; no database read, write or SQL grant."
+    },
+    "server/socket/chat/phases/start_chat_foreground_turn.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/chat.ts; no database read, write or SQL grant."
+    },
+    "server/socket/chat/phases/prepare_chat_terminal_writers.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/chat.ts; no database read, write or SQL grant."
+    },
+    "server/socket/voice/turn/prepare_voice_identity_and_admission.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/voice_conversation_turn.ts; no database read, write or SQL grant."
+    },
+    "server/socket/voice/turn/prepare_voice_context_and_routing.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/voice_conversation_turn.ts; no database read, write or SQL grant."
+    },
+    "server/socket/voice/turn/prepare_voice_release.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only responsibility moved from server/socket/voice_conversation_turn.ts; no database read, write or SQL grant."
     }
   },
   "approvedTableImporters": {
@@ -662,20 +698,6 @@
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
     },
-    "server/socket/chat.ts": {
-      "tables": [
-        "conversationActionReceipts",
-        "conversationActionTasks",
-        "conversationActionTurns",
-        "conversations",
-        "interactions"
-      ],
-      "allowedExports": [
-        "flushDBOrThrow",
-        "readDatabaseTables"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
     "server/socket/proactive_reminder_delivery.ts": {
       "tables": [
         "interactions",
@@ -958,6 +980,46 @@
         "commitDatabaseTables"
       ],
       "reason": "Active root file routes use detached six-table state with atomic deltas, scoped file ownership and indexing revisions; unrelated tables cannot be accessed."
+    },
+    "server/socket/chat/phases/prepare_chat_events.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "flushDBOrThrow",
+        "readDatabaseTables"
+      ],
+      "reason": "Responsibility moved from server/socket/chat.ts; exact prior table subset and existing owner predicates retained."
+    },
+    "server/socket/chat/phases/prepare_chat_prior_task_query.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Responsibility moved from server/socket/chat.ts; exact prior table subset and existing owner predicates retained."
+    },
+    "server/socket/chat/phases/prepare_chat_conversation_context.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Responsibility moved from server/socket/chat.ts; exact prior table subset and existing owner predicates retained."
     }
   },
   "approvedSqlImporters": {

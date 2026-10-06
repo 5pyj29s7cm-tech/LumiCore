@@ -10,6 +10,81 @@ const modules: Record<string, string[]> = {
   'src/components/AgentChatPage.tsx': ['src/components/AgentChatPage.tsx', 'src/components/agent_chat/chat_stream_receivers.ts', 'src/components/agent_chat/useConversationTransitions.ts', 'src/components/agent_chat/AgentChatView.tsx', ...['chat_toolbar_view', 'conversation_history_rail_view', 'chat_panel_header_view', 'chat_message_feed_view', 'chat_composer_view', 'chat_activity_rail_view'].map(name => 'src/components/agent_chat/' + name + '.tsx')],
   'src-tauri/src/lib.rs': ['src-tauri/src/lib.rs', ...['native_files', 'native_shell', 'native_apps', 'native_window_modes', 'native_processes', 'native_activity', 'native_display', 'native_input'].map(name => 'src-tauri/src/' + name + '.rs')],
 };
+const phaseOwners: Record<string, string[]> = {
+  "server/socket/chat.ts": [
+    "server/socket/chat/phases/shared.ts",
+    "server/socket/chat/phases/prepare_chat_request.ts",
+    "server/socket/chat/phases/prepare_chat_events.ts",
+    "server/socket/chat/phases/resolve_chat_control_turn.ts",
+    "server/socket/chat/phases/admit_chat_foreground_turn.ts",
+    "server/socket/chat/phases/start_chat_foreground_turn.ts",
+    "server/socket/chat/phases/prepare_chat_prior_task_query.ts",
+    "server/socket/chat/phases/prepare_chat_conversation_context.ts",
+    "server/socket/chat/phases/prepare_chat_terminal_writers.ts",
+    "server/socket/chat/phases/prepare_chat_execution_lease_and_tools.ts",
+    "server/socket/chat/phases/prepare_chat_runtime_control_and_model.ts",
+    "server/socket/chat/phases/prepare_chat_model_state.ts",
+    "server/socket/chat/phases/execute_chat_model_and_delivery.ts"
+  ],
+  "server/socket/voice_conversation_turn.ts": [
+    "server/socket/voice/turn/prepare_voice_identity_and_admission.ts",
+    "server/socket/voice/turn/prepare_voice_context_and_routing.ts",
+    "server/socket/voice/turn/prepare_voice_execution_and_prompt.ts",
+    "server/socket/voice/turn/prepare_voice_receipts_and_tools.ts",
+    "server/socket/voice/turn/prepare_voice_speech.ts",
+    "server/socket/voice/turn/prepare_voice_release.ts",
+    "server/socket/voice/turn/execute_voice_confirmed_and_deterministic_turn.ts",
+    "server/socket/voice/turn/execute_voice_mode_and_messaging_turn.ts",
+    "server/socket/voice/turn/execute_voice_model_turn.ts",
+    "server/socket/voice/turn/finalize_voice_model_turn.ts"
+  ],
+  "src/components/DesktopUI.tsx": [
+    "src/components/desktop/state/shared.tsx",
+    "src/components/desktop/state/use_desktop_surface_state.tsx",
+    "src/components/desktop/state/use_desktop_capture_and_identity.tsx",
+    "src/components/desktop/state/use_desktop_runtime_and_preferences.tsx",
+    "src/components/desktop/state/use_desktop_wallpaper.tsx",
+    "src/components/desktop/state/use_desktop_notifications_and_shortcuts.tsx",
+    "src/components/desktop/state/use_desktop_surface_controls.tsx",
+    "src/components/desktop/state/use_desktop_presentation.tsx"
+  ],
+  "src/components/AgentChatPage.tsx": [
+    "src/components/agent_chat/state/shared.tsx",
+    "src/components/agent_chat/state/use_chat_identity_and_state.tsx",
+    "src/components/agent_chat/state/use_chat_attachments_and_presentation.tsx",
+    "src/components/agent_chat/state/use_chat_history_and_requests.tsx",
+    "src/components/agent_chat/state/use_chat_scope_initialization.tsx",
+    "src/components/agent_chat/state/use_chat_socket_events.tsx",
+    "src/components/agent_chat/state/use_chat_request_controls.tsx",
+    "src/components/agent_chat/state/use_chat_media_controls.tsx",
+    "src/components/agent_chat/state/use_chat_uploads_and_view.tsx"
+  ]
+};
+
+/** Rebase only module specifiers when inspecting actual phase implementations at their logical entry. */
+function readPhaseSource(file: string, entry: string): string {
+  const source = fs.readFileSync(path.resolve(file), 'utf8');
+  if (file === entry) return source;
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  const visit = (node: ts.Node) => {
+    const specifier = ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier
+      : ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || node.expression.getText(ast) === 'require') ? node.arguments[0] : undefined;
+    if (specifier && ts.isStringLiteral(specifier) && specifier.text.startsWith('.')) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier.text));
+      let relative = path.posix.relative(path.posix.dirname(entry), target);
+      if (!relative.startsWith('.')) relative = './' + relative;
+      const quote = specifier.getText(ast)[0];
+      edits.push({ start: specifier.getStart(ast), end: specifier.end, replacement: quote + relative + quote });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  return edits.sort((a, b) => b.start - a.start).reduce((text, edit) => text.slice(0, edit.start) + edit.replacement + text.slice(edit.end), source);
+}
+
+const readOwnedSource = (file: string) => [...(phaseOwners[file] || []), file].map(name => readPhaseSource(name, file)).join('\n');
+const readSourceModule = (file: string): string => modules[file] ? modules[file].map(name => name === file ? readOwnedSource(name) : readSourceModule(name)).join('\n') : readOwnedSource(file);
 const chatPhases = ['confirmation_execution', 'result_delivery', 'context_retrieval', 'prompt_context', 'prior_task_status', 'model_execution'];
 
 /** Unwrap only the explicit live-state access used by responsibility helpers. */
@@ -22,13 +97,13 @@ export function normalizeTurnBindings(source: string): string {
 export function readImplementationSource(file: fs.PathOrFileDescriptor, options?: any): any {
   const input = file instanceof URL ? fileURLToPath(file) : String(file);
   const normalized = path.resolve(input).replace(/\\/g, '/');
-  const entry = Object.keys(modules).find(name => normalized === name || normalized.endsWith('/' + name));
+  const entry = [...Object.keys(modules), 'server/socket/voice_conversation_turn.ts'].find(name => normalized === name || normalized.endsWith('/' + name));
   if (entry) {
-    const source = modules[entry].map(name => fs.readFileSync(path.resolve(name), 'utf8')).join('\n');
+    const source = readSourceModule(entry);
     return entry.startsWith('server/') ? normalizeTurnBindings(source) : source;
   }
   if (normalized === 'server/socket/chat.ts' || normalized.endsWith('/server/socket/chat.ts')) {
-    let source = fs.readFileSync(file, 'utf8');
+    let source = readOwnedSource('server/socket/chat.ts');
     for (const phase of chatPhases) {
       const filename = path.resolve('server/socket/chat/' + phase + '.ts');
       const text = fs.readFileSync(filename, 'utf8');

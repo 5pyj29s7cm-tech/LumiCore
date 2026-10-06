@@ -11,6 +11,8 @@ export const CN_TASK_EXECUTION_MESSAGES = {
   executing: (goal: string, receiptCount: number) => `“${goal}”还在执行链上${receiptCount ? `，已完成${receiptCount}个可验证步骤` : ''}。`,
   resumableNotRunning: (goal: string, receiptCount: number) => `“${goal}”的任务上下文仍然保留${receiptCount ? `，已有${receiptCount}个可验证步骤` : ''}，但当前没有正在运行的执行请求。`,
   activeWithoutReceipt: '当前任务仍在执行，暂时还没有终态回执。',
+  pendingConfirmationCancelled: '已取消刚才等待确认的操作；它没有执行，也不会继续发送。',
+  noPendingOperation: '当前没有等待确认或正在执行的操作。',
   cancelled: '已停止当前任务，未完成的步骤不会继续执行。',
   statusCancelled: (goal: string) => `“${goal || '刚才的任务'}”已经停止，未完成的步骤不会继续。`,
   statusFreshConfirmation: (goal: string) => `“${goal}”上次的确认已经失效，我没有执行旧操作。需要重新生成并展示这一步；请审阅新提议后再确认。`,

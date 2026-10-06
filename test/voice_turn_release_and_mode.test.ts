@@ -1,11 +1,10 @@
-import fs from 'node:fs';
-import { normalizeTurnBindings } from './implementation_source';
+import { normalizeTurnBindings, readImplementationSource } from './implementation_source';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { toolRecordSucceeded } from '../server/cognition/task_execution_ledger';
 
 const filename = 'server/socket/voice_conversation_turn.ts';
-const source = fs.readFileSync(filename, 'utf8');
+const source = readImplementationSource(filename, 'utf8');
 const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
 const turn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'processAdmittedVoiceTurn') as ts.FunctionDeclaration;
 const functions = new Map(ast.statements.filter(ts.isFunctionDeclaration).filter(node => node.name).map(node => [node.name!.text, node]));
