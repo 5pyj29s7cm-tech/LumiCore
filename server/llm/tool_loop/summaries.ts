@@ -99,18 +99,24 @@ export function buildIterationLimitSummary(executionLog: ToolExecutionRecord[], 
 
   if (isZh) {
     return [
-      CN_DURABLE_EXECUTION_MESSAGES.recoveryBudgetExhausted,      CN_TOOL_LOOP_MESSAGES.progressHeading,
-      ...recentSteps,      artifacts.length > 0 ? CN_TOOL_LOOP_MESSAGES.verifiedArtifactsHeading : '',
-      ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),      artifacts.length > 0
+      CN_DURABLE_EXECUTION_MESSAGES.recoveryBudgetExhausted,
+      CN_TOOL_LOOP_MESSAGES.progressHeading,
+      ...recentSteps,
+      artifacts.length > 0 ? CN_TOOL_LOOP_MESSAGES.verifiedArtifactsHeading : '',
+      ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
+      artifacts.length > 0
         ? CN_DURABLE_EXECUTION_MESSAGES.resumeFromVerifiedArtifacts
         : CN_DURABLE_EXECUTION_MESSAGES.resumeWithoutVerifiedArtifacts,
     ].filter(Boolean).join('\n');
   }
 
   return [
-    'The bounded tool execution and automatic recovery budget was exhausted before final verification passed.',    'Progress:',
-    ...recentSteps,    artifacts.length > 0 ? 'Verified generated files:' : '',
-    ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),    artifacts.length > 0
+    'The bounded tool execution and automatic recovery budget was exhausted before final verification passed.',
+    'Progress:',
+    ...recentSteps,
+    artifacts.length > 0 ? 'Verified generated files:' : '',
+    ...artifacts.map(artifact => `- ${artifact.path} (${formatBytes(artifact.size)})`),
+    artifacts.length > 0
       ? 'Recovery must continue from these verified results, prefer a declared fallback or independent verification capability, and avoid repeating completed work.'
       : 'No verified artifact was detected. Recovery must preserve the receipts and re-plan a declared fallback or verification capability instead of treating the failure explanation as completion.',
   ].filter(Boolean).join('\n');

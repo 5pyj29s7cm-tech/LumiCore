@@ -10,4 +10,3 @@ export function invalidateMemoryAvatarAuthorization(userId: string, avatarId: st
     controller.abort(new DOMException('Memory avatar or its sources changed.', 'AbortError'));
   }
 }
-
