@@ -26,9 +26,10 @@ import { remotePlatformLabel, getRequestText, buildRemoteTurnIntentText } from "
 import { assertMessagingAuthorization, isMessagingAuthorizationCurrent, newerMessageSupersedesThisTurn, registerActiveMessageRouteController } from "../messaging_ingress_runtime";
 import { createMessagingReplyCommitter, conversationForMessagingTurn } from "../messaging_persistence";
 import { messagingPendingOffer, buildRemoteConversationHistory } from './history';
-import { buildRemoteLumiExecutionPlan } from './remote_plan';
+import { remoteTurnPlanningData } from './remote_plan';
+import type { LumiExecutionPipeline } from '../../../../cognition/execution_pipeline';
 
-export async function prepareMessagingTurn(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }) {
+export async function prepareMessagingTurn(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }, admittedController?: AbortController) {
 
   msg = captureMessagingOrganization(msg);
   assertMessagingAuthorization(msg);
@@ -51,7 +52,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
   if (isIdentityBound && (!conversation || !acceptedTurnAdmission || acceptedTurnAdmission.persisted !== msg.userMessageId)) {
     throw new Error('The admitted remote turn lost its original conversation or durability token.');
   }
-  const actionAbortController = new AbortController();
+  const actionAbortController = admittedController || new AbortController();
   let organizationWorkExecution: OrganizationWorkExecution | null = null;
   const actionWasCancelled = () => (
     actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg) || !isMessagingAuthorizationCurrent(msg)
@@ -97,7 +98,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
     const dismissalReply = /[\u3400-\u9fff]/u.test(requestText)
       ? '好，有需要再叫我。'
       : 'Okay. I\'m here when you need me.';
-    return { terminal: await ( await commitReply(dismissalReply)), context: undefined };
+    return { terminal: await commitReply(dismissalReply), planning: undefined, assemble: undefined };
   }
   const turnResolution = acceptedTurn?.resolution || resolveUserTurn({
     requestId, userText: requestText, state: conversation?.actionContinuationState,
@@ -141,7 +142,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
       console.warn('[Messaging] Personality configuration unavailable:', error.message);
     }
   }
-  const executionPlan = buildRemoteLumiExecutionPlan({
+  const planning = remoteTurnPlanningData({
     requestId,userText:requestText,acceptedResolution:turnResolution,
     actionTaskState:conversation?.actionContinuationState,
     userId: effectiveUserId,
@@ -155,6 +156,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
     personalityToolPolicy: personality?.toolPolicy,
     pendingAssistantOfferContext,
   });
+  return { terminal: undefined, planning, assemble: async (executionPlan: LumiExecutionPipeline) => {
   const priorMessages = conversation
     ? getMessagesByTokenBudget(conversation.id, 6000, 8, msg.messageId)
     : [];
@@ -344,6 +346,7 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
     actionLeaseHeartbeat,
     releaseActiveMessageRouteController,
   } };
+  } };
 }
 
-export type MessagingTurnContext = NonNullable<Awaited<ReturnType<typeof prepareMessagingTurn>>["context"]>;
+export type MessagingTurnContext = NonNullable<Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof prepareMessagingTurn>>["assemble"]>>>["context"]>;

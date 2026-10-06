@@ -5,7 +5,7 @@ import type { TurnResolution } from "../../../../cognition/turn_resolution";
 import type { OperationMode } from "../../../../cognition/operation_modes";
 import type { ToolPolicy } from "../../../../personality/types";
 import type { PendingAssistantOfferContext } from "../../../../cognition/pending_assistant_offer";
-import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from "../../../../cognition/execution_pipeline";
+import { buildLumiExecutionPipeline, type LumiExecutionPipeline, type BuildLumiExecutionPipelineInput } from "../../../../cognition/execution_pipeline";
 import { toolRegistry } from "../../../../tools/registry";
 
 export function resolveMentionedOrganizationMembers(message: IncomingMessage, orgId: string): string[] {
@@ -51,8 +51,8 @@ export interface RemoteLumiExecutionPlanInput {
   pendingAssistantOfferContext?: PendingAssistantOfferContext;
 }
 
-export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): LumiExecutionPipeline {
-  return buildLumiExecutionPipeline({
+export function remoteTurnPlanningData(input: RemoteLumiExecutionPlanInput): BuildLumiExecutionPipelineInput {
+  return {
     requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
     dispatch: {
       userId: input.userId,
@@ -78,5 +78,9 @@ export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput
     traceText: input.text,
     source: input.source,
     taskId: input.taskId,
-  });
+  };
+}
+
+export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): LumiExecutionPipeline {
+  return buildLumiExecutionPipeline(remoteTurnPlanningData(input));
 }

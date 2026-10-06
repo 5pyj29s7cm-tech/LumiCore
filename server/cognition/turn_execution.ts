@@ -29,10 +29,13 @@ export interface LumiTurnExecutionIdentity {
 }
 export interface AssembledLumiTurnData {
   systemPrompt: string;
-  model: (Omit<ToolSessionOptions, 'messages'> & { streaming?: boolean; taskText?: string }) | Omit<ConversationTurnInput, 'messages'>;
+  model: ((Omit<ToolSessionOptions, 'messages'> & { streaming?: boolean; taskText?: string }) | Omit<ConversationTurnInput, 'messages'>)
+    & Pick<ResolvedTurnModelInput, 'assertCurrent' | 'isCancelled'>;
   /** Stateless external entries supply their already normalized provider messages. */
   messages?: NormalizedMessage[];
-  prepared?: Pick<PreparedLumiTurnInput, 'projectRecords' | 'finalization' | 'onResult' | 'onRecoveryStart' | 'onRecoveryUsage' | 'recovery'>;
+  task?: { taskId?: string; turnRowId?: string };
+  taskText?: string;
+  prepared?: Pick<PreparedLumiTurnInput, 'projectRecords' | 'finalization' | 'onResult' | 'onRecoveryStart' | 'onRecoveryUsage' | 'recovery' | 'skipModel'>;
 }
 export interface ExecutedLumiTurn {
   execution: LumiExecutionPipeline;
@@ -48,17 +51,18 @@ export interface LumiEntryTurnInput<T> {
   identity: LumiTurnExecutionIdentity;
   userText: string;
   /** External ledgers keep their existing durable task and transcript ownership. */
-  persistence?: 'conversation' | 'external';
+  persistence?: 'conversation' | 'external' | 'preaccepted';
   externalTask?: { taskId?: string; turnRowId?: string };
   authorization: RequestAuthorization;
   controller: AbortController;
   planning: Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>
-    | (() => Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>);
+    | (() => Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'>
+      | { terminal: T } | Promise<Omit<BuildLumiExecutionPipelineInput, 'requestId' | 'actionTaskState' | 'persistedConversationHistory'> | { terminal: T }>);
   onFailure?: (error: unknown) => Promise<T> | T;
   /** External ledgers finish their durable terminal state before the FIFO owner is released. */
   settle?: () => Promise<void>;
   /** Entry enrichment returns data; ownership, planning and execution remain here. */
-  assemble(execution: LumiExecutionPipeline): AssembledLumiTurnData | Promise<AssembledLumiTurnData>;
+  assemble(execution: LumiExecutionPipeline): AssembledLumiTurnData | { terminal: T } | Promise<AssembledLumiTurnData | { terminal: T }>;
   explicitMemory?: () => Promise<MemoryReceipt>;
   beforeCommit?: (result: ExecutedLumiTurn) => Promise<void> | void;
   deliverySource?: () => string;
@@ -71,7 +75,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   const identity = Object.freeze({ ...input.identity });
   const entry = Object.freeze({ ...input.entry });
   const userText = input.userText;
-  const conversationPersistence = input.persistence !== 'external';
+  const persistence = input.persistence || 'conversation';
+  const conversationPersistence = persistence === 'conversation';
   const externalTask = Object.freeze({ ...input.externalTask });
   const capturedPlanning = typeof input.planning === 'function' ? input.planning
     : { ...input.planning, dispatch: { ...input.planning.dispatch } };
@@ -84,7 +89,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
   const assertCurrent = () => { controller.signal.throwIfAborted(); authorization.assertCurrent(); };
   const commit = async (finalized: LumiResultFinalizerResult, reason: string) => {
     authorization.assertCurrent();
-    if (!conversationPersistence) { if (identity.conversationId) await flushDBOrThrow(); return; }
+    // Preaccepted entries have an atomic transcript/terminal-receipt committer in delivery.
+    if (!conversationPersistence) { if (persistence !== 'preaccepted' && identity.conversationId) await flushDBOrThrow(); return; }
     addMessageIdempotent({ ...identity, source: entry.source, channel: entry.channel, role: 'assistant', content: finalized.text,
       toolCalls: toolRecords, cognitiveIntent: reason,
       ...(finalized.blocked && taskId ? { terminalTaskDisposition: { outcome: 'blocked' as const, taskId,
@@ -101,7 +107,8 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     await admission?.waitForTurn(); assertCurrent();
     const conversation = identity.conversationId ? getConversationForScope(identity.conversationId, identity.userId, identity.domain, identity.orgId) : null;
     if (identity.conversationId && !conversation) throw Object.assign(new Error('The accepted conversation is unavailable'), { code: 'CONVERSATION_ENTRY_UNAVAILABLE' });
-    const planning = typeof capturedPlanning === 'function' ? capturedPlanning() : capturedPlanning;
+    const planning = typeof capturedPlanning === 'function' ? await capturedPlanning() : capturedPlanning;
+    if ('terminal' in planning) return planning.terminal;
     assertCurrent();
     const execution = buildLumiExecutionPipeline({ ...planning, requestId: identity.requestId,
       ...(conversationPersistence && conversation ? { actionTaskState: conversation.actionContinuationState,
@@ -117,7 +124,13 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
     heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
     } else { taskId = externalTask.taskId; turnRowId = externalTask.turnRowId; }
     const receiptObserver = conversationPersistence ? createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent) : undefined;
-    const assembled = await input.assemble(execution); assertCurrent();
+    const assembled = await input.assemble(execution);
+    if ('terminal' in assembled) return assembled.terminal;
+    assertCurrent();
+    if (!conversationPersistence && assembled.task) {
+      if (externalTask.taskId && externalTask.taskId !== assembled.task.taskId) throw new Error('Assembly changed the external task identity');
+      taskId = assembled.task.taskId; turnRowId = assembled.task.turnRowId;
+    }
     if (assembled.model.config.requestId && assembled.model.config.requestId !== identity.requestId) throw new Error('Model data does not belong to the accepted request');
     if (assembled.model.config.conversationId && assembled.model.config.conversationId !== identity.conversationId) throw new Error('Model data does not belong to the accepted conversation');
     const messages: NormalizedMessage[] = !conversationPersistence && assembled.messages ? assembled.messages : [
@@ -127,14 +140,15 @@ export async function runLumiEntryTurn<T>(input: LumiEntryTurnInput<T>): Promise
       { role: 'user', content: userText },
     ];
     const toolModel = 'registry' in assembled.model ? assembled.model : undefined;
-    const model: ResolvedTurnModelInput = { ...assembled.model, execution, messages, assertCurrent,
+    const model: ResolvedTurnModelInput = { ...assembled.model, execution, messages,
+      assertCurrent: () => { assertCurrent(); assembled.model.assertCurrent?.(); },
       config: { ...assembled.model.config, conversationId: identity.conversationId || undefined, requestId: identity.requestId, signal: controller.signal },
       ...(toolModel ? { context: { ...toolModel.context, ...identity, taskId, turnRowId,
         source: entry.source, executionSignal: controller.signal, isCancelled: () => controller.signal.aborted || !authorization.isCurrent(),
         onToolRecord: async record => { await receiptObserver?.onToolRecord(record); await toolModel.context?.onToolRecord?.(record); },
       }, onToolCall: async record => { toolRecords = mergeToolExecutionRecords(toolRecords, [record]); await toolModel.onToolCall?.(record); } } : {}),
     };
-    const completed = await runPreparedLumiTurn({ model, taskText: userText, taskId, requestId: identity.requestId,
+    const completed = await runPreparedLumiTurn({ model, taskText: assembled.taskText || userText, taskId, requestId: identity.requestId,
       source: input.deliverySource || entry.source, skipModel: Boolean(input.explicitMemory),
       ...assembled.prepared,
       projectRecords: records => {

@@ -1,58 +1,73 @@
 import type { IncomingMessage } from "../../../../messaging/types";
-import { captureMessagingOrganization } from "../../../../messaging/turn_authorization";
-import { resolveUserTurn, type TurnResolution } from "../../../../cognition/turn_resolution";
-import type { PendingAssistantOfferContext } from "../../../../cognition/pending_assistant_offer";
+import { captureMessagingOrganization, isMessagingAuthorizationCurrent } from "../../../../messaging/turn_authorization";
+import { resolveUserTurn } from "../../../../cognition/turn_resolution";
 import type { AcceptedUserTurnAdmission } from "../../../../socket/action_turn_durability";
-import { reserveConversationExecution } from "../../../../cognition/conversation_execution";
+import { runLumiEntryTurn, type ExecutedLumiTurn } from "../../../../cognition/turn_execution";
+import { captureRequestAuthorization } from "../../../../conversation/lifecycle";
 import type { MessagingRouteOptions } from "../messaging_finalization";
 import { getRequestText } from "../remote_materials";
 import { assertMessagingAuthorization } from "../messaging_ingress_runtime";
 import { admitBoundMessagingTurnDurably, conversationForMessagingTurn } from "../messaging_persistence";
 import { messagingPendingOffer } from './history';
-import { prepareMessagingTurn } from './admission';
-import { prepareMessagingExecution } from './execution_preparation';
-import { executeMessagingModelTurn } from './model_execution';
+import { prepareMessagingTurn, type MessagingTurnContext } from './admission';
+import { prepareMessagingExecution, type MessagingModelContext } from './execution_preparation';
+import { prepareMessagingModelTurn, finalizeMessagingModelFailure } from './model_execution';
 
 export async function processWithPersonality(
   msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
 ): Promise<string> {
-  msg=captureMessagingOrganization(msg); assertMessagingAuthorization(msg);
-  if (!msg.boundUserId) return processWithPersonalityAdmitted(msg,options,preacceptedAdmission);
-  const accepted = preacceptedAdmission && preacceptedAdmission.persisted === msg.userMessageId
-    ? {message:msg,admission:preacceptedAdmission}
-    : await admitBoundMessagingTurnDurably(msg,options?.onConversationUpdated);
-  const conversation=conversationForMessagingTurn(accepted.message);
-  if (!conversation) throw new Error('The accepted messaging conversation is unavailable');
-  const pendingAssistantOfferContext = messagingPendingOffer(accepted.message, conversation);
-  const acceptedTurn = Object.freeze({
+  msg = captureMessagingOrganization(msg); assertMessagingAuthorization(msg);
+  const accepted = !msg.boundUserId || preacceptedAdmission && preacceptedAdmission.persisted === msg.userMessageId
+    ? { message: msg, admission: preacceptedAdmission }
+    : await admitBoundMessagingTurnDurably(msg, options?.onConversationUpdated);
+  const conversation = msg.boundUserId ? conversationForMessagingTurn(accepted.message) : null;
+  if (msg.boundUserId && !conversation) throw new Error('The accepted messaging conversation is unavailable');
+  const pendingAssistantOfferContext = conversation ? messagingPendingOffer(accepted.message, conversation) : undefined;
+  const acceptedTurn = conversation ? Object.freeze({
     resolution: resolveUserTurn({ requestId: msg.platform + '_bot:' + msg.messageId, userText: getRequestText(accepted.message),
-      state: conversation.actionContinuationState, options: { pendingAssistantOfferContext } }),
-    pendingAssistantOfferContext,
+      state: conversation.actionContinuationState, options: { pendingAssistantOfferContext } }), pendingAssistantOfferContext,
+  }) : undefined;
+  const controller = new AbortController();
+  const authorization = captureRequestAuthorization(() => isMessagingAuthorizationCurrent(msg), 'Messaging authorization was revoked');
+  let setup: Awaited<ReturnType<typeof prepareMessagingTurn>> | undefined;
+  let context: MessagingTurnContext | undefined;
+  let modelContext: MessagingModelContext | undefined;
+  let deliver: ((result: ExecutedLumiTurn) => Promise<string>) | undefined;
+  return runLumiEntryTurn({
+    entry: { source: msg.platform + '_bot', channel: msg.platform, historyLimit: 0,
+      failureText: 'The remote turn could not finish.', failureReason: 'remote_execution_failed' },
+    identity: { userId: msg.boundUserId || 'anonymous', agentId: conversation?.agentId || 'lumi',
+      conversationId: conversation?.id || '', requestId: msg.platform + '_bot:' + msg.messageId,
+      domain: msg.boundUserId && msg.boundOrgId ? 'work' : 'personal', orgId: msg.boundUserId && msg.boundOrgId || '' },
+    userText: getRequestText(accepted.message), persistence: msg.boundUserId ? 'preaccepted' : 'external', authorization, controller,
+    planning: async () => {
+      setup = await prepareMessagingTurn(accepted.message, options, accepted.admission, acceptedTurn, controller);
+      if (setup.terminal !== undefined) return { terminal: setup.terminal };
+      return setup.planning!;
+    },
+    assemble: async execution => {
+      const admitted = await setup!.assemble!(execution);
+      if (admitted.terminal !== undefined) return { terminal: admitted.terminal };
+      context = admitted.context!;
+      const prepared = await prepareMessagingExecution(context);
+      if (prepared.terminal !== undefined) return { terminal: prepared.terminal };
+      modelContext = prepared.context!;
+      const data = await prepareMessagingModelTurn(modelContext);
+      if (data.terminal !== undefined) return { terminal: data.terminal };
+      deliver = data.deliver;
+      return data.data;
+    },
+    deliver: result => deliver!(result),
+    onFailure: error => {
+      if (modelContext) return finalizeMessagingModelFailure(error, modelContext);
+      throw error;
+    },
+    settle: async () => {
+      context?.desktopRelay?.releaseControlLease?.();
+      context?.personalDesktopRelay?.releaseControlLease?.();
+      context?.organizationWorkExecution?.release();
+      context?.actionLeaseHeartbeat?.stop();
+      context?.releaseActiveMessageRouteController();
+    },
   });
-  const admission=reserveConversationExecution({
-    userId:msg.boundUserId,domain:msg.boundOrgId?'work':'personal',orgId:msg.boundOrgId,
-    conversationId:conversation.id,
-  },msg.platform+'_bot:'+msg.messageId);
-  try {
-    await admission.waitForTurn(); assertMessagingAuthorization(msg);
-    return await processWithPersonalityAdmitted(accepted.message,options,accepted.admission,acceptedTurn);
-  } finally {admission.release();}
-}
-
-async function processWithPersonalityAdmitted(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }): Promise<string> {
-  const admitted = await prepareMessagingTurn(msg, options, preacceptedAdmission, acceptedTurn);
-  if (admitted.terminal !== undefined) return admitted.terminal;
-  const context = admitted.context!;
-  try {
-    const prepared = await prepareMessagingExecution(context);
-    if (prepared.terminal !== undefined) return prepared.terminal;
-    return await executeMessagingModelTurn(prepared.context!);
-  } finally {
-
-    context.desktopRelay?.releaseControlLease?.();
-    context.personalDesktopRelay?.releaseControlLease?.();
-    context.organizationWorkExecution?.release();
-    context.actionLeaseHeartbeat?.stop();
-    context.releaseActiveMessageRouteController();
-  }
 }

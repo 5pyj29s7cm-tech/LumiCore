@@ -1,4 +1,4 @@
-import { runPreparedLumiTurn } from "../../../../cognition/prepared_turn";
+import type { ExecutedLumiTurn, AssembledLumiTurnData } from "../../../../cognition/turn_execution";
 import type { MessageHandler } from "../../../../messaging/types";
 import { MessagingAuthorizationRevokedError } from "../../../../messaging/turn_authorization";
 import { toolRegistry } from "../../../../tools/registry";
@@ -22,7 +22,7 @@ import { assertMessagingAuthorization, isMessagingAuthorizationCurrent } from ".
 import { handleRemoteOrgCommand } from "../remote_org_commands";
 import type { MessagingModelContext } from './execution_preparation';
 
-export async function executeMessagingModelTurn(context: MessagingModelContext): Promise<string> {
+export async function prepareMessagingModelTurn(context: MessagingModelContext) {
 
 
   try {
@@ -90,7 +90,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
         context.actionTaskExecution.state?.taskId,
         context.requestId,
       );
-      return await context.commitReply(finalizedMode.text, {
+      return { terminal: await context.commitReply(finalizedMode.text, {
         toolCalls: context.toolRecords,
         beforeFlush: superseded => {
           if (superseded) {
@@ -104,7 +104,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
           }
           context.settleRemoteTask();
         },
-      });
+      }), data: undefined, deliver: undefined };
     }
 
     if (!deterministicEntryReply && context.isOrganizationBound) {
@@ -176,20 +176,18 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
 
     const entryHandled = Boolean(deterministicEntryReply);
     let missingOrganizationExternalCommitReceipt = false;
-    const completed = await runPreparedLumiTurn({
-      source: context.source, taskText: context.routingText,
-      taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
-      skipModel: entryHandled,
+    return { terminal: undefined, data: {
+      systemPrompt: context.systemPrompt, messages: context.messages, taskText: context.routingText,
+      task: { taskId: context.actionTaskExecution.state?.taskId, turnRowId: context.actionTaskExecution.turnRowId },
       model: {
-        execution: context.executionPlan,
         assertCurrent: () => { assertMessagingAuthorization(context.msg); context.organizationWorkExecution?.assertCurrent(); },
         isCancelled: context.actionWasCancelled,
-        taskText: context.routingText, streaming: false, messages: context.messages,
+        taskText: context.routingText, streaming: false,
         registry: toolRegistry, config: context.userLLMPrefs,
         onToolCall: context.collectToolRecord,
         maxIterations: context.modelToolPolicy.maxIterations || context.executionDecision.maxIterations,
         context: context.remoteToolContext, getters: context.llm,
-      },
+      }, prepared: { skipModel: entryHandled,
       onResult: result => {
         if (entryHandled) return;
         context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
@@ -231,7 +229,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
         return {
           initialFinalization,
           allowToolUse: context.toolSessionActive && !callbackReply && !entryHandled && !missingOrganizationExternalCommitReceipt,
-          pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), aborted: context.actionWasCancelled(),
+          pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), requiresFreshConfirmation: context.correctionRequiresFreshConfirmation, aborted: context.actionWasCancelled(),
           isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn), isAborted: context.actionWasCancelled,
           trustedConfirmationRequestText: () => context.pendingConfirmationCreatedThisTurn
             ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn) : undefined,
@@ -245,7 +243,8 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
               taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId }),
         };
       },
-    });
+      },
+    } satisfies AssembledLumiTurnData, deliver: async (completed: ExecutedLumiTurn) => {
     context.toolRecords = completed.toolRecords;
     const finalized = completed.finalized;
     if (context.actionLeaseWasLost()) {
@@ -322,7 +321,13 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
       }
     }
     return committedText;
-  } catch (err: any) {
+    } };
+  } catch (err) {
+    return { terminal: await finalizeMessagingModelFailure(err, context), data: undefined, deliver: undefined };
+  }
+}
+
+export async function finalizeMessagingModelFailure(err: any, context: MessagingModelContext): Promise<string> {
     if (!isMessagingAuthorizationCurrent(context.msg)) {
       context.settleRemoteTask('The remote message authorization was revoked or replaced.');
       await context.flushTerminalReply();
@@ -357,5 +362,4 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
         });
       },
     });
-  }
 }

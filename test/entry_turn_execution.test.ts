@@ -103,7 +103,7 @@ describe('entry turn execution ownership', () => {
   });
   it('rejects a foreign model request before execution and durably blocks the original accepted request', async () => {
     const item = fixture(); const assembly = item.input.assemble;
-    item.input.assemble = async execution => { const data = await assembly(execution); data.model.config.requestId = 'foreign-request'; return data; };
+    item.input.assemble = async execution => { const data = await assembly(execution); if ('terminal' in data) throw new Error('Foreign-model fixture requires model data'); data.model.config.requestId = 'foreign-request'; return data; };
     await expect(runLumiEntryTurn(item.input)).rejects.toThrow('accepted request');
     expect(model).not.toHaveBeenCalled();
     const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === item.identity.requestId);
@@ -135,8 +135,8 @@ describe('entry turn execution ownership', () => {
   });
   it('settles a revoked external attempt without starting a model or writing a transcript', async () => {
     const item = fixture(); const events: string[] = [];
-    const assemble = vi.fn(item.input.assemble);
-    const result = await runLumiEntryTurn({ ...item.input, persistence: 'external', assemble,
+    const assemble = vi.fn(() => { throw new Error('A rejected attempt must not assemble model data'); });
+    const result = await runLumiEntryTurn<string>({ ...item.input, planning: item.planning, persistence: 'external', assemble,
       authorization: captureRequestAuthorization(() => false, 'Revoked before queue admission'),
       onFailure: error => { expect(error).toMatchObject({ name: 'AbortError' }); events.push('failed'); return 'blocked'; },
       deliver: () => 'delivered', settle: async () => { events.push('saved'); },

@@ -66,7 +66,7 @@ describe('finalized output paths', () => {
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('return await runLumiEntryTurn({');
-    expect(source('server/cognition/turn_execution.ts')).toContain('...assembled.model, execution, messages, assertCurrent');
+    expect(source('server/cognition/turn_execution.ts')).toContain('...assembled.model, execution, messages,');
     expect(source('server/cognition/turn_model.ts')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).toContain("'remote_restricted'");
@@ -279,7 +279,7 @@ describe('finalized output paths', () => {
     const driver = source('server/cognition/turn_execution.ts');
     expect(driver).toContain('buildLumiExecutionPipeline({');
     expect(chat).toContain('execution.authorizationPolicy.maxIterations || 3');
-    expect(driver).toContain('...assembled.model, execution, messages, assertCurrent');
+    expect(driver).toContain('...assembled.model, execution, messages,');
     expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
     expect(driver).toContain('await runPreparedLumiTurn({');
     expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
@@ -374,8 +374,10 @@ describe('finalized output paths', () => {
     expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
     const messagingModel = source('server/regions/packs/cn/messaging_turn/model_execution.ts');
-    expect(messagingModel).toContain('await runPreparedLumiTurn({');
-    expect(messagingModel).toContain('source: context.source, taskText: context.routingText');
+    expect(messaging).toContain('return runLumiEntryTurn({');
+    expect(messagingModel).toContain('satisfies AssembledLumiTurnData');
+    expect(messagingModel).toContain('taskText: context.routingText');
+    expect(messagingModel).not.toContain('runPreparedLumiTurn(');
     expect(messagingModel).not.toContain('runResolvedLumiRecovery(');
     expect(delivery.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(1);
     expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard)');
