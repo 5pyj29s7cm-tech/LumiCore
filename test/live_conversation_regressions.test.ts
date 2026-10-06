@@ -38,8 +38,11 @@ describe('September live conversation failures', () => {
     expect(finalizeLumiResponse({ ...input, toolRecords: [{ ...observation, requestId: 'previous-request' }] }).blocked).toBe(true);
     expect(finalizeLumiResponse({ ...input, toolRecords: [observation, { ...observation, result: '{"playback":{"playbackState":"playing"}}' }] }).blocked).toBe(true);
   });
-  it('requires both browser and wallpaper receipts for the actual composite navigation request', () => {
-    const taskText = '你给我打开，用浏览器打开，进入壁纸模式';
+  it.each([
+    '你给我打开，用浏览器打开，进入壁纸模式',
+    '用浏览器打开，进入壁纸模式',
+    '进入壁纸模式，再用浏览器打开',
+  ])('requires both browser and wallpaper receipts regardless of component order: %s', taskText => {
     const contract = buildActionContract(taskText);
     const wallpaper = { name: 'client_action', arguments: { action: 'set_wallpaper_mode', enabled: true }, result: JSON.stringify({
       ok: true, action: 'set_wallpaper_mode', enabled: true, verification: { status: 'verified' },
