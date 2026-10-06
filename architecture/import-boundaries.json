@@ -58,12 +58,6 @@
       ],
       "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
     },
-    "server/socket/voice.ts": {
-      "allowedExports": [
-        "flushDBOrThrow"
-      ],
-      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
-    },
     "server/socket/voice_input_pipeline.ts": {
       "allowedExports": [
         "flushDBOrThrow"
@@ -161,6 +155,18 @@
       "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
     },
     "server/workflows/state/maintenance.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
+    },
+    "server/regions/packs/cn/messaging_turn/admission.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
+    },
+    "server/socket/voice/connection/connection.ts": {
       "allowedExports": [
         "flushDBOrThrow"
       ],
@@ -331,21 +337,6 @@
       ],
       "allowedExports": [
         "flushDBOrThrow",
-        "readDatabaseTables",
-        "commitDatabaseTables"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
-    "server/conversation/manager.ts": {
-      "tables": [
-        "conversationActionReceipts",
-        "conversationActionTasks",
-        "conversationActionTurns",
-        "conversations",
-        "interactions",
-        "modelRoutingReceipts"
-      ],
-      "allowedExports": [
         "readDatabaseTables",
         "commitDatabaseTables"
       ],
@@ -587,13 +578,6 @@
       "allowedExports": [
         "readDatabaseTables",
         "commitDatabaseTables",
-        "flushDBOrThrow"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
-    "server/regions/packs/cn/messaging_routes.ts": {
-      "tables": [],
-      "allowedExports": [
         "flushDBOrThrow"
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
@@ -1095,6 +1079,111 @@
         "externalCapabilityReceipts"
       ],
       "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/terminal_durability.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/turn_binding.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/execution_preparation.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/execution_control.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/recovery.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/conversation/manager/message_updates.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "conversationActionTurns",
+        "conversations",
+        "interactions",
+        "modelRoutingReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
         "readDatabaseTables"
       ],
       "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."

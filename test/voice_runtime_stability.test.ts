@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { readVoiceImplementationSource } from './voice_implementation_source';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -113,7 +114,7 @@ describe('live voice runtime stability policy', () => {
 
   it('wires capture recovery, live input-device changes, bounded prompts, and the voice lease deadline', () => {
     const root = process.cwd();
-    const hook = fs.readFileSync(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
+    const hook = readImplementationSource(path.join(root, 'src/hooks/useVoiceCall.ts'), 'utf8');
     const voice = readVoiceImplementationSource();
 
     expect(hook).toContain('classifyVoiceCaptureHealth');

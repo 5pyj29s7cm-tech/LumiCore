@@ -1,0 +1,123 @@
+import type { IncomingMessage } from "../../../../messaging/types";
+import { getBinding } from "../../../../messaging/bindings";
+import { getMember } from "../../../../org/db";
+import type { TurnResolution } from "../../../../cognition/turn_resolution";
+import type { OperationMode } from "../../../../cognition/operation_modes";
+import type { ToolPolicy } from "../../../../personality/types";
+import type { PendingAssistantOfferContext } from "../../../../cognition/pending_assistant_offer";
+import { buildLumiTurnDispatch, type LumiTurnDispatch } from "../../../../cognition/turn_dispatch";
+import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from "../../../../cognition/execution_pipeline";
+import { toolRegistry } from "../../../../tools/registry";
+
+export function resolveMentionedOrganizationMembers(message: IncomingMessage, orgId: string): string[] {
+  if (message.chatType !== 'group' || !orgId) return [];
+  if (!['feishu', 'wecom', 'wechat'].includes(message.platform)) return [];
+  const platform = message.platform as 'feishu' | 'wecom' | 'wechat';
+  const members = (message.mentionedUserIds || []).flatMap(platformUserId => {
+    if (!platformUserId || platformUserId === message.userId) return [];
+    const binding = getBinding(platform, platformUserId, message.chatId, 'group');
+    if (!binding || binding.orgId !== orgId) return [];
+    const membership = getMember(orgId, binding.lumiUserId);
+    if (!membership || membership.status !== 'active' || membership.role === 'viewer') return [];
+    return [binding.lumiUserId];
+  });
+  return Array.from(new Set(members));
+}
+
+const ORGANIZATION_VIEWER_WRITE_TOOLS = [
+  'legal_case_workspace',
+  'legal_message_intake_to_case',
+  'legal_meeting_minutes_to_case',
+  'legal_import_materials_to_kb',
+  'legal_import_judgment',
+  'wechat_send_file',
+  'feishu_send_file',
+];
+
+export interface RemoteLumiExecutionPlanInput {
+  requestId?: string;
+  userText?: string;
+  acceptedResolution?: TurnResolution;
+  userId: string;
+  text: string;
+  source: string;
+  domain: 'personal' | 'work';
+  orgId: string;
+  operationMode: OperationMode;
+  identityBound: boolean;
+  canWriteOrganization: boolean;
+  personalityToolPolicy?: ToolPolicy;
+  actionTaskState?: import("../../../../cognition/action_continuation").ConversationActionContinuationState | null;
+  taskId?: string;
+  pendingAssistantOfferContext?: PendingAssistantOfferContext;
+}
+
+function unauthenticatedRemoteDispatch(dispatch: LumiTurnDispatch): LumiTurnDispatch {
+  const flow = {
+    ...dispatch.flow,
+    operationMode: 'chat' as const,
+    effectiveOperationMode: 'chat' as const,
+    requestedMode: null,
+    autoPromoteToAssistant: false,
+    allowToolUseForTurn: false,
+    selfRepairTurn: false,
+    clientActionOnlyTurn: false,
+    promptOverlay: [
+      '## Lumi Turn Flow',
+      'Channel: chat. Surface: chat. Mode: chat -> chat. Tool access: chat-only.',
+      'This remote sender is not identity-bound. Keep the turn conversational and do not expose private, local, organization, client, or desktop tools.',
+    ].join('\n'),
+  };
+  return {
+    ...dispatch,
+    boundary: 'conversation',
+    flow,
+    promptOverlay: [
+      '## Lumi Unified Turn Dispatch',
+      `Entry channel: chat. Source: ${dispatch.source}. Surface: chat. Boundary: conversation.`,
+      'Identity boundary: this sender is not bound to a Lumi user, so this turn cannot control or inspect a private Lumi client.',
+    ].join('\n'),
+  };
+}
+
+export function buildRemoteLumiExecutionPlan(input: RemoteLumiExecutionPlanInput): LumiExecutionPipeline {
+  const rawDispatch = buildLumiTurnDispatch({
+    userId: input.userId,
+    text: input.text,
+    channel: 'chat',
+    source: input.source,
+    category: input.domain === 'work' ? 'organization' : undefined,
+    domain: input.domain,
+    orgId: input.orgId,
+    operationMode: input.operationMode,
+    targetIsLumi: true,
+  });
+  const dispatch = input.identityBound ? rawDispatch : unauthenticatedRemoteDispatch(rawDispatch);
+  return buildLumiExecutionPipeline({
+    requestId:input.requestId, userText:input.userText, acceptedResolution:input.acceptedResolution,
+    dispatch: {
+      userId: input.userId,
+      text: input.text,
+      channel: 'chat',
+      source: input.source,
+      category: input.domain === 'work' ? 'organization' : undefined,
+      domain: input.domain,
+      orgId: input.orgId,
+      operationMode: input.operationMode,
+      targetIsLumi: true,
+    },
+    prebuiltDispatch: dispatch,
+    registry: toolRegistry,
+    personalityToolPolicy: input.personalityToolPolicy,
+    actionTaskState: input.actionTaskState,
+    pendingAssistantOfferContext: input.pendingAssistantOfferContext,
+    isSanctuary: !input.identityBound,
+    additionalForbiddenTools: input.domain === 'work' && !input.canWriteOrganization
+      ? ORGANIZATION_VIEWER_WRITE_TOOLS
+      : undefined,
+    decisionText: input.text,
+    traceText: input.text,
+    source: input.source,
+    taskId: input.taskId,
+  });
+}

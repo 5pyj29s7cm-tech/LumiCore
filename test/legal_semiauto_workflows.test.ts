@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -1523,7 +1524,7 @@ describe('semi-automated legal workflows', () => {
 
   it('keeps triad reasoning as core legal logic rather than a standalone UI tab', () => {
     const registry = createLegalRegistry();
-    const legalHubSource = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalHub.tsx'), 'utf-8');
+    const legalHubSource = readImplementationSource(path.join(process.cwd(), 'src/components/org/LegalHub.tsx'), 'utf-8');
     const toolRouterSource = fs.readFileSync(path.join(process.cwd(), 'server/cognition/tool_router.ts'), 'utf-8');
     const legalToolsShimSource = fs.readFileSync(path.join(process.cwd(), 'server/tools/definitions/legal_tools.ts'), 'utf-8');
     const legalToolDirectory = path.join(process.cwd(), 'server/regions/packs/cn/legal_tools');
