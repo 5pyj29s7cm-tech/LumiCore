@@ -742,7 +742,7 @@
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
     },
-    "server/tools/definitions/work_takeover_tools.ts": {
+    "server/tools/definitions/work_takeover_execution_tools.ts": {
       "tables": [
         "conversationActionReceipts",
         "conversationActionTasks",

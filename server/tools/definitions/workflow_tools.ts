@@ -641,6 +641,12 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
 
   const stepReceipts: Array<Record<string, unknown>> = [];
   const orderedSteps = topologicallyOrderWorkflowSteps(run.planSnapshot);
+  const workerResponse = (extra: Record<string, unknown>) => JSON.stringify({
+    ok: false, status: run!.status, runId: run!.runId, revision: run!.revision,
+    workflowId, name: workflowName, completedSteps: stepReceipts.length,
+    totalSteps: orderedSteps.length, steps: stepReceipts, ...extra,
+  }, null, 2);
+
   if (!context?.toolRegistry) {
     run = await durablyBlockWorkflowRun({
       runId: run.runId,
@@ -650,19 +656,22 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       reason: 'The tool registry is unavailable.',
       kind: 'policy',
     });
-    return JSON.stringify({
-      ok: false,
+    return workerResponse({
       status: 'blocked',
-      runId: run.runId,
-      revision: run.revision,
-      workflowId,
-      name: workflowName,
       completedSteps: 0,
-      totalSteps: orderedSteps.length,
       blocker: 'The tool registry is unavailable.',
       steps: [],
-    }, null, 2);
+    });
   }
+  const blockChangedContract = async (stepId: string, blocker: string) => {
+    run = await durablyBlockWorkflowRun({ runId: run!.runId, expectedRevision: run!.revision,
+      userId, actor: 'workflow-tool', reason: blocker, kind: 'capability_contract_changed' });
+    return workerResponse({
+      status: 'blocked',
+      failedStepId: stepId,
+      blocker,
+    });
+  };
   const workerLeaseId = run.lease?.leaseId;
   if (!workerLeaseId) throw new Error(`Workflow run '${run.runId}' has no live worker lease.`);
 
@@ -693,20 +702,12 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
         reason: blocker,
         kind: 'policy',
       });
-      return JSON.stringify({
-        ok: false,
+      return workerResponse({
         status: 'blocked',
-        runId: run.runId,
-        revision: run.revision,
-        workflowId,
-        name: workflowName,
-        completedSteps: stepReceipts.length,
-        totalSteps: orderedSteps.length,
         failedStep: i + 1,
         failedStepId: step.stepId,
         blocker,
-        steps: stepReceipts,
-      }, null, 2);
+      });
     }
     const existingExecutionKey = workflowStepExecutionKey(run, step.stepId);
     if (run.receipts.some(receipt => (
@@ -734,28 +735,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
         && capabilityContractStillCompatible(step, latestManifest, latestDefinition?.parameters || {});
     };
     if (!capabilityContractMatchesReviewedDefinition()) {
-      const blocker = capabilityContractBlocker;
-      run = await durablyBlockWorkflowRun({
-        runId: run.runId,
-        expectedRevision: run.revision,
-        userId,
-        actor: 'workflow-tool',
-        reason: blocker,
-        kind: 'capability_contract_changed',
-      });
-      return JSON.stringify({
-        ok: false,
-        status: 'blocked',
-        runId: run.runId,
-        revision: run.revision,
-        workflowId,
-        name: workflowName,
-        completedSteps: stepReceipts.length,
-        totalSteps: orderedSteps.length,
-        failedStepId: step.stepId,
-        blocker,
-        steps: stepReceipts,
-      }, null, 2);
+      return blockChangedContract(step.stepId, capabilityContractBlocker);
     }
     const resolvedArguments = resolveWorkflowValue(
       step.argumentsTemplate || {},
@@ -781,20 +761,13 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
           arguments: resolvedArguments,
         });
         await persistWorkflowRuntimeBarrier();
-        return JSON.stringify({
+        return workerResponse({
           ok: true,
           status: 'waiting_confirmation',
-          runId: run.runId,
-          revision: run.revision,
-          workflowId,
-          name: workflowName,
           confirmationId: run.confirmation?.confirmationId,
           stepId: step.stepId,
           capabilityId,
-          completedSteps: stepReceipts.length,
-          totalSteps: orderedSteps.length,
-          steps: stepReceipts,
-        }, null, 2);
+        });
       }
     }
     run = await prepareWorkflowStepExecution({
@@ -812,28 +785,7 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
       },
     });
     if (!capabilityContractMatchesReviewedDefinition()) {
-      const blocker = capabilityContractBlocker;
-      run = await durablyBlockWorkflowRun({
-        runId: run.runId,
-        expectedRevision: run.revision,
-        userId,
-        actor: 'workflow-tool',
-        reason: blocker,
-        kind: 'capability_contract_changed',
-      });
-      return JSON.stringify({
-        ok: false,
-        status: 'blocked',
-        runId: run.runId,
-        revision: run.revision,
-        workflowId,
-        name: workflowName,
-        completedSteps: stepReceipts.length,
-        totalSteps: orderedSteps.length,
-        failedStepId: step.stepId,
-        blocker,
-        steps: stepReceipts,
-      }, null, 2);
+      return blockChangedContract(step.stepId, capabilityContractBlocker);
     }
     const executionKey = workflowStepExecutionKey(run, step.stepId);
     const upstreamAdapterStart = context?.onAdapterStart;
@@ -889,17 +841,11 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     if (!verified) {
       const controlledRun = getWorkflowRun(run.runId, userId);
       if (record.adapterStarted !== true && controlledRun && (controlledRun.status === 'paused' || controlledRun.status === 'cancelled')) {
-        return JSON.stringify({
-          ok: false,
+        return workerResponse({
           status: controlledRun.status,
           runId: controlledRun.runId,
           revision: controlledRun.revision,
-          workflowId,
-          name: workflowName,
-          completedSteps: stepReceipts.length,
-          totalSteps: orderedSteps.length,
-          steps: stepReceipts,
-        }, null, 2);
+        });
       }
       const blocker = record.error || record.terminalVerification?.reason || record.envelope?.verification.reason || 'The workflow step did not produce verified terminal evidence.';
       run = await durablyBlockWorkflowRun({
@@ -915,21 +861,14 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
           ? 'capability_contract_changed'
           : undefined,
       });
-      return JSON.stringify({
-        ok: false,
+      return workerResponse({
         status: run.reconciliationRequired ? 'blocked' : 'failed',
-        runId: run.runId,
-        revision: run.revision,
-        workflowId,
-        name: workflowName,
-        completedSteps: stepReceipts.length,
-        totalSteps: orderedSteps.length,
         failedStep: i + 1,
         failedStepId: step.stepId,
         blocker,
         reconciliationRequired: run.reconciliationRequired,
         steps: [...stepReceipts, { index: i + 1, stepId: step.stepId, capability: capabilityId, status: 'failed', error: blocker }],
-      }, null, 2);
+      });
     }
     stepReceipts.push({ index: i + 1, stepId: step.stepId, capability: capabilityId, status: 'completed', result: record.result });
     run = checkpointWorkflowRun({
@@ -944,17 +883,9 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
     });
     await persistWorkflowRuntimeBarrier();
     if (run.status !== 'running') {
-      return JSON.stringify({
-        ok: false,
-        status: run.status,
-        runId: run.runId,
-        revision: run.revision,
-        workflowId,
-        name: workflowName,
-        completedSteps: stepReceipts.length,
-        totalSteps: orderedSteps.length,
-        steps: stepReceipts,
-      }, null, 2);
+      return workerResponse({
+
+      });
     }
   }
 
@@ -976,17 +907,10 @@ async function handleRunWorkflow(args: Record<string, any>, context?: any): Prom
   await persistWorkflowRuntimeBarrier();
   assertWorkflowAuthorization(run);
 
-  return JSON.stringify({
+  return workerResponse({
     ok: true,
     status: 'completed',
-    runId: run.runId,
-    revision: run.revision,
-    workflowId,
-    name: workflowName,
-    completedSteps: stepReceipts.length,
-    totalSteps: orderedSteps.length,
-    steps: stepReceipts,
-  }, null, 2);
+  });
 }
 
 function boundedWorkflowOutput(value: unknown, maxChars = 2_000): unknown {
