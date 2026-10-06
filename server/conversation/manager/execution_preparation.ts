@@ -1,3 +1,4 @@
+import type { ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 import { bindConversationActionTurnTask, getConversationActionTurn } from "../action_turn_ledger";
 import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
 import type { Conversation } from "./contracts";
@@ -20,7 +21,8 @@ export type RejectedConversationActionExecution = {
   diagnosticCode:
     | 'conversation_action_conversation_missing'
     | 'conversation_action_turn_not_persisted'
-    | 'conversation_action_turn_busy';
+    | 'conversation_action_turn_busy'
+    | 'conversation_action_task_binding_stale';
 };
 
 export type ConversationActionExecutionPreparation =
@@ -49,6 +51,10 @@ export function prepareConversationActionExecution(input: {
   followupIntent?: import("../../cognition/action_continuation").RecentActionFollowupIntent;
   /** Preserve the current task while binding corrective/continuation feedback. */
   preserveExistingTask?: boolean;
+  /** Final server-owned task relation; no downstream text-based reselection. */
+  acceptedTaskRelation?: ActiveTaskMessageResolution;
+  /** Exact accepted durable grant identity, independent of conversational wording. */
+  confirmationTaskId?: string;
 }): ConversationActionExecutionPreparation {
   const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   const conversation = (db.conversations || []).find((item: Conversation) => (
@@ -60,7 +66,12 @@ export function prepareConversationActionExecution(input: {
       'conversation_action_conversation_missing',
     );
   }
-  hydrateConversationActionState(db, conversation, input.userText);
+  hydrateConversationActionState(db, conversation, input.acceptedTaskRelation ? undefined : input.userText);
+  const relation = input.acceptedTaskRelation;
+  const expectedTaskId = input.confirmationTaskId || (relation && (relation.binding === 'active_task' || relation.binding === 'previous_task') ? relation.taskId : undefined);
+  const existingTurn = (db.conversationActionTurns || []).find((turn: any) => turn.conversationId === input.conversationId && turn.userId === input.userId && turn.requestId === input.requestId);
+  const currentTaskId = existingTurn?.taskId || conversation.actionContinuationState?.taskId;
+  if (expectedTaskId && currentTaskId !== expectedTaskId) return rejectedConversationActionExecution('stale', 'conversation_action_task_binding_stale');
   const binding = bindConversationActionExecutionTurnInDb(db, conversation, {
     userId: input.userId,
     conversationId: input.conversationId,

@@ -29,6 +29,10 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
   const conversation = { state: null, kind: 'conversation' as const, turnRowId: undefined };
   if (!input.conversationId || input.observationOnly) return conversation;
   const relation = execution.taskRelation;
+  const stale = { state: null, kind: 'conversation' as const, bindingFailure: 'stale' as const,
+    diagnosticCode: 'conversation_action_task_binding_stale' as const };
+  if (relation.binding === 'stale' || input.pendingConfirmation?.taskId && relation.taskId && input.pendingConfirmation.taskId !== relation.taskId) return stale;
+  const tasklessGrant = Boolean(input.pendingConfirmation && !input.pendingConfirmation.taskId);
   const boundFeedback = Boolean(relation.taskId
     && (relation.binding === 'active_task' || relation.binding === 'previous_task')
     && ['continue', 'correction', 'accept', 'retry'].includes(relation.feedback));
@@ -42,8 +46,9 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
       ? { allowedTools: ['runtime_work_cancel'], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 }
       : execution.authorizationPolicy,
     followupIntent: execution.actionFollowupIntent,
-    forceTask, forceResume: !input.acceptedRuntimeCleanup && forceResume,
-    forceNewTask: input.acceptedRuntimeCleanup,
+    acceptedTaskRelation: relation, confirmationTaskId: input.pendingConfirmation?.taskId,
+    forceTask, forceResume: !input.acceptedRuntimeCleanup && !tasklessGrant && forceResume,
+    forceNewTask: input.acceptedRuntimeCleanup || tasklessGrant,
     preserveExistingTask: input.acceptedRuntimeCleanup ? false : forceResume || forceTask,
   });
 }

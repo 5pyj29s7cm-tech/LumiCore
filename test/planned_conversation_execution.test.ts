@@ -100,6 +100,37 @@ describe('planned conversation task ownership', () => {
     expect(preparePlannedConversationExecution({ ...input, observationOnly: true, bindConversationTurn: true })).toMatchObject({ kind: 'conversation', state: null });
     expect(JSON.stringify(readDB().conversationActionTasks)).toBe(before);
   });
+  it('rejects the old accepted task after a different task becomes the current durable pointer', async () => {
+    const previous = await unfinished(); const delayed = await accepted('Continue the unfinished task.', previous.input);
+    expect(delayed.execution.taskRelation.taskId).toBe(previous.taskId);
+    const later = await accepted('Start a separate task: Search the public web for synthetic ocean examples.', previous.input);
+    const latest = preparePlannedConversationExecution(later);
+    addMessageIdempotent({ userId: later.userId, conversationId: later.conversationId, agentId: 'lumi', requestId: later.requestId, source: 'planned-fixture', channel: 'chat', domain: 'personal', orgId: '', role: 'assistant', content: 'The later task is still unfinished.',
+      terminalTaskDisposition: { outcome: 'blocked', taskId: latest.state!.taskId, requestId: later.requestId, reason: 'Later task awaits evidence.' },
+    });
+    await flushDBOrThrow();
+    const before = JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === later.conversationId));
+    expect(preparePlannedConversationExecution(delayed)).toMatchObject({ bindingFailure: 'stale', diagnosticCode: 'conversation_action_task_binding_stale' });
+    expect(getConversationForScope(later.conversationId, later.userId, 'personal', '')?.actionContinuationState?.taskId).toBe(latest.state!.taskId);
+    expect(JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === later.conversationId))).toBe(before);
+  });
+  it('cannot resume a planned task using a durable grant that names a different task', async () => {
+    const previous = await unfinished(); const input = await accepted('Continue the unfinished task.', previous.input);
+    const scope = buildTransportNeutralConfirmationScope({ domain: 'personal', orgId: '', conversationId: input.conversationId, taskId: 'another-task' });
+    const pending = await recordPendingConfirmationDurably(input.userId, 'web_search', { query: 'fixture' }, 'chat', scope);
+    const before = JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === input.conversationId));
+    expect(preparePlannedConversationExecution({ ...input, pendingConfirmation: pending })).toMatchObject({ bindingFailure: 'stale' });
+    expect(JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === input.conversationId))).toBe(before);
+    expect((await getPendingConfirmationDurably(input.userId, scope))?.id).toBe(pending.id);
+  });
+  it('keeps a taskless grant separate from an unrelated unfinished task', async () => {
+    const previous = await unfinished(); const input = await accepted('Okay.', previous.input);
+    const scope = buildTransportNeutralConfirmationScope({ domain: 'personal', orgId: '', conversationId: input.conversationId });
+    const pending = await recordPendingConfirmationDurably(input.userId, 'web_search', { query: 'a separately approved observation' }, 'chat', scope);
+    const prepared = preparePlannedConversationExecution({ ...input, pendingConfirmation: pending });
+    expect(prepared.kind).toBe('new'); expect(prepared.state?.taskId).not.toBe(previous.taskId);
+    expect(prepared.state?.activeRequestId).toBe(input.requestId);
+  });
   it('rejects a mismatched request identity before any task or turn is changed', async () => {
     const input = await accepted('Search the public web for synthetic cloud examples.');
     const before = JSON.stringify([readDB().conversationActionTasks, readDB().conversationActionTurns]);
