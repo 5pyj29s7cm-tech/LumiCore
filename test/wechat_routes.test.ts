@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeApp, JWT_SECRET, COOKIE_OPTS } from './helpers';
 import { mountAuthRoutes } from '../server/routes/auth';
@@ -68,7 +69,7 @@ describe('personal WeChat routes', () => {
       pendingPersonalBinding: { code: codeBody.code, expiresAt: codeBody.expiresAt },
     });
 
-    const binding = bindings.consumeBindingCode(
+    const binding = consumeFixtureBindingCode(
       'wechat',
       codeBody.code,
       'wx-route-user',

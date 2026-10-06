@@ -27,7 +27,7 @@ import { buildDesktopExecutionStabilityPolicy } from "../../../cognition/desktop
 import { createDesktopExecutionTracker } from "../../../desktop/execution_runtime";
 import { commitChatTerminalBoundary } from "../../chat_terminal_boundary";
 import { resolveSingleVoiceTtsRoute } from "../selection";
-import { emitVoiceTtsFailure, voiceTransportState, computeVolumeGain, resetSilenceTimer } from "../../voice_transport_runtime";
+import { captureVoiceTurnOwner, emitVoiceTtsFailure, voiceTransportState, computeVolumeGain, resetSilenceTimer } from "../../voice_transport_runtime";
 import { addEchoText, voiceEchoScope } from "../echo";
 import { shouldAllowVoiceLocalFileWriteForTurn } from "../../voice_turn_policy";
 import type { prepareVoiceIdentityAndAdmission } from './prepare_voice_identity_and_admission';
@@ -35,6 +35,7 @@ import type { prepareVoiceIdentityAndAdmission } from './prepare_voice_identity_
 export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceIdentityAndAdmission>>["context"]>) {
 
 
+  context.turnAuthorization.assertCurrent();
   context.session.pendingInterruptedTurn = null;
   context.session.isSpeaking = false;
   context.session.isProcessing = true;
@@ -58,6 +59,7 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
   context.session.activeTurnRequestId = context.requestId;
   context.session.activeExecutionReceipts = context.executionReceipts;
   context.session.activeRoutingText = context.actionIntentText;
+  context.resources.owner = captureVoiceTurnOwner(context.session);
   context.turnAuthorization.assertCurrent();
   context.emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
   context.socket.emit("audio:status", { status: "thinking", requestId: context.requestId });

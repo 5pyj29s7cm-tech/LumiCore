@@ -22,6 +22,7 @@ vi.mock('../server/tts/gptsovits_runtime', () => ({
 vi.mock('../server/socket/voice', () => ({ isEchoText: () => false, isTtsPlaying: () => false }));
 
 import * as stt from '../server/stt/adapter';
+import { transcribeAudioFile, getAudioFileProviderPlan } from '../server/stt/file_transcription';
 import * as qwen from '../server/stt/providers/qwen';
 import * as arkStream from '../server/stt/providers/ark_stream';
 import * as officialStt from '../server/stt/providers/official';
@@ -55,11 +56,12 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('strict speech transport boundaries', () => {
-  it.each(['qwen', 'ark', 'relay'] as const)('blocks %s realtime and batch adapter routes without a transport', async provider => {
+  it.each(['qwen', 'ark', 'relay'] as const)('blocks %s realtime and file transcription routes without a transport', async provider => {
     expect(() => stt.createStreamingSession({ provider })).toThrow('[Privacy]');
     const injectedFactory = vi.fn();
     expect(() => stt.createResilientStreamingSession({ provider }, { createSession: injectedFactory })).toThrow('[Privacy]');
-    await expect(stt.transcribe(Buffer.from('private audio'), { provider })).rejects.toThrow('[Privacy]');
+    expect(getAudioFileProviderPlan({ preferredProvider: provider })).toEqual([]);
+    await expect(transcribeAudioFile(Buffer.from('private audio'), { preferredProvider: provider })).rejects.toMatchObject({ code: 'AUDIO_PRIVACY_LOCAL_UNAVAILABLE' });
     expect(injectedFactory).not.toHaveBeenCalled();
     expect(mocks.socket).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
@@ -94,12 +96,13 @@ describe('strict speech transport boundaries', () => {
   it('selects only installed local batch STT and never replaces missing local STT with cloud', async () => {
     expect(stt.getActiveSTTProvider()).toBeNull();
     expect(stt.getActiveStreamingSTTProvider()).toBeNull();
-    await expect(stt.transcribe(Buffer.from('audio'), { provider: 'local-whisper' })).rejects.toThrow('No STT provider');
+    await expect(transcribeAudioFile(Buffer.from('audio'), { preferredProvider: 'local-whisper' })).rejects.toMatchObject({ code: 'AUDIO_PRIVACY_LOCAL_UNAVAILABLE' });
     mocks.localAvailable = true;
     const result = { text: 'local transcript', isFinal: true };
     mocks.localTranscribe.mockResolvedValueOnce(result);
     expect(stt.getActiveSTTProvider()).toBe('local-whisper');
-    await expect(stt.transcribe(Buffer.from('audio'), { provider: 'local-whisper' })).resolves.toEqual(result);
+    await expect(transcribeAudioFile(Buffer.from('audio'), { preferredProvider: 'local-whisper' })).resolves.toMatchObject({ text: result.text, provider: 'local-whisper' });
+    expect(mocks.localTranscribe).toHaveBeenCalledOnce();
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 

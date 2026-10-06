@@ -1,14 +1,8 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET, makeApp } from './helpers';
-import {
-  authorizeMessagingGroup,
-  consumeBindingCode,
-  createBindingCode,
-  getBinding,
-  listActiveBindingCodesForUser,
-  resetMessagingBindingsForTest,
-} from '../server/messaging/bindings';
+import { authorizeMessagingGroup, createBindingCode, getBinding, listActiveBindingCodesForUser, resetMessagingBindingsForTest } from '../server/messaging/bindings';
 import { resetDeliveryLedgerForTest } from '../server/messaging/delivery_ledger';
 import {
   evaluateMessagingIngress,
@@ -97,9 +91,9 @@ describe('Feishu group governance and delivery safety', () => {
     addMember(org.id, memberId, 'member');
 
     const code = createBindingCode('feishu', memberId, org.id);
-    expect(consumeBindingCode('feishu', code.code, 'ou-governed-member', 'oc-governed-group', 'group')).toBeNull();
+    expect(consumeFixtureBindingCode('feishu', code.code, 'ou-governed-member', 'oc-governed-group', 'group')).toBeNull();
     expect(listActiveBindingCodesForUser(memberId, 'feishu')).toHaveLength(1);
-    expect(consumeBindingCode('feishu', code.code, 'ou-governed-member', 'oc-private-member', 'private')).toMatchObject({
+    expect(consumeFixtureBindingCode('feishu', code.code, 'ou-governed-member', 'oc-private-member', 'private')).toMatchObject({
       lumiUserId: memberId,
       chatType: 'private',
     });
@@ -138,7 +132,7 @@ describe('Feishu group governance and delivery safety', () => {
     addMember(org.id, ownerId, 'owner');
     addMember(org.id, memberId, 'member');
     const code = createBindingCode('feishu', memberId, org.id);
-    consumeBindingCode('feishu', code.code, 'ou-governed-member', 'oc-private-member', 'private');
+    consumeFixtureBindingCode('feishu', code.code, 'ou-governed-member', 'oc-private-member', 'private');
     authorizeMessagingGroup({
       platform: 'feishu',
       chatId: 'oc-governed-group',

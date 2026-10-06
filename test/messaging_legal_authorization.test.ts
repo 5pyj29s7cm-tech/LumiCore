@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase } from '../db_layer';
@@ -19,7 +20,7 @@ function fixture() {
   const orgId = createOrg('Synthetic', `notice-revoke-org-${sequence}`, userId).id;
   addMember(orgId, userId, 'owner');
   const code = bindings.createBindingCode('feishu', userId, orgId, 'work');
-  const binding = bindings.consumeBindingCode('feishu', code.code, `platform-${sequence}`, `chat-${sequence}`)!;
+  const binding = consumeFixtureBindingCode('feishu', code.code, `platform-${sequence}`, `chat-${sequence}`)!;
   const message: IncomingMessage = { platform: 'feishu', userId: binding.platformUserId, chatId: binding.chatId!,
     userName: 'Synthetic', chatType: 'private', messageId: `notice-${sequence}`, raw: {}, timestamp: new Date().toISOString(),
     text: '请新建案件并归档：人民法院送达通知，张三诉李四合同纠纷。',

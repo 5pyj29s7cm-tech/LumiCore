@@ -5,11 +5,6 @@ import {
 } from '../../shared/public_execution_language';
 import { CN_PUBLIC_AGENT_EVENT_MESSAGES } from "../regions/messages/public_agent_event_messages";
 
-export type CustomerVisibleExecutionEvent =
-  | 'agent:progress'
-  | 'agent:tool_call'
-  | 'agent:tool';
-
 export interface CustomerVisibleExecutionProjectionOptions {
   taskText?: unknown;
   language?: PublicExecutionLanguage;

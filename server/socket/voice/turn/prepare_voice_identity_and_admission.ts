@@ -1,9 +1,9 @@
-import { captureConversationAuthorization, combineRequestAuthorizations } from '../../../conversation/lifecycle';
+import { captureConversationAuthorization, captureRequestAuthorization, combineRequestAuthorizations } from '../../../conversation/lifecycle';
 import { resolveConversationForEntry } from '../../../conversation/entry_conversation';
 import type { Server, Socket } from "socket.io";
-import { type AudioSession, getVoiceStateKey, type VoiceInputTiming } from "../session";
+import { type AudioSession, getVoiceStateKey, type VoiceInputTiming, type VoiceInputResources } from "../session";
 import type { LLMGetters as LlmGetters } from "../../../llm/dispatch";
-import { reserveConversationExecution, type ConversationResourceLifetime } from "../../../cognition/conversation_execution";
+import { reserveConversationExecution } from "../../../cognition/conversation_execution";
 import { isVoiceprintGateOpen, blockUnverifiedVoice } from "../voiceprint";
 import { captureChatAuthorization } from "../../chat_authorization";
 import { assessVoiceTranscriptForExecution } from "../../../cognition/voice_transcript_guard";
@@ -32,7 +32,7 @@ import { resolveUserTurn } from "../../../cognition/turn_resolution";
 import { admitAcceptedUserTurnDurably, resolveAcceptedTurnConfirmation, runAfterAcceptedUserTurnAdmission } from "../../action_turn_durability";
 import { flushDBOrThrow } from "../../../../db_layer";
 
-export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: ConversationResourceLifetime = {}) {
+export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: VoiceInputResources = {}) {
 
   if (!voiceAuthorized && !isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
@@ -102,7 +102,8 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     kind: 'voice', phase: 'admit', agentId: session.agentId, userText: actionIntentText,
   }, session.conversationId);
   session.conversationId = conversationTurn.conversation.id;
-  const turnAuthorization = combineRequestAuthorizations(scopeAuthorization, captureConversationAuthorization({
+  const ownerAuthorization = captureRequestAuthorization(() => resources.owner?.isCurrent() ?? true, 'Voice request was superseded.');
+  const turnAuthorization = combineRequestAuthorizations(scopeAuthorization, ownerAuthorization, captureConversationAuthorization({
     userId: session.userId, domain: session.domain, orgId: session.orgId, agentId: session.agentId,
   }, () => conversationTurn.conversation.id));
   if (transcriptExecutionGuard.action === 'allow') {
@@ -113,6 +114,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   try {
     await ensurePendingConfirmationPersistenceInitialized();
   } catch (error) {
+    if (!(resources.owner?.isCurrent() ?? true)) return { terminal: true as const, context: undefined };
     logger.error('[Audio] Encrypted confirmation store is unavailable:', error);
     socket.emit('agent:response', {
       text: voiceDurabilityUnknownText(),
@@ -173,6 +175,8 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     source: 'voice',
     conversationId: conversationTurn.conversation.id,
   };
+  resources.request = Object.freeze({ ...executionScope, requestId, agentId: session.agentId,
+    personalityId: session.personalityId, provenance: voiceTurnProvenance, authorization: turnAuthorization });
   let trustedVoiceConfirmationText: string | undefined;
   const normalizeAgentPayload = (
     event: string,
@@ -200,6 +204,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     };
   };
   const publishRecordedAgent = (event: string, payload: Record<string, any>) => {
+    if (!(resources.owner?.isCurrent() ?? true)) return;
     if (!turnAuthorization.isCurrent()) {
       if (!finalAgentResponseDelivered && (event === 'agent:error' || (event === 'agent:response' && payload.finalized))) {
         finalAgentResponseDelivered = true;
@@ -293,7 +298,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   // may affect its result, but can no longer erase the user's instruction.
   const acceptedVoiceResolution = resolveUserTurn({requestId,userText,state:conversationTurn.conversation.actionContinuationState,options:{pendingAssistantOfferContext}});
   const voiceAdmission = await admitAcceptedUserTurnDurably({
-    persistAcceptedUserTurn: () => persistVoiceUserMessage(),
+    persistAcceptedUserTurn: () => { turnAuthorization.assertCurrent(); return persistVoiceUserMessage(); },
     flush: flushDBOrThrow,
     onPersistenceUnknown: async error => {
       logger.error('[Audio] Accepted voice turn could not be flushed:', error);
@@ -313,6 +318,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   if (!voiceAdmission) {
     { return { terminal: true as const, context: undefined }; }
   }
+  turnAuthorization.assertCurrent();
   voiceUserMessageId = voiceAdmission.persisted;
   resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal,{authorization:turnAuthorization,abort:reason=>{if(!pipelineAbort.signal.aborted)pipelineAbort.abort(reason);}});
   await resources.admission.waitForTurn();
@@ -327,6 +333,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
       }))
     ));
   }
+  turnAuthorization.assertCurrent();
   const confirmationResolution = await resolveAcceptedTurnConfirmation({
     admission: voiceAdmission,
     userId: session.userId,
@@ -336,6 +343,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     taskScope: confirmationScope,
     channelScope: confirmationChannelScope,
   });
+  turnAuthorization.assertCurrent();
   pendingConfirmation = confirmationResolution.pending;
   pendingConfirmationPrompt = confirmationResolution.prompt;
   confirmationScope = confirmationResolution.scope;
@@ -356,9 +364,10 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   } catch (error) {
     logger.error('[Audio] Voice execution reservation could not be durably established:', error);
     publishRecordedAgent('agent:response', executionUnknownPayload);
-    if (session.isActive) socket.emit('audio:status', { status: 'listening', requestId });
+    if ((resources.owner?.isCurrent() ?? true) && session.isActive) socket.emit('audio:status', { status: 'listening', requestId });
     { return { terminal: true as const, context: undefined }; }
   }
+  turnAuthorization.assertCurrent();
   return { terminal: false as const, context: {
     session,
     get transcriptExecutionGuard(): typeof transcriptExecutionGuard { return transcriptExecutionGuard; },

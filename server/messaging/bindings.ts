@@ -188,17 +188,6 @@ export function createBindingCode(
   return bindingCode;
 }
 
-export function consumeBindingCode(
-  platform: MessagingPlatformId,
-  code: string,
-  platformUserId: string,
-  chatId = '',
-  chatType: 'private' | 'group' = 'private',
-): MessagingBinding | null {
-  const plan = planBindingCodeConsumption(platform, code, platformUserId, chatId, chatType);
-  return plan ? commitBindingCodeConsumption(plan)?.binding || null : null;
-}
-
 export function planBindingCodeConsumption(
   platform: MessagingPlatformId,
   code: string,

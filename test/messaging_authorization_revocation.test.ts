@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initDatabase, readDB, writeDB, flushDBOrThrow } from '../db_layer';
@@ -55,7 +56,7 @@ beforeEach(() => {
     chatId: `chat-${sequence}`, chatType: 'private', messageId: `revocation-message-${sequence}`, text: '你好', raw: {},
     timestamp: new Date().toISOString(), attachments: [{ id: 'attachment', type: 'file', fileName: 'synthetic.txt' }] };
   const code = bindings.createBindingCode('feishu', userId, orgId, 'work');
-  binding = bindings.consumeBindingCode('feishu', code.code, message.userId, message.chatId)!;
+  binding = consumeFixtureBindingCode('feishu', code.code, message.userId, message.chatId)!;
   readDB().memories.push({ id: `secret-${sequence}`, userId, orgId, domain: 'work', content: '你好 synthetic confidential memory',
     confidence: 0.8, type: 'episodic', source: 'manual', perspective: 'owner_trait', tier: 'episodic', importance: 0.8,
     agentId: 'lumi', nodeType: 'leaf', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), keywords: [] });
@@ -88,7 +89,7 @@ describe('remote message authorization remains bound to its accepted identity', 
       replacementUser = `replacement-${sequence}`;
       org.addMember(orgId, replacementUser, 'member');
       const code = bindings.createBindingCode('feishu', replacementUser, orgId, 'work');
-      const replacement = bindings.consumeBindingCode('feishu', code.code, message.userId, message.chatId)!;
+      const replacement = consumeFixtureBindingCode('feishu', code.code, message.userId, message.chatId)!;
       expect(replacement.revision).not.toBe(binding.revision);
     }
     gate.resolve(captured!);

@@ -1,3 +1,7 @@
+import type { ConversationResourceLifetime } from '../../cognition/conversation_execution';
+import type { RequestAuthorization } from '../../conversation/lifecycle';
+import type { ChatExecutionScope } from '../chat_execution_registry';
+import type { captureVoiceTurnOwner } from '../voice_transport_runtime';
 import { createResilientStreamingSession } from "../../stt/adapter";
 import { captureChatAuthorization } from "../chat_authorization";
 import { type ForegroundRequestIdentity as VoiceForegroundRequestIdentity } from "../../conversation/manager";
@@ -7,6 +11,14 @@ import { type MeetingCapture } from "../meeting_recordings";
 import { type VoiceCaptureProvenanceState, type VoiceTurnProvenance, createVoiceCaptureProvenance } from "../voice_provenance";
 import { Socket } from "socket.io";
 import { scopedEmotionalStateKey } from "../scope";
+
+export interface VoiceInputResources extends ConversationResourceLifetime {
+  owner?: ReturnType<typeof captureVoiceTurnOwner>;
+  request?: Readonly<ChatExecutionScope & {
+    requestId: string; agentId: string; personalityId: string;
+    provenance: VoiceTurnProvenance | null; authorization: RequestAuthorization;
+  }>;
+}
 
 export interface AudioSession {
   sttSession: ReturnType<typeof createResilientStreamingSession> | null;

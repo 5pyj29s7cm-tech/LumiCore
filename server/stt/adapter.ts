@@ -1,13 +1,10 @@
 import { STTConfig, STTResult, STTProvider, StreamingSTTSession } from './types';
-import * as whisper from './providers/whisper';
 import * as qwen from './providers/qwen';
-import * as ark from './providers/ark';
 import * as arkStream from './providers/ark_stream';
 import * as localWhisper from './providers/local-whisper';
 import * as relay from './providers/official';
 import { getKey } from '../config/keys';
 import { getConfiguredVoiceModel, getVoicePreference } from '../config/voice_preference';
-import { recordLatency } from '../monitor/latency_store';
 import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
@@ -23,69 +20,13 @@ function hasOpenAIKey(): boolean {
   return Boolean(process.env.OPENAI_API_KEY || getKey('OPENAI_API_KEY'));
 }
 
-/** Snapshot the role-specific official model when a realtime/batch session is
+/** Snapshot the role-specific official model when a realtime session is
  * created.  This keeps Settings -> voice behavior on the same adapter path
  * while preventing a preference change from mutating an already-open stream. */
 function resolveSessionConfig(config: STTConfig): STTConfig {
   if (config.provider !== 'relay' || config.model) return config;
   const selected = String(getVoicePreference().sttModel || '').trim();
   return selected ? { ...config, model: selected } : config;
-}
-
-export async function transcribe(audioBuffer: Buffer, config: STTConfig): Promise<STTResult> {
-  const start = Date.now();
-  const sessionConfig = resolveSessionConfig(config);
-  // Local Whisper is batch-only; use it only when installed.
-  const effectiveProvider = sessionConfig.provider === 'local-whisper' && !localWhisper.isLocalWhisperAvailable()
-    ? getActiveSTTProvider()
-    : sessionConfig.provider;
-
-  if (!effectiveProvider) {
-    throw new Error('No STT provider configured. Configure local Whisper, DashScope, OpenAI Whisper, or Doubao Speech.');
-  }
-  if (effectiveProvider !== 'local-whisper') requireNotStrict('Cloud speech recognition');
-
-  let result: STTResult;
-  switch (effectiveProvider) {
-    case 'local-whisper':
-      result = await localWhisper.transcribe(audioBuffer, sessionConfig.language);
-      break;
-    case 'whisper':
-      result = await whisper.transcribe(audioBuffer, sessionConfig.language);
-      break;
-    case 'ark':
-      result = await ark.transcribe(audioBuffer, sessionConfig.language);
-      break;
-    case 'relay':
-      try {
-        result = await relay.transcribe(audioBuffer, config.language, {
-          model: sessionConfig.model,
-          rawPcm: true,
-          sampleRate: 16_000,
-        });
-        recordSuccess('relay-stt');
-      } catch (error: any) {
-        recordFailure('relay-stt', undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
-        throw error;
-      }
-      break;
-    case 'qwen':
-      result = await new Promise((resolve, reject) => {
-        const session = qwen.createStream(sessionConfig.language || 'zh', false);
-        session.onResult((result) => {
-          if (result.isFinal) resolve(result);
-        });
-        session.onError(reject);
-        session.sendAudio(audioBuffer);
-        session.end();
-        setTimeout(() => resolve({ text: '', isFinal: false }), 8000);
-      });
-      break;
-    default:
-      throw new Error(`Unknown STT provider: ${sessionConfig.provider}`);
-  }
-  recordLatency('stt', Date.now() - start);
-  return result;
 }
 
 export function createStreamingSession(

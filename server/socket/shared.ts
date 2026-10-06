@@ -4,11 +4,6 @@ import { fuseContext, RawModalityInput } from "../context/fusion";
 import type { RuntimeScope } from './scope';
 import { runtimeScopeStorageKey } from './scope';
 
-export const sounds = {
-  notification: '/sounds/notification.mp3',
-  tool_exec: '/sounds/tool_exec.mp3',
-};
-
 // Perception events buffer (per user)
 export const perceptionEvents: Map<string, RawModalityInput[]> = new Map();
 export const MAX_PERCEPTION_EVENTS = 20;

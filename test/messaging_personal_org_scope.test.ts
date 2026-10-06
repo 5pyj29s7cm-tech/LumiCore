@@ -1,3 +1,4 @@
+import { commitFixturePersonalOrganizationScope } from './messaging_binding_fixture';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeApp } from './helpers';
 import { addMember, createOrg } from '../server/org/db';
@@ -6,7 +7,6 @@ import * as OrgKB from '../server/org/kb';
 import {
   requestsOrganizationScope,
   resetPersonalOrganizationScopesForTest,
-  resolvePersonalOrganizationScope,
 } from '../server/messaging/personal_org_scope';
 import {
   classifyRemoteCaseAttachmentWriteIntent,
@@ -48,18 +48,18 @@ describe('personal Lumi organization scope', () => {
     const org = createOrg('Only Scope Firm', `only-scope-${suffix}`, userId);
     addMember(org.id, userId, 'owner');
 
-    const entered = resolvePersonalOrganizationScope(message(userId, '查看组织案件'), true);
+    const entered = commitFixturePersonalOrganizationScope(message(userId, '查看组织案件'), true);
     expect(entered.kind).toBe('organization');
     if (entered.kind !== 'organization') throw new Error('organization scope was not entered');
     expect(entered.message.boundOrgId).toBe(org.id);
 
-    const followUp = resolvePersonalOrganizationScope(message(userId, '继续整理'), false);
+    const followUp = commitFixturePersonalOrganizationScope(message(userId, '继续整理'), false);
     expect(followUp.kind).toBe('organization');
     if (followUp.kind === 'organization') expect(followUp.message.boundOrgId).toBe(org.id);
 
-    const exited = resolvePersonalOrganizationScope(message(userId, '切回个人'), false);
+    const exited = commitFixturePersonalOrganizationScope(message(userId, '切回个人'), false);
     expect(exited).toMatchObject({ kind: 'reply', reply: expect.stringContaining('回到个人 Lumi') });
-    const personal = resolvePersonalOrganizationScope(message(userId, '今晚吃什么'), false);
+    const personal = commitFixturePersonalOrganizationScope(message(userId, '今晚吃什么'), false);
     expect(personal.kind).toBe('personal');
   });
 
@@ -72,28 +72,28 @@ describe('personal Lumi organization scope', () => {
     expect(requestsOrganizationScope('知识库里的文件可以发给我吗')).toBe(false);
     expect(requestsOrganizationScope('把组织知识库里的案件材料发给我')).toBe(true);
 
-    const capabilityQuestion = resolvePersonalOrganizationScope(
+    const capabilityQuestion = commitFixturePersonalOrganizationScope(
       message(userId, '知识库里的文件可以发给我吗'),
       requestsOrganizationScope('知识库里的文件可以发给我吗'),
     );
     expect(capabilityQuestion.kind).toBe('personal');
 
-    const entered = resolvePersonalOrganizationScope(message(userId, '查看组织案件'), true);
+    const entered = commitFixturePersonalOrganizationScope(message(userId, '查看组织案件'), true);
     expect(entered.kind).toBe('organization');
 
-    const correction = resolvePersonalOrganizationScope(message(userId, '刚刚那句话不是指令'), false);
+    const correction = commitFixturePersonalOrganizationScope(message(userId, '刚刚那句话不是指令'), false);
     expect(correction.kind).toBe('organization');
 
-    const relationship = resolvePersonalOrganizationScope(
+    const relationship = commitFixturePersonalOrganizationScope(
       message(userId, '我想让你知道，你是我真正的伙伴，我们要共同前行'),
       false,
     );
     expect(relationship.kind).toBe('personal');
 
-    const personalConfirmation = resolvePersonalOrganizationScope(message(userId, '确认'), false);
+    const personalConfirmation = commitFixturePersonalOrganizationScope(message(userId, '确认'), false);
     expect(personalConfirmation.kind).toBe('personal');
 
-    const explicitWork = resolvePersonalOrganizationScope(message(userId, '继续整理组织案件'), true);
+    const explicitWork = commitFixturePersonalOrganizationScope(message(userId, '继续整理组织案件'), true);
     expect(explicitWork.kind).toBe('organization');
   });
 
@@ -111,12 +111,12 @@ describe('personal Lumi organization scope', () => {
       localPath: 'D:\\lumi-data\\notice.pdf',
     };
 
-    const pending = resolvePersonalOrganizationScope(message(userId, '查询组织知识库里的立案流程', {
+    const pending = commitFixturePersonalOrganizationScope(message(userId, '查询组织知识库里的立案流程', {
       attachments: [attachment],
     }), true);
     expect(pending).toMatchObject({ kind: 'reply', reply: expect.stringContaining('多个可用组织') });
 
-    const selected = resolvePersonalOrganizationScope(message(userId, '2'), false);
+    const selected = commitFixturePersonalOrganizationScope(message(userId, '2'), false);
     expect(selected.kind).toBe('organization');
     if (selected.kind !== 'organization') throw new Error('pending organization was not selected');
     expect(selected.message).toMatchObject({

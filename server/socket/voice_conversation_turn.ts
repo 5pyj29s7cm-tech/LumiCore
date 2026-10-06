@@ -1,7 +1,6 @@
 import type { Server, Socket } from "socket.io";
-import type { AudioSession, VoiceInputTiming } from "./voice/session";
+import type { AudioSession, VoiceInputTiming, VoiceInputResources } from "./voice/session";
 import type { LLMGetters as LlmGetters } from "../llm/dispatch";
-import type { ConversationResourceLifetime } from "../cognition/conversation_execution";
 import { logger } from "../../logger";
 import { isTtsCancellationError } from "../tts/adapter";
 import { CN_VOICE_WORK_MESSAGES } from "../regions/messages/voice_fast_path_messages";
@@ -18,7 +17,7 @@ import { finalizeVoiceModelTurn } from './voice/turn/finalize_voice_model_turn';
 
 export { respondAlongsideActiveVoiceWork } from "./voice_side_response";
 
-async function processAdmittedVoiceTurn(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: ConversationResourceLifetime = {}): Promise<void> {
+async function processAdmittedVoiceTurn(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: VoiceInputResources = {}): Promise<void> {
   const prepareVoiceIdentityAndAdmissionResult = await prepareVoiceIdentityAndAdmission(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
   if (prepareVoiceIdentityAndAdmissionResult.terminal) return;
   const prepareVoiceContextAndRoutingResult = await prepareVoiceContextAndRouting(prepareVoiceIdentityAndAdmissionResult.context);
@@ -79,7 +78,7 @@ export async function processVoiceInput(
   userReceivedAt = new Date().toISOString(),
   voiceAuthorized = false,
   inputTiming: VoiceInputTiming = {},
-  resources: ConversationResourceLifetime = {},
+  resources: VoiceInputResources = {},
 ): Promise<void> {
   return processAdmittedVoiceTurn(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
 }

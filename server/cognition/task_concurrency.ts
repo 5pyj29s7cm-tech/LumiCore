@@ -521,13 +521,6 @@ export function formatActiveTaskRelationContext(
   return lines.join('\n');
 }
 
-export function classifyActiveTaskMessage(
-  text: string,
-  state?: ConversationActionContinuationState | null,
-): ActiveTaskMessageRelation {
-  return resolveActiveTaskMessageRelation(text, state).relation;
-}
-
 /** Only identity/version is checked after queueing. The accepted meaning is immutable. */
 export function revalidateAcceptedTaskRelation(
   relation: ActiveTaskMessageResolution,

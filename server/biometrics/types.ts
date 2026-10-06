@@ -42,13 +42,6 @@ export interface FaceTemplate {
   lastMatchedAt: string;
 }
 
-export interface FaceMatch {
-  faceId: string;
-  uid: string;
-  label: string;
-  confidence: number;
-}
-
 // ── Presence ──
 
 export interface PresenceState {
@@ -79,10 +72,6 @@ export interface PresenceHeartbeat {
   voiceprintMatched: boolean;
   voiceprintConfidence: number;
 }
-
-// ── Triple Lock ──
-
-export type LockFactor = 'voiceprint' | 'face' | 'pin';
 
 export enum SecurityLevel {
   L1_DAILY = 1,       // any single factor

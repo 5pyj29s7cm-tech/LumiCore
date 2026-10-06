@@ -1,16 +1,15 @@
 import { Server, Socket } from "socket.io";
-import { type AudioSession, type VoiceInputTiming } from "./voice/session";
+import { type AudioSession, type VoiceInputTiming, type VoiceInputResources } from "./voice/session";
 import type { LLMGetters as LlmGetters } from '../llm/dispatch';
-import { type ConversationResourceLifetime } from '../cognition/conversation_execution';
 import { logger } from "../../logger";
-import { getOrCreateActiveConversation, addMessageIdempotent, getMessages, setConversationActionExecutionStatus } from "../conversation/manager";
+import { getConversationForScope, addMessageIdempotent, getMessages, setConversationActionExecutionStatus } from "../conversation/manager";
 import { CN_VOICE_WORK_MESSAGES, formatCnToolFailureDetail } from "../regions/messages/voice_fast_path_messages";
 import { voiceDurabilityUnknownText } from './voice_durability';
 import { recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably, type ChatExecutionScope } from './chat_execution_registry';
 import { commitChatTerminalBoundary } from './chat_terminal_boundary';
 import { flushDBOrThrow } from "../../db_layer";
 import { processVoiceInput } from "./voice_conversation_turn";
-import { cancelActiveVoiceTurn } from "./voice_transport_runtime";
+import { cancelActiveVoiceTurn, captureVoiceTurnOwner } from "./voice_transport_runtime";
 
 export async function runVoiceInputPipeline(
   socket: Socket,
@@ -24,144 +23,145 @@ export async function runVoiceInputPipeline(
   inputTiming: VoiceInputTiming = {},
 ): Promise<void> {
   const originalAuthorization = session.authorization;
-  const resources: ConversationResourceLifetime = {};
+  const resources: VoiceInputResources = { owner: captureVoiceTurnOwner(session) };
   try {
     await processVoiceInput(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
   } catch (err: any) {
+    const owner = resources.owner!;
+    if (!owner.isCurrent()) return;
     if (originalAuthorization && !originalAuthorization.isCurrent()) {
       if (session.authorization === originalAuthorization && session.activeTurnRequestId) {
         await session.cancelAuthorizationTurn?.(session.activeTurnRequestId);
       }
       return;
     }
+    const request = resources.request;
+    const requestIsCurrent = request?.authorization.isCurrent() ?? true;
     logger.error('[Voice Error]:', err);
-    const failedRequestId = session.activeTurnRequestId;
+    const failedRequestId = request?.requestId;
     const queuedWork = session.inputQueue.slice();
-    let conversationId = session.activeTaskConversationId || '';
+    const conversationId = request?.conversationId || '';
     let terminalResponseAlreadyPersisted = false;
     try {
-      if (!conversationId) {
-        conversationId = getOrCreateActiveConversation(
-          session.userId,
-          session.agentId,
-          session.domain,
-          session.orgId,
-        ).id;
-      }
-      terminalResponseAlreadyPersisted = getMessages(conversationId, 4).some((message: any) => (
-        message?.role === 'assistant'
-        && Boolean(failedRequestId)
-        && (
-          message?.requestId === failedRequestId
-          || message?.externalMessageId === failedRequestId
-        )
-      ));
-      if (!terminalResponseAlreadyPersisted && failedRequestId) {
-        const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
-        const failurePayload = {
-          text: failureText,
-          source: 'voice_error',
-          channel: 'voice',
-          requestId: failedRequestId,
-          conversationId,
-          finalized: true,
-          blocked: true,
-          reason: 'voice_processing_failed',
-        };
-        const unknownPayload = {
-          text: voiceDurabilityUnknownText(),
-          agentName: 'Lumi',
-          source: 'voice',
-          channel: 'voice',
-          requestId: failedRequestId,
-          conversationId,
-          finalized: true,
-          blocked: true,
-          reason: 'persistence_unknown',
-        };
-        const failureScope: ChatExecutionScope = {
-          userId: session.userId,
-          domain: session.domain,
-          orgId: session.orgId,
-          source: 'voice',
-          conversationId,
-        };
-        await commitChatTerminalBoundary({
-          persistTerminalState: () => setConversationActionExecutionStatus(
-            conversationId,
-            session.userId,
-            'blocked',
-            {
-              blocker: formatCnToolFailureDetail(err?.message || String(err)),
-              assistantState: failureText,
-              requestId: failedRequestId,
-            },
-          ),
-          persistAssistantMessage: () => addMessageIdempotent({
-            userId: session.userId,
-            agentId: session.agentId,
-            conversationId,
-            role: 'assistant',
-            content: failureText,
-            personality: session.personalityId,
-            mode: 'voice',
+      if (requestIsCurrent && request && conversationId && getConversationForScope(conversationId, request.userId, request.domain, request.orgId)) {
+        terminalResponseAlreadyPersisted = getMessages(conversationId, 4).some((message: any) => (
+          message?.role === 'assistant'
+          && Boolean(failedRequestId)
+          && (
+            message?.requestId === failedRequestId
+            || message?.externalMessageId === failedRequestId
+          )
+        ));
+        if (!terminalResponseAlreadyPersisted && failedRequestId) {
+          const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
+          const failurePayload = {
+            text: failureText,
             source: 'voice_error',
             channel: 'voice',
-            cognitiveIntent: 'voice_processing_failed',
-            llmWasCalled: false,
-            domain: session.domain,
-            orgId: session.orgId,
             requestId: failedRequestId,
-            ...(session.activeTurnProvenance || {}),
-          }),
-          flush: flushDBOrThrow,
-          persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-            failureScope,
-            failedRequestId,
-            'agent:response',
-            failurePayload,
-            unknownPayload,
-          ),
-          persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
-            failureScope,
-            failedRequestId,
-            unknownPayload,
-          ),
-          publishCommitted: () => {
-            socket.emit('agent:response', failurePayload);
-            socket.emit('audio:work_progress', {
-              requestId: failedRequestId,
-              text: failureText,
-              phase: 'blocked',
-            });
-            socket.emit('chat:conversation_updated', {
+            conversationId,
+            finalized: true,
+            blocked: true,
+            reason: 'voice_processing_failed',
+          };
+          const unknownPayload = {
+            text: voiceDurabilityUnknownText(),
+            agentName: 'Lumi',
+            source: 'voice',
+            channel: 'voice',
+            requestId: failedRequestId,
+            conversationId,
+            finalized: true,
+            blocked: true,
+            reason: 'persistence_unknown',
+          };
+          const failureScope: ChatExecutionScope = {
+            userId: request.userId,
+            domain: request.domain,
+            orgId: request.orgId,
+            source: 'voice',
+            conversationId,
+          };
+          await commitChatTerminalBoundary({
+            persistTerminalState: () => setConversationActionExecutionStatus(
               conversationId,
-              agentId: session.agentId,
+              request.userId,
+              'blocked',
+              {
+                blocker: formatCnToolFailureDetail(err?.message || String(err)),
+                assistantState: failureText,
+                requestId: failedRequestId,
+              },
+            ),
+            persistAssistantMessage: () => addMessageIdempotent({
+              userId: request.userId,
+              agentId: request.agentId,
+              conversationId,
+              role: 'assistant',
+              content: failureText,
+              personality: request.personalityId,
+              mode: 'voice',
               source: 'voice_error',
-            });
-          },
-          publishUnknown: () => socket.emit('agent:response', unknownPayload),
-          persistenceUnknownProjection: {
-            text: unknownPayload.text,
-            reason: 'Terminal persistence outcome is unknown.',
-          },
-          onPersistenceError: persistenceError => {
-            logger.warn('[Audio] Outer failure terminal persistence failed:', persistenceError);
-          },
-        });
+              channel: 'voice',
+              cognitiveIntent: 'voice_processing_failed',
+              llmWasCalled: false,
+              domain: request.domain,
+              orgId: request.orgId,
+              requestId: failedRequestId,
+              ...(request.provenance || {}),
+            }),
+            flush: flushDBOrThrow,
+            persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
+              failureScope,
+              failedRequestId,
+              'agent:response',
+              failurePayload,
+              unknownPayload,
+            ),
+            persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+              failureScope,
+              failedRequestId,
+              unknownPayload,
+            ),
+            publishCommitted: () => {
+              if (!owner.isCurrent() || !request.authorization.isCurrent()) return;
+              socket.emit('agent:response', failurePayload);
+              socket.emit('audio:work_progress', {
+                requestId: failedRequestId,
+                text: failureText,
+                phase: 'blocked',
+              });
+              socket.emit('chat:conversation_updated', {
+                conversationId,
+                agentId: request.agentId,
+                source: 'voice_error',
+              });
+            },
+            publishUnknown: () => {
+              if (owner.isCurrent() && request.authorization.isCurrent()) socket.emit('agent:response', unknownPayload);
+            },
+            persistenceUnknownProjection: {
+              text: unknownPayload.text,
+              reason: 'Terminal persistence outcome is unknown.',
+            },
+            onPersistenceError: persistenceError => {
+              logger.warn('[Audio] Outer failure terminal persistence failed:', persistenceError);
+            },
+          });
+        }
       }
     } catch (persistError: any) {
       logger.warn(`[Audio] Failed to persist outer pipeline error: ${persistError?.message || String(persistError)}`);
     }
-    await cancelActiveVoiceTurn(session, false, true);
+    if (!await cancelActiveVoiceTurn(session, false, true, false, owner) || !owner.isCurrent()) return;
     session.activeTaskConversationId = null;
     session.activeTaskRequestId = null;
     session.activeTaskId = null;
-    session.inputQueue = queuedWork;
-    socket.emit('audio:status', { status: 'listening', requestId: failedRequestId || undefined });
+    session.inputQueue = requestIsCurrent ? queuedWork : [];
+    socket.emit('audio:status', { status: 'listening', sessionId: session.sessionId, requestId: failedRequestId || undefined });
   } finally {
     if (!resources.ownedByDurableRelease) resources.admission?.release();
-    if (!session.isActive || session.isProcessing || session.inputQueue.length === 0) return;
+    if (!resources.owner?.isCurrent() || !session.isActive || session.isProcessing || session.inputQueue.length === 0) return;
     const next = session.inputQueue.shift();
     if (!next) return;
 
@@ -173,7 +173,9 @@ export async function runVoiceInputPipeline(
       queuedAt: next.queuedAt,
       remaining: session.inputQueue.length,
     });
+    const handoffOwner = captureVoiceTurnOwner(session);
     setImmediate(() => {
+      if (!handoffOwner.isCurrent() || !session.isActive) return;
       void runVoiceInputPipeline(
         socket,
         session,

@@ -23,24 +23,6 @@ export interface UserProfile {
   provider: 'custom' | 'google';
 }
 
-export interface Interaction {
-  id: string;
-  userId: string;
-  agentId?: string;
-  content: string;
-  response?: string;
-  role: string;
-  personality?: string;
-  mode?: string;
-  toolCalls?: any[];
-  conversationId?: string;
-  cognitiveIntent?: string;
-  llmWasCalled?: boolean;
-  domain?: 'personal' | 'work';
-  orgId?: string;
-  timestamp: string;
-}
-
 export interface Memory {
   id: string;
   userId: string;
@@ -97,11 +79,6 @@ export interface NotificationItem {
   proactiveContext?: Record<string, any>;
   timestamp: number;
   read: boolean;
-}
-
-export interface Setting {
-  key: string;
-  value: string;
 }
 
 export interface VoicePreference {

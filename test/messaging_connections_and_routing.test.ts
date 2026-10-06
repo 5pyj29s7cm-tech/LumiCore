@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import sqlite3 from 'sqlite3';
 import { makeApp } from './helpers';
@@ -189,7 +190,7 @@ describe('messaging long connections and organization routing', () => {
     orgDb.addMember(orgB.id, lumiUserId, 'owner');
 
     const privateCode = bindings.createBindingCode('feishu', lumiUserId, orgA.id);
-    bindings.consumeBindingCode('feishu', privateCode.code, platformUserId, 'oc-private', 'private');
+    consumeFixtureBindingCode('feishu', privateCode.code, platformUserId, 'oc-private', 'private');
     bindings.authorizeMessagingGroup({
       platform: 'feishu',
       chatId: 'oc-group-b',
@@ -240,9 +241,9 @@ describe('messaging long connections and organization routing', () => {
     orgDb.addMember(orgA.id, lumiUserB, 'member');
 
     const first = bindings.createBindingCode('wecom', lumiUserA, orgA.id);
-    bindings.consumeBindingCode('wecom', first.code, 'member-a', 'private-a', 'private');
+    consumeFixtureBindingCode('wecom', first.code, 'member-a', 'private-a', 'private');
     const second = bindings.createBindingCode('wecom', lumiUserB, orgB.id);
-    bindings.consumeBindingCode('wecom', second.code, 'member-b', 'private-b', 'private');
+    consumeFixtureBindingCode('wecom', second.code, 'member-b', 'private-b', 'private');
     bindings.authorizeMessagingGroup({
       platform: 'wecom',
       chatId: 'shared-group',
@@ -268,8 +269,8 @@ describe('messaging long connections and organization routing', () => {
 
     const ownerCode = bindings.createBindingCode('feishu', ownerId, org.id);
     const memberCode = bindings.createBindingCode('feishu', memberId, org.id);
-    bindings.consumeBindingCode('feishu', ownerCode.code, 'ou-owner', 'oc-owner-private', 'private');
-    bindings.consumeBindingCode('feishu', memberCode.code, 'ou-member', 'oc-member-private', 'private');
+    consumeFixtureBindingCode('feishu', ownerCode.code, 'ou-owner', 'oc-owner-private', 'private');
+    consumeFixtureBindingCode('feishu', memberCode.code, 'ou-member', 'oc-member-private', 'private');
     bindings.authorizeMessagingGroup({
       platform: 'feishu',
       chatId: 'oc-concurrent',
@@ -295,7 +296,7 @@ describe('messaging long connections and organization routing', () => {
     expect(bindings.parseMessagingBindingCommand('Bind Lumi V_3XJS8J')).toEqual({ kind: 'bind', code: 'V_3XJS8J' });
     expect(bindings.parseMessagingBindingCommand('Already bound?')).toEqual({ kind: 'status' });
     expect(bindings.parseMessagingBindingCommand('我已经绑定成功了')).toEqual({ kind: 'status' });
-    const consumed = bindings.consumeBindingCode('wechat', code.code, 'wx-personal-user', 'wx-personal-user', 'private');
+    const consumed = consumeFixtureBindingCode('wechat', code.code, 'wx-personal-user', 'wx-personal-user', 'private');
 
     expect(consumed).toMatchObject({
       lumiUserId,

@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
@@ -15,7 +16,7 @@ function fixture() {
   sequence++;
   const userId = `learning-user-${sequence}`;
   const code = bindings.createBindingCode('feishu', userId, '', 'personal');
-  const binding = bindings.consumeBindingCode('feishu', code.code, `platform-${sequence}`, `chat-${sequence}`)!;
+  const binding = consumeFixtureBindingCode('feishu', code.code, `platform-${sequence}`, `chat-${sequence}`)!;
   const message: IncomingMessage = { platform: 'feishu', userId: binding.platformUserId, chatId: binding.chatId!,
     userName: 'Synthetic', chatType: 'private', messageId: `learning-${sequence}`, raw: {}, timestamp: new Date().toISOString(),
     text: 'Please remember my synthetic preference.', boundUserId: userId, bindingAuthorization: captureMessagingBinding(binding) };

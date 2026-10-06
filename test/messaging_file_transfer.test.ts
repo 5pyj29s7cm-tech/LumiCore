@@ -1,10 +1,11 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { makeApp } from './helpers';
 import { addMember, createOrg } from '../server/org/db';
-import { createBindingCode, consumeBindingCode, resetMessagingBindingsForTest } from '../server/messaging/bindings';
+import { createBindingCode, resetMessagingBindingsForTest } from '../server/messaging/bindings';
 import { getMessagingConfig } from '../server/messaging/config';
 import { FeishuAdapter } from '../server/messaging/feishu';
 import { WeChatClawBotAdapter } from '../server/messaging/wechat-clawbot';
@@ -37,7 +38,7 @@ describe('cross-workspace messaging file transfer', () => {
     const orgId = createOrg('File Transfer Org', `file-transfer-${suffix}`, userId).id;
     addMember(orgId, userId, 'owner');
     const code = createBindingCode('feishu', userId, orgId);
-    const binding = consumeBindingCode('feishu', code.code, 'ou-file-owner', 'oc-file-target', 'private')!;
+    const binding = consumeFixtureBindingCode('feishu', code.code, 'ou-file-owner', 'oc-file-target', 'private')!;
     const filePath = path.join(os.tmpdir(), `lumi-file-transfer-${suffix}.txt`);
     fs.writeFileSync(filePath, 'court evidence file', 'utf8');
 
@@ -89,7 +90,7 @@ describe('cross-workspace messaging file transfer', () => {
     const orgId = createOrg('WeChat Transfer Org', `wechat-transfer-${suffix}`, userId).id;
     addMember(orgId, userId, 'owner');
     const code = createBindingCode('wechat', userId, '', 'personal');
-    const binding = consumeBindingCode('wechat', code.code, 'wx-personal-owner', 'wx-personal-owner', 'private')!;
+    const binding = consumeFixtureBindingCode('wechat', code.code, 'wx-personal-owner', 'wx-personal-owner', 'private')!;
     const filePath = path.join(os.tmpdir(), `lumi-wechat-transfer-${suffix}.pdf`);
     fs.writeFileSync(filePath, 'court notice attachment', 'utf8');
     const adapter = new WeChatClawBotAdapter({

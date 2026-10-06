@@ -9,6 +9,7 @@ import {
   startNewConversation,
 } from '../server/conversation/manager';
 import { extractSourceExpression } from './source_expression';
+import { captureVoiceTurnOwner } from '../server/socket/voice_transport_runtime';
 import { TASK_TARGET_HISTORY_LIMIT } from '../server/conversation/task_target_anchor';
 
 beforeAll(async () => { await initDatabase(); });
@@ -26,6 +27,7 @@ it('keeps voice history on the admitted conversation after the user opens a new 
     'server/socket/voice/turn/prepare_voice_context_and_routing.ts',
     'prepareVoiceContextAndRouting', {
       logger: { info: vi.fn(), warn: vi.fn() },
+      captureVoiceTurnOwner,
       isCapabilityMetaQuestion: () => true,
       hasExplicitToolIntent: () => false,
       startVoiceLatencyTrace: vi.fn(),
@@ -54,7 +56,7 @@ it('keeps voice history on the admitted conversation after the user opens a new 
     requestId: 'voice-pinned-request',
     session: {
       userId, agentId: 'lumi', domain: 'personal', orgId: '',
-      voiceTurnGeneration: 0,
+      voiceTurnGeneration: 0, callControlGeneration: 0, sessionId: 'history-call', activeRoutingText: '', activeTurnRequestId: null,
     },
     voiceScope: { domain: 'personal', orgId: '' },
     toolSecurityContext: { executionBoundary: 'trusted_local' },
@@ -63,6 +65,7 @@ it('keeps voice history on the admitted conversation after the user opens a new 
     pipelineAbort: new AbortController(),
     executionReceipts: {},
     turnAuthorization: { assertCurrent: vi.fn() },
+    resources: {},
     emitAgent: vi.fn(),
     socket: { emit: vi.fn() },
     sensoryFn: () => ({}),

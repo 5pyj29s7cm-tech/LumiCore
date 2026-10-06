@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  classifyActiveTaskMessage,
   formatActiveTaskRelationContext,
   resolveActiveTaskMessageRelation,
   bindPreparedTaskMessageRelation,
@@ -87,9 +86,9 @@ describe('active task message relation', () => {
     expect(resolveActiveTaskMessageRelation(text, activeState)).toMatchObject({ taskRelation: 'new' });
   });
   it('keeps status and confirmation on the existing task', () => {
-    expect(classifyActiveTaskMessage('怎么样了', activeState)).toBe('status');
-    expect(classifyActiveTaskMessage('确认', activeState)).toBe('continue');
-    expect(classifyActiveTaskMessage('继续执行', activeState)).toBe('continue');
+    expect(resolveActiveTaskMessageRelation('怎么样了', activeState).relation).toBe('status');
+    expect(resolveActiveTaskMessageRelation('确认', activeState).relation).toBe('continue');
+    expect(resolveActiveTaskMessageRelation('继续执行', activeState).relation).toBe('continue');
   });
 
   it('keeps a global runtime-work query independent from the adjacent action', () => {
@@ -172,16 +171,16 @@ describe('active task message relation', () => {
   });
 
   it('cancels only an explicit cancellation or replacement', () => {
-    expect(classifyActiveTaskMessage('取消当前任务', activeState)).toBe('cancel');
-    expect(classifyActiveTaskMessage('Cancel this task. Do not write any file.', activeState)).toBe('cancel');
-    expect(classifyActiveTaskMessage("Cancel this task. Don't write any file.", activeState)).toBe('cancel');
-    expect(classifyActiveTaskMessage('Cancel this task. Don’t write any file.', activeState)).toBe('cancel');
-    expect(classifyActiveTaskMessage('停止这个，改成打开 WPS', activeState)).toBe('replace');
+    expect(resolveActiveTaskMessageRelation('取消当前任务', activeState).relation).toBe('cancel');
+    expect(resolveActiveTaskMessageRelation('Cancel this task. Do not write any file.', activeState).relation).toBe('cancel');
+    expect(resolveActiveTaskMessageRelation("Cancel this task. Don't write any file.", activeState).relation).toBe('cancel');
+    expect(resolveActiveTaskMessageRelation('Cancel this task. Don’t write any file.', activeState).relation).toBe('cancel');
+    expect(resolveActiveTaskMessageRelation('停止这个，改成打开 WPS', activeState).relation).toBe('replace');
   });
 
   it('queues independent work without destroying the active ledger', () => {
-    expect(classifyActiveTaskMessage('顺便帮我整理一下会议纪要', activeState)).toBe('queue');
-    expect(classifyActiveTaskMessage('今天天气怎么样', activeState)).toBe('queue');
+    expect(resolveActiveTaskMessageRelation('顺便帮我整理一下会议纪要', activeState).relation).toBe('queue');
+    expect(resolveActiveTaskMessageRelation('今天天气怎么样', activeState).relation).toBe('queue');
   });
 
   it('distinguishes adjacent feedback and binds it to task identity and revision', () => {

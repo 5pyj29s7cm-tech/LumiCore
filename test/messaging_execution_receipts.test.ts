@@ -1,3 +1,4 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -139,7 +140,7 @@ describe('remote channel execution evidence', () => {
     const bindings = await import('../server/messaging/bindings');
     const { captureMessagingBinding } = await import('../server/messaging/turn_authorization');
     const code = bindings.createBindingCode('wechat', f.id, '', 'personal');
-    const binding = bindings.consumeBindingCode('wechat', code.code, f.message.userId, f.message.chatId)!;
+    const binding = consumeFixtureBindingCode('wechat', code.code, f.message.userId, f.message.chatId)!;
     f.message.bindingAuthorization = captureMessagingBinding(binding);
     f.install(true);
     await routes.processWithPersonality(f.message, {});

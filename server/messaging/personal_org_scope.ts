@@ -311,15 +311,6 @@ export function commitPersonalOrganizationScopePlan(plan: PersonalOrganizationSc
   plan.commit();
 }
 
-export function resolvePersonalOrganizationScope(
-  message: IncomingMessage,
-  requiresOrganization: boolean,
-): PersonalOrganizationScopeResolution {
-  const plan = planPersonalOrganizationScope(message, requiresOrganization);
-  plan.commit();
-  return plan.resolution;
-}
-
 export function resetPersonalOrganizationScopesForTest(): void {
   try { fs.rmSync(STORE_PATH, { force: true }); } catch {}
 }

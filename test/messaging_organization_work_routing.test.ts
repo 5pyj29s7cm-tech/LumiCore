@@ -1,13 +1,9 @@
+import { consumeFixtureBindingCode } from './messaging_binding_fixture';
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
 import type { IncomingMessage } from '../server/messaging/types';
-import {
-  authorizeMessagingGroup,
-  consumeBindingCode,
-  createBindingCode,
-  resetMessagingBindingsForTest,
-} from '../server/messaging/bindings';
+import { authorizeMessagingGroup, createBindingCode, resetMessagingBindingsForTest } from '../server/messaging/bindings';
 import { addMember, createDepartment, createOrg } from '../server/org/db';
 import {
   createOrganizationPosition,
@@ -94,7 +90,7 @@ describe('remote organization work routing integration', () => {
       [ownerId, `ou-${ownerId}`],
     ]) {
       const code = createBindingCode('feishu', lumiUserId, orgId, 'work');
-      expect(consumeBindingCode('feishu', code.code, platformUserId, `private-${platformUserId}`, 'private')).toBeTruthy();
+      expect(consumeFixtureBindingCode('feishu', code.code, platformUserId, `private-${platformUserId}`, 'private')).toBeTruthy();
     }
     authorizeMessagingGroup({
       platform: 'feishu',
