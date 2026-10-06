@@ -42,6 +42,7 @@ export const LUMI_TECHNICAL_ARCHITECTURE: LumiTechnicalArchitecture = {
     'Windows and macOS expose the same capability IDs and behavior contracts; only native adapters differ.',
     'client_surfaces is the single registry for Lumi client surfaces and client actions.',
     'Task completion is derived from TaskLedger execution evidence and verification, never from model prose alone.',
+    'Every accepted turn has one immutable requestId root; turnRowId, taskId, toolCallId, conversationId and executionSessionId retain distinct meanings, and externalMessageId/scheduleId never replace requestId.',
     'User memory, runtime configuration, generated drafts, logs, and migration backups live in the dedicated user-data directory, not the source tree.',
   ],
   components: [
