@@ -3282,6 +3282,11 @@ describe('Lumi result finalizer', () => {
     expect(chatSource).toContain('responseText = finalResponse.text;');
     expect(chatSource).not.toContain('responseText: completionCandidate');
     expect(chatSource).not.toContain('const completionText = finalizedBackground.text;');
-    expect(voiceSource).toContain('responseText = finalResponse.text;');
+    const voiceDelivery = readFileSync(path.join(root, 'server/socket/voice/turn/finalize_voice_model_turn.ts'), 'utf8');
+    expect(voiceDelivery).toContain('context.responseText = completed.finalized.text;');
+    expect(voiceDelivery).toContain('const finalResponse = completed.finalized;');
+    const driver = readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8');
+    expect(driver).toContain('const completed = await runPreparedLumiTurn({');
+    expect(driver).toContain('return await input.deliver(executed);');
   });
 });

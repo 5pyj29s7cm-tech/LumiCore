@@ -530,15 +530,20 @@ describe('Lumi execution decision', () => {
     expect(decision.promptOverlay).toContain('major premise');
   });
 
-  it('keeps chat, voice, and task sockets on the shared execution decision path', () => {
+  it('keeps text and voice on the shared entry and execution decision owner', () => {
     const root = process.cwd();
     const sources = [
       readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8'),
       readVoiceImplementationSource(),
     ];
 
+    const driver = readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8');
+    const pipeline = readFileSync(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
+    expect(driver).toContain('const execution = buildLumiExecutionPipeline({');
+    expect(driver.indexOf('await admission?.waitForTurn();')).toBeLessThan(driver.indexOf('const execution = buildLumiExecutionPipeline({'));
+    expect(pipeline).toContain('buildLumiExecutionDecision(');
     for (const source of sources) {
-      expect(source).toContain('buildLumiExecutionPipeline');
+      expect(source).toContain('await runLumiEntryTurn<void>({');
       expect(source).toContain('agent:intent_trace');
       expect(source).not.toContain('routeToolsForTurn');
       expect(source).not.toContain('mergeToolPolicyWithRoute');

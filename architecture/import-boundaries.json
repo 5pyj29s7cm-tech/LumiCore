@@ -171,6 +171,12 @@
         "flushDBOrThrow"
       ],
       "reason": "Durability-only fence transferred to the actual scoped MCP conversation owner; no database root/table or SQL access."
+    },
+    "server/cognition/turn_execution.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Shared accepted-turn user and assistant durability fences only, transferred from MCP and REST entry owners. Preaccepted chat, voice and messaging retain their atomic terminal committers. No database root, table, SQL, read or write access."
     }
   },
   "approvedTableImporters": {

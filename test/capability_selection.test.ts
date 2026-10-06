@@ -614,15 +614,20 @@ describe('Lumi capability selection', () => {
     expect(selection.preferredTools).toContain('wechat_read_recent_chat');
   });
 
-  it('keeps chat, voice, and task sockets on the shared capability selection path', () => {
+  it('keeps text and voice on the shared entry and capability selection owner', () => {
     const root = process.cwd();
     const sources = [
       readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8'),
       readVoiceImplementationSource(),
     ];
 
+    const driver = readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8');
+    const pipeline = readFileSync(path.join(root, 'server/cognition/execution_pipeline.ts'), 'utf8');
+    expect(driver).toContain('const execution = buildLumiExecutionPipeline({');
+    expect(driver.indexOf('await admission?.waitForTurn();')).toBeLessThan(driver.indexOf('const execution = buildLumiExecutionPipeline({'));
+    expect(pipeline).toContain('buildLumiCapabilitySelection(');
     for (const source of sources) {
-      expect(source).toContain('buildLumiExecutionPipeline');
+      expect(source).toContain('await runLumiEntryTurn<void>({');
       expect(source).toContain('agent:capability_selection');
     }
   });
