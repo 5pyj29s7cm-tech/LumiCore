@@ -1,3 +1,4 @@
+import { cosineSimilarity } from '../lib/vectorSimilarity';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { releaseSensorStream, requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
@@ -162,19 +163,6 @@ function extractMFCC(samples: Float32Array): number[] {
   // DCT → 13 MFCC coefficients
   const mfcc = dct(melEnergy, 13);
   return Array.from(mfcc);
-}
-
-// ── Cosine similarity ──
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA < 1e-10 || normB < 1e-10) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 // ── RMS ──

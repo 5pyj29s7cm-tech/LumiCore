@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -71,12 +72,6 @@ export interface PendingConfirmationRepositoryOptions {
   filePersistenceAdapter?: PrivateFilePersistenceAdapter;
   sql?: SqlAdapter;
   now?: () => Date;
-}
-
-function stableValue(value: any): any {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
 }
 
 function sha256(value: string): string {

@@ -64,12 +64,6 @@
       ],
       "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
     },
-    "server/workflows/runtime.ts": {
-      "allowedExports": [
-        "flushDBOrThrow"
-      ],
-      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
-    },
     "server/socket/voice_input_pipeline.ts": {
       "allowedExports": [
         "flushDBOrThrow"
@@ -153,6 +147,24 @@
         "flushDBOrThrow"
       ],
       "reason": "Durability fence transferred from routes/files.ts to its actual knowledge feature owner. This module may neither read/replace the database root nor execute SQL."
+    },
+    "server/workflows/runtime.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
+    },
+    "server/workflows/state/run_control.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
+    },
+    "server/workflows/state/maintenance.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
     }
   },
   "approvedTableImporters": {
@@ -391,33 +403,6 @@
       ],
       "allowedExports": [
         "readDatabaseTables"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
-    "server/extensions/registry.ts": {
-      "tables": [
-        "extensionActivationReceipts",
-        "extensionPublishers",
-        "extensionRevisions"
-      ],
-      "allowedExports": [
-        "flushDBOrThrow",
-        "readDatabaseTables",
-        "commitDatabaseTables"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
-    "server/external_capabilities/registry.ts": {
-      "tables": [
-        "conversationActionReceipts",
-        "conversationActionTasks",
-        "externalCapabilityPackages",
-        "externalCapabilityReceipts"
-      ],
-      "allowedExports": [
-        "flushDBOrThrow",
-        "readDatabaseTables",
-        "commitDatabaseTables"
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
     },
@@ -1038,6 +1023,81 @@
         "readDatabaseTables"
       ],
       "reason": "Responsibility moved from server/socket/chat.ts; exact prior table subset and existing owner predicates retained."
+    },
+    "server/extensions/runtime/runtime_state.ts": {
+      "tables": [
+        "extensionActivationReceipts",
+        "extensionPublishers",
+        "extensionRevisions"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "flushDBOrThrow",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/extensions/runtime/persistence.ts": {
+      "tables": [
+        "extensionActivationReceipts",
+        "extensionPublishers",
+        "extensionRevisions"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/extensions/registry.ts": {
+      "tables": [
+        "extensionActivationReceipts",
+        "extensionPublishers",
+        "extensionRevisions"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/external_capabilities/runtime/persistence.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "externalCapabilityPackages",
+        "externalCapabilityReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "flushDBOrThrow",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/external_capabilities/runtime/store.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "externalCapabilityPackages",
+        "externalCapabilityReceipts"
+      ],
+      "allowedExports": [
+        "commitDatabaseTables",
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
+    },
+    "server/external_capabilities/runtime/projection.ts": {
+      "tables": [
+        "conversationActionReceipts",
+        "conversationActionTasks",
+        "externalCapabilityPackages",
+        "externalCapabilityReceipts"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Existing detached table snapshots and staged commits transferred to the actual responsibility owner; no new table access."
     }
   },
   "approvedSqlImporters": {

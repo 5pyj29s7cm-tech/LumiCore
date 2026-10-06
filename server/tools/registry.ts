@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 import { isDefiniteOfficialImageRejection } from '../llm/official_api';
@@ -235,15 +236,6 @@ function assertToolPermission(tool: ToolDefinition, context?: ToolContext): void
 export function resetExternalCommitRuntimeCacheForTests(): void {
   externalCommitAttempts.clear();
   sideEffectAttempts.clear();
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
-    key,
-    stableValue((value as Record<string, unknown>)[key]),
-  ]));
 }
 
 export function executionIdempotencyKey(name: string, args: Record<string, any>, context?: ToolContext): string {

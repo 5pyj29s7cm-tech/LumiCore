@@ -4,7 +4,7 @@ import { synthesizeSpeech, getActiveProvider as getTTSProvider, isTtsCancellatio
 import { isVoiceReferentialFollowup } from "../../voice_turn_state";
 import { CN_VOICE_WORK_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
-import { getOrCreateActiveConversation, getMessages, getTopicContext, getConversationSummary, prepareConversationActionExecution } from "../../../conversation/manager";
+import { getMessages, getTopicContext, getConversationSummary, prepareConversationActionExecution } from "../../../conversation/manager";
 import { recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably } from "../../chat_execution_registry";
 import { flushDBOrThrow } from "../../../../db_layer";
 import { isCapabilityMetaQuestion } from "../../../cognition/capability_meta";
@@ -171,11 +171,10 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     || /(?:刚才|刚刚|之前|上次|以前|我们聊过|还记得)|\b(?:earlier|before|previously|last time|we discussed|remember)\b/iu.test(context.userText),
   );
   try {
-    const convForTopic = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
     if (wantsHistoricalVoiceContext) {
-      const summary = getConversationSummary(convForTopic.id);
+      const summary = getConversationSummary(context.conversationTurn.conversation.id);
       if (summary) topicContext += `\n\n## Conversation Context\n${summary}`;
-      const tc = getTopicContext(convForTopic.id);
+      const tc = getTopicContext(context.conversationTurn.conversation.id);
       if (tc) topicContext += tc;
     }
   } catch {}

@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import crypto from 'node:crypto';
 import { readDatabaseTables } from '../../db_layer';
@@ -114,15 +115,6 @@ function staleEvidenceError(code: string): Error {
   const error = new Error(code);
   error.name = 'TaskRegressionStaleReceiptEvidenceError';
   return error;
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
-    key,
-    stableValue((value as Record<string, unknown>)[key]),
-  ]));
 }
 
 function stableJson(value: unknown): string {

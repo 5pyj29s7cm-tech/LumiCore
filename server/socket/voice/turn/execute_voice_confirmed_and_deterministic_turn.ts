@@ -1,5 +1,5 @@
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
-import { getOrCreateActiveConversation, getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
+import { getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
 import { formatConversationActionTaskStatus } from "../../../cognition/action_continuation";
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, consumePendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { toolRegistry } from "../../../tools/registry";
@@ -313,10 +313,9 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
     let recentActionExplanation: string | null = context.interruptedActivityResponse;
     let recentActionEvidence: ToolExecutionRecord[] = [];
     try {
-      const conversation = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
       const recentActionHistory = context.recentVoiceHistory.length > 0
         ? context.recentVoiceHistory
-        : getMessages(conversation.id, 30);
+        : getMessages(context.conversationTurn.conversation.id, 30);
       recentActionEvidence = collectRecentActionToolRecords(recentActionHistory);
       if (!recentActionExplanation) {
         recentActionExplanation = describeRecentActionsFromHistory(context.userText, recentActionHistory);

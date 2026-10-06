@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import { cloneDatabaseValue } from '../db/snapshot_changes';
 import {
@@ -220,14 +221,6 @@ function canonicalInstant(value: unknown, code: string): string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map(key => [key, stableValue((value as Record<string, unknown>)[key])]));
 }
 
 function stableJson(value: unknown): string {

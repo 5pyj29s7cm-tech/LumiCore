@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 import { groupTaskReceipts, isDelegatedActionEvidenceArchive } from './task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
@@ -157,15 +158,6 @@ function compact(value: unknown, limit = 700): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, limit);
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
-    key,
-    stableValue((value as Record<string, unknown>)[key]),
-  ]));
 }
 
 function digest(value: unknown): string {

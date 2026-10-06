@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 import type { LumiExecutionDecision } from './execution_decision';
 import type { LumiCapabilityPlan } from './execution_pipeline';
@@ -131,14 +132,6 @@ export interface BuildScheduledCapabilityExecutionPlanInput {
   operation: CapabilityOperation;
   sideEffectClass: Exclude<NormalizedSideEffectClass, 'external_commit'>;
   sideEffects: CapabilitySideEffect[];
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map(key => [key, stableValue((value as Record<string, unknown>)[key])]));
 }
 
 function digest(value: unknown): string {

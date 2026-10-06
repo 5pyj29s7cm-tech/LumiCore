@@ -1,19 +1,10 @@
+import { stableValue } from '../../shared/stable_json';
 import { toolExecutionIdentity } from './execution_identity';
 import crypto from 'node:crypto';
 import { isConfirmationBlockedToolRecord } from './confirmation_block';
 import type { ToolExecutionEnvelope, ToolExecutionRecord } from './types';
 import { toolRecordSucceeded } from '../cognition/task_execution_ledger';
 import { toolRecordTerminalPayload } from './receipt_payload';
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map(key => [key, stableValue((value as Record<string, unknown>)[key])]),
-  );
-}
 
 export function toolRecordIdempotencyKey(record: ToolExecutionRecord): string {
   if (record.idempotencyKey) return record.idempotencyKey;

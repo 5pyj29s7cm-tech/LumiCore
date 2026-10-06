@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 
 export const EXTERNAL_CAPABILITY_SCHEMA_VERSION = 1 as const;
@@ -413,14 +414,6 @@ export function normalizeExternalCapabilityProposal(input: unknown): ExternalCap
     actions,
     acceptance: { requiredActionIds, minimumVerifiedRuns },
   };
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map(key => [key, stableValue((value as Record<string, unknown>)[key])]));
 }
 
 export function externalCapabilityProposalDigest(proposal: ExternalCapabilityPackageProposal): string {

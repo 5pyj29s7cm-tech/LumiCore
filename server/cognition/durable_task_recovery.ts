@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 import type { NormalizedSideEffectClass } from './normalized_action_intent';
 import type { ToolExecutionEnvelopeStatus, ToolExecutionRecord } from '../tools/types';
@@ -98,14 +99,6 @@ const POLICY_RE = /forbidden|denied|not allowed|policy|safety gate|permission|un
 const PRECONDITION_RE = /missing input|precondition|requires? setup|not configured|not found|invalid target|missing target|missing credential|\u7f3a\u5c11|\u672a\u627e\u5230/i;
 function compact(value: unknown, limit = 700): string {
   return redactDiagnosticSecrets(value).replace(/\s+/g, ' ').trim().slice(0, limit);
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map(key => [key, stableValue((value as Record<string, unknown>)[key])]));
 }
 
 function digest(value: unknown): string {

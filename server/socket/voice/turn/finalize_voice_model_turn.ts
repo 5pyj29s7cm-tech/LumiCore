@@ -1,5 +1,5 @@
 import { logger } from "../../../../logger";
-import { getOrCreateActiveConversation, extractTopics, trackTopic } from "../../../conversation/manager";
+import { extractTopics, trackTopic } from "../../../conversation/manager";
 import { recoverBlockedExecutionOnce } from "../../../cognition/execution_guard_recovery";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
@@ -127,7 +127,6 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
     // database and terminal-receipt fences have both committed.
     if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
 
-    const conv = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
     // The user, assistant, task writeback, and terminal receipt committed
     // before TTS. Playback or
     // disconnect failures must never make a completed/blocked task disappear.
@@ -136,7 +135,7 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
       try {
         const topics = extractTopics(context.userText + ' ' + context.responseText);
         for (const topic of topics) {
-          trackTopic(conv.id, topic);
+          trackTopic(context.conversationTurn.conversation.id, topic);
         }
       } catch {}
     }

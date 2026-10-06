@@ -1,3 +1,4 @@
+import { stableValue } from '../../shared/stable_json';
 import crypto from 'crypto';
 import { formatPendingConfirmationRequestMessage } from "../regions/messages/confirmation_messages";
 
@@ -127,14 +128,6 @@ function confirmationChannelKey(
     String(scope.orgId || ''),
     String(scope.channelId || '').trim(),
   ].join('\0');
-}
-
-function stableValue(value: any): any {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.keys(value).sort().map(key => [key, stableValue(value[key])]),
-  );
 }
 
 function argsHash(args: Record<string, any>): string {

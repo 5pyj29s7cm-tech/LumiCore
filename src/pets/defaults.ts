@@ -1,3 +1,4 @@
+import { roundRect } from './canvas';
 import { PetConfig, DEFAULT_ATLAS, PetPalette, CustomPetTags, PetSpecies, BUILTIN_PALETTES } from './types';
 
 const CW = 192;
@@ -33,23 +34,6 @@ function drawRow(ctx: CanvasRenderingContext2D, row: number, frameCount: number,
 function canvasToDataURL(canvas: HTMLCanvasElement): string {
   // PNG for max compatibility across WebView2 / all browsers
   return canvas.toDataURL('image/png');
-}
-
-// ── Drawing helpers ──
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
 }
 
 function drawEyes(ctx: CanvasRenderingContext2D, cx: number, cy: number, eyeShape: string, eyeColor: string, eyeWhite: string, blink: number, scale: number) {
