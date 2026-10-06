@@ -210,7 +210,7 @@ function releaseAudioBufferSource(source: AudioBufferSourceNode | null, stop = f
   try { source.buffer = null; } catch {}
 }
 
-export function useVoiceCall({
+function useVoiceSessionState({
   socket,
   onTranscript,
   onResponse,
@@ -219,6 +219,7 @@ export function useVoiceCall({
   privateCapture = false,
   proactive,
 }: UseVoiceCallOptions) {
+
   const proactiveContextRef = useRef<{ contextId: string; userId: string; domain: string; orgId: string; enabled: boolean } | null>(null);
   const [callState, setCallState] = useState<CallState>('idle');
   // Server readiness and local output have independent lifetimes. Decoding or
@@ -284,6 +285,7 @@ export function useVoiceCall({
     }
   }, []);
 
+  const isCallActive = useRef(false);
   const scheduleThinkingWatchdog = useCallback((lane: 'turn' | 'work' = 'turn') => {
     clearThinkingWatchdog();
     const startedAt = Date.now();
@@ -308,7 +310,6 @@ export function useVoiceCall({
 
   const isTtsPlaying = useRef(false);
   const isConversationTtsPlaying = useRef(false);
-  const isCallActive = useRef(false);
   const playbackStartTime = useRef(0);
   // Streaming TTS: pre-buffer and cross-fade to eliminate gaps between chunks
   const ttsContext = useRef<AudioContext | null>(null);
@@ -342,7 +343,28 @@ export function useVoiceCall({
     }
     return ttsContext.current;
   }, []);
+  return {
+    playbackGenerationRef, playbackRequestIdRef, setHasConversationPlayback, outputLevelRef,
+    proactivePlaybackGenerationRef, playbackStartTime, proactiveStateTimerRef, proactiveSource, proactiveContext,
+    ttsSourceRef, ttsContext, nextStartTime, ttsGainNode, isTtsPlaying, isConversationTtsPlaying, ttsStartedAt,
+    ttsEchoFloorRef, ttsBargeInFramesRef, ttsBargeInCandidateSentRef, outputMeterTimerRef, outputAnalyserRef, socket,
+    disabled, privateCapture, proactive, isCallActive, setCallState, isMutedRef, proactiveContextRef, isMuted,
+    privateCaptureRef, streamRef, scriptProcessorRef, audioContext, rawAudioLevelRef, lastCaptureFrameAtRef,
+    callGenerationRef, socketRef, transcriptionOnlyRef, canSendMicAudioRef, callStateRef,
+    lastPassiveSilenceKeepAlive, captureRecoveryInFlightRef, setError, passiveTimer, disconnectTimer,
+    captureLeaseToken, clearThinkingWatchdog, activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef,
+    cancelledVoiceRequestsRef, setIsMuted, scheduleThinkingWatchdog, prevCallState, setTranscript, onTranscript,
+    ensureTtsContext, setResponseText, onResponse, preferredVoiceIdRef, pendingInterruptRef, setConnectionQuality,
+    callState, startInFlightRef, callStartTime, captureRecoveryTimerRef, hasConversationPlayback, error, transcript,
+    responseText, connectionQuality
+  } as const;
+}
 
+function useVoiceCaptureRuntime(previousBindings: ReturnType<typeof useVoiceSessionState>) {
+  const { playbackGenerationRef, playbackRequestIdRef, setHasConversationPlayback, outputLevelRef, proactivePlaybackGenerationRef, playbackStartTime, proactiveStateTimerRef, proactiveSource, proactiveContext, ttsSourceRef, ttsContext, nextStartTime, ttsGainNode, isTtsPlaying, isConversationTtsPlaying, ttsStartedAt, ttsEchoFloorRef, ttsBargeInFramesRef, ttsBargeInCandidateSentRef, outputMeterTimerRef, outputAnalyserRef, socket, disabled, privateCapture, proactive, isCallActive, setCallState, isMutedRef, proactiveContextRef, isMuted, privateCaptureRef, streamRef, scriptProcessorRef, audioContext, rawAudioLevelRef, lastCaptureFrameAtRef, callGenerationRef, socketRef, transcriptionOnlyRef, canSendMicAudioRef, callStateRef, lastPassiveSilenceKeepAlive, captureRecoveryInFlightRef, setError, passiveTimer, disconnectTimer, captureLeaseToken, clearThinkingWatchdog, activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef, cancelledVoiceRequestsRef, setIsMuted } = previousBindings;
+
+
+  const audioQueue = useRef<Array<ArrayBuffer | VoiceAudioResponse>>([]);
   const stopAllPlayback = useCallback(() => {
     playbackGenerationRef.current++;
     playbackRequestIdRef.current = null;
@@ -383,7 +405,7 @@ export function useVoiceCall({
     ttsEchoFloorRef.current = 0;
     ttsBargeInFramesRef.current = 0;
     ttsBargeInCandidateSentRef.current = false;
-  }, []);
+  }, [isConversationTtsPlaying, isTtsPlaying, nextStartTime, outputLevelRef, playbackGenerationRef, playbackRequestIdRef, playbackStartTime, proactiveContext, proactivePlaybackGenerationRef, proactiveSource, proactiveStateTimerRef, setHasConversationPlayback, ttsBargeInCandidateSentRef, ttsBargeInFramesRef, ttsContext, ttsEchoFloorRef, ttsGainNode, ttsSourceRef, ttsStartedAt]);
 
   const disposePlaybackContexts = useCallback(() => {
     stopAllPlayback();
@@ -398,7 +420,7 @@ export function useVoiceCall({
     ttsContext.current = null;
     nextStartTime.current = 0;
     void closeAudioContext(context);
-  }, [stopAllPlayback]);
+  }, [nextStartTime, outputAnalyserRef, outputMeterTimerRef, stopAllPlayback, ttsContext, ttsGainNode]);
 
   useEffect(() => {
     if (!socket || disabled || privateCapture || !proactive?.userId) return;
@@ -445,7 +467,7 @@ export function useVoiceCall({
       window.removeEventListener('lumi:setting-changed', onSetting);
       unsubscribe();
     };
-  }, [disabled, privateCapture, socket, proactive?.userId, proactive?.domain, proactive?.orgId, proactive?.voiceId, proactive?.outputMuted, isMuted]);
+  }, [disabled, privateCapture, socket, proactive.userId, proactive.domain, proactive.orgId, proactive.voiceId, proactive.outputMuted, isMuted, proactivePlaybackGenerationRef, proactiveStateTimerRef, proactiveSource, proactiveContext, isTtsPlaying, isConversationTtsPlaying, isCallActive, setCallState, isMutedRef, proactiveContextRef]);
 
   const cleanupCapture = useCallback(() => {
     if (typeof window !== 'undefined' && !privateCaptureRef.current) {
@@ -464,7 +486,7 @@ export function useVoiceCall({
     audioContext.current = null;
     rawAudioLevelRef.current = 0;
     lastCaptureFrameAtRef.current = 0;
-  }, []);
+  }, [audioContext, lastCaptureFrameAtRef, privateCaptureRef, rawAudioLevelRef, scriptProcessorRef, streamRef]);
 
   const installMicrophoneCapture = useCallback(async (
     generation: number,
@@ -590,7 +612,7 @@ export function useVoiceCall({
       void closeAudioContext(nextContext);
       throw error;
     }
-  }, [cleanupCapture]);
+  }, [audioContext, callGenerationRef, callStateRef, canSendMicAudioRef, cleanupCapture, isMutedRef, isTtsPlaying, lastCaptureFrameAtRef, lastPassiveSilenceKeepAlive, privateCaptureRef, rawAudioLevelRef, scriptProcessorRef, socketRef, streamRef, transcriptionOnlyRef, ttsBargeInCandidateSentRef, ttsBargeInFramesRef, ttsEchoFloorRef, ttsStartedAt]);
 
   const recoverMicrophoneCapture = useCallback(async (forceRestart = false): Promise<void> => {
     if (!isCallActive.current || captureRecoveryInFlightRef.current) return;
@@ -626,12 +648,12 @@ export function useVoiceCall({
     } finally {
       captureRecoveryInFlightRef.current = false;
     }
-  }, [installMicrophoneCapture]);
+  }, [audioContext, callGenerationRef, captureRecoveryInFlightRef, installMicrophoneCapture, isCallActive, lastCaptureFrameAtRef, setError, streamRef]);
 
   const clearPassiveTimers = useCallback(() => {
     if (passiveTimer.current) { clearTimeout(passiveTimer.current); passiveTimer.current = null; }
     if (disconnectTimer.current) { clearTimeout(disconnectTimer.current); disconnectTimer.current = null; }
-  }, []);
+  }, [disconnectTimer, passiveTimer]);
 
   const endCall = useCallback((options: EndCallOptions = {}) => {
     callGenerationRef.current++;
@@ -662,9 +684,16 @@ export function useVoiceCall({
     isMutedRef.current = false;
 
     setCallState('idle');
-  }, [cleanupCapture, disposePlaybackContexts, clearPassiveTimers, clearThinkingWatchdog]);
+  }, [callGenerationRef, captureLeaseToken, isCallActive, clearPassiveTimers, clearThinkingWatchdog, socketRef, activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef, disposePlaybackContexts, cleanupCapture, isTtsPlaying, transcriptionOnlyRef, ttsStartedAt, setIsMuted, isMutedRef, setCallState, playbackRequestIdRef, cancelledVoiceRequestsRef]);
+  return {
+    ...previousBindings, endCall, audioQueue, cleanupCapture, disposePlaybackContexts, stopAllPlayback, installMicrophoneCapture, recoverMicrophoneCapture
+  } as const;
+}
 
-  const audioQueue = useRef<Array<ArrayBuffer | VoiceAudioResponse>>([]);
+function useVoiceSocketEvents(previousBindings: ReturnType<typeof useVoiceCaptureRuntime>) {
+  const { disabled, socket, activeStartPayload, isCallActive, cancelledVoiceRequestsRef, activeVoiceRequestIdRef, scheduleThinkingWatchdog, clearThinkingWatchdog, setCallState, passiveTimer, disconnectTimer, transcriptionOnlyRef, prevCallState, endCall, activeWorkRequestIdRef, setTranscript, privateCaptureRef, onTranscript, audioQueue, ensureTtsContext, isConversationTtsPlaying, playbackRequestIdRef, setHasConversationPlayback, isTtsPlaying, proactiveSource, setError, playbackGenerationRef, ttsStartedAt, ttsBargeInCandidateSentRef, outputLevelRef, ttsEchoFloorRef, ttsBargeInFramesRef, ttsSourceRef, ttsContext, ttsGainNode, nextStartTime, proactivePlaybackGenerationRef, proactiveStateTimerRef, proactiveContext, setResponseText, onResponse, callGenerationRef, cleanupCapture, disposePlaybackContexts, preferredVoiceIdRef, pendingInterruptRef, stopAllPlayback, proactiveContextRef, isMutedRef } = previousBindings;
+
+
 
   useEffect(() => {
     if (disabled || !socket) return;
@@ -738,199 +767,13 @@ export function useVoiceCall({
         onTranscript?.(data.text, true);
       }
     };
+    const { prepareAudio, prepareQueueHead, playAudioChunk } = createVoicePlaybackRuntime({
+    audioQueue, isCallActive, ensureTtsContext, isConversationTtsPlaying, playbackRequestIdRef,
+    setHasConversationPlayback, isTtsPlaying, proactiveSource, setError, setCallState, playbackGenerationRef,
+    ttsStartedAt, ttsBargeInCandidateSentRef, clearThinkingWatchdog, outputLevelRef, ttsEchoFloorRef,
+    ttsBargeInFramesRef, ttsSourceRef, ttsContext, ttsGainNode, nextStartTime, socket
+  });
 
-    /**
-     * Play a TTS audio chunk using Web Audio API with cross-fade scheduling.
-     * Pre-buffers: starts decoding while the previous chunk is still playing.
-     * Cross-fade: overlaps the last 50ms of previous audio with the first 50ms of next.
-     * VolumeGain: applies server-computed volume adaptation.
-     */
-    const prepareAudio = (packet: VoiceAudioResponse, ctx: AudioContext) => {
-      if (packet.preparedAudio?.context === ctx) return packet.preparedAudio;
-      const prepared: NonNullable<VoiceAudioResponse['preparedAudio']> = {
-        context: ctx, startedAt: performance.now(), promise: Promise.resolve({}),
-      };
-      // Decode at most the playing packet and one queued packet. A rejected
-      // preparation is observed here even if interruption later drops the queue.
-      prepared.promise = Promise.resolve().then(() => ctx.decodeAudioData(packet.buffer.slice(0))).then(decoded => {
-        prepared.finishedAt = performance.now();
-        return { decoded };
-      }, error => {
-        prepared.finishedAt = performance.now();
-        return { error };
-      });
-      packet.preparedAudio = prepared;
-      return prepared;
-    };
-
-    const prepareQueueHead = (ctx: AudioContext) => {
-      const next = audioQueue.current[0];
-      if (!next) return;
-      const packet: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next, receivedAt: performance.now() } : next;
-      audioQueue.current[0] = packet;
-      prepareAudio(packet, ctx);
-    };
-
-    const playAudioChunk = (
-      buffer: ArrayBuffer,
-      volumeGain?: number,
-      lane?: string,
-      requestId?: string,
-      format?: string,
-      queuedPacket?: VoiceAudioResponse,
-    ) => {
-      if (!isCallActive.current) return;
-      let ctx: AudioContext;
-      try {
-        ctx = ensureTtsContext();
-      } catch (error) {
-        console.error('[VoiceCall] Could not create the realtime audio output:', error, { format, lane, requestId });
-        isConversationTtsPlaying.current = false;
-        playbackRequestIdRef.current = null;
-        setHasConversationPlayback(false);
-        audioQueue.current = [];
-        isTtsPlaying.current = Boolean(proactiveSource.current);
-        setError('Voice audio could not be played. The text reply is still available.');
-        setCallState(prev => prev === 'speaking' ? 'listening' : prev);
-        return;
-      }
-      if (!isConversationTtsPlaying.current) playbackGenerationRef.current++;
-      const playbackGeneration = playbackGenerationRef.current;
-      const packet = queuedPacket || { buffer, receivedAt: performance.now() };
-      const preparedAudio = prepareAudio(packet, ctx);
-      prepareQueueHead(ctx);
-      playbackRequestIdRef.current = requestId || null;
-      isConversationTtsPlaying.current = true;
-      setHasConversationPlayback(true);
-      isTtsPlaying.current = true;
-      if (ttsStartedAt.current === 0) {
-        ttsStartedAt.current = Date.now();
-        ttsBargeInCandidateSentRef.current = false;
-      }
-      if (lane !== 'conversation') clearThinkingWatchdog();
-      setCallState(prev => (prev === 'thinking' || prev === 'queued') ? 'speaking' : prev);
-
-      const playNextOrFinish = () => {
-        if (playbackGeneration !== playbackGenerationRef.current) return;
-        if (audioQueue.current.length > 0) {
-          const next = audioQueue.current.shift()!;
-          const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
-          playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId, queued.format, queued);
-          return;
-        }
-        isConversationTtsPlaying.current = false;
-        playbackRequestIdRef.current = null;
-        setHasConversationPlayback(false);
-        outputLevelRef.current = 0;
-        isTtsPlaying.current = Boolean(proactiveSource.current);
-        ttsStartedAt.current = 0;
-        ttsEchoFloorRef.current = 0;
-        ttsBargeInFramesRef.current = 0;
-        ttsBargeInCandidateSentRef.current = false;
-        setCallState(prev => prev === 'speaking' ? 'listening' : prev);
-      };
-
-      let failed = false;
-      const failPlayback = (error: unknown) => {
-        if (failed || playbackGeneration !== playbackGenerationRef.current) return;
-        failed = true;
-        console.error('[VoiceCall] Realtime audio playback failed:', error, { format, lane, requestId });
-        if (ttsSourceRef.current) {
-          releaseAudioBufferSource(ttsSourceRef.current, true);
-          ttsSourceRef.current = null;
-        }
-        if (ttsContext.current === ctx) {
-          const gain = ttsGainNode.current;
-          ttsGainNode.current = null;
-          try { gain?.disconnect(); } catch {}
-          ttsContext.current = null;
-          nextStartTime.current = 0;
-          void closeAudioContext(ctx);
-        }
-        isConversationTtsPlaying.current = false;
-        isTtsPlaying.current = Boolean(proactiveSource.current);
-        setError('Voice audio could not be played. The text reply is still available.');
-        playNextOrFinish();
-      };
-
-      const startDecodedAudio = (decoded: AudioBuffer) => {
-        if (!isCallActive.current || playbackGeneration !== playbackGenerationRef.current) return;
-        if (ctx.state === 'closed') {
-          failPlayback(new Error('Audio output context closed before playback'));
-          return;
-        }
-        try {
-          const now = ctx.currentTime;
-          const crossFadeSec = 0.05;
-          const effectiveStart = nextStartTime.current > 0
-            ? Math.max(now, nextStartTime.current - crossFadeSec)
-            : now;
-          nextStartTime.current = effectiveStart + decoded.duration;
-
-          const source = ctx.createBufferSource();
-          source.buffer = decoded;
-          const gain = typeof volumeGain === 'number' ? Math.max(0.3, Math.min(1.5, volumeGain)) : 1.0;
-          if (!ttsGainNode.current) throw new Error('Audio output gain node is unavailable');
-          ttsGainNode.current.gain.setValueAtTime(gain, effectiveStart);
-          source.connect(ttsGainNode.current);
-          ttsSourceRef.current = source;
-          source.onended = () => {
-            releaseAudioBufferSource(source);
-            if (ttsSourceRef.current === source) ttsSourceRef.current = null;
-            playNextOrFinish();
-          };
-          source.start(effectiveStart);
-          setError(prev => prev?.startsWith('Voice audio could not be played') ? null : prev);
-          if (requestId) {
-            const ackGeneration = playbackGeneration;
-            const delayMs = Math.max(0, Math.round((effectiveStart - ctx.currentTime) * 1000));
-            setTimeout(() => {
-              if (!isCallActive.current || ackGeneration !== playbackGenerationRef.current) return;
-              socket.emit('audio:playback_started', {
-                requestId,
-                lane,
-                durationMs: Math.max(1, Math.round(decoded.duration * 1_000)),
-                clientDecodeMs: Math.max(0, Math.round((preparedAudio.finishedAt ?? performance.now()) - preparedAudio.startedAt)),
-                clientReceiptToPlaybackMs: Math.max(0, Math.round(performance.now() - (packet.receivedAt ?? preparedAudio.startedAt))),
-              });
-            }, delayMs);
-          }
-        } catch (error) {
-          failPlayback(error);
-        }
-      };
-
-      const decode = () => {
-        try {
-          void preparedAudio.promise.then(result => {
-            if (result.decoded) startDecodedAudio(result.decoded);
-            else failPlayback(result.error || new Error('Audio decoding returned no samples'));
-          }).catch(failPlayback);
-        } catch (error) {
-          failPlayback(error);
-        }
-      };
-
-      const prepareOutput = async () => {
-        if (ctx.state === 'suspended' || (ctx.state as string) === 'interrupted') {
-          let resumeTimer: ReturnType<typeof setTimeout> | null = null;
-          try {
-            await Promise.race([
-              ctx.resume(),
-              new Promise<never>((_resolve, reject) => {
-                resumeTimer = setTimeout(() => reject(new Error('Audio output resume timed out')), 2500);
-              }),
-            ]);
-          } finally {
-            if (resumeTimer) clearTimeout(resumeTimer);
-          }
-        }
-        if (ctx.state !== 'running') throw new Error(`Audio output is ${ctx.state}`);
-        if (!isCallActive.current || playbackGeneration !== playbackGenerationRef.current) return;
-        decode();
-      };
-      void prepareOutput().catch(failPlayback);
-    };
 
     // Handle raw binary payloads and the metadata envelope emitted by the
     // server.  Normalize before queueing so a Uint8Array/serialized Buffer
@@ -1312,7 +1155,15 @@ export function useVoiceCall({
       socket.off('audio:proactive_error', onAudioProactiveError);
       clearThinkingWatchdog();
     };
-  }, [disabled, socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog]);
+  }, [disabled, socket, onTranscript, onResponse, stopAllPlayback, disposePlaybackContexts, cleanupCapture, clearThinkingWatchdog, endCall, ensureTtsContext, scheduleThinkingWatchdog, audioQueue, isCallActive, isConversationTtsPlaying, playbackRequestIdRef, setHasConversationPlayback, isTtsPlaying, proactiveSource, setError, setCallState, playbackGenerationRef, ttsStartedAt, ttsBargeInCandidateSentRef, outputLevelRef, ttsEchoFloorRef, ttsBargeInFramesRef, ttsSourceRef, ttsContext, ttsGainNode, nextStartTime, activeStartPayload, cancelledVoiceRequestsRef, activeVoiceRequestIdRef, prevCallState, passiveTimer, disconnectTimer, transcriptionOnlyRef, activeWorkRequestIdRef, setTranscript, privateCaptureRef, proactivePlaybackGenerationRef, proactiveStateTimerRef, proactiveContext, setResponseText, callGenerationRef, preferredVoiceIdRef, pendingInterruptRef, proactiveContextRef, isMutedRef]);
+  return {
+    ...previousBindings
+  } as const;
+}
+
+function useVoiceCallControls(previousBindings: ReturnType<typeof useVoiceSocketEvents>) {
+  const { disabled, socket, isCallActive, activeVoiceRequestIdRef, playbackRequestIdRef, activeWorkRequestIdRef, audioQueue, cancelledVoiceRequestsRef, pendingInterruptRef, setConnectionQuality, setCallState, clearThinkingWatchdog, stopAllPlayback, activeStartPayload, privateCapture, callState, startInFlightRef, captureLeaseToken, endCall, preferredVoiceIdRef, callGenerationRef, setError, transcriptionOnlyRef, ensureTtsContext, socketRef, installMicrophoneCapture, callStartTime, cleanupCapture, disposePlaybackContexts, recoverMicrophoneCapture, captureRecoveryTimerRef, ttsContext, proactiveContext, isTtsPlaying, callStateRef, playbackGenerationRef, setIsMuted, isMutedRef, streamRef, ttsStartedAt, ttsEchoFloorRef, ttsBargeInFramesRef, ttsBargeInCandidateSentRef, privateCaptureRef, rawAudioLevelRef, hasConversationPlayback, error, transcript, responseText, isMuted, connectionQuality, outputLevelRef } = previousBindings;
+
 
   useEffect(() => {
     if (disabled || !socket) return;
@@ -1342,7 +1193,7 @@ export function useVoiceCall({
       socket.off('disconnect', onDisconnect);
       socket.off('connect', onConnect);
     };
-  }, [disabled, socket, clearThinkingWatchdog, stopAllPlayback]);
+  }, [disabled, socket, clearThinkingWatchdog, stopAllPlayback, isCallActive, activeVoiceRequestIdRef, activeWorkRequestIdRef, pendingInterruptRef, setConnectionQuality, setCallState, playbackRequestIdRef, audioQueue, cancelledVoiceRequestsRef, activeStartPayload]);
 
   // Push audio emotion perception events when call state changes
   useEffect(() => {
@@ -1428,7 +1279,7 @@ export function useVoiceCall({
     } finally {
       startInFlightRef.current = false;
     }
-  }, [cleanupCapture, disabled, disposePlaybackContexts, endCall, ensureTtsContext, installMicrophoneCapture]);
+  }, [activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef, callGenerationRef, callStartTime, captureLeaseToken, cleanupCapture, disabled, disposePlaybackContexts, endCall, ensureTtsContext, installMicrophoneCapture, isCallActive, pendingInterruptRef, preferredVoiceIdRef, setCallState, setError, socketRef, startInFlightRef, transcriptionOnlyRef]);
 
   const switchVoice = useCallback((voiceId?: string): boolean => {
     const normalizedVoiceId = normalizeSelectedVoiceId(voiceId);
@@ -1442,7 +1293,7 @@ export function useVoiceCall({
       socketRef.current.emit('audio:switch-voice', transition.event);
     }
     return true;
-  }, []);
+  }, [activeStartPayload, isCallActive, preferredVoiceIdRef, socketRef]);
 
   useEffect(() => {
     if (disabled) return;
@@ -1454,7 +1305,7 @@ export function useVoiceCall({
       clearInterval(timer);
       if (captureRecoveryTimerRef.current === timer) captureRecoveryTimerRef.current = null;
     };
-  }, [disabled, recoverMicrophoneCapture]);
+  }, [captureRecoveryTimerRef, disabled, recoverMicrophoneCapture]);
 
   useEffect(() => {
     const applyDevicePreference = (event: Event) => {
@@ -1468,7 +1319,7 @@ export function useVoiceCall({
     };
     window.addEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyDevicePreference);
     return () => window.removeEventListener(VOICE_DEVICE_PREFERENCE_CHANGED, applyDevicePreference);
-  }, [recoverMicrophoneCapture]);
+  }, [proactiveContext, recoverMicrophoneCapture, ttsContext]);
 
   const startCallRef = useRef(startCall);
   startCallRef.current = startCall;
@@ -1485,7 +1336,7 @@ export function useVoiceCall({
     stopAllPlayback();
     pendingInterruptRef.current = { requestId, generation: playbackGenerationRef.current };
     socketRef.current?.emit('audio:interrupt', { source: 'user_control', sessionId: activeStartPayload.current?.sessionId, requestId });
-  }, [stopAllPlayback]);
+  }, [activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef, audioQueue, callStateRef, cancelledVoiceRequestsRef, isCallActive, isTtsPlaying, pendingInterruptRef, playbackGenerationRef, playbackRequestIdRef, socketRef, stopAllPlayback]);
 
   useEffect(() => {
     const stopVoiceOutput = () => {
@@ -1494,7 +1345,7 @@ export function useVoiceCall({
     };
     window.addEventListener('lumi:stop-voice-output', stopVoiceOutput);
     return () => window.removeEventListener('lumi:stop-voice-output', stopVoiceOutput);
-  }, [interrupt, stopAllPlayback]);
+  }, [interrupt, isCallActive, stopAllPlayback]);
 
   const switchPersonality = useCallback((personalityId: string) => {
     if (callState !== 'idle') {
@@ -1511,7 +1362,7 @@ export function useVoiceCall({
       }
       return next;
     });
-  }, []);
+  }, [isMutedRef, setIsMuted, streamRef]);
 
   useEffect(() => () => {
     releaseVoiceCapture(captureLeaseToken.current);
@@ -1528,7 +1379,7 @@ export function useVoiceCall({
     activeWorkRequestIdRef.current = null;
     cleanupCapture();
     disposePlaybackContexts();
-  }, [cleanupCapture, disposePlaybackContexts]);
+  }, [activeStartPayload, activeVoiceRequestIdRef, activeWorkRequestIdRef, callGenerationRef, captureLeaseToken, cleanupCapture, disposePlaybackContexts, isCallActive, socketRef]);
 
   // Track the beginning of each TTS utterance. Audio-frame processing above
   // uses this timestamp to learn an adaptive echo floor and detect barge-in.
@@ -1541,7 +1392,7 @@ export function useVoiceCall({
       ttsBargeInFramesRef.current = 0;
       ttsBargeInCandidateSentRef.current = false;
     }
-  }, [callState]);
+  }, [callState, isTtsPlaying, ttsBargeInCandidateSentRef, ttsBargeInFramesRef, ttsEchoFloorRef, ttsStartedAt]);
 
   // Monitor connection quality via socket latency
   useEffect(() => {
@@ -1562,7 +1413,7 @@ export function useVoiceCall({
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [socket, callState]);
+  }, [socket, callState, setConnectionQuality]);
 
   // Report ambient noise level to server every 5s for environment-aware behavior
   useEffect(() => {
@@ -1577,31 +1428,220 @@ export function useVoiceCall({
       });
     }, 5000);
     return () => clearInterval(interval);
-  }, [socket, callState]);
+  }, [socket, callState, privateCaptureRef, rawAudioLevelRef, isTtsPlaying]);
 
   return {
-    callState: hasConversationPlayback && isCallActive.current && callState !== 'connecting' ? 'speaking' as const : callState,
-    // Realtime RMS deliberately stays outside React state. DesktopUI is a very
-    // large tree; publishing microphone frames through this hook causes the
-    // WebView to retain development-render traces until it becomes unresponsive.
+    ...previousBindings, callState: hasConversationPlayback && isCallActive.current && callState !== 'connecting' ? 'speaking' as const : callState,
     audioLevel: 0,
-    error,
-    transcript,
-    responseText,
-    isMuted,
     elapsedSeconds: isCallActive.current && callStartTime.current > 0
       ? Math.floor((Date.now() - callStartTime.current) / 1000)
       : 0,
-    connectionQuality,
-    inputLevelRef: rawAudioLevelRef,
-    outputLevelRef,
-    startCall,
-    startCallRef,
-    switchVoice,
-    endCall,
-    interrupt,
-    toggleMute,
-    switchPersonality,
-    clearError: () => setError(null),
+    inputLevelRef: rawAudioLevelRef, startCall, startCallRef, switchVoice, interrupt, toggleMute, switchPersonality, clearError: () => setError(null)
   };
+}
+
+export function useVoiceCall(props: Parameters<typeof useVoiceSessionState>[0]) {
+  const state0 = useVoiceSessionState(props);
+  const state1 = useVoiceCaptureRuntime(state0);
+  const state2 = useVoiceSocketEvents(state1);
+  return useVoiceCallControls(state2);
+}
+
+
+function createVoicePlaybackRuntime({ audioQueue, isCallActive, ensureTtsContext, isConversationTtsPlaying, playbackRequestIdRef, setHasConversationPlayback, isTtsPlaying, proactiveSource, setError, setCallState, playbackGenerationRef, ttsStartedAt, ttsBargeInCandidateSentRef, clearThinkingWatchdog, outputLevelRef, ttsEchoFloorRef, ttsBargeInFramesRef, ttsSourceRef, ttsContext, ttsGainNode, nextStartTime, socket }: Pick<ReturnType<typeof useVoiceCaptureRuntime>, "audioQueue" | "isCallActive" | "ensureTtsContext" | "isConversationTtsPlaying" | "playbackRequestIdRef" | "setHasConversationPlayback" | "isTtsPlaying" | "proactiveSource" | "setError" | "setCallState" | "playbackGenerationRef" | "ttsStartedAt" | "ttsBargeInCandidateSentRef" | "clearThinkingWatchdog" | "outputLevelRef" | "ttsEchoFloorRef" | "ttsBargeInFramesRef" | "ttsSourceRef" | "ttsContext" | "ttsGainNode" | "nextStartTime" | "socket">) {
+
+
+    /**
+     * Play a TTS audio chunk using Web Audio API with cross-fade scheduling.
+     * Pre-buffers: starts decoding while the previous chunk is still playing.
+     * Cross-fade: overlaps the last 50ms of previous audio with the first 50ms of next.
+     * VolumeGain: applies server-computed volume adaptation.
+     */
+    const prepareAudio = (packet: VoiceAudioResponse, ctx: AudioContext) => {
+      if (packet.preparedAudio?.context === ctx) return packet.preparedAudio;
+      const prepared: NonNullable<VoiceAudioResponse['preparedAudio']> = {
+        context: ctx, startedAt: performance.now(), promise: Promise.resolve({}),
+      };
+      // Decode at most the playing packet and one queued packet. A rejected
+      // preparation is observed here even if interruption later drops the queue.
+      prepared.promise = Promise.resolve().then(() => ctx.decodeAudioData(packet.buffer.slice(0))).then(decoded => {
+        prepared.finishedAt = performance.now();
+        return { decoded };
+      }, error => {
+        prepared.finishedAt = performance.now();
+        return { error };
+      });
+      packet.preparedAudio = prepared;
+      return prepared;
+    };
+
+    const prepareQueueHead = (ctx: AudioContext) => {
+      const next = audioQueue.current[0];
+      if (!next) return;
+      const packet: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next, receivedAt: performance.now() } : next;
+      audioQueue.current[0] = packet;
+      prepareAudio(packet, ctx);
+    };
+
+    const playAudioChunk = (
+      buffer: ArrayBuffer,
+      volumeGain?: number,
+      lane?: string,
+      requestId?: string,
+      format?: string,
+      queuedPacket?: VoiceAudioResponse,
+    ) => {
+      if (!isCallActive.current) return;
+      let ctx: AudioContext;
+      try {
+        ctx = ensureTtsContext();
+      } catch (error) {
+        console.error('[VoiceCall] Could not create the realtime audio output:', error, { format, lane, requestId });
+        isConversationTtsPlaying.current = false;
+        playbackRequestIdRef.current = null;
+        setHasConversationPlayback(false);
+        audioQueue.current = [];
+        isTtsPlaying.current = Boolean(proactiveSource.current);
+        setError('Voice audio could not be played. The text reply is still available.');
+        setCallState(prev => prev === 'speaking' ? 'listening' : prev);
+        return;
+      }
+      if (!isConversationTtsPlaying.current) playbackGenerationRef.current++;
+      const playbackGeneration = playbackGenerationRef.current;
+      const packet = queuedPacket || { buffer, receivedAt: performance.now() };
+      const preparedAudio = prepareAudio(packet, ctx);
+      prepareQueueHead(ctx);
+      playbackRequestIdRef.current = requestId || null;
+      isConversationTtsPlaying.current = true;
+      setHasConversationPlayback(true);
+      isTtsPlaying.current = true;
+      if (ttsStartedAt.current === 0) {
+        ttsStartedAt.current = Date.now();
+        ttsBargeInCandidateSentRef.current = false;
+      }
+      if (lane !== 'conversation') clearThinkingWatchdog();
+      setCallState(prev => (prev === 'thinking' || prev === 'queued') ? 'speaking' : prev);
+
+      const playNextOrFinish = () => {
+        if (playbackGeneration !== playbackGenerationRef.current) return;
+        if (audioQueue.current.length > 0) {
+          const next = audioQueue.current.shift()!;
+          const queued: VoiceAudioResponse = next instanceof ArrayBuffer ? { buffer: next } : next;
+          playAudioChunk(queued.buffer, queued.volumeGain, queued.lane, queued.requestId, queued.format, queued);
+          return;
+        }
+        isConversationTtsPlaying.current = false;
+        playbackRequestIdRef.current = null;
+        setHasConversationPlayback(false);
+        outputLevelRef.current = 0;
+        isTtsPlaying.current = Boolean(proactiveSource.current);
+        ttsStartedAt.current = 0;
+        ttsEchoFloorRef.current = 0;
+        ttsBargeInFramesRef.current = 0;
+        ttsBargeInCandidateSentRef.current = false;
+        setCallState(prev => prev === 'speaking' ? 'listening' : prev);
+      };
+
+      let failed = false;
+      const failPlayback = (error: unknown) => {
+        if (failed || playbackGeneration !== playbackGenerationRef.current) return;
+        failed = true;
+        console.error('[VoiceCall] Realtime audio playback failed:', error, { format, lane, requestId });
+        if (ttsSourceRef.current) {
+          releaseAudioBufferSource(ttsSourceRef.current, true);
+          ttsSourceRef.current = null;
+        }
+        if (ttsContext.current === ctx) {
+          const gain = ttsGainNode.current;
+          ttsGainNode.current = null;
+          try { gain?.disconnect(); } catch {}
+          ttsContext.current = null;
+          nextStartTime.current = 0;
+          void closeAudioContext(ctx);
+        }
+        isConversationTtsPlaying.current = false;
+        isTtsPlaying.current = Boolean(proactiveSource.current);
+        setError('Voice audio could not be played. The text reply is still available.');
+        playNextOrFinish();
+      };
+
+      const startDecodedAudio = (decoded: AudioBuffer) => {
+        if (!isCallActive.current || playbackGeneration !== playbackGenerationRef.current) return;
+        if (ctx.state === 'closed') {
+          failPlayback(new Error('Audio output context closed before playback'));
+          return;
+        }
+        try {
+          const now = ctx.currentTime;
+          const crossFadeSec = 0.05;
+          const effectiveStart = nextStartTime.current > 0
+            ? Math.max(now, nextStartTime.current - crossFadeSec)
+            : now;
+          nextStartTime.current = effectiveStart + decoded.duration;
+
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          const gain = typeof volumeGain === 'number' ? Math.max(0.3, Math.min(1.5, volumeGain)) : 1.0;
+          if (!ttsGainNode.current) throw new Error('Audio output gain node is unavailable');
+          ttsGainNode.current.gain.setValueAtTime(gain, effectiveStart);
+          source.connect(ttsGainNode.current);
+          ttsSourceRef.current = source;
+          source.onended = () => {
+            releaseAudioBufferSource(source);
+            if (ttsSourceRef.current === source) ttsSourceRef.current = null;
+            playNextOrFinish();
+          };
+          source.start(effectiveStart);
+          setError(prev => prev?.startsWith('Voice audio could not be played') ? null : prev);
+          if (requestId) {
+            const ackGeneration = playbackGeneration;
+            const delayMs = Math.max(0, Math.round((effectiveStart - ctx.currentTime) * 1000));
+            setTimeout(() => {
+              if (!isCallActive.current || ackGeneration !== playbackGenerationRef.current) return;
+              socket.emit('audio:playback_started', {
+                requestId,
+                lane,
+                durationMs: Math.max(1, Math.round(decoded.duration * 1_000)),
+                clientDecodeMs: Math.max(0, Math.round((preparedAudio.finishedAt ?? performance.now()) - preparedAudio.startedAt)),
+                clientReceiptToPlaybackMs: Math.max(0, Math.round(performance.now() - (packet.receivedAt ?? preparedAudio.startedAt))),
+              });
+            }, delayMs);
+          }
+        } catch (error) {
+          failPlayback(error);
+        }
+      };
+
+      const decode = () => {
+        try {
+          void preparedAudio.promise.then(result => {
+            if (result.decoded) startDecodedAudio(result.decoded);
+            else failPlayback(result.error || new Error('Audio decoding returned no samples'));
+          }).catch(failPlayback);
+        } catch (error) {
+          failPlayback(error);
+        }
+      };
+
+      const prepareOutput = async () => {
+        if (ctx.state === 'suspended' || (ctx.state as string) === 'interrupted') {
+          let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+          try {
+            await Promise.race([
+              ctx.resume(),
+              new Promise<never>((_resolve, reject) => {
+                resumeTimer = setTimeout(() => reject(new Error('Audio output resume timed out')), 2500);
+              }),
+            ]);
+          } finally {
+            if (resumeTimer) clearTimeout(resumeTimer);
+          }
+        }
+        if (ctx.state !== 'running') throw new Error(`Audio output is ${ctx.state}`);
+        if (!isCallActive.current || playbackGeneration !== playbackGenerationRef.current) return;
+        decode();
+      };
+      void prepareOutput().catch(failPlayback);
+    };
+  return { prepareAudio, prepareQueueHead, playAudioChunk };
 }

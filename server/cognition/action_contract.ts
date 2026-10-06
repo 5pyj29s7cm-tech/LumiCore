@@ -598,104 +598,10 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
 
   const text = compact(withoutLocationLiterals(withoutNegatedLookupClauses(rawInput), true));
   if (!text) return NONE_CONTRACT;
-  if (isAvatarAuthoringRequest(text)) return withDefaults({ kind:'avatar_authoring', label:'Memory person authoring',
-    coreAction:'Create/import/configure the requested person through the memory person tools and read back the saved state.',
-    preparationIsNotCompletion:['Generating a still image','Opening Memory Territory','Writing a plan'],
-    requiredEvidence:['Verified memory_avatar_read or configuration receipt for the requested person and every requested animation feature'],
-    preferredTools:['memory_avatar_read','memory_avatar_create','memory_avatar_import_image','memory_avatar_configure_animation','generate_image','ai_edit_image'],
-    verificationTools:['memory_avatar_read'], nextStep:'Import the actual generated images, save the animation config, then read the same person back.',
-    caution:'Do not overwrite an existing person unless requested. Missing expression frames cannot be reported as working blinking or speech.' });
-  if (classifyExternalCliIntent(text) === 'inspect') {
-    return withDefaults({ kind: 'external_cli_status', label: 'External CLI availability check',
-      coreAction: 'Inspect the named local CLI installation and login/configuration; answer the capability question from that receipt.',
-      preparationIsNotCompletion: ['An unverified claim about the local installation'],
-      requiredEvidence: ['Verified current-turn external_cli_status receipt containing every requested provider'],
-      preferredTools: ['external_cli_status'], verificationTools: ['external_cli_status'],
-      nextStep: 'Report installed/readiness facts directly. No project directory or CLI task is required for this question.',
-      caution: 'A successful status check can report an unavailable CLI. It does not verify model quota or task execution.' });
-  }
-  if (isExternalCliDelegation(text)) {
-    return withDefaults({ kind: 'external_ai_request', label: 'External CLI task',
-      coreAction: 'Delegate the bounded task to the named CLI within the existing Lumi task and verify its returned result.',
-      preparationIsNotCompletion: ['CLI installed', 'CLI authenticated', 'process started', 'provider text without terminal success'],
-      requiredEvidence: ['external_cli_run successful terminal receipt, matching provider and current task', 'validate returned deliverables and source changes against the user request'],
-      preferredTools: ['external_cli_run', 'external_cli_status', 'external_cli_get_run'], verificationTools: ['external_cli_get_run'],
-      nextStep: 'Resume the exact Lumi runId for follow-ups; use existing task cancellation. Verify business correctness separately.',
-      caution: 'CLI settings and account are independent from Lumi model routing. Never claim completion for a timed-out, cancelled, or unverified run.' });
-  }
-  const authoringIntent = classifySkillAuthoringIntent(rawInput);
-  const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
-  if (executionBeforeSave) {
-    const execution = buildActionContract(executionBeforeSave, undefined, analysis);
-    const saveText = rawInput.slice(rawInput.indexOf(executionBeforeSave) + executionBeforeSave.length);
-    return withDefaults({ kind: 'skill_authoring', label: 'Execute and save workflow',
-      components: [
-        { text: executionBeforeSave, contract: execution },
-        { text: saveText, contract: buildActionContract(saveText, undefined, analysis) },
-      ],
-      coreAction: 'Execute and verify the explicit current task, then save its input-dependent workflow draft.',
-      preparationIsNotCompletion: ['saving a draft without performing the requested current task', 'performing the task without saving its executable workflow'],
-      requiredEvidence: [...execution.requiredEvidence, 'a verified current-turn workflow draft save receipt'],
-      preferredTools: [...execution.preferredTools, 'code_execution', ...skillAuthoringTools('save')],
-      verificationTools: [...execution.verificationTools, 'get_workflow'],
-      nextStep: 'Complete and verify the current task first, then save all calculations as executable steps bound to fresh inputs.',
-      caution: 'The separately requested current action is authorized; a skill description or past example alone is not.' });
-  }
-  if (['generate', 'save', 'install', 'publish'].includes(authoringIntent)
-    || authoringIntent === 'use' && /工作流|流程|\bworkflow\b/iu.test(rawInput)) { // i18n-allow: workflow execution intent recognition.
-    return withDefaults({
-      kind: 'skill_authoring', label: 'Skill/workflow authoring',
-      coreAction: `Complete the requested ${authoringIntent} lifecycle phase.`,
-      preparationIsNotCompletion: ['describing a skill', 'executing the example task instead of saving its capability'],
-      requiredEvidence: ['a verified current-turn receipt for the requested lifecycle phase'],
-      preferredTools: skillAuthoringTools(authoringIntent), verificationTools: [],
-      nextStep: 'Use the authoring receipt to report the exact draft, registration, or publication state; do not repeat successful creation.',
-      caution: 'A reviewed draft is not installed or executed. Registration does not prove a business task succeeded.',
-    });
-  }
-  // A named persistent takeover-task query belongs to the takeover ledger,
-  // not the active runtime-work ledger. Its deterministic quick command emits
-  // a verified work_takeover_task_list receipt, so do not demand the unrelated
-  // runtime_work_status tool in the final completion gate.
-  if (isNamedPersistentWorkTaskStatusQuery(text)) return NONE_CONTRACT;
-  const diagnosticPlan = buildClientDiagnosticPlan(primaryTaskText || rawInput);
-  if (diagnosticPlan.length) {
-    const tools = diagnosticPlan.map(step => step.name);
-    return withDefaults({ kind: 'desktop_operation', label: 'Current Lumi runtime diagnostic',
-      coreAction: 'Inspect the current Lumi runtime state and explain its actual health findings.',
-      preparationIsNotCompletion: ['listing generic capabilities or unrelated business integrations'],
-      requiredEvidence: tools.map(name => `successful current-turn ${name} receipt`), preferredTools: tools, verificationTools: tools,
-      nextStep: 'Read all required runtime receipts, identify attention items, and distinguish optional disconnected integrations from core failures.',
-      caution: 'A task ledger snapshot alone does not verify client and backend health.' });
-  }
-  // Runtime status/cancellation has its own exact ledger contract. Classify it
-  // before the generic normalized status guard so a phrase such as
-  // "background task progress" cannot be reduced to a no-tool status turn.
-  const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
-  if (runtimeWorkIntent !== 'none') {
-    const cancelling = runtimeWorkIntent === 'cancel';
-    return withDefaults({
-      kind: 'task_control',
-      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
-      coreAction: cancelling
-        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
-        : 'Read the active Lumi work recorded in the unified runtime ledger.',
-      preparationIsNotCompletion: [
-        'listing operating-system processes',
-        'checking client health',
-        'saying work was stopped without a runtime cancellation receipt',
-      ],
-      requiredEvidence: [cancelling
-        ? 'runtime_work_cancel result with ok=true and cancelled/idle for completion; cancelling proves only that the request was accepted and must be rechecked'
-        : 'runtime_work_status result with ok=true and the exact active item count'],
-      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
-      verificationTools: ['runtime_work_status'],
-      nextStep: cancelling
-        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
-        : 'Read the runtime work ledger and report its current items without substituting a process list.',
-      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
-    });
-  }
+  const authoringContract = buildAuthoringActionContract(rawInput, text, analysis);
+  if (authoringContract) return authoringContract;
+  const runtimeContract = buildRuntimeControlContract(rawInput, text, primaryTaskText);
+  if (runtimeContract) return runtimeContract;
   // Preserve a narrow local-file inspection candidate across the generic
   // question/status guards below. Domain-specific contracts still get first
   // refusal, and the candidate is materialized only near the artifact branch.
@@ -835,47 +741,8 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   if (isRemoteLegalMessageTurn(text)) {
     return buildLegalDocumentContract();
   }
-
-  if (requiresExternalAiHistory(text)) {
-    // i18n-allow: Multilingual external-AI authorization intent recognition; not user-visible copy.
-    const wantsAuthorization = /(?:授权|注册|添加|连接).{0,28}(?:来源|历史|会话)|\b(?:authorize|register|add|connect)\b.{0,32}\b(?:source|history|session)\b/iu.test(text);
-    // i18n-allow: Multilingual external-AI revocation intent recognition; not user-visible copy.
-    const wantsRevocation = /(?:撤销|取消|禁用).{0,28}(?:授权|来源)|\b(?:revoke|disable|remove)\b.{0,32}\b(?:authorization|source)\b/iu.test(text);
-    // i18n-allow: Multilingual external-AI sync status intent recognition; not user-visible copy.
-    const wantsStatus = /(?:状态|进度|同步到哪)|\b(?:status|progress)\b/iu.test(text);
-    // i18n-allow: Multilingual external-AI history query intent recognition; not user-visible copy.
-    const wantsQuery = /(?:读取|查看|搜索|查询|总结).{0,32}(?:聊天|对话|历史|内容)|\b(?:read|view|search|query|summari[sz]e)\b/iu.test(text);
-    const preferredTools = wantsRevocation
-      ? ['external_ai_history_source_revoke', 'external_ai_history_status']
-      : wantsAuthorization
-        ? ['external_ai_history_source_register', 'external_ai_history_source_list']
-        : wantsStatus
-          ? ['external_ai_history_status', 'external_ai_history_source_list']
-          : wantsQuery
-            ? ['external_ai_history_query', 'external_ai_history_status', 'external_ai_history_sync', 'external_ai_history_source_list']
-            : ['external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_source_list'];
-    return withDefaults({
-      kind: 'external_ai_history',
-      label: 'Authorized external AI history access',
-      coreAction: 'Read, synchronize, or manage only the external AI history source and scope explicitly authorized by this user in the current personal or organization domain.',
-      preparationIsNotCompletion: ['opening an AI app', 'seeing a conversation list without message evidence', 'using an unregistered session', 'reading only a process/window title', 'treating one visible viewport as complete history'],
-      requiredEvidence: [
-        wantsAuthorization
-          ? 'external_ai_history_source_register receipt with an immutable authorizationDigest'
-          : wantsRevocation
-            ? 'external_ai_history_source_revoke receipt with status=revoked'
-            : wantsStatus
-              ? 'external_ai_history_status receipt derived from the persistent source and job ledger'
-              : wantsQuery
-                ? 'external_ai_history_query receipt with message ids and sourceEvidence'
-                : 'external_ai_history_sync receipt with verified=true, a durable jobId/cursor, counts, completeness, and source limitations',
-      ],
-      preferredTools,
-      verificationTools: ['external_ai_history_status', 'external_ai_history_query'],
-      nextStep: 'Use an existing exact authorization source. If none exists, explain the missing source and request confirmation to register a connector, JSON export, authorized session, or desktop-visible source. Never submit a new prompt while fulfilling a history-read request.',
-      caution: 'Do not claim arbitrary account access. Credentials remain outside this ledger; scope expansion requires a new confirmation; desktop-visible extraction is partial, uses local vision first, and never scrolls or submits.',
-    });
-  }
+  const externalHistory = buildExternalHistoryActionContract(text);
+  if (externalHistory) return externalHistory;
 
   if (requiresDesktopAiRequest(text)) {
     const collectAnswer = requiresDesktopAiAnswerReadback(text);
@@ -1798,3 +1665,157 @@ export { extractPrimaryTaskText, type DesktopWindowAction, requestedDesktopWindo
 export { hasVisibleAutoCadExecutionEvidence, hasBlankAutoCadDocumentEvidence, hasRequestedDesktopOpenEvidence, hasCurrentAppSaveEvidence, hasCurrentAppUiMutationEvidence, isSuccessfulExactDocumentRead, type VerifiedCurrentAuthoringDocumentEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence, documentReadMatchesRequestedTarget } from "./action_desktop_evidence";
 export { hasMediaPauseEvidence, hasMediaPlaybackEvidence } from "./action_media_evidence";
 export { matchesRequestedDesktopActionTarget } from "./desktop_action_target";
+
+function buildAuthoringActionContract(rawInput: string, text: string, analysis?: ActionIntentAnalysis): LumiActionContract | null {
+
+  if (isAvatarAuthoringRequest(text)) return withDefaults({ kind:'avatar_authoring', label:'Memory person authoring',
+    coreAction:'Create/import/configure the requested person through the memory person tools and read back the saved state.',
+    preparationIsNotCompletion:['Generating a still image','Opening Memory Territory','Writing a plan'],
+    requiredEvidence:['Verified memory_avatar_read or configuration receipt for the requested person and every requested animation feature'],
+    preferredTools:['memory_avatar_read','memory_avatar_create','memory_avatar_import_image','memory_avatar_configure_animation','generate_image','ai_edit_image'],
+    verificationTools:['memory_avatar_read'], nextStep:'Import the actual generated images, save the animation config, then read the same person back.',
+    caution:'Do not overwrite an existing person unless requested. Missing expression frames cannot be reported as working blinking or speech.' });
+  if (classifyExternalCliIntent(text) === 'inspect') {
+    return withDefaults({ kind: 'external_cli_status', label: 'External CLI availability check',
+      coreAction: 'Inspect the named local CLI installation and login/configuration; answer the capability question from that receipt.',
+      preparationIsNotCompletion: ['An unverified claim about the local installation'],
+      requiredEvidence: ['Verified current-turn external_cli_status receipt containing every requested provider'],
+      preferredTools: ['external_cli_status'], verificationTools: ['external_cli_status'],
+      nextStep: 'Report installed/readiness facts directly. No project directory or CLI task is required for this question.',
+      caution: 'A successful status check can report an unavailable CLI. It does not verify model quota or task execution.' });
+  }
+  if (isExternalCliDelegation(text)) {
+    return withDefaults({ kind: 'external_ai_request', label: 'External CLI task',
+      coreAction: 'Delegate the bounded task to the named CLI within the existing Lumi task and verify its returned result.',
+      preparationIsNotCompletion: ['CLI installed', 'CLI authenticated', 'process started', 'provider text without terminal success'],
+      requiredEvidence: ['external_cli_run successful terminal receipt, matching provider and current task', 'validate returned deliverables and source changes against the user request'],
+      preferredTools: ['external_cli_run', 'external_cli_status', 'external_cli_get_run'], verificationTools: ['external_cli_get_run'],
+      nextStep: 'Resume the exact Lumi runId for follow-ups; use existing task cancellation. Verify business correctness separately.',
+      caution: 'CLI settings and account are independent from Lumi model routing. Never claim completion for a timed-out, cancelled, or unverified run.' });
+  }
+  const authoringIntent = classifySkillAuthoringIntent(rawInput);
+  const executionBeforeSave = executionBeforeWorkflowSave(rawInput);
+  if (executionBeforeSave) {
+    const execution = buildActionContract(executionBeforeSave, undefined, analysis);
+    const saveText = rawInput.slice(rawInput.indexOf(executionBeforeSave) + executionBeforeSave.length);
+    return withDefaults({ kind: 'skill_authoring', label: 'Execute and save workflow',
+      components: [
+        { text: executionBeforeSave, contract: execution },
+        { text: saveText, contract: buildActionContract(saveText, undefined, analysis) },
+      ],
+      coreAction: 'Execute and verify the explicit current task, then save its input-dependent workflow draft.',
+      preparationIsNotCompletion: ['saving a draft without performing the requested current task', 'performing the task without saving its executable workflow'],
+      requiredEvidence: [...execution.requiredEvidence, 'a verified current-turn workflow draft save receipt'],
+      preferredTools: [...execution.preferredTools, 'code_execution', ...skillAuthoringTools('save')],
+      verificationTools: [...execution.verificationTools, 'get_workflow'],
+      nextStep: 'Complete and verify the current task first, then save all calculations as executable steps bound to fresh inputs.',
+      caution: 'The separately requested current action is authorized; a skill description or past example alone is not.' });
+  }
+  if (['generate', 'save', 'install', 'publish'].includes(authoringIntent)
+    || authoringIntent === 'use' && /工作流|流程|\bworkflow\b/iu.test(rawInput)) { // i18n-allow: workflow execution intent recognition.
+    return withDefaults({
+      kind: 'skill_authoring', label: 'Skill/workflow authoring',
+      coreAction: `Complete the requested ${authoringIntent} lifecycle phase.`,
+      preparationIsNotCompletion: ['describing a skill', 'executing the example task instead of saving its capability'],
+      requiredEvidence: ['a verified current-turn receipt for the requested lifecycle phase'],
+      preferredTools: skillAuthoringTools(authoringIntent), verificationTools: [],
+      nextStep: 'Use the authoring receipt to report the exact draft, registration, or publication state; do not repeat successful creation.',
+      caution: 'A reviewed draft is not installed or executed. Registration does not prove a business task succeeded.',
+    });
+  }
+  return null;
+}
+
+function buildRuntimeControlContract(rawInput: string, text: string, primaryTaskText: string): LumiActionContract | null {
+
+  // A named persistent takeover-task query belongs to the takeover ledger,
+  // not the active runtime-work ledger. Its deterministic quick command emits
+  // a verified work_takeover_task_list receipt, so do not demand the unrelated
+  // runtime_work_status tool in the final completion gate.
+  if (isNamedPersistentWorkTaskStatusQuery(text)) return NONE_CONTRACT;
+  const diagnosticPlan = buildClientDiagnosticPlan(primaryTaskText || rawInput);
+  if (diagnosticPlan.length) {
+    const tools = diagnosticPlan.map(step => step.name);
+    return withDefaults({ kind: 'desktop_operation', label: 'Current Lumi runtime diagnostic',
+      coreAction: 'Inspect the current Lumi runtime state and explain its actual health findings.',
+      preparationIsNotCompletion: ['listing generic capabilities or unrelated business integrations'],
+      requiredEvidence: tools.map(name => `successful current-turn ${name} receipt`), preferredTools: tools, verificationTools: tools,
+      nextStep: 'Read all required runtime receipts, identify attention items, and distinguish optional disconnected integrations from core failures.',
+      caution: 'A task ledger snapshot alone does not verify client and backend health.' });
+  }
+  // Runtime status/cancellation has its own exact ledger contract. Classify it
+  // before the generic normalized status guard so a phrase such as
+  // "background task progress" cannot be reduced to a no-tool status turn.
+  const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
+  if (runtimeWorkIntent !== 'none') {
+    const cancelling = runtimeWorkIntent === 'cancel';
+    return withDefaults({
+      kind: 'task_control',
+      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
+      coreAction: cancelling
+        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
+        : 'Read the active Lumi work recorded in the unified runtime ledger.',
+      preparationIsNotCompletion: [
+        'listing operating-system processes',
+        'checking client health',
+        'saying work was stopped without a runtime cancellation receipt',
+      ],
+      requiredEvidence: [cancelling
+        ? 'runtime_work_cancel result with ok=true and cancelled/idle for completion; cancelling proves only that the request was accepted and must be rechecked'
+        : 'runtime_work_status result with ok=true and the exact active item count'],
+      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
+      verificationTools: ['runtime_work_status'],
+      nextStep: cancelling
+        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
+        : 'Read the runtime work ledger and report its current items without substituting a process list.',
+      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
+    });
+  }
+  return null;
+}
+
+function buildExternalHistoryActionContract(text: string): LumiActionContract | null {
+
+
+  if (requiresExternalAiHistory(text)) {
+    // i18n-allow: Multilingual external-AI authorization intent recognition; not user-visible copy.
+    const wantsAuthorization = /(?:授权|注册|添加|连接).{0,28}(?:来源|历史|会话)|\b(?:authorize|register|add|connect)\b.{0,32}\b(?:source|history|session)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI revocation intent recognition; not user-visible copy.
+    const wantsRevocation = /(?:撤销|取消|禁用).{0,28}(?:授权|来源)|\b(?:revoke|disable|remove)\b.{0,32}\b(?:authorization|source)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI sync status intent recognition; not user-visible copy.
+    const wantsStatus = /(?:状态|进度|同步到哪)|\b(?:status|progress)\b/iu.test(text);
+    // i18n-allow: Multilingual external-AI history query intent recognition; not user-visible copy.
+    const wantsQuery = /(?:读取|查看|搜索|查询|总结).{0,32}(?:聊天|对话|历史|内容)|\b(?:read|view|search|query|summari[sz]e)\b/iu.test(text);
+    const preferredTools = wantsRevocation
+      ? ['external_ai_history_source_revoke', 'external_ai_history_status']
+      : wantsAuthorization
+        ? ['external_ai_history_source_register', 'external_ai_history_source_list']
+        : wantsStatus
+          ? ['external_ai_history_status', 'external_ai_history_source_list']
+          : wantsQuery
+            ? ['external_ai_history_query', 'external_ai_history_status', 'external_ai_history_sync', 'external_ai_history_source_list']
+            : ['external_ai_history_sync', 'external_ai_history_status', 'external_ai_history_source_list'];
+    return withDefaults({
+      kind: 'external_ai_history',
+      label: 'Authorized external AI history access',
+      coreAction: 'Read, synchronize, or manage only the external AI history source and scope explicitly authorized by this user in the current personal or organization domain.',
+      preparationIsNotCompletion: ['opening an AI app', 'seeing a conversation list without message evidence', 'using an unregistered session', 'reading only a process/window title', 'treating one visible viewport as complete history'],
+      requiredEvidence: [
+        wantsAuthorization
+          ? 'external_ai_history_source_register receipt with an immutable authorizationDigest'
+          : wantsRevocation
+            ? 'external_ai_history_source_revoke receipt with status=revoked'
+            : wantsStatus
+              ? 'external_ai_history_status receipt derived from the persistent source and job ledger'
+              : wantsQuery
+                ? 'external_ai_history_query receipt with message ids and sourceEvidence'
+                : 'external_ai_history_sync receipt with verified=true, a durable jobId/cursor, counts, completeness, and source limitations',
+      ],
+      preferredTools,
+      verificationTools: ['external_ai_history_status', 'external_ai_history_query'],
+      nextStep: 'Use an existing exact authorization source. If none exists, explain the missing source and request confirmation to register a connector, JSON export, authorized session, or desktop-visible source. Never submit a new prompt while fulfilling a history-read request.',
+      caution: 'Do not claim arbitrary account access. Credentials remain outside this ledger; scope expansion requires a new confirmation; desktop-visible extraction is partial, uses local vision first, and never scrolls or submits.',
+    });
+  }
+  return null;
+}

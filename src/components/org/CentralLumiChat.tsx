@@ -78,7 +78,8 @@ export function CentralLumiChat() {
   return <CentralLumiChatView key={scope} />;
 }
 
-function CentralLumiChatView() {
+function useCentralChatAttachmentsAndHistory() {
+
   const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const t = useT();
   const socket = useSocket();
@@ -351,6 +352,21 @@ function CentralLumiChatView() {
     })();
     return () => { controller.abort(); historyReadRef.current?.abort(); };
   }, [bindAttachmentContextToConversation, loadConversationMessages]);
+  return {
+    socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice,
+    streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef,
+    bindAttachmentContextToConversation, loadConversationMessages, setDragActive, nativeDropHandledAtRef,
+    uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef,
+    orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments,
+    rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue,
+    modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments,
+    clearConversationAttachments, removePendingAttachment, uploading
+  } as const;
+}
+
+function useCentralChatEventsAndView(previousBindings: ReturnType<typeof useCentralChatAttachmentsAndHistory>) {
+  const { socket, activeRequestIdRef, setMessages, streamingMessageIdRef, setLoading, setRequestNotice, streamingRawTextRef, locale, clearActiveRequest, attachmentConversationIdRef, bindAttachmentContextToConversation, loadConversationMessages, setDragActive, nativeDropHandledAtRef, uploadChatAttachments, input, pendingAttachments, conversationAttachmentsRef, loading, uploadWorkRef, orgConnection, messages, timeoutRef, setInput, pendingAttachmentsRef, setPendingAttachments, rememberConversationAttachments, previewFile, isZh, setPreviewFile, dragActive, t, modelPreferenceValue, modelPreferenceLabel, openModelSettings, endRef, fileInputRef, requestNotice, conversationAttachments, clearConversationAttachments, removePendingAttachment, uploading } = previousBindings;
+
 
   useEffect(() => {
     if (!socket) return;
@@ -810,4 +826,9 @@ function CentralLumiChatView() {
       </div>
     </div>
   );
+}
+
+function CentralLumiChatView() {
+  const state0 = useCentralChatAttachmentsAndHistory();
+  return useCentralChatEventsAndView(state0);
 }

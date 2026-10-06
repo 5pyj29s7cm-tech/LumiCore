@@ -1,3 +1,4 @@
+import { extendTurnBindings } from '../../../cognition/turn_bindings';
 import type { IncomingMessage, MessageHandler } from '../../../messaging/types';
 import { commitBindingCodeConsumption, createBindingCode, deleteBindingForUser, getBinding, authorizeMessagingGroup, listMessagingGroupAuthorizations, revokeMessagingGroupAuthorization, listBindingsForUser, parseMessagingBindingCommand, planBindingCodeConsumption, rollbackBindingCodeConsumption, type BindingCodeConsumptionPlan, type MessagingPlatformId } from '../../../messaging/bindings';
 import { getMember } from '../../../org/db';
@@ -912,12 +913,8 @@ export async function processWithPersonality(
   } finally {admission.release();}
 }
 
-async function processWithPersonalityAdmitted(
-  msg: IncomingMessage,
-  options?: MessagingRouteOptions,
-  preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null,
-  acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext },
-): Promise<string> {
+async function prepareMessagingTurn(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }) {
+
   msg = captureMessagingOrganization(msg);
   assertMessagingAuthorization(msg);
   const llm = options?.llmGetters;
@@ -985,7 +982,7 @@ async function processWithPersonalityAdmitted(
     const dismissalReply = /[\u3400-\u9fff]/u.test(requestText)
       ? '好，有需要再叫我。'
       : 'Okay. I\'m here when you need me.';
-    return await commitReply(dismissalReply);
+    return { terminal: await ( await commitReply(dismissalReply)), context: undefined };
   }
   const turnResolution = acceptedTurn?.resolution || resolveUserTurn({
     requestId, userText: requestText, state: conversation?.actionContinuationState,
@@ -1059,7 +1056,7 @@ async function processWithPersonalityAdmitted(
       console.warn('[Messaging] Explicit remote relationship memory failed:', error?.message || error);
     }
   }
-  if (newerMessageSupersedesThisTurn(msg)) return '';
+  if (newerMessageSupersedesThisTurn(msg)) return { terminal: await ( ''), context: undefined };
 
   const requestedMode = executionPlan.turnIntent.flow.requestedMode;
   // A semantic action match is only a planning hint. It must not silently
@@ -1150,7 +1147,7 @@ async function processWithPersonalityAdmitted(
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
       : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
-    return await commitReply(staleText);
+    return { terminal: await ( await commitReply(staleText)), context: undefined };
   }
   const receiptObserver = conversation && actionTaskExecution.state?.taskId
     ? createConversationReceiptObserver({
@@ -1184,98 +1181,157 @@ async function processWithPersonalityAdmitted(
     error.name = 'AbortError';
     throw error;
   };
-  try {
-  if (isIdentityBound) {
+  return { terminal: undefined, context: {
+    isIdentityBound: isIdentityBound as typeof isIdentityBound,
+    actionTaskExecution: actionTaskExecution as typeof actionTaskExecution,
+    requestId: requestId as typeof requestId,
+    actionAbortController: actionAbortController as typeof actionAbortController,
+    receiptObserver: receiptObserver as typeof receiptObserver,
+    get desktopRelay(): typeof desktopRelay { return desktopRelay; },
+    set desktopRelay(value: typeof desktopRelay) { desktopRelay = value; },
+    options: options as typeof options,
+    effectiveUserId: effectiveUserId as typeof effectiveUserId,
+    source: source as typeof source,
+    domain: domain as typeof domain,
+    orgId: orgId as typeof orgId,
+    get personalDesktopRelay(): typeof personalDesktopRelay { return personalDesktopRelay; },
+    set personalDesktopRelay(value: typeof personalDesktopRelay) { personalDesktopRelay = value; },
+    conversation: conversation as typeof conversation,
+    executionPlan: executionPlan as typeof executionPlan,
+    actionFollowupIntent: actionFollowupIntent as typeof actionFollowupIntent,
+    requestText: requestText as typeof requestText,
+    commitReply: commitReply as typeof commitReply,
+    isOrganizationBound: isOrganizationBound as typeof isOrganizationBound,
+    directlyAppliedMode: directlyAppliedMode as typeof directlyAppliedMode,
+    get msg(): typeof msg { return msg; },
+    set msg(value: typeof msg) { msg = value; },
+    routingText: routingText as typeof routingText,
+    get organizationWorkExecution(): typeof organizationWorkExecution { return organizationWorkExecution; },
+    set organizationWorkExecution(value: typeof organizationWorkExecution) { organizationWorkExecution = value; },
+    get systemPrompt(): typeof systemPrompt { return systemPrompt; },
+    set systemPrompt(value: typeof systemPrompt) { systemPrompt = value; },
+    toolSessionActive: toolSessionActive as typeof toolSessionActive,
+    turnFlow: turnFlow as typeof turnFlow,
+    capabilitySelection: capabilitySelection as typeof capabilitySelection,
+    turnDispatch: turnDispatch as typeof turnDispatch,
+    executionDecision: executionDecision as typeof executionDecision,
+    get explicitRemoteMemoryIds(): typeof explicitRemoteMemoryIds { return explicitRemoteMemoryIds; },
+    set explicitRemoteMemoryIds(value: typeof explicitRemoteMemoryIds) { explicitRemoteMemoryIds = value; },
+    priorRuntimeEvidence: priorRuntimeEvidence as typeof priorRuntimeEvidence,
+    pendingConfirmationPrompt: pendingConfirmationPrompt as typeof pendingConfirmationPrompt,
+    conversationHistory: conversationHistory as typeof conversationHistory,
+    pendingConfirmation: pendingConfirmation as typeof pendingConfirmation,
+    get confirmationScope(): typeof confirmationScope { return confirmationScope; },
+    set confirmationScope(value: typeof confirmationScope) { confirmationScope = value; },
+    confirmationChannelScope: confirmationChannelScope as typeof confirmationChannelScope,
+    correctionRequiresFreshConfirmation: correctionRequiresFreshConfirmation as typeof correctionRequiresFreshConfirmation,
+    actionWasCancelled: actionWasCancelled as typeof actionWasCancelled,
+    flushTerminalReply: flushTerminalReply as typeof flushTerminalReply,
+    modelToolPolicy: modelToolPolicy as typeof modelToolPolicy,
+    llm: llm as typeof llm,
+    throwIfActionLeaseWasLost: throwIfActionLeaseWasLost as typeof throwIfActionLeaseWasLost,
+    operationMode: operationMode as typeof operationMode,
+    modelToolProjection: modelToolProjection as typeof modelToolProjection,
+    actionLeaseWasLost: actionLeaseWasLost as typeof actionLeaseWasLost,
+    actionLeaseHeartbeat: actionLeaseHeartbeat as typeof actionLeaseHeartbeat,
+    releaseActiveMessageRouteController: releaseActiveMessageRouteController as typeof releaseActiveMessageRouteController,
+  } };
+}
+type MessagingTurnContext = NonNullable<Awaited<ReturnType<typeof prepareMessagingTurn>>["context"]>;
+
+async function prepareMessagingExecution(context: MessagingTurnContext) {
+
+  if (context.isIdentityBound) {
     const lifecycle: MessagingDesktopLifecycle = {
-      taskId: actionTaskExecution.state?.taskId, requestId,
-      signal: actionAbortController.signal, onLateResult: receiptObserver?.onDesktopLateResult,
+      taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      signal: context.actionAbortController.signal, onLateResult: context.receiptObserver?.onDesktopLateResult,
     };
-    desktopRelay = options?.createScopedDesktopRelay?.(effectiveUserId, source, domain, orgId, lifecycle);
-    personalDesktopRelay = options?.createPersonalDesktopRelay?.(effectiveUserId, source, lifecycle);
+    context.desktopRelay = context.options?.createScopedDesktopRelay?.(context.effectiveUserId, context.source, context.domain, context.orgId, lifecycle);
+    context.personalDesktopRelay = context.options?.createPersonalDesktopRelay?.(context.effectiveUserId, context.source, lifecycle);
   }
-  if (conversation && actionTaskExecution.state?.taskId) {
-    executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
-      executionPlan.executionPlan,
-      actionTaskExecution.state.taskId,
+  if (context.conversation && context.actionTaskExecution.state?.taskId) {
+    context.executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
+      context.executionPlan.executionPlan,
+      context.actionTaskExecution.state.taskId,
     );
     persistConversationExecutionPlan({
-      conversationId: conversation.id,
-      userId: effectiveUserId,
-      plan: executionPlan.executionPlan,
+      conversationId: context.conversation.id,
+      userId: context.effectiveUserId,
+      plan: context.executionPlan.executionPlan,
     });
   }
-  if (isIdentityBound && conversation && actionFollowupIntent === 'status') {
-    const executionFactQuestion = isConversationExecutionFactQuestion(requestText);
+  if (context.isIdentityBound && context.conversation && context.actionFollowupIntent === 'status') {
+    const executionFactQuestion = isConversationExecutionFactQuestion(context.requestText);
     const statusText = executionFactQuestion
       ? formatConversationExecutionFactAnswer(getConversationExecutionFacts({
-          conversationId: conversation.id,
-          userId: effectiveUserId,
-          domain,
-          orgId,
-          currentRequestId: requestId,
-          taskId: conversation.actionContinuationState?.taskId || '',
-        }), requestText)
+          conversationId: context.conversation.id,
+          userId: context.effectiveUserId,
+          domain: context.domain,
+          orgId: context.orgId,
+          currentRequestId: context.requestId,
+          taskId: context.conversation.actionContinuationState?.taskId || '',
+        }), context.requestText)
       : getConversationActionStatus(
-          conversation.id,
-          effectiveUserId,
-          requestText,
-          conversation.actionContinuationState,
+          context.conversation.id,
+          context.effectiveUserId,
+          context.requestText,
+          context.conversation.actionContinuationState,
         );
-    return await commitReply(statusText, { beforeFlush: superseded => {
-      settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId,
+    return { terminal: await ( await context.commitReply(statusText, { beforeFlush: superseded => {
+      settleConversationActionExecutionRequest(context.conversation.id, context.effectiveUserId, context.requestId,
         superseded ? 'The remote status turn was superseded by a newer user message.' : undefined);
-    } });
+    } })), context: undefined };
   }
   let organizationWorkRoute: RouteOrganizationWorkResult | null = null;
   const shouldRouteOrganizationWork = Boolean(
-    isOrganizationBound
-    && conversation
-    && actionTaskExecution.state?.taskId
+    context.isOrganizationBound
+    && context.conversation
+    && context.actionTaskExecution.state?.taskId
     && (
-      executionPlan.capabilityPlan.taskLedgerRequired
-      || requestsOrganizationScope(requestText)
-      || actionTaskExecution.kind === 'resume'
-      || Boolean(options?.onMessage)
+      context.executionPlan.capabilityPlan.taskLedgerRequired
+      || requestsOrganizationScope(context.requestText)
+      || context.actionTaskExecution.kind === 'resume'
+      || Boolean(context.options?.onMessage)
     )
-    && !directlyAppliedMode
-    && executionPlan.normalizedIntent.operation !== 'status'
-    && executionPlan.normalizedIntent.operation !== 'explain',
+    && !context.directlyAppliedMode
+    && context.executionPlan.normalizedIntent.operation !== 'status'
+    && context.executionPlan.normalizedIntent.operation !== 'explain',
   );
   if (shouldRouteOrganizationWork) {
     try {
-      const mentionedMemberIds = resolveMentionedOrganizationMembers(msg, orgId);
+      const mentionedMemberIds = resolveMentionedOrganizationMembers(context.msg, context.orgId);
       organizationWorkRoute = routeOrganizationWork({
-        orgId,
-        requesterUserId: effectiveUserId,
-        source,
-        requestId,
-        idempotencyKey: `organization-work:${requestId}`,
-        text: routingText,
-        intentKind: executionPlan.normalizedIntent.kind,
-        operation: executionPlan.normalizedIntent.operation,
-        sideEffectClass: executionPlan.normalizedIntent.sideEffectClass,
-        conversationId: conversation!.id,
-        taskId: actionTaskExecution.state!.taskId,
-        platform: msg.platform,
+        orgId: context.orgId,
+        requesterUserId: context.effectiveUserId,
+        source: context.source,
+        requestId: context.requestId,
+        idempotencyKey: `organization-work:${context.requestId}`,
+        text: context.routingText,
+        intentKind: context.executionPlan.normalizedIntent.kind,
+        operation: context.executionPlan.normalizedIntent.operation,
+        sideEffectClass: context.executionPlan.normalizedIntent.sideEffectClass,
+        conversationId: context.conversation!.id,
+        taskId: context.actionTaskExecution.state!.taskId,
+        platform: context.msg.platform,
         targetMemberId: mentionedMemberIds[0],
         targetMemberIds: mentionedMemberIds,
       });
       bindOrganizationWorkItemTask({
-        orgId,
+        orgId: context.orgId,
         workItemId: organizationWorkRoute.workItem.id,
-        conversationId: conversation!.id,
-        taskId: actionTaskExecution.state!.taskId,
+        conversationId: context.conversation!.id,
+        taskId: context.actionTaskExecution.state!.taskId,
       });
       const route = organizationWorkRoute.workItem;
       if (!['waiting_approval', 'waiting_human'].includes(route.status)) {
-        organizationWorkExecution = registerOrganizationWorkExecution({
-          orgId,
+        context.organizationWorkExecution = registerOrganizationWorkExecution({
+          orgId: context.orgId,
           workItemId: route.id,
-          actorUserId: effectiveUserId,
-          abortController: actionAbortController,
+          actorUserId: context.effectiveUserId,
+          abortController: context.actionAbortController,
         });
       }
-      systemPrompt += [
+      context.systemPrompt += [
         '',
         '## Organization Business Route',
         `Work item: ${route.id}. Status: ${route.status}.`,
@@ -1286,145 +1342,145 @@ async function processWithPersonalityAdmitted(
       ].join('\n');
     } catch (error: any) {
       const blocker = `Organization work routing failed: ${error?.message || error}`;
-      setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
-      settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+      setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
+      settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
       const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员或技能配置。`;
-      return await commitReply(response);
+      return { terminal: await ( await context.commitReply(response)), context: undefined };
     }
   }
   if (organizationWorkRoute?.workItem.status === 'waiting_approval') {
     const approvalId = organizationWorkRoute.approval?.id || organizationWorkRoute.workItem.approvalId || '';
     const blocker = `Organization approval ${approvalId} is required before execution.`;
-    setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
-    settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+    setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
+    settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
     const response = `任务已完成组织路由，但尚未执行。工作项 ${organizationWorkRoute.workItem.id} 正在等待组织管理员审批（审批单 ${approvalId}）。审批通过后，在当前会话说“继续”即可恢复原任务。`;
-    return await commitReply(response);
+    return { terminal: await ( await context.commitReply(response)), context: undefined };
   }
   if (organizationWorkRoute?.workItem.status === 'waiting_human') {
     const owner = organizationWorkRoute.workItem.humanOwnerUserId || organizationWorkRoute.workItem.assignedMemberId || '指定成员';
     const blocker = `Organization work item is owned by human member ${owner}.`;
-    setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
-    settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
+    setConversationActionExecutionStatus(context.conversation!.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
+    settleConversationActionExecutionRequest(context.conversation!.id, context.effectiveUserId, context.requestId, blocker);
     const response = `任务已转交给组织成员 ${owner}，LumiCore 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到新的持久转派回执后才会恢复。`;
-    return await commitReply(response);
+    return { terminal: await ( await context.commitReply(response)), context: undefined };
   }
   if (
-    conversation
-    && (toolSessionActive || Boolean(directlyAppliedMode))
-    && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+    context.conversation
+    && (context.toolSessionActive || Boolean(context.directlyAppliedMode))
+    && (context.actionTaskExecution.kind === 'new' || context.actionTaskExecution.kind === 'resume')
   ) {
-    setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'executing', { requestId });
+    setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'executing', { requestId: context.requestId });
     if (organizationWorkRoute) {
       setOrganizationWorkItemExecutionStatus({
-        orgId,
+        orgId: context.orgId,
         workItemId: organizationWorkRoute.workItem.id,
         status: 'executing',
-        actorUserId: effectiveUserId,
-        execution: organizationWorkExecution,
+        actorUserId: context.effectiveUserId,
+        execution: context.organizationWorkExecution,
       });
     }
   }
-  const priorTaskRecords = actionTaskExecution.kind === 'resume'
-    ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
+  const priorTaskRecords = context.actionTaskExecution.kind === 'resume'
+    ? taskReceiptsToRecords(context.actionTaskExecution.state?.receipts || [])
     : [];
   const taskAwareRecords = (records: ToolExecutionRecord[]) => (
     coalesceToolExecutionRecords([...priorTaskRecords, ...records])
   );
   const desktopExecutionPolicy = buildDesktopExecutionStabilityPolicy({
     channel: 'chat',
-    text: routingText,
-    flow: turnFlow,
-    capabilitySelection,
-    capabilityExecutionPlan: executionPlan.executionPlan,
+    text: context.routingText,
+    flow: context.turnFlow,
+    capabilitySelection: context.capabilitySelection,
+    capabilityExecutionPlan: context.executionPlan.executionPlan,
   });
   const desktopExecutionTracker = createDesktopExecutionTracker(desktopExecutionPolicy.executionPlan);
 
-  systemPrompt += `\n\n${turnDispatch.promptOverlay}`;
-  systemPrompt += `\n\n${turnFlow.promptOverlay}`;
-  systemPrompt += `\n\n${buildInteractionModeOverlay(turnFlow)}`;
-  systemPrompt += `\n\n${executionDecision.promptOverlay}`;
-  if (isIdentityBound) {
-    systemPrompt += `\n\n${buildLumiRuntimeCapabilityContext({
-      userId: effectiveUserId,
-      text: routingText,
-      flow: turnFlow,
+  context.systemPrompt += `\n\n${context.turnDispatch.promptOverlay}`;
+  context.systemPrompt += `\n\n${context.turnFlow.promptOverlay}`;
+  context.systemPrompt += `\n\n${buildInteractionModeOverlay(context.turnFlow)}`;
+  context.systemPrompt += `\n\n${context.executionDecision.promptOverlay}`;
+  if (context.isIdentityBound) {
+    context.systemPrompt += `\n\n${buildLumiRuntimeCapabilityContext({
+      userId: context.effectiveUserId,
+      text: context.routingText,
+      flow: context.turnFlow,
       toolRegistry,
-      domain,
-      orgId,
+      domain: context.domain,
+      orgId: context.orgId,
     })}`;
-    systemPrompt += `\n\n${capabilitySelection.promptOverlay}`;
+    context.systemPrompt += `\n\n${context.capabilitySelection.promptOverlay}`;
     if (desktopExecutionPolicy.promptOverlay) {
-      systemPrompt += `\n\n${desktopExecutionPolicy.promptOverlay}`;
+      context.systemPrompt += `\n\n${desktopExecutionPolicy.promptOverlay}`;
     }
-    systemPrompt += `\n\n${formatClientSelfPromptForTurn(effectiveUserId, routingText, { domain, orgId })}`;
+    context.systemPrompt += `\n\n${formatClientSelfPromptForTurn(context.effectiveUserId, context.routingText, { domain: context.domain, orgId: context.orgId })}`;
   }
-  systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: turnFlow })}`;
-  systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
-  systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
-  systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';
-  systemPrompt += '\nExact file identity rule: a filename or path returned by a tool is an immutable identifier. Copy it character-for-character, including underscores, spaces, punctuation, extension, and parent directories. Never invent a size, timestamp, path, copy, upload, or send result; if the exact requested file is not in a receipt, say it was not verified.';
-  systemPrompt += '\nRemote reply layout rule: make replies easy to scan in mobile chat. Use short paragraphs of 2-4 sentences separated by a blank line. For multiple points, use brief numbered labels or bullet lines. Do not send a dense wall of text.';
-  if (explicitRemoteMemoryIds.length > 0) {
-    systemPrompt += '\nCurrent-turn memory receipt: the explicit personal relationship/trust statement was accepted into durable personal memory. You may acknowledge that fact naturally; do not expose internal memory IDs.';
+  context.systemPrompt += `\n\n${buildLumiOperatingKernelPrompt({ channel: 'chat', flow: context.turnFlow })}`;
+  context.systemPrompt += '\n\nRemote continuity rule: prior assistant statements about installed tool counts, missing desktop access, or mode availability are conversational history, not runtime evidence. Use the current capability map, client state, scoped relay, and actual tool results as the source of truth.';
+  context.systemPrompt += '\nRemote embodiment rule: WeChat, Feishu, and WeCom are transport channels into the same Lumi runtime. Do not claim that a remote channel inherently cannot reach the desktop. A no-client result for one data scope proves only that the scoped device route did not match; report that exact fact and check the personal/work scope before inferring that the desktop client is offline.';
+  context.systemPrompt += '\nRemote memory rule: authenticated personal remote chat participates in the same personal memory system. Organization turns remain organization-scoped. Do not ask the user to repeat an explicit relationship or trust statement merely to make it memorable, and do not claim a memory was stored unless the memory pipeline accepted it.';
+  context.systemPrompt += '\nExact file identity rule: a filename or path returned by a tool is an immutable identifier. Copy it character-for-character, including underscores, spaces, punctuation, extension, and parent directories. Never invent a size, timestamp, path, copy, upload, or send result; if the exact requested file is not in a receipt, say it was not verified.';
+  context.systemPrompt += '\nRemote reply layout rule: make replies easy to scan in mobile chat. Use short paragraphs of 2-4 sentences separated by a blank line. For multiple points, use brief numbered labels or bullet lines. Do not send a dense wall of text.';
+  if (context.explicitRemoteMemoryIds.length > 0) {
+    context.systemPrompt += '\nCurrent-turn memory receipt: the explicit personal relationship/trust statement was accepted into durable personal memory. You may acknowledge that fact naturally; do not expose internal memory IDs.';
   }
-  if (priorRuntimeEvidence) systemPrompt += `\n\n${priorRuntimeEvidence}`;
-  if (pendingConfirmationPrompt) systemPrompt += `\n\n${pendingConfirmationPrompt}`;
-  systemPrompt += `\n\n${buildResponseLanguageInstruction(requestText)}`;
+  if (context.priorRuntimeEvidence) context.systemPrompt += `\n\n${context.priorRuntimeEvidence}`;
+  if (context.pendingConfirmationPrompt) context.systemPrompt += `\n\n${context.pendingConfirmationPrompt}`;
+  context.systemPrompt += `\n\n${buildResponseLanguageInstruction(context.requestText)}`;
 
   const userLLMPrefs = {
-    ...getUserPreferredLLMConfig(effectiveUserId, { domain, orgId, maxTokens: 4096, source }),
+    ...getUserPreferredLLMConfig(context.effectiveUserId, { domain: context.domain, orgId: context.orgId, maxTokens: 4096, source: context.source }),
     inputTokenBudget: resolveModelRequestInputBudget(),
-    signal: actionAbortController.signal,
+    signal: context.actionAbortController.signal,
   };
   const messages: NormalizedMessage[] = [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory.map(item => ({
+    { role: 'system', content: context.systemPrompt },
+    ...context.conversationHistory.map(item => ({
       role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
       content: item.content,
     })),
-    { role: 'user', content: [msg.text, pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
+    { role: 'user', content: [context.msg.text, context.pendingConfirmationPrompt].filter(Boolean).join('\n\n') },
   ];
   let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
   const requestToolConfirmation = createTurnConfirmation({
-    userId: effectiveUserId, source, requestId, actionIntent: requestText,
-    pending: pendingConfirmation,
-    consumeScope: () => confirmationScope,
-    proposalScope: () => confirmationChannelScope
-      ? { ...confirmationChannelScope, taskId: actionTaskExecution.state?.taskId } : undefined,
-    correctionRequiresFreshConfirmation,
-    assertCurrent: () => assertMessagingAuthorization(msg),
-    isCancelled: actionWasCancelled,
+    userId: context.effectiveUserId, source: context.source, requestId: context.requestId, actionIntent: context.requestText,
+    pending: context.pendingConfirmation,
+    consumeScope: () => context.confirmationScope,
+    proposalScope: () => context.confirmationChannelScope
+      ? { ...context.confirmationChannelScope, taskId: context.actionTaskExecution.state?.taskId } : undefined,
+    correctionRequiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
+    assertCurrent: () => assertMessagingAuthorization(context.msg),
+    isCancelled: context.actionWasCancelled,
     onPending: pending => {
       pendingConfirmationCreatedThisTurn = pending;
-      if (conversation) setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationRequest(pending), requestId,
+      if (context.conversation) setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'waiting_confirmation', {
+        assistantState: formatPendingConfirmationRequest(pending), requestId: context.requestId,
       });
     },
   });
   const settleRemoteTask = (fallbackBlocker?: string) => {
     // Every accepted turn owns a request lease, even without a task id.
-    if (conversation) settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId, fallbackBlocker);
+    if (context.conversation) settleConversationActionExecutionRequest(context.conversation.id, context.effectiveUserId, context.requestId, fallbackBlocker);
   };
   const settleSupersededRemoteTurn = (reason: string) => {
     if (organizationWorkRoute) setOrganizationWorkItemExecutionStatus({
-      orgId, workItemId: organizationWorkRoute.workItem.id, status: 'cancelled',
-      actorUserId: effectiveUserId, execution: organizationWorkExecution, blocker: reason,
+      orgId: context.orgId, workItemId: organizationWorkRoute.workItem.id, status: 'cancelled',
+      actorUserId: context.effectiveUserId, execution: context.organizationWorkExecution, blocker: reason,
     });
     settleRemoteTask(reason);
   };
 
   const settleTransferredExecution = async (records: ToolExecutionRecord[]): Promise<boolean> => {
-    if (!organizationWorkExecution || organizationWorkExecution.isCurrent()) return false;
+    if (!context.organizationWorkExecution || context.organizationWorkExecution.isCurrent()) return false;
     // Keep any terminal action evidence in its original conversation ledger,
     // while suppressing prose and completion claims from the former owner.
     if (records.length) {
-      const evidenceMessage = persistBoundMessagingMessage(msg, 'assistant', '', undefined, records);
+      const evidenceMessage = persistBoundMessagingMessage(context.msg, 'assistant', '', undefined, records);
       removeSupersededAssistantMessage(evidenceMessage);
     }
     const blocker = 'Organization work was handed off; the previous execution has stopped.';
-    if (conversation) setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', { blocker, requestId });
+    if (context.conversation) setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'blocked', { blocker, requestId: context.requestId });
     settleRemoteTask(blocker);
-    await flushTerminalReply();
+    await context.flushTerminalReply();
     return true;
   };
   let toolRecords: ToolExecutionRecord[] = [];
@@ -1432,152 +1488,174 @@ async function processWithPersonalityAdmitted(
     toolRecords = mergeToolExecutionRecords(toolRecords, [record]);
   };
   const observeToolRecord = (record: ToolExecutionRecord) => {
-    receiptObserver?.onToolRecord(record);
+    context.receiptObserver?.onToolRecord(record);
     collectToolRecord(record);
   };
 
   const remoteToolContext = {
-    userId: effectiveUserId,
-    taskId: actionTaskExecution.state?.taskId,
-    conversationId: conversation?.id,
-    turnId: msg.messageId,
-    turnRowId: actionTaskExecution.turnRowId,
-    externalMessageId: msg.messageId,
-    resolutionId: executionPlan.resolution.id,
-    requestId,
-    domain,
-    orgId,
-    actionIntent: requestText,
-    routedTaskText: routingText,
-    supervisedExternalCommits: isIdentityBound,
-    toolPolicy: modelToolPolicy,
-    source,
-    llmGetters: llm as any,
-    desktopRelay,
-    personalDesktopRelay,
+    userId: context.effectiveUserId,
+    taskId: context.actionTaskExecution.state?.taskId,
+    conversationId: context.conversation?.id,
+    turnId: context.msg.messageId,
+    turnRowId: context.actionTaskExecution.turnRowId,
+    externalMessageId: context.msg.messageId,
+    resolutionId: context.executionPlan.resolution.id,
+    requestId: context.requestId,
+    domain: context.domain,
+    orgId: context.orgId,
+    actionIntent: context.requestText,
+    routedTaskText: context.routingText,
+    supervisedExternalCommits: context.isIdentityBound,
+    toolPolicy: context.modelToolPolicy,
+    source: context.source,
+    llmGetters: context.llm as any,
+    desktopRelay: context.desktopRelay,
+    personalDesktopRelay: context.personalDesktopRelay,
     desktopExecutionTracker,
-    isCancelled: actionWasCancelled,
-    executionSignal: actionAbortController.signal,
+    isCancelled: context.actionWasCancelled,
+    executionSignal: context.actionAbortController.signal,
     onToolRecord: observeToolRecord,
     requestConfirmation: requestToolConfirmation,
   };
+  return { terminal: undefined, context: extendTurnBindings(context, {
+    get organizationWorkRoute(): typeof organizationWorkRoute { return organizationWorkRoute; },
+    set organizationWorkRoute(value: typeof organizationWorkRoute) { organizationWorkRoute = value; },
+    remoteToolContext: remoteToolContext as typeof remoteToolContext,
+    collectToolRecord: collectToolRecord as typeof collectToolRecord,
+    get pendingConfirmationCreatedThisTurn(): typeof pendingConfirmationCreatedThisTurn { return pendingConfirmationCreatedThisTurn; },
+    set pendingConfirmationCreatedThisTurn(value: typeof pendingConfirmationCreatedThisTurn) { pendingConfirmationCreatedThisTurn = value; },
+    taskAwareRecords: taskAwareRecords as typeof taskAwareRecords,
+    get toolRecords(): typeof toolRecords { return toolRecords; },
+    set toolRecords(value: typeof toolRecords) { toolRecords = value; },
+    desktopExecutionTracker: desktopExecutionTracker as typeof desktopExecutionTracker,
+    settleRemoteTask: settleRemoteTask as typeof settleRemoteTask,
+    userLLMPrefs: userLLMPrefs as typeof userLLMPrefs,
+    messages: messages as typeof messages,
+    settleTransferredExecution: settleTransferredExecution as typeof settleTransferredExecution,
+    settleSupersededRemoteTurn: settleSupersededRemoteTurn as typeof settleSupersededRemoteTurn,
+  }) };
+}
+type MessagingModelContext = NonNullable<Awaited<ReturnType<typeof prepareMessagingExecution>>["context"]>;
+
+async function executeMessagingModelTurn(context: MessagingModelContext): Promise<string> {
+
 
   try {
-    const usageInteractionId = `messaging_${msg.platform}_${Date.now()}`;
+    const usageInteractionId = `messaging_${context.msg.platform}_${Date.now()}`;
     let responseText = '';
     let callbackReply: Awaited<ReturnType<MessageHandler>> | null = null;
     const callbackBlockedForExternalCommit = Boolean(
-      options?.onMessage && organizationWorkRoute?.workItem.sideEffectClass === 'external_commit',
+      context.options?.onMessage && context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit',
     );
     // The legacy handler returns only prose and cannot produce a canonical tool
     // envelope. Never let it execute an external commit; those actions must go
     // through the receipt-producing tool route and its exact confirmation gate.
-    if (options?.onMessage && !callbackBlockedForExternalCommit) {
-      assertMessagingAuthorization(msg);
-      organizationWorkExecution?.assertCurrent();
-      callbackReply = await options.onMessage(msg);
-      throwIfActionLeaseWasLost();
+    if (context.options?.onMessage && !callbackBlockedForExternalCommit) {
+      assertMessagingAuthorization(context.msg);
+      context.organizationWorkExecution?.assertCurrent();
+      callbackReply = await context.options.onMessage(context.msg);
+      context.throwIfActionLeaseWasLost();
     }
     let deterministicEntryReply: string | null = callbackReply?.text
-      || (isRetiredOperationModeRequest(requestText) ? buildOperationModeMetaResponse({ text: requestText, operationMode }) : null)
+      || (isRetiredOperationModeRequest(context.requestText) ? buildOperationModeMetaResponse({ text: context.requestText, operationMode: context.operationMode }) : null)
       || (callbackBlockedForExternalCommit
-        ? (/[㐀-鿿]/u.test(routingText)
+        ? (/[㐀-鿿]/u.test(context.routingText)
           ? '外部提交已停止：旧消息回调不能生成统一工具回执，请改由受确认和回执约束的工具执行。'
           : 'The external commit was stopped because the legacy message callback cannot produce a canonical tool receipt. Use the confirmed tool route instead.')
         : null);
     if (deterministicEntryReply) responseText = deterministicEntryReply;
 
-    if (isIdentityBound && directlyAppliedMode && !deterministicEntryReply) {
+    if (context.isIdentityBound && context.directlyAppliedMode && !deterministicEntryReply) {
       const modeRecord = await executeToolCall({
         registry: toolRegistry,
-        id: `${requestId}:client-mode`,
+        id: `${context.requestId}:client-mode`,
         name: 'client_action',
         arguments: {
           action: 'start_meeting_mode',
-          mode: directlyAppliedMode,
+          mode: context.directlyAppliedMode,
           // Confirmation authority comes from ToolContext/requestConfirmation,
           // never from a model- or route-authored boolean argument.
           confirmed: false,
         },
-        context: remoteToolContext,
+        context: context.remoteToolContext,
       });
-      throwIfActionLeaseWasLost();
-      collectToolRecord(modeRecord);
+      context.throwIfActionLeaseWasLost();
+      context.collectToolRecord(modeRecord);
       const modeSynced = toolRecordSucceeded(modeRecord);
-      if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
+      if (modeSynced) saveStoredOperationMode(context.effectiveUserId, context.directlyAppliedMode);
 
-      const candidate = pendingConfirmationCreatedThisTurn
-        ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
-        : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
+      const candidate = context.pendingConfirmationCreatedThisTurn
+        ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn)
+        : formatOperationModeSwitchResponse(context.directlyAppliedMode, modeSynced, context.requestText);
       const modeOutbound = await finalizeMessagingResponseForDelivery({
-        taskText: routingText,
+        taskText: context.routingText,
         responseText: candidate,
-        toolRecords: taskAwareRecords(toolRecords),
-        source,
-        flow: turnFlow,
-        taskId: actionTaskExecution.state?.taskId,
-        requestId,
-        pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-        isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
+        toolRecords: context.taskAwareRecords(context.toolRecords),
+        source: context.source,
+        flow: context.turnFlow,
+        taskId: context.actionTaskExecution.state?.taskId,
+        requestId: context.requestId,
+        pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
+        isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
       });
       const finalizedMode = modeOutbound.finalization;
-      toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+      context.toolRecords = withCurrentMessagingDesktopExecutionReceipt(
         modeOutbound.toolRecords,
-        desktopExecutionTracker,
-        actionTaskExecution.state?.taskId,
-        requestId,
+        context.desktopExecutionTracker,
+        context.actionTaskExecution.state?.taskId,
+        context.requestId,
       );
-      return await commitReply(finalizedMode.text, {
-        toolCalls: toolRecords,
+      return await context.commitReply(finalizedMode.text, {
+        toolCalls: context.toolRecords,
         beforeFlush: superseded => {
           if (superseded) {
-            settleRemoteTask('The remote turn was superseded by a newer user message.');
+            context.settleRemoteTask('The remote turn was superseded by a newer user message.');
             return;
           }
-          if (pendingConfirmationCreatedThisTurn && conversation) {
-            setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-              assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn), requestId,
+          if (context.pendingConfirmationCreatedThisTurn && context.conversation) {
+            setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'waiting_confirmation', {
+              assistantState: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn), requestId: context.requestId,
             });
           }
-          settleRemoteTask();
+          context.settleRemoteTask();
         },
       });
     }
 
-    if (!deterministicEntryReply && isOrganizationBound) {
-      assertMessagingAuthorization(msg);
-      deterministicEntryReply = await handleRemoteLegalNoticeIntake(msg, {
-        isCancelled: actionWasCancelled,
-        executionSignal: actionAbortController.signal,
+    if (!deterministicEntryReply && context.isOrganizationBound) {
+      assertMessagingAuthorization(context.msg);
+      deterministicEntryReply = await handleRemoteLegalNoticeIntake(context.msg, {
+        isCancelled: context.actionWasCancelled,
+        executionSignal: context.actionAbortController.signal,
       });
-      assertMessagingAuthorization(msg);
+      assertMessagingAuthorization(context.msg);
       if (!deterministicEntryReply) {
-        organizationWorkExecution?.assertCurrent();
-        deterministicEntryReply = await handleRemoteOrgCommand(msg, () => organizationWorkExecution?.assertCurrent());
+        context.organizationWorkExecution?.assertCurrent();
+        deterministicEntryReply = await handleRemoteOrgCommand(context.msg, () => context.organizationWorkExecution?.assertCurrent());
       }
       if (deterministicEntryReply) {
         responseText = deterministicEntryReply;
-        toolRecords.push({
-          id: `${requestId}:organization-command`,
-          taskId: actionTaskExecution.state?.taskId,
-          turnId: msg.messageId,
-          turnRowId: actionTaskExecution.turnRowId,
-          externalMessageId: msg.messageId,
-          resolutionId: executionPlan.resolution.id,
-          requestId,
-          idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
+        context.toolRecords.push({
+          id: `${context.requestId}:organization-command`,
+          taskId: context.actionTaskExecution.state?.taskId,
+          turnId: context.msg.messageId,
+          turnRowId: context.actionTaskExecution.turnRowId,
+          externalMessageId: context.msg.messageId,
+          resolutionId: context.executionPlan.resolution.id,
+          requestId: context.requestId,
+          idempotencyKey: `${context.organizationWorkRoute?.workItem.id || context.requestId}:organization-command`,
           name: 'organization_business_command',
           arguments: {
-            source,
-            requestId,
-            workItemId: organizationWorkRoute?.workItem.id || '',
+            source: context.source,
+            requestId: context.requestId,
+            workItemId: context.organizationWorkRoute?.workItem.id || '',
           },
           result: JSON.stringify({
             ok: true,
             verified: true,
             status: 'completed',
             verificationMethod: 'organization-server-transaction',
-            workItemId: organizationWorkRoute?.workItem.id || '',
+            workItemId: context.organizationWorkRoute?.workItem.id || '',
           }),
           terminalVerification: {
             status: 'verified',
@@ -1588,17 +1666,17 @@ async function processWithPersonalityAdmitted(
             version: 1,
             status: 'verified_success',
             toolName: 'organization_business_command',
-            resolutionId: executionPlan.resolution.id,
-            taskId: actionTaskExecution.state?.taskId || '',
-            turnId: msg.messageId,
-            turnRowId: actionTaskExecution.turnRowId,
-            externalMessageId: msg.messageId,
-            requestId,
-            idempotencyKey: `${organizationWorkRoute?.workItem.id || requestId}:organization-command`,
-            targetIdentity: orgId,
+            resolutionId: context.executionPlan.resolution.id,
+            taskId: context.actionTaskExecution.state?.taskId || '',
+            turnId: context.msg.messageId,
+            turnRowId: context.actionTaskExecution.turnRowId,
+            externalMessageId: context.msg.messageId,
+            requestId: context.requestId,
+            idempotencyKey: `${context.organizationWorkRoute?.workItem.id || context.requestId}:organization-command`,
+            targetIdentity: context.orgId,
             completedAt: new Date().toISOString(),
             result: {
-              workItemId: organizationWorkRoute?.workItem.id || '',
+              workItemId: context.organizationWorkRoute?.workItem.id || '',
               verificationMethod: 'organization-server-transaction',
             },
             verification: {
@@ -1615,199 +1693,199 @@ async function processWithPersonalityAdmitted(
     const runMessagingToolTurn = (
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
-      executionSource = source,
+      executionSource = context.source,
     ) => runToolSession({
       messages: turnMessages,
       registry: toolRegistry,
-      config: userLLMPrefs,
-      onToolCall: record => { collectToolRecord(record); onToolRecord?.(record); },
-      maxIterations: modelToolPolicy.maxIterations || executionDecision.maxIterations,
-      context: { ...remoteToolContext, source: executionSource, modelToolProjection },
-      getters: llm,
+      config: context.userLLMPrefs,
+      onToolCall: record => { context.collectToolRecord(record); onToolRecord?.(record); },
+      maxIterations: context.modelToolPolicy.maxIterations || context.executionDecision.maxIterations,
+      context: { ...context.remoteToolContext, source: executionSource, modelToolProjection: context.modelToolProjection },
+      getters: context.llm,
     });
 
-    if (!entryHandled && !toolSessionActive) {
-      assertMessagingAuthorization(msg);
+    if (!entryHandled && !context.toolSessionActive) {
+      assertMessagingAuthorization(context.msg);
       const response = await makeLLMCall(
-        messages,
+        context.messages,
         [],
-        userLLMPrefs,
-        ...providerGetterArguments(llm ?? {}, "primary"),
+        context.userLLMPrefs,
+        ...providerGetterArguments(context.llm ?? {}, "primary"),
       );
       responseText = response.text || '';
       if (response.usage) {
-        recordTokenUsage(effectiveUserId, userLLMPrefs.provider, userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
+        recordTokenUsage(context.effectiveUserId, context.userLLMPrefs.provider, context.userLLMPrefs.model, response.usage, usageInteractionId, 'chat');
       }
     } else if (!entryHandled) {
-      const result = await runMessagingToolTurn(messages);
+      const result = await runMessagingToolTurn(context.messages);
       responseText = result.text || '';
-      toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || []);
-      recordTokenUsageBatch(effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
+      context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
+      recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
     }
 
-    toolRecords = withCurrentMessagingDesktopExecutionReceipt(
-      toolRecords,
-      desktopExecutionTracker,
-      actionTaskExecution.state?.taskId,
-      requestId,
+    context.toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+      context.toolRecords,
+      context.desktopExecutionTracker,
+      context.actionTaskExecution.state?.taskId,
+      context.requestId,
     );
-    if (pendingConfirmationCreatedThisTurn) {
-      responseText = formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn);
+    if (context.pendingConfirmationCreatedThisTurn) {
+      responseText = formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn);
     }
     const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
     const preDeliveryRecords = currentMessagingFinalizationRecords({
-      toolRecords: taskAwareRecords(toolRecords),
-      taskId: actionTaskExecution.state?.taskId,
-      requestId,
+      toolRecords: context.taskAwareRecords(context.toolRecords),
+      taskId: context.actionTaskExecution.state?.taskId,
+      requestId: context.requestId,
     });
     const organizationVerifiedTerminalReceipt = preDeliveryRecords.some(record => {
       const verified = record.envelope?.status === 'verified_success'
         || record.terminalVerification?.status === 'verified';
       if (!verified) return false;
-      if (organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit') return true;
+      if (context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit') return true;
       return Boolean(record.capability?.sideEffects?.some(effect => (
         effect.type === 'external_communication' || effect.type === 'external_state_change'
       ))) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
     });
-    const missingOrganizationExternalCommitReceipt = organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
-      && !pendingConfirmationCreatedThisTurn
+    const missingOrganizationExternalCommitReceipt = context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
+      && !context.pendingConfirmationCreatedThisTurn
       && !organizationVerifiedTerminalReceipt;
     const initialFinalization: MessagingFinalization = callbackReply
-      && organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
+      && context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
       ? { text: responseText || callbackReply.text, blocked: false }
       : missingOrganizationExternalCommitReceipt
         ? {
-        text: /[\u3400-\u9fff]/u.test(routingText)
+        text: /[\u3400-\u9fff]/u.test(context.routingText)
           ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
           : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
         blocked: true,
         reason: 'The external commit has no verified terminal receipt.',
           }
         : finalizeLumiResponse({
-            taskText: routingText,
+            taskText: context.routingText,
             responseText: deliveryText,
             toolRecords: preDeliveryRecords,
-            source,
-            flow: turnFlow,
-            taskId: actionTaskExecution.state?.taskId,
-            requestId,
+            source: context.source,
+            flow: context.turnFlow,
+            taskId: context.actionTaskExecution.state?.taskId,
+            requestId: context.requestId,
           });
     const outbound = await finalizeMessagingResponseForDelivery({
-      taskText: routingText,
+      taskText: context.routingText,
       responseText: deliveryText,
       toolRecords: preDeliveryRecords,
-      source,
-      flow: turnFlow,
-      taskId: actionTaskExecution.state?.taskId,
-      requestId,
+      source: context.source,
+      flow: context.turnFlow,
+      taskId: context.actionTaskExecution.state?.taskId,
+      requestId: context.requestId,
       initialFinalization,
-      allowToolUse: toolSessionActive
+      allowToolUse: context.toolSessionActive
         && !callbackReply
         && !entryHandled
         && !missingOrganizationExternalCommitReceipt,
-      pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-      aborted: actionWasCancelled(),
-      isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
-      isAborted: actionWasCancelled,
+      pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
+      aborted: context.actionWasCancelled(),
+      isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+      isAborted: context.actionWasCancelled,
       attempt: async ({ instruction, recordTool }) => {
         const recovery = await runMessagingToolTurn(
           [
-            ...messages,
+            ...context.messages,
             ...(deliveryText.trim()
               ? [{ role: 'assistant' as const, content: deliveryText }]
               : []),
             { role: 'user', content: instruction },
           ],
           recordTool,
-          `${source}_guard_recovery`,
+          `${context.source}_guard_recovery`,
         );
-        recordTokenUsageBatch(effectiveUserId, recovery.usageRecords || [], usageInteractionId, 'chat');
+        recordTokenUsageBatch(context.effectiveUserId, recovery.usageRecords || [], usageInteractionId, 'chat');
         return {
           text: recovery.text,
           toolRecords: withCurrentMessagingDesktopExecutionReceipt(
             recovery.toolCalls || [],
-            desktopExecutionTracker,
-            actionTaskExecution.state?.taskId,
-            requestId,
+            context.desktopExecutionTracker,
+            context.actionTaskExecution.state?.taskId,
+            context.requestId,
           ),
         };
       },
-      refinalize: (candidateText, records) => pendingConfirmationCreatedThisTurn
+      refinalize: (candidateText, records) => context.pendingConfirmationCreatedThisTurn
         ? {
-            text: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+            text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
             blocked: false,
             reason: 'waiting_confirmation',
           }
         : finalizeLumiResponse({
-            taskText: routingText,
+            taskText: context.routingText,
             responseText: candidateText,
             toolRecords: currentMessagingFinalizationRecords({
               toolRecords: withCurrentMessagingDesktopExecutionReceipt(
                 records,
-                desktopExecutionTracker,
-                actionTaskExecution.state?.taskId,
-                requestId,
+                context.desktopExecutionTracker,
+                context.actionTaskExecution.state?.taskId,
+                context.requestId,
               ),
-              taskId: actionTaskExecution.state?.taskId,
-              requestId,
+              taskId: context.actionTaskExecution.state?.taskId,
+              requestId: context.requestId,
             }),
-            source: `${source}_guard_recovery`,
-            flow: turnFlow,
-            taskId: actionTaskExecution.state?.taskId,
-            requestId,
+            source: `${context.source}_guard_recovery`,
+            flow: context.turnFlow,
+            taskId: context.actionTaskExecution.state?.taskId,
+            requestId: context.requestId,
           }),
     });
-    toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+    context.toolRecords = withCurrentMessagingDesktopExecutionReceipt(
       outbound.toolRecords,
-      desktopExecutionTracker,
-      actionTaskExecution.state?.taskId,
-      requestId,
+      context.desktopExecutionTracker,
+      context.actionTaskExecution.state?.taskId,
+      context.requestId,
     );
     const finalized = outbound.finalization;
-    if (actionLeaseWasLost()) {
-      await actionLeaseHeartbeat!.leaseLoss;
+    if (context.actionLeaseWasLost()) {
+      await context.actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
-    if (await settleTransferredExecution(toolRecords)) return '';
-    organizationWorkExecution?.assertCurrent();
-    const committedText = await commitReply(finalized.text, {
-      toolCalls: toolRecords,
+    if (await context.settleTransferredExecution(context.toolRecords)) return '';
+    context.organizationWorkExecution?.assertCurrent();
+    const committedText = await context.commitReply(finalized.text, {
+      toolCalls: context.toolRecords,
       beforeFlush: superseded => {
         if (superseded) {
-          settleSupersededRemoteTurn('The remote turn was superseded by a newer user message.');
+          context.settleSupersededRemoteTurn('The remote turn was superseded by a newer user message.');
           return;
         }
-        if (pendingConfirmationCreatedThisTurn && conversation) {
-          setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-            assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-            requestId,
+        if (context.pendingConfirmationCreatedThisTurn && context.conversation) {
+          setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'waiting_confirmation', {
+            assistantState: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
+            requestId: context.requestId,
           });
         }
-        if (organizationWorkRoute) {
-          const organizationStatus = pendingConfirmationCreatedThisTurn || finalized.blocked || missingOrganizationExternalCommitReceipt
+        if (context.organizationWorkRoute) {
+          const organizationStatus = context.pendingConfirmationCreatedThisTurn || finalized.blocked || missingOrganizationExternalCommitReceipt
             ? 'blocked'
             : 'completed';
-          const organizationBlocker = pendingConfirmationCreatedThisTurn
+          const organizationBlocker = context.pendingConfirmationCreatedThisTurn
             ? 'The user action confirmation is still pending.'
             : missingOrganizationExternalCommitReceipt
               ? 'The external commit has no verified terminal receipt.'
               : finalized.reason;
           setOrganizationWorkItemExecutionStatus({
-            orgId,
-            workItemId: organizationWorkRoute.workItem.id,
+            orgId: context.orgId,
+            workItemId: context.organizationWorkRoute.workItem.id,
             status: organizationStatus,
-            actorUserId: effectiveUserId,
-            execution: organizationWorkExecution,
+            actorUserId: context.effectiveUserId,
+            execution: context.organizationWorkExecution,
             blocker: organizationBlocker,
           });
-          if (organizationStatus === 'blocked' && conversation) {
-            setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', {
+          if (organizationStatus === 'blocked' && context.conversation) {
+            setConversationActionExecutionStatus(context.conversation.id, context.effectiveUserId, 'blocked', {
               blocker: organizationBlocker,
-              requestId,
+              requestId: context.requestId,
             });
           }
         }
-        settleRemoteTask();
+        context.settleRemoteTask();
       },
     });
     if (!committedText) return '';
@@ -1820,13 +1898,13 @@ async function processWithPersonalityAdmitted(
     if (!entryHandled) {
       try {
         void persistRemotePostTurnLearning({
-          message: msg,
+          message: context.msg,
           responseText: committedText,
-          isCancelled: actionWasCancelled,
-          llmGetters: llm,
+          isCancelled: context.actionWasCancelled,
+          llmGetters: context.llm,
           modelConfig: {
-            provider: userLLMPrefs.provider,
-            model: userLLMPrefs.model,
+            provider: context.userLLMPrefs.provider,
+            model: context.userLLMPrefs.model,
           },
         });
       } catch (learningError: any) {
@@ -1835,49 +1913,61 @@ async function processWithPersonalityAdmitted(
     }
     return committedText;
   } catch (err: any) {
-    if (!isMessagingAuthorizationCurrent(msg)) {
-      settleRemoteTask('The remote message authorization was revoked or replaced.');
-      await flushTerminalReply();
+    if (!isMessagingAuthorizationCurrent(context.msg)) {
+      context.settleRemoteTask('The remote message authorization was revoked or replaced.');
+      await context.flushTerminalReply();
       throw new MessagingAuthorizationRevokedError();
     }
-    if (actionLeaseWasLost()) {
-      await actionLeaseHeartbeat!.leaseLoss;
+    if (context.actionLeaseWasLost()) {
+      await context.actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
     }
     if (isMessagingReplyDurabilityError(err)) throw err;
-    if (await settleTransferredExecution(toolRecords)) return '';
-    console.warn(`[Messaging] ${msg.platform} model pipeline failed:`, err?.message || err);
-    const fallback = toolRecords.length
+    if (await context.settleTransferredExecution(context.toolRecords)) return '';
+    console.warn(`[Messaging] ${context.msg.platform} model pipeline failed:`, err?.message || err);
+    const fallback = context.toolRecords.length
       ? '当前语言模型暂时不可用，后续处理没有完成。本次已有的执行记录已保留，请稍后继续。'
       : '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
     // The assistant write closes this request with an explicit blocked outcome;
     // never recompute completion from an earlier successful substep afterward.
-    return await commitReply(fallback, {
-      toolCalls: toolRecords,
-      terminalTaskDisposition: actionTaskExecution.state?.taskId ? {
-        outcome: 'blocked', taskId: actionTaskExecution.state.taskId, requestId, reason: fallback,
+    return await context.commitReply(fallback, {
+      toolCalls: context.toolRecords,
+      terminalTaskDisposition: context.actionTaskExecution.state?.taskId ? {
+        outcome: 'blocked', taskId: context.actionTaskExecution.state.taskId, requestId: context.requestId, reason: fallback,
       } : undefined,
       beforeFlush: superseded => {
         if (superseded) {
-          settleSupersededRemoteTurn('The remote turn failed after it was superseded by a newer user message.');
+          context.settleSupersededRemoteTurn('The remote turn failed after it was superseded by a newer user message.');
           return;
         }
-        if (organizationWorkRoute) setOrganizationWorkItemExecutionStatus({
-          orgId, workItemId: organizationWorkRoute.workItem.id, status: 'blocked',
-          actorUserId: effectiveUserId, execution: organizationWorkExecution,
+        if (context.organizationWorkRoute) setOrganizationWorkItemExecutionStatus({
+          orgId: context.orgId, workItemId: context.organizationWorkRoute.workItem.id, status: 'blocked',
+          actorUserId: context.effectiveUserId, execution: context.organizationWorkExecution,
           blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
         });
       },
     });
   }
+}
+
+async function processWithPersonalityAdmitted(msg: IncomingMessage, options?: MessagingRouteOptions, preacceptedAdmission?: AcceptedUserTurnAdmission<string> | null, acceptedTurn?: { resolution: TurnResolution; pendingAssistantOfferContext?: PendingAssistantOfferContext }): Promise<string> {
+  const admitted = await prepareMessagingTurn(msg, options, preacceptedAdmission, acceptedTurn);
+  if (admitted.terminal !== undefined) return admitted.terminal;
+  const context = admitted.context!;
+  try {
+    const prepared = await prepareMessagingExecution(context);
+    if (prepared.terminal !== undefined) return prepared.terminal;
+    return await executeMessagingModelTurn(prepared.context!);
   } finally {
-    desktopRelay?.releaseControlLease?.();
-    personalDesktopRelay?.releaseControlLease?.();
-    organizationWorkExecution?.release();
-    actionLeaseHeartbeat?.stop();
-    releaseActiveMessageRouteController();
+
+    context.desktopRelay?.releaseControlLease?.();
+    context.personalDesktopRelay?.releaseControlLease?.();
+    context.organizationWorkExecution?.release();
+    context.actionLeaseHeartbeat?.stop();
+    context.releaseActiveMessageRouteController();
   }
 }
+
 
 export function createWeComRoutes(
   config: WeComConfig,

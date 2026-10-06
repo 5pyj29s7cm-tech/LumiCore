@@ -1480,7 +1480,56 @@ export class ToolRegistry {
       throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Tool execution failed.'));
     })();
 
-    const finalizeExecution = async (): Promise<string> => {
+    const finalizedExecution = finalizeToolExecution({
+      execution, externalCommit, idempotencyKey, claimToken, adapterPermit, finishMetric, name, sideEffectFenceKey, sideEffectInputDigest, pinnedLocalIdempotencyReplay, pinnedReconcileExternalCommit, executionArgs, context, releasePreparation,
+      get handlerEntered() { return handlerEntered; },
+      get timedOut() { return timedOut; },
+    });
+    if (externalCommit) {
+      externalCommitAttempts.set(idempotencyKey, {
+        state: 'running',
+        promise: finalizedExecution,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
+      });
+      releasePreparation?.();
+      releasePreparation = null;
+    }
+    if (sideEffectFenceKey) {
+      sideEffectAttempts.set(sideEffectFenceKey, {
+        state: 'running',
+        inputDigest: sideEffectInputDigest,
+        promise: finalizedExecution,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
+      });
+    }
+    return await finalizedExecution;
+  }
+}
+
+export const toolRegistry = new ToolRegistry();
+
+type ToolFinalizationState = {
+  execution: Promise<string>;
+  externalCommit: boolean;
+  idempotencyKey: string;
+  claimToken: string;
+  adapterPermit: ReturnType<typeof beforeAdapterExecution>;
+  finishMetric: ReturnType<typeof beginToolMetric>;
+  name: string;
+  sideEffectFenceKey: string;
+  sideEffectInputDigest: string;
+  pinnedLocalIdempotencyReplay: NonNullable<ToolDefinition["localIdempotencyReplay"]>;
+  pinnedReconcileExternalCommit: ToolDefinition["reconcileExternalCommit"];
+  executionArgs: Record<string, any>;
+  context: ToolContext | undefined;
+  releasePreparation: (() => void) | null;
+  readonly handlerEntered: boolean;
+  readonly timedOut: boolean;
+};
+
+async function finalizeToolExecution(state: ToolFinalizationState): Promise<string> {
+  const { execution, externalCommit, idempotencyKey, claimToken, adapterPermit, finishMetric, name, sideEffectFenceKey, sideEffectInputDigest, pinnedLocalIdempotencyReplay, pinnedReconcileExternalCommit, executionArgs, context, releasePreparation } = state;
+
       try {
         const result = await execution;
         if (externalCommit) {
@@ -1554,7 +1603,7 @@ export class ToolRegistry {
       } catch (error: any) {
         if (error?.externalCommitUnknown === true) throw error;
         if (externalCommit) {
-          if (!handlerEntered || (['generate_image', 'ai_edit_image'].includes(name) && isDefiniteOfficialImageRejection(error))) {
+          if (!state.handlerEntered || (['generate_image', 'ai_edit_image'].includes(name) && isDefiniteOfficialImageRejection(error))) {
             await settleExternalCommitAttempt({
               idempotencyKey,
               claimToken,
@@ -1624,11 +1673,11 @@ export class ToolRegistry {
           if (isToolLifecyclePersistenceFailure(error)) throw error;
           throw externalCommitUnknownError(
             name,
-            `${timedOut ? 'The call timed out.' : 'The handler failed after the durable claim.'} ${String(error?.message || error || '')}`,
+            `${state.timedOut ? 'The call timed out.' : 'The handler failed after the durable claim.'} ${String(error?.message || error || '')}`,
           );
         } else {
           if (sideEffectFenceKey) {
-            if (handlerEntered) {
+            if (state.handlerEntered) {
               sideEffectAttempts.set(sideEffectFenceKey, {
                 state: 'unknown',
                 inputDigest: sideEffectInputDigest,
@@ -1639,34 +1688,11 @@ export class ToolRegistry {
             }
           }
           recordAdapterExecutionFailure(adapterPermit, error);
-          finishMetric(timedOut ? 'timeout' : 'failed');
+          finishMetric(state.timedOut ? 'timeout' : 'failed');
         }
         throw error;
       } finally {
         releasePreparation?.();
       }
-    };
 
-    const finalizedExecution = finalizeExecution();
-    if (externalCommit) {
-      externalCommitAttempts.set(idempotencyKey, {
-        state: 'running',
-        promise: finalizedExecution,
-        expiresAt: Date.now() + 24 * 60 * 60_000,
-      });
-      releasePreparation?.();
-      releasePreparation = null;
-    }
-    if (sideEffectFenceKey) {
-      sideEffectAttempts.set(sideEffectFenceKey, {
-        state: 'running',
-        inputDigest: sideEffectInputDigest,
-        promise: finalizedExecution,
-        expiresAt: Date.now() + 24 * 60 * 60_000,
-      });
-    }
-    return await finalizedExecution;
-  }
 }
-
-export const toolRegistry = new ToolRegistry();

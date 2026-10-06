@@ -1,3 +1,4 @@
+import { countImplementationCalls } from './implementation_source';
 import { readVoiceImplementationSource } from './voice_implementation_source';
 import './helpers';
 import { prepareForegroundRequest, taskFor } from './foreground_request_fixture';
@@ -651,8 +652,17 @@ describe('voice foreground release convergence', () => {
 
     expect(source).not.toContain('preMatchedQuickResult');
     const turnSource = readFileSync('server/socket/voice_conversation_turn.ts', 'utf8');
-    expect(turnSource.match(/releaseVoiceTurnResources\(/g)).toHaveLength(1);
-    expect(turnSource.indexOf("  try {\n    if (transcriptExecutionGuard.action === 'clarify')")).toBeLessThan(turnSource.indexOf('await persistTurnMemory('));
+    expect(countImplementationCalls(turnSource, 'releaseVoiceTurnResources')).toBe(1);
+    const ownerStart = turnSource.indexOf('async function processAdmittedVoiceTurn(');
+    const ownerTry = turnSource.indexOf('  try {', ownerStart);
+    const clarificationPhase = turnSource.indexOf('await executeVoiceConfirmedAndDeterministicTurn(', ownerTry);
+    const modelPhase = turnSource.indexOf('await executeVoiceModelTurn(', ownerTry);
+    const phaseStart = turnSource.indexOf('async function executeVoiceConfirmedAndDeterministicTurn(');
+    expect(ownerTry).toBeGreaterThan(ownerStart);
+    expect(clarificationPhase).toBeGreaterThan(ownerTry);
+    expect(modelPhase).toBeGreaterThan(clarificationPhase);
+    expect(turnSource.indexOf("if (context.transcriptExecutionGuard.action === 'clarify')", phaseStart))
+      .toBeLessThan(turnSource.indexOf('await persistTurnMemory(', phaseStart));
     expect(source).toContain("releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.')");
 
     const outerFailureStart = source.indexOf("logger.error('[Voice Error]:', err);");
@@ -671,7 +681,7 @@ describe('voice foreground release convergence', () => {
     expect(mainFailure).toContain('CN_VOICE_WORK_MESSAGES.processingFailed');
     expect(mainFailure).not.toContain("emitAgent('agent:error'");
     const voiceTerminalStart = source.indexOf('const commitVoiceTerminal = async');
-    const voiceTerminalEnd = source.indexOf('const maxIterations =', voiceTerminalStart);
+    const voiceTerminalEnd = source.indexOf('const releaseVoiceTransportResources =', voiceTerminalStart);
     expect(source.slice(voiceTerminalStart, voiceTerminalEnd))
       .toContain('persistVoiceAssistantMessage(');
 

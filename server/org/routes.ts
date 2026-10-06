@@ -46,6 +46,16 @@ function canReadOrganizationResource(input: {
 
 export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
   const router = durableOrganizationRouter(baseRouter);
+  mountOrganizationIdentityRoutes(router);
+  mountOrganizationWorkRoutingRoutes(router);
+  mountOrganizationResourceRoutes(router);
+  mountOrganizationKnowledgeRoutes(router);
+  mountOrganizationLegalRoutes(router);
+  mountOrganizationInvitationRoutes(io, router);
+  mountOrganizationAuditRoutes(io, router);
+}
+
+function mountOrganizationIdentityRoutes(router: ReturnType<typeof durableOrganizationRouter>) {
   // ── Health / status ──────────────────────────────────────────────────
 
   router.get('/org/status', optionalAuth, (_req: Request, res: Response) => {
@@ -173,7 +183,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
     }
     res.json(m);
   });
+}
 
+function mountOrganizationWorkRoutingRoutes(router: ReturnType<typeof durableOrganizationRouter>) {
   // ── Departments ──────────────────────────────────────────────────────
 
   router.get('/org/org/:orgId/departments', requireAuth, requireOrgMember, (req: Request, res: Response) => {
@@ -358,7 +370,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
     }
     res.json(result);
   });
+}
 
+function mountOrganizationResourceRoutes(router: ReturnType<typeof durableOrganizationRouter>) {
   // ── Knowledge Base ───────────────────────────────────────────────────
 
   router.get('/org/org/:orgId/resources/:resourceType/:resourceId/policy', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
@@ -466,7 +480,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
       respondResourceAuthorizationError(res, error);
     }
   });
+}
 
+function mountOrganizationKnowledgeRoutes(router: ReturnType<typeof durableOrganizationRouter>) {
   router.get('/org/kb/stats', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const visible = new Set(KB.listArticles(req.user!.orgId!, undefined, req.user!.uid)
       .filter(article => canReadOrganizationResource({
@@ -667,7 +683,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
       res.status(500).json({ error: err.message });
     });
   });
+}
 
+function mountOrganizationLegalRoutes(router: ReturnType<typeof durableOrganizationRouter>) {
   router.get('/org/legal/cases', requireAuth, requireOrgMember, (req: Request, res: Response) => {
     const query = String(req.query.query || '');
     const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
@@ -796,7 +814,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
     }
     res.status(201).json(material);
   });
+}
 
+function mountOrganizationInvitationRoutes(io: SocketIOServer | undefined, router: ReturnType<typeof durableOrganizationRouter>) {
   // ── Invitations ──────────────────────────────────────────────────────
 
   router.post('/org/org/:orgId/invitations', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {
@@ -843,7 +863,9 @@ export function mountOrgRoutes(baseRouter: Router, io?: SocketIOServer) {
     }
     res.json({ success: true, orgId: result.orgId, membership: result.membership });
   });
+}
 
+function mountOrganizationAuditRoutes(io: SocketIOServer | undefined, router: ReturnType<typeof durableOrganizationRouter>) {
   // ── Audit Log (admin only) ───────────────────────────────────────────
 
   router.get('/org/audit', requireAuth, requireOrgRole('owner', 'admin'), (req: Request, res: Response) => {

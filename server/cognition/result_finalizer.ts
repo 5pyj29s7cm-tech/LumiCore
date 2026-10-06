@@ -683,7 +683,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (business) return business;
   const windowObservation = groundedReadOnlyWindowObservation(input);
   if (windowObservation) return windowObservation;
-  const artifactProgress = taskActionContract(input).kind === 'artifact_work'
+  const actionContract = taskActionContract(input);
+  const artifactProgress = actionContract.kind === 'artifact_work'
     ? getArtifactTaskProgress(actionText, input.toolRecords || [], input) : null;
   if (artifactProgress && !artifactProgress.complete) return {
     text: formatArtifactProgress(artifactProgress, actionText), blocked: true,
@@ -709,7 +710,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       : zh ? CN_EXECUTION_EVIDENCE_MESSAGES.mediaPauseUnconfirmed : 'The requested player is not yet confirmed paused.',
       blocked: !verified, reason: verified ? 'verified_media_pause' : 'media_pause_unconfirmed' };
   }
-  const composite = taskActionContract(input);
+  const composite = actionContract;
   if (composite.kind === 'external_cli_status') {
     const status = verifiedExternalCliStatus(actionText, input.toolRecords || [], input);
     return status ? { text: formatExternalCliStatus(actionText, status), blocked: false, reason: 'verified_external_cli_status' }
@@ -851,7 +852,6 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       reason: 'Grounded Lumi client action from a verified state-diff receipt.',
     });
   }
-  const actionContract = taskActionContract(input);
   const groundedRuntimeWork = formatGroundedRuntimeWorkResult(input, actionContract);
   if (groundedRuntimeWork) return groundedRuntimeWork;
   const modelIdentity = groundedModelIdentity(input);
@@ -1140,6 +1140,20 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
+  return finalizeActionCompletionClaims(input, actionText, actionContract, guard, responseClaimsIncomplete);
+
+}
+export { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
+export { formatGroundedArtifactResult } from "./result_artifact_presenter";
+
+function finalizeActionCompletionClaims(
+  input: LumiResultFinalizerInput,
+  actionText: string,
+  actionContract: ReturnType<typeof taskActionContract>,
+  guard: NonNullable<LumiResultFinalizerInput["completionGuard"]> | ReturnType<typeof guardCompletionClaims>,
+  responseClaimsIncomplete: boolean,
+): LumiResultFinalizerResult {
+
   const claimsActionDone = !responseClaimsIncomplete && /(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u53d1\u9001|\u53d1\u51fa|\u6253\u5f00\u4e86|\u770b\u5230|\u8bfb\u5230|\u8bfb\u53d6|\u603b\u7ed3|\u751f\u6210|done|complete|completed|success|sent|opened|read|viewed|created|generated)/iu
     .test(input.responseText || '');
   const claimsStockWatchStarted = /(?:\u5df2\u7ecf|\u5df2|\u5f00\u59cb|\u6b63\u5728|\u6301\u7eed|\u76ef\u76d8|\u76d1\u63a7|started|watching|monitoring|tracking)/iu
@@ -1154,32 +1168,14 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     hasLegalExternalPlatformSignal(actionText) &&
     claimsExternalLegalPlatformFinalAction(input.responseText || '')
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'External legal platform final action requires authorized collaboration.'),
-      blocked: true,
-      reason: 'External legal platform final action requires authorized collaboration.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'External legal platform final action requires authorized collaboration.',
-      },
-    };
+    return blockedCompletionClaim(input, 'External legal platform final action requires authorized collaboration.');
   }
   if (
     hasLegalExternalPlatformSignal(actionText) &&
     claimsExternalLegalPlatformResult(input.responseText || '') &&
     !hasLegalExternalPlatformResultEvidence(input.toolRecords || [])
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing external legal platform result evidence.'),
-      blocked: true,
-      reason: 'Missing external legal platform result evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing external legal platform result evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing external legal platform result evidence.');
   }
   if (
     actionContract.kind === 'desktop_operation'
@@ -1187,17 +1183,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     && claimsActionDone
     && !hasCurrentAppUiMutationEvidence(input.toolRecords || [], actionText)
   ) {
-    return {
-      text: formatCreatedArtifactWithoutInAppCompletion(input)
-        || formatCompactBlockedResponse(input, 'Missing verified in-app UI mutation evidence.'),
-      blocked: true,
-      reason: 'Missing verified in-app UI mutation evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing verified in-app UI mutation evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing verified in-app UI mutation evidence.', formatCreatedArtifactWithoutInAppCompletion(input)
+        || formatCompactBlockedResponse(input, 'Missing verified in-app UI mutation evidence.'));
   }
   if (
     actionContract.kind === 'desktop_operation'
@@ -1205,16 +1192,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     && claimsCurrentAppSaveCompletion(input.responseText || '')
     && !hasCurrentAppSaveEvidence(input.toolRecords || [], actionText)
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing verified in-app save evidence.'),
-      blocked: true,
-      reason: 'Missing verified in-app save evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing verified in-app save evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing verified in-app save evidence.');
   }
   if (
     actionContract.kind === 'stock_monitor' &&
@@ -1222,16 +1200,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     hasContinuousStockWatchIntent(actionText) &&
     !hasContinuousStockWatchEvidence(input.toolRecords || [])
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing continuous stock watch evidence.'),
-      blocked: true,
-      reason: 'Missing continuous stock watch evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing continuous stock watch evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing continuous stock watch evidence.');
   }
   if (
     actionContract.kind === 'cad_drafting' &&
@@ -1239,16 +1208,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     requiresVisibleAutoCadExecution(actionText) &&
     !hasVisibleAutoCadExecutionEvidence(input.toolRecords || [], actionText)
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing visible AutoCAD execution evidence.'),
-      blocked: true,
-      reason: 'Missing visible AutoCAD execution evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing visible AutoCAD execution evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing visible AutoCAD execution evidence.');
   }
   if (
     actionContract.kind === 'browser_account' &&
@@ -1257,16 +1217,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     !legalExternalHandoffOnly &&
     !hasAuthenticatedWebResultEvidence(input.toolRecords || [], actionText)
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing authenticated browser result evidence.'),
-      blocked: true,
-      reason: 'Missing authenticated browser result evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing authenticated browser result evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing authenticated browser result evidence.');
   }
   if (
     actionContract.kind === 'legal_document' &&
@@ -1274,16 +1225,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     requiresLegalCurrentLawGate(actionText) &&
     !hasLegalDocumentProductionEvidence(input.toolRecords || [])
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing legal document production evidence.'),
-      blocked: true,
-      reason: 'Missing legal document production evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing legal document production evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing legal document production evidence.');
   }
   if (
     actionContract.kind === 'legal_document' &&
@@ -1291,16 +1233,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     requiresLegalCurrentLawGate(actionText) &&
     !hasLegalCurrentLawGateEvidence(input.toolRecords || [])
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing current-law verification gate for legal document.'),
-      blocked: true,
-      reason: 'Missing current-law verification gate for legal document.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing current-law verification gate for legal document.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing current-law verification gate for legal document.');
   }
   if (
     actionContract.kind === 'legal_document' &&
@@ -1308,16 +1241,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     requiresLegalCurrentLawGate(actionText) &&
     !hasLegalReasoningChainEvidence(input.toolRecords || [])
   ) {
-    return {
-      text: formatCompactBlockedResponse(input, 'Missing legal reasoning chain evidence.'),
-      blocked: true,
-      reason: 'Missing legal reasoning chain evidence.',
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: 'Missing legal reasoning chain evidence.',
-      },
-    };
+    return blockedCompletionClaim(input, 'Missing legal reasoning chain evidence.');
   }
   if (shouldEnforceCoreActionContract(actionContract, actionText) && claimsActionDone && !legalExternalHandoffOnly && !hasResultCoreActionEvidence(input, actionContract, input.toolRecords || [], actionText)) {
     if (guard.blocked && /content-read\/open\/review/i.test(guard.reason || '')) {
@@ -1344,16 +1268,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         },
       };
     }
-    return {
-      text: formatCompactBlockedResponse(input, `Missing core evidence for ${actionContract.kind}.`),
-      blocked: true,
-      reason: `Missing core evidence for ${actionContract.kind}.`,
-      notification: {
-        type: 'work_product_guard',
-        level: 'warning',
-        message: `Missing core evidence for ${actionContract.kind}.`,
-      },
-    };
+    return blockedCompletionClaim(input, `Missing core evidence for ${actionContract.kind}.`);
   }
 
   if (!guard.blocked) {
@@ -1373,5 +1288,10 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     },
   };
 }
-export { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
-export { formatGroundedArtifactResult } from "./result_artifact_presenter";
+
+function blockedCompletionClaim(input: LumiResultFinalizerInput, reason: string, text = formatCompactBlockedResponse(input, reason)): LumiResultFinalizerResult {
+  return {
+    text, blocked: true, reason,
+    notification: { type: "work_product_guard", level: "warning", message: reason },
+  };
+}

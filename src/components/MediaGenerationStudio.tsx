@@ -206,7 +206,7 @@ function SourceImageField({
   );
 }
 
-export function MediaGenerationStudio({
+function useMediaGenerationStudioState({
   mode,
   operation,
   locale,
@@ -246,6 +246,7 @@ export function MediaGenerationStudio({
   onArtifactReady,
   onArtifactError,
 }: MediaGenerationStudioProps) {
+
   const copy = mediaGenerationCopy(locale);
   const [chatSongVisited, setChatSongVisited] = useState(chatSongActive);
   useEffect(() => { if (chatSongActive) setChatSongVisited(true); }, [chatSongActive]);
@@ -452,6 +453,16 @@ export function MediaGenerationStudio({
     : activeKind === 'image'
       ? copy.generateImage
       : copy.generateVideo;
+  return { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onRequestSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
+}
+
+export function MediaGenerationStudio(props: Parameters<typeof useMediaGenerationStudioState>[0]) {
+  return renderMediaGenerationStudio(useMediaGenerationStudioState(props));
+}
+
+function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGenerationStudioState>) {
+  const { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onRequestSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
+
 
   return (
     <section

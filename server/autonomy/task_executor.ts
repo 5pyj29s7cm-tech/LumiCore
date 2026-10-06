@@ -1097,6 +1097,46 @@ export async function executeNextAutonomousTask(
 
     return returnResult;
   } catch (err: any) {
+    return finalizeAutonomousTaskFailure(err, { task, running, io, taskRoom, toolLedger, sideEffectClass, leaseLost, publicLanguage, authorizationWasRevoked });
+  } finally {
+    clearInterval(leaseHeartbeat);
+    options.signal?.removeEventListener('abort', onParentCancelled);
+    voicePriority.signal.removeEventListener('abort', onVoicePriority);
+    voicePriority.dispose();
+    releaseDesktopControlLease();
+    try {
+      await persistAutonomousTaskFinalizations(io);
+    } catch (error) {
+      if (pendingCompletions.has(task.id)) {
+        io.to(taskRoom).emit('autonomous:task_failed', {
+          taskId: task.id, title: task.title, status: 'blocked', finalized: false, verified: false, blocked: true,
+          error: publicLanguage === 'zh'
+            ? CN_AUTONOMOUS_CUSTOMER_MESSAGES.finalizationPending
+            : 'The work finished, but its final state could not be saved. Saving must succeed before completion can be confirmed.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      throw error;
+    } finally {
+      // The live owner outlasts both its handler and terminal persistence.
+      membershipAuthority?.dispose();
+      releaseAutonomousTaskExecutor(task.id, running.leaseId);
+    }
+  }
+}
+
+function finalizeAutonomousTaskFailure(err: any, { task, running, io, taskRoom, toolLedger, sideEffectClass, leaseLost, publicLanguage, authorizationWasRevoked }: {
+  task: NonNullable<ReturnType<typeof dequeue>>;
+  running: NonNullable<ReturnType<typeof markRunning>>;
+  io: SocketIOServer;
+  taskRoom: string;
+  toolLedger: ToolExecutionRecord[];
+  sideEffectClass: NonNullable<NonNullable<ReturnType<typeof markRunning>>["executionPlan"]>["risk"]["sideEffectClass"] | undefined;
+  leaseLost: boolean;
+  publicLanguage: ReturnType<typeof inferAutonomousPublicLanguage>;
+  authorizationWasRevoked: () => boolean;
+}): Awaited<ReturnType<typeof executeNextAutonomousTask>> {
+
     const errorMsg = err.message || 'Unknown error';
     authorizationWasRevoked();
     if (isTaskPauseRequested(task.id, task.userId) && !isTaskCancellationRequested(task.id, task.userId)) {
@@ -1181,29 +1221,5 @@ export async function executeNextAutonomousTask(
       taskId: task.id,
       result: willRetry ? `Retry scheduled: ${settled.nextAttemptAt}` : `Failed: ${errorMsg}`,
     };
-  } finally {
-    clearInterval(leaseHeartbeat);
-    options.signal?.removeEventListener('abort', onParentCancelled);
-    voicePriority.signal.removeEventListener('abort', onVoicePriority);
-    voicePriority.dispose();
-    releaseDesktopControlLease();
-    try {
-      await persistAutonomousTaskFinalizations(io);
-    } catch (error) {
-      if (pendingCompletions.has(task.id)) {
-        io.to(taskRoom).emit('autonomous:task_failed', {
-          taskId: task.id, title: task.title, status: 'blocked', finalized: false, verified: false, blocked: true,
-          error: publicLanguage === 'zh'
-            ? CN_AUTONOMOUS_CUSTOMER_MESSAGES.finalizationPending
-            : 'The work finished, but its final state could not be saved. Saving must succeed before completion can be confirmed.',
-          timestamp: new Date().toISOString(),
-        });
-      }
-      throw error;
-    } finally {
-      // The live owner outlasts both its handler and terminal persistence.
-      membershipAuthority?.dispose();
-      releaseAutonomousTaskExecutor(task.id, running.leaseId);
-    }
-  }
+
 }

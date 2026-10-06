@@ -13,7 +13,7 @@ import { createChatAttachmentReference, mergeChatAttachmentReferences, MAX_CHAT_
 export const pagePath = 'src/components/AgentChatPage.tsx';
 
 export const pageAst = readSourceAst(pagePath);
-const viewAst = readSourceAst("src/components/agent_chat/AgentChatView.tsx");
+const viewAst = readSourceAst("src/components/agent_chat/chat_composer_view.tsx");
 
 export function sendButtonDisabled(dependencies: Record<string, unknown>) {
   dependencies = { conversationTransitionPending: false, ...dependencies };
@@ -76,6 +76,9 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
 
     attachmentConversationIdRef: { current: 'synthetic-conversation' }, activeChatViewDetachersRef: { current: new Map() },
     activeMediaGenerationRef: { current: null }, mediaGenerationText: {},
+    agentName: "Lumi", mediaGenerationArtifactsRef: { current: [] },
+    mediaGenerationArtifactValidationRef: { current: null },
+    setMediaGenerationArtifacts: noop, setMediaGeneration: noop,
     setIsTyping: noop, needsVisibleToolEvidence: () => false, clearChatProgress: noop, pushChatProgress: noop,
     setWorkflowStatus: noop, setWorkflowSteps: noop, persistActiveExecution: noop,
     clearPersistedExecution: noop, streamingMsgIdsRef: { current: new Map() }, streamingRawTextRef: { current: new Map() },
@@ -101,7 +104,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
   deps.ChatExecutionWatch = class extends ChatExecutionWatch {
     constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout }); }
   };
-  for (const name of ['dropRequestStream', 'resumeForegroundRequest', 'settleTrackedChatRequest', 'appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
+  for (const name of ['createChatStreamReceivers', 'dropRequestStream', 'resumeForegroundRequest', 'settleTrackedChatRequest', 'appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
     'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
     deps[name] = extract(pagePath, name, deps);
   }

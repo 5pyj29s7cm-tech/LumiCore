@@ -1,3 +1,4 @@
+import { extendTurnBindings } from "../cognition/turn_bindings";
 import { createToolLifecycleCallbacks } from "./tool_lifecycle";
 import { Server, Socket } from "socket.io";
 import { type AudioSession, getVoiceStateKey, type VoiceInputTiming } from "./voice/session";
@@ -95,25 +96,15 @@ import { extractSentiment } from "../cognition/sentiment";
 import { himTick } from "../personality/him";
 import { shouldAllowVoiceLocalFileWriteForTurn, buildVoiceReplyStyleOverlay } from "./voice_turn_policy";
 
-export async function processVoiceInput(
-  socket: Socket,
-  session: AudioSession,
-  userText: string,
-  llmGetters: LlmGetters,
-  sensoryFn: (uid: string) => any,
-  io: Server,
-  userReceivedAt = new Date().toISOString(),
-  voiceAuthorized = false,
-  inputTiming: VoiceInputTiming = {},
-  resources: ConversationResourceLifetime = {},
-): Promise<void> {
+async function prepareVoiceIdentityAndAdmission(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: ConversationResourceLifetime = {}) {
+
   if (!voiceAuthorized && !isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
-    return;
+    { return { terminal: true as const, context: undefined }; }
   }
 
   const turnAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
-  if (!turnAuthorization.isCurrent()) return;
+  if (!turnAuthorization.isCurrent()) { return { terminal: true as const, context: undefined }; }
   let transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
   if (transcriptExecutionGuard.action === 'clarify') {
     logger.warn(
@@ -195,7 +186,7 @@ export async function processVoiceInput(
       blocked: true,
       reason: 'persistence_unknown',
     });
-    return;
+    { return { terminal: true as const, context: undefined }; }
   }
   turnAuthorization.assertCurrent();
   const userObservedCompletion = isUserObservedTaskCompletion(
@@ -383,7 +374,7 @@ export async function processVoiceInput(
     },
   });
   if (!voiceAdmission) {
-    return;
+    { return { terminal: true as const, context: undefined }; }
   }
   voiceUserMessageId = voiceAdmission.persisted;
   resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal);
@@ -429,50 +420,114 @@ export async function processVoiceInput(
     logger.error('[Audio] Voice execution reservation could not be durably established:', error);
     publishRecordedAgent('agent:response', executionUnknownPayload);
     if (session.isActive) socket.emit('audio:status', { status: 'listening', requestId });
-    return;
+    { return { terminal: true as const, context: undefined }; }
   }
+  return { terminal: false as const, context: {
+    session: session as typeof session,
+    get transcriptExecutionGuard(): typeof transcriptExecutionGuard { return transcriptExecutionGuard; },
+    set transcriptExecutionGuard(value: typeof transcriptExecutionGuard) { transcriptExecutionGuard = value; },
+    actionIntentText: actionIntentText as typeof actionIntentText,
+    requestId: requestId as typeof requestId,
+    inputTiming: inputTiming as typeof inputTiming,
+    pipelineAbort: pipelineAbort as typeof pipelineAbort,
+    userText: userText as typeof userText,
+    executionReceipts: executionReceipts as typeof executionReceipts,
+    turnAuthorization: turnAuthorization as typeof turnAuthorization,
+    emitAgent: emitAgent as typeof emitAgent,
+    socket: socket as typeof socket,
+    get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
+    set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },
+    get pendingConfirmationPrompt(): typeof pendingConfirmationPrompt { return pendingConfirmationPrompt; },
+    set pendingConfirmationPrompt(value: typeof pendingConfirmationPrompt) { pendingConfirmationPrompt = value; },
+    voiceScope: voiceScope as typeof voiceScope,
+    sensoryFn: sensoryFn as typeof sensoryFn,
+    acceptedVoiceResolution: acceptedVoiceResolution as typeof acceptedVoiceResolution,
+    toolSecurityContext: toolSecurityContext as typeof toolSecurityContext,
+    conversationTurn: conversationTurn as typeof conversationTurn,
+    pendingAssistantOfferContext: pendingAssistantOfferContext as typeof pendingAssistantOfferContext,
+    userObservedCompletion: userObservedCompletion as typeof userObservedCompletion,
+    get voiceUserMessageId(): typeof voiceUserMessageId { return voiceUserMessageId; },
+    set voiceUserMessageId(value: typeof voiceUserMessageId) { voiceUserMessageId = value; },
+    get pendingConfirmation(): typeof pendingConfirmation { return pendingConfirmation; },
+    set pendingConfirmation(value: typeof pendingConfirmation) { pendingConfirmation = value; },
+    get interruptedMerge(): typeof interruptedMerge { return interruptedMerge; },
+    set interruptedMerge(value: typeof interruptedMerge) { interruptedMerge = value; },
+    normalizeAgentPayload: normalizeAgentPayload as typeof normalizeAgentPayload,
+    writeVoiceMessage: writeVoiceMessage as typeof writeVoiceMessage,
+    voiceTurnProvenance: voiceTurnProvenance as typeof voiceTurnProvenance,
+    executionScope: executionScope as typeof executionScope,
+    executionUnknownPayload: executionUnknownPayload as typeof executionUnknownPayload,
+    publishRecordedAgent: publishRecordedAgent as typeof publishRecordedAgent,
+    isCurrentTurn: isCurrentTurn as typeof isCurrentTurn,
+    get actionLeaseHeartbeat(): typeof actionLeaseHeartbeat { return actionLeaseHeartbeat; },
+    set actionLeaseHeartbeat(value: typeof actionLeaseHeartbeat) { actionLeaseHeartbeat = value; },
+    get confirmationScope(): typeof confirmationScope { return confirmationScope; },
+    set confirmationScope(value: typeof confirmationScope) { confirmationScope = value; },
+    llmGetters: llmGetters as typeof llmGetters,
+    io: io as typeof io,
+    confirmationResolution: confirmationResolution as typeof confirmationResolution,
+    confirmationChannelScope: confirmationChannelScope as typeof confirmationChannelScope,
+    correctionRequiresFreshConfirmation: correctionRequiresFreshConfirmation as typeof correctionRequiresFreshConfirmation,
+    get trustedVoiceConfirmationText(): typeof trustedVoiceConfirmationText { return trustedVoiceConfirmationText; },
+    set trustedVoiceConfirmationText(value: typeof trustedVoiceConfirmationText) { trustedVoiceConfirmationText = value; },
+    voiceStateKey: voiceStateKey as typeof voiceStateKey,
+    turnTtsSelection: turnTtsSelection as typeof turnTtsSelection,
+    persistVoiceUserMessage: persistVoiceUserMessage as typeof persistVoiceUserMessage,
+    resources: resources as typeof resources,
+    get finalAgentResponseDelivered(): typeof finalAgentResponseDelivered { return finalAgentResponseDelivered; },
+    set finalAgentResponseDelivered(value: typeof finalAgentResponseDelivered) { finalAgentResponseDelivered = value; },
+    get recentVoiceHistory(): typeof recentVoiceHistory { return recentVoiceHistory; },
+    set recentVoiceHistory(value: typeof recentVoiceHistory) { recentVoiceHistory = value; },
+    userObservedCompletionTask: userObservedCompletionTask as typeof userObservedCompletionTask,
+    modelTurnState: modelTurnState as typeof modelTurnState,
+    interruptedActivityResponse: interruptedActivityResponse as typeof interruptedActivityResponse,
+  } };
+}
 
-  session.pendingInterruptedTurn = null;
-  session.isSpeaking = false;
-  session.isProcessing = true;
-  session.isBackgroundWork = transcriptExecutionGuard.action !== 'clarify'
-    && !isCapabilityMetaQuestion(actionIntentText)
-    && hasExplicitToolIntent(actionIntentText);
-  session.activeWorkStatus = session.isBackgroundWork ? 'planning' : 'idle';
-  session.activeWorkStep = '';
-  session.activeWorkToolCalls = 0;
+async function prepareVoiceContextAndRouting(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceIdentityAndAdmission>>["context"]>) {
+
+
+  context.session.pendingInterruptedTurn = null;
+  context.session.isSpeaking = false;
+  context.session.isProcessing = true;
+  context.session.isBackgroundWork = context.transcriptExecutionGuard.action !== 'clarify'
+    && !isCapabilityMetaQuestion(context.actionIntentText)
+    && hasExplicitToolIntent(context.actionIntentText);
+  context.session.activeWorkStatus = context.session.isBackgroundWork ? 'planning' : 'idle';
+  context.session.activeWorkStep = '';
+  context.session.activeWorkToolCalls = 0;
   startVoiceLatencyTrace({
-    requestId,
-    provider: inputTiming.sttProvider,
-    domain: session.domain,
-    speechEndedAt: inputTiming.speechEndedAt,
-    asrFinalAt: inputTiming.asrFinalAt,
+    requestId: context.requestId,
+    provider: context.inputTiming.sttProvider,
+    domain: context.session.domain,
+    speechEndedAt: context.inputTiming.speechEndedAt,
+    asrFinalAt: context.inputTiming.asrFinalAt,
     pipelineStartedAt: Date.now(),
   });
-  session.pipelineAbortController = pipelineAbort;
-  session.activeTurnText = userText;
-  session.voiceTurnGeneration += 1;
-  session.activeTurnRequestId = requestId;
-  session.activeExecutionReceipts = executionReceipts;
-  session.activeRoutingText = actionIntentText;
-  turnAuthorization.assertCurrent();
-  emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
-  socket.emit("audio:status", { status: "thinking", requestId });
-  if (session.isBackgroundWork) {
-    emitVoiceWorkProgress(socket, session, requestId, 'planning', CN_VOICE_WORK_MESSAGES.workAccepted);
-    startVoiceWorkHeartbeat(socket, session, requestId);
+  context.session.pipelineAbortController = context.pipelineAbort;
+  context.session.activeTurnText = context.userText;
+  context.session.voiceTurnGeneration += 1;
+  context.session.activeTurnRequestId = context.requestId;
+  context.session.activeExecutionReceipts = context.executionReceipts;
+  context.session.activeRoutingText = context.actionIntentText;
+  context.turnAuthorization.assertCurrent();
+  context.emitAgent("agent:status", { status: "thinking", agentName: "Lumi" });
+  context.socket.emit("audio:status", { status: "thinking", requestId: context.requestId });
+  if (context.session.isBackgroundWork) {
+    emitVoiceWorkProgress(context.socket, context.session, context.requestId, 'planning', CN_VOICE_WORK_MESSAGES.workAccepted);
+    startVoiceWorkHeartbeat(context.socket, context.session, context.requestId);
   }
-  const routedUserText = [actionIntentText, actionContinuationBridge, pendingConfirmationPrompt].filter(Boolean).join('\n\n');
-  session.activeRoutingText = actionIntentText;
-  const requestedModeHint = detectRequestedOperationMode(userText);
-  const skipKnowledgeRetrieval = transcriptExecutionGuard.action === 'clarify'
+  const routedUserText = [context.actionIntentText, context.actionContinuationBridge, context.pendingConfirmationPrompt].filter(Boolean).join('\n\n');
+  context.session.activeRoutingText = context.actionIntentText;
+  const requestedModeHint = detectRequestedOperationMode(context.userText);
+  const skipKnowledgeRetrieval = context.transcriptExecutionGuard.action === 'clarify'
     || Boolean(requestedModeHint)
-    || isCapabilityMetaQuestion(userText)
-    || hasClientActionOnlyIntent(userText)
-    || isUserCorrectionOrExplanationQuestion(userText);
+    || isCapabilityMetaQuestion(context.userText)
+    || hasClientActionOnlyIntent(context.userText)
+    || isUserCorrectionOrExplanationQuestion(context.userText);
   const allowLocalFileWrites = shouldAllowVoiceLocalFileWriteForTurn(routedUserText);
   const localWriteIntentReason = allowLocalFileWrites
-    ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${userText.slice(0, 120)}"`
+    ? `Current voice request explicitly asked Lumi to generate/export a local deliverable: "${context.userText.slice(0, 120)}"`
     : undefined;
 
   // Cross-session context is read-only and prefetched in parallel. A slow
@@ -481,7 +536,7 @@ export async function processVoiceInput(
   const voiceRagKnowledge: string[] = [];
   let voiceOrganizationKnowledge = '';
   if (!skipKnowledgeRetrieval) {
-    const ragAgentIds = Array.from(new Set([session.agentId, 'lumi'].filter(Boolean)));
+    const ragAgentIds = Array.from(new Set([context.session.agentId, 'lumi'].filter(Boolean)));
     // Memory and knowledge are mutable user data. Read the authoritative
     // stores each turn; a second TTL cache can replay data the user deleted.
     const prefetch = await collectAnticipatoryContext([
@@ -490,12 +545,12 @@ export async function processVoiceInput(
         operation: 'read',
         sideEffectClass: 'none',
         run: () => queryMemories({
-          userId: session.userId,
+          userId: context.session.userId,
           query: routedUserText,
           limit: 5,
           minConfidence: 0.4,
-          domain: voiceScope.domain,
-          orgId: voiceScope.orgId,
+          domain: context.voiceScope.domain,
+          orgId: context.voiceScope.orgId,
           evidenceClasses: CONVERSATIONAL_MEMORY_EVIDENCE,
         }),
       },
@@ -503,19 +558,19 @@ export async function processVoiceInput(
         key: `rag:${ragAgentId}`,
         operation: 'read' as const,
         sideEffectClass: 'none' as const,
-        run: (signal?: AbortSignal) => retrieveChunks(session.userId, ragAgentId, routedUserText, 3, {
-          domain: voiceScope.domain,
-          orgId: voiceScope.domain === 'work' ? voiceScope.orgId : '',
+        run: (signal?: AbortSignal) => retrieveChunks(context.session.userId, ragAgentId, routedUserText, 3, {
+          domain: context.voiceScope.domain,
+          orgId: context.voiceScope.domain === 'work' ? context.voiceScope.orgId : '',
           signal,
         }),
       })),
-      ...(voiceScope.domain === 'work' && voiceScope.orgId ? [{
+      ...(context.voiceScope.domain === 'work' && context.voiceScope.orgId ? [{
         key: 'organization',
         operation: 'read' as const,
         sideEffectClass: 'none' as const,
-        run: (signal?: AbortSignal) => searchKnowledgeBase(voiceScope.orgId, routedUserText, { limit: 3, userId: session.userId, signal }),
+        run: (signal?: AbortSignal) => searchKnowledgeBase(context.voiceScope.orgId, routedUserText, { limit: 3, userId: context.session.userId, signal }),
       }] : []),
-    ], { deadlineMs: 1_300, signal: pipelineAbort.signal });
+    ], { deadlineMs: 1_300, signal: context.pipelineAbort.signal });
 
     voiceMemories = Array.isArray(prefetch.values.memory) ? prefetch.values.memory : [];
     for (const ragAgentId of ragAgentIds) {
@@ -541,12 +596,12 @@ export async function processVoiceInput(
     logger.info('[Audio] Skipped memory/RAG retrieval for deterministic or corrective voice turn');
   }
 
-  turnAuthorization.assertCurrent();
-  const sensoryAudio = sensoryFn(session.userId);
+  context.turnAuthorization.assertCurrent();
+  const sensoryAudio = context.sensoryFn(context.session.userId);
   const personalityConfig = personalityRegistry.getForUser(
-    session.personalityId || 'lumi',
-    session.userId,
-    voiceScope.orgId,
+    context.session.personalityId || 'lumi',
+    context.session.userId,
+    context.voiceScope.orgId,
   ) || personalityRegistry.getDefault();
 
   // ── Unified personality prompt + voice-specific overlay ──
@@ -562,13 +617,13 @@ export async function processVoiceInput(
   // made completed app commands compete with the current sentence.
   let topicContext = '';
   const wantsHistoricalVoiceContext = Boolean(
-    actionContinuationBridge
-    || isVoiceReferentialFollowup(userText)
+    context.actionContinuationBridge
+    || isVoiceReferentialFollowup(context.userText)
     // i18n-allow: history-recall recognition; not user-visible copy.
-    || /(?:刚才|刚刚|之前|上次|以前|我们聊过|还记得)|\b(?:earlier|before|previously|last time|we discussed|remember)\b/iu.test(userText),
+    || /(?:刚才|刚刚|之前|上次|以前|我们聊过|还记得)|\b(?:earlier|before|previously|last time|we discussed|remember)\b/iu.test(context.userText),
   );
   try {
-    const convForTopic = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    const convForTopic = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
     if (wantsHistoricalVoiceContext) {
       const summary = getConversationSummary(convForTopic.id);
       if (summary) topicContext += `\n\n## Conversation Context\n${summary}`;
@@ -579,23 +634,23 @@ export async function processVoiceInput(
 
   const operationMode = (() => {
     try {
-      return getStoredOperationMode(session.userId);
+      return getStoredOperationMode(context.session.userId);
     } catch {}
     return 'assistant';
   })();
   const requestedMode = requestedModeHint;
   const executionPipeline = buildLumiExecutionPipeline({
-    requestId, userText, acceptedResolution:acceptedVoiceResolution,
+    requestId: context.requestId, userText: context.userText, acceptedResolution:context.acceptedVoiceResolution,
     dispatch: {
-      userId: session.userId,
-      text: actionIntentText,
-      continuationContext: [actionContinuationBridge, pendingConfirmationPrompt]
+      userId: context.session.userId,
+      text: context.actionIntentText,
+      continuationContext: [context.actionContinuationBridge, context.pendingConfirmationPrompt]
         .filter(Boolean)
         .join('\n\n'),
       channel: 'voice',
       source: 'voice',
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
+      domain: context.voiceScope.domain,
+      orgId: context.voiceScope.orgId,
       surface: 'voice',
       operationMode,
       requestedMode,
@@ -603,12 +658,12 @@ export async function processVoiceInput(
     },
     registry: toolRegistry,
     personalityToolPolicy: personalityConfig.toolPolicy,
-    executionBoundary: toolSecurityContext.executionBoundary,
-    actionTaskState: conversationTurn.conversation.actionContinuationState,
-    persistedConversationHistory: getMessages(conversationTurn.conversation.id, TASK_TARGET_HISTORY_LIMIT)
-      .filter(record => record.requestId !== requestId),
-    pendingAssistantOfferContext,
-    traceText: actionIntentText,
+    executionBoundary: context.toolSecurityContext.executionBoundary,
+    actionTaskState: context.conversationTurn.conversation.actionContinuationState,
+    persistedConversationHistory: getMessages(context.conversationTurn.conversation.id, TASK_TARGET_HISTORY_LIMIT)
+      .filter(record => record.requestId !== context.requestId),
+    pendingAssistantOfferContext: context.pendingAssistantOfferContext,
+    traceText: context.actionIntentText,
     source: 'voice',
   });
   const turnDispatch = executionPipeline.turnIntent;
@@ -619,36 +674,36 @@ export async function processVoiceInput(
   const workSurfaceRoute = turnFlow.workSurfaceRoute;
   const visionIntent = turnFlow.visionIntent;
   const executionDecision = executionPipeline.execution;
-  const requestedToolSession = transcriptExecutionGuard.action === 'clarify'
+  const requestedToolSession = context.transcriptExecutionGuard.action === 'clarify'
     ? false
     : executionPipeline.executionRequested;
   const voiceInputTokenBudget = resolveVoiceModelInputBudget({
-    text: actionIntentText,
+    text: context.actionIntentText,
     allowToolUse: requestedToolSession,
   });
   const { systemPrompt: fullPersonalityPrompt } = personalityRegistry.buildSystemPrompt(
-    session.personalityId || 'lumi',
+    context.session.personalityId || 'lumi',
     {
       mode: requestedToolSession ? 'task' : 'chat',
       sensory: sensoryAudio,
       uiContext: 'voice',
     },
     {
-      userId: session.userId,
+      userId: context.session.userId,
       memories: voiceMemories.length > 0 ? voiceMemories : undefined,
       ragKnowledge: voiceRagKnowledge.length > 0 ? voiceRagKnowledge : undefined,
       userText: routedUserText,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
+      domain: context.voiceScope.domain,
+      orgId: context.voiceScope.orgId,
     },
   );
-  session.isBackgroundWork = requestedToolSession;
-  session.activeWorkStatus = requestedToolSession ? 'planning' : 'idle';
-  if (requestedToolSession && !session.workHeartbeatTimer) {
-    emitVoiceWorkProgress(socket, session, requestId, 'planning', CN_VOICE_WORK_MESSAGES.workAccepted);
-    startVoiceWorkHeartbeat(socket, session, requestId);
+  context.session.isBackgroundWork = requestedToolSession;
+  context.session.activeWorkStatus = requestedToolSession ? 'planning' : 'idle';
+  if (requestedToolSession && !context.session.workHeartbeatTimer) {
+    emitVoiceWorkProgress(context.socket, context.session, context.requestId, 'planning', CN_VOICE_WORK_MESSAGES.workAccepted);
+    startVoiceWorkHeartbeat(context.socket, context.session, context.requestId);
   } else if (!requestedToolSession) {
-    stopVoiceWorkHeartbeat(session);
+    stopVoiceWorkHeartbeat(context.session);
   }
   const intentTrace = executionPipeline.intentTrace;
   const capabilitySelection = executionPipeline.capabilityPlan;
@@ -666,25 +721,25 @@ export async function processVoiceInput(
   const toolSessionActive = requestedToolSession;
   const actionFollowupIntent = executionPipeline.actionFollowupIntent;
   const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
-    || transcriptExecutionGuard.action === 'clarify'
+    || context.transcriptExecutionGuard.action === 'clarify'
     ? { state: null, kind: 'conversation' as const }
-    : userObservedCompletion
+    : context.userObservedCompletion
     ? {
         state: null,
         kind: 'conversation' as const,
       }
     : prepareConversationActionExecution({
-        conversationId: conversationTurn.conversation.id,
-        userId: session.userId,
-        userText: actionIntentText,
-        requestId,
-        userMessageId: voiceUserMessageId,
+        conversationId: context.conversationTurn.conversation.id,
+        userId: context.session.userId,
+        userText: context.actionIntentText,
+        requestId: context.requestId,
+        userMessageId: context.voiceUserMessageId,
         toolPolicy: routedToolPolicy,
         followupIntent: actionFollowupIntent,
         forceTask: toolSessionActive,
         forceResume: Boolean(
-          pendingConfirmation
-          || interruptedMerge.usedInterruptedTurn
+          context.pendingConfirmation
+          || context.interruptedMerge.usedInterruptedTurn
           || executionPipeline.trustedActionContinuation
         ),
       });
@@ -692,11 +747,11 @@ export async function processVoiceInput(
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
       : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
-    stopVoiceWorkHeartbeat(session);
-    session.isBackgroundWork = false;
-    session.activeWorkStatus = 'idle';
-    session.activeWorkStep = '';
-    const bindingTerminalPayload = normalizeAgentPayload('agent:response', {
+    stopVoiceWorkHeartbeat(context.session);
+    context.session.isBackgroundWork = false;
+    context.session.activeWorkStatus = 'idle';
+    context.session.activeWorkStep = '';
+    const bindingTerminalPayload = context.normalizeAgentPayload('agent:response', {
       text: staleText,
       agentName: 'Lumi',
       source: 'voice_turn_binding',
@@ -706,44 +761,44 @@ export async function processVoiceInput(
     });
     const bindingCommitted = await commitChatTerminalBoundary({
       persistTerminalState: () => undefined,
-      persistAssistantMessage: () => writeVoiceMessage({
-        conversationId: conversationTurn.conversation.id,
+      persistAssistantMessage: () => context.writeVoiceMessage({
+        conversationId: context.conversationTurn.conversation.id,
         role: 'assistant',
         content: staleText,
         source: 'voice_turn_binding',
         cognitiveIntent: actionTaskExecution.diagnosticCode,
         llmWasCalled: false,
-        requestId,
-        ...(voiceTurnProvenance || {}),
+        requestId: context.requestId,
+        ...(context.voiceTurnProvenance || {}),
         taskIntent: 'conversation',
         skipActionContinuation: true,
       }),
       flush: flushDBOrThrow,
       persistTerminalReceipt: () => recordChatExecutionTerminalEventDurably(
-        executionScope,
-        requestId,
+        context.executionScope,
+        context.requestId,
         'agent:response',
         bindingTerminalPayload,
-        executionUnknownPayload,
+        context.executionUnknownPayload,
       ),
       persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
-        executionScope,
-        requestId,
-        executionUnknownPayload,
+        context.executionScope,
+        context.requestId,
+        context.executionUnknownPayload,
       ),
       publishCommitted: () => {
-        publishRecordedAgent('agent:response', bindingTerminalPayload);
-        socket.emit('chat:conversation_updated', {
-          conversationId: conversationTurn.conversation.id,
-          agentId: session.agentId,
+        context.publishRecordedAgent('agent:response', bindingTerminalPayload);
+        context.socket.emit('chat:conversation_updated', {
+          conversationId: context.conversationTurn.conversation.id,
+          agentId: context.session.agentId,
           source: 'voice_turn_binding',
-          requestId,
+          requestId: context.requestId,
         });
       },
-      publishUnknown: () => publishRecordedAgent('agent:response', executionUnknownPayload),
+      publishUnknown: () => context.publishRecordedAgent('agent:response', context.executionUnknownPayload),
       persistenceUnknownProjection: {
-        text: executionUnknownPayload.text,
-        completionFeedback: executionUnknownPayload.completionFeedback,
+        text: context.executionUnknownPayload.text,
+        completionFeedback: context.executionUnknownPayload.completionFeedback,
         reason: 'Terminal persistence outcome is unknown.',
       },
       onPersistenceError: error => {
@@ -753,10 +808,10 @@ export async function processVoiceInput(
     let bindingSpeechCounted = false;
     try {
       const ttsProvider = getTTSProvider();
-      if (bindingCommitted && ttsProvider && session.currentVoiceId && session.isActive) {
-        const ttsRoute = await resolveSingleVoiceTtsRoute(session, ttsProvider, session.currentVoiceId);
+      if (bindingCommitted && ttsProvider && context.session.currentVoiceId && context.session.isActive) {
+        const ttsRoute = await resolveSingleVoiceTtsRoute(context.session, ttsProvider, context.session.currentVoiceId);
         if (!ttsRoute) throw new Error(`Provider ${ttsProvider} has no compatible voice`);
-        session.isSpeaking = true;
+        context.session.isSpeaking = true;
         voiceTransportState.ttsSpeakingCount++;
         bindingSpeechCounted = true;
         const ttsResult = await synthesizeSpeech(staleText, {
@@ -766,246 +821,295 @@ export async function processVoiceInput(
           speechRate: ttsRoute.speechRate,
           pitch: ttsRoute.pitch,
           volume: ttsRoute.volume,
-          signal: pipelineAbort.signal,
+          signal: context.pipelineAbort.signal,
           allowFallback: false,
         });
-        if (isCurrentTurn()) {
-          socket.emit('audio:status', { status: 'speaking', requestId });
-          addEchoText(staleText, voiceEchoScope(session));
-          socket.emit('audio:response', {
+        if (context.isCurrentTurn()) {
+          context.socket.emit('audio:status', { status: 'speaking', requestId: context.requestId });
+          addEchoText(staleText, voiceEchoScope(context.session));
+          context.socket.emit('audio:response', {
             buffer: ttsResult.audioBuffer,
             format: ttsResult.format,
             volumeGain: computeVolumeGain(),
             lane: 'conversation',
-            requestId,
+            requestId: context.requestId,
           });
         }
       }
     } catch (bindingSpeechError: any) {
-      if (!isTtsCancellationError(bindingSpeechError, pipelineAbort.signal)) {
+      if (!isTtsCancellationError(bindingSpeechError, context.pipelineAbort.signal)) {
         logger.warn(`[Audio] Failed to speak stale/busy turn response: ${bindingSpeechError?.message || String(bindingSpeechError)}`);
-        emitVoiceTtsFailure(socket, requestId, 'conversation');
+        emitVoiceTtsFailure(context.socket, context.requestId, 'conversation');
       }
     } finally {
       if (bindingSpeechCounted) {
         const decay = () => { voiceTransportState.ttsSpeakingCount = Math.max(0, voiceTransportState.ttsSpeakingCount - 1); };
         const timer = setTimeout(decay, 3000);
-        session.ttsDecayTimers.push(timer);
+        context.session.ttsDecayTimers.push(timer);
       }
-      if (session.pipelineAbortController === pipelineAbort) {
-        session.isSpeaking = false;
-        session.isProcessing = false;
-        session.activeWorkToolCalls = 0;
-        session.activeTurnText = '';
-        session.activeRoutingText = '';
-        if (session.isActive) {
-          resetSilenceTimer(session, socket);
-          socket.emit('audio:status', { status: 'listening', requestId });
-          emitAgent('agent:status', { status: 'idle' });
+      if (context.session.pipelineAbortController === context.pipelineAbort) {
+        context.session.isSpeaking = false;
+        context.session.isProcessing = false;
+        context.session.activeWorkToolCalls = 0;
+        context.session.activeTurnText = '';
+        context.session.activeRoutingText = '';
+        if (context.session.isActive) {
+          resetSilenceTimer(context.session, context.socket);
+          context.socket.emit('audio:status', { status: 'listening', requestId: context.requestId });
+          context.emitAgent('agent:status', { status: 'idle' });
         }
-        session.pipelineAbortController = null;
-        session.activeTurnRequestId = null;
-        session.suppressedSpeechRequestIds.delete(requestId);
+        context.session.pipelineAbortController = null;
+        context.session.activeTurnRequestId = null;
+        context.session.suppressedSpeechRequestIds.delete(context.requestId);
       }
     }
-    return;
+    { return { terminal: true as const, context: undefined }; }
   }
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    actionTaskExecution: actionTaskExecution as typeof actionTaskExecution,
+    executionPipeline: executionPipeline as typeof executionPipeline,
+    toolSessionActive: toolSessionActive as typeof toolSessionActive,
+    executionDecision: executionDecision as typeof executionDecision,
+    operationMode: operationMode as typeof operationMode,
+    effectiveOperationMode: effectiveOperationMode as typeof effectiveOperationMode,
+    turnFlow: turnFlow as typeof turnFlow,
+    clientActionOnlyTurn: clientActionOnlyTurn as typeof clientActionOnlyTurn,
+    selfRepairTurn: selfRepairTurn as typeof selfRepairTurn,
+    capabilitySelection: capabilitySelection as typeof capabilitySelection,
+    intentTrace: intentTrace as typeof intentTrace,
+    visibleToolRoute: visibleToolRoute as typeof visibleToolRoute,
+    desktopExecutionPolicy: desktopExecutionPolicy as typeof desktopExecutionPolicy,
+    workSurfaceRoute: workSurfaceRoute as typeof workSurfaceRoute,
+    visionIntent: visionIntent as typeof visionIntent,
+    routedUserText: routedUserText as typeof routedUserText,
+    baseVoiceOverlay: baseVoiceOverlay as typeof baseVoiceOverlay,
+    turnDispatch: turnDispatch as typeof turnDispatch,
+    get voiceOrganizationKnowledge(): typeof voiceOrganizationKnowledge { return voiceOrganizationKnowledge; },
+    set voiceOrganizationKnowledge(value: typeof voiceOrganizationKnowledge) { voiceOrganizationKnowledge = value; },
+    fullPersonalityPrompt: fullPersonalityPrompt as typeof fullPersonalityPrompt,
+    get topicContext(): typeof topicContext { return topicContext; },
+    set topicContext(value: typeof topicContext) { topicContext = value; },
+    routedToolPolicy: routedToolPolicy as typeof routedToolPolicy,
+    allowLocalFileWrites: allowLocalFileWrites as typeof allowLocalFileWrites,
+    localWriteIntentReason: localWriteIntentReason as typeof localWriteIntentReason,
+    modelToolProjection: modelToolProjection as typeof modelToolProjection,
+    desktopExecutionTracker: desktopExecutionTracker as typeof desktopExecutionTracker,
+    actionFollowupIntent: actionFollowupIntent as typeof actionFollowupIntent,
+    voiceInputTokenBudget: voiceInputTokenBudget as typeof voiceInputTokenBudget,
+    requestedMode: requestedMode as typeof requestedMode,
+  }) };
+}
+
+async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceContextAndRouting>>["context"]>) {
+
   // Every accepted voice turn owns a durable request identity, including
   // conceptual/taskless turns. Without it, an exception in one of those paths
   // could release the voice/desktop lane without a terminal audit record.
   const foregroundRequestIdentity: VoiceForegroundRequestIdentity = Object.freeze({
-    conversationId: conversationTurn.conversation.id,
-    userId: session.userId,
-    requestId,
-    ...(actionTaskExecution.state?.taskId
-      ? { expectedTaskId: actionTaskExecution.state.taskId }
+    conversationId: context.conversationTurn.conversation.id,
+    userId: context.session.userId,
+    requestId: context.requestId,
+    ...(context.actionTaskExecution.state?.taskId
+      ? { expectedTaskId: context.actionTaskExecution.state.taskId }
       : {}),
   });
-  session.activeForegroundRequestIdentity = foregroundRequestIdentity;
-  executionReceipts.bindTask(foregroundRequestIdentity.expectedTaskId);
-  actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({
-    conversationId: conversationTurn.conversation.id,
-    userId: session.userId,
-    requestId,
-    abortController: pipelineAbort,
+  context.session.activeForegroundRequestIdentity = foregroundRequestIdentity;
+  context.executionReceipts.bindTask(foregroundRequestIdentity.expectedTaskId);
+  context.actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({
+    conversationId: context.conversationTurn.conversation.id,
+    userId: context.session.userId,
+    requestId: context.requestId,
+    abortController: context.pipelineAbort,
     onPersistenceUnknown: async () => {
       const recorded = await recordChatExecutionPersistenceUnknownDurably(
-        executionScope,
-        requestId,
-        executionUnknownPayload,
+        context.executionScope,
+        context.requestId,
+        context.executionUnknownPayload,
       );
-      if (recorded) publishRecordedAgent('agent:response', executionUnknownPayload);
+      if (recorded) context.publishRecordedAgent('agent:response', context.executionUnknownPayload);
     },
   });
-  if (actionTaskExecution.state?.taskId) {
-    executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
-      executionPipeline.executionPlan,
-      actionTaskExecution.state.taskId,
+  if (context.actionTaskExecution.state?.taskId) {
+    context.executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
+      context.executionPipeline.executionPlan,
+      context.actionTaskExecution.state.taskId,
     );
     persistConversationExecutionPlan({
-      conversationId: conversationTurn.conversation.id,
-      userId: session.userId,
-      plan: executionPipeline.executionPlan,
+      conversationId: context.conversationTurn.conversation.id,
+      userId: context.session.userId,
+      plan: context.executionPipeline.executionPlan,
     });
   }
-  if (actionTaskExecution.kind === 'new') {
+  if (context.actionTaskExecution.kind === 'new') {
     // A concrete replacement task invalidates an older confirmation boundary
     // on this exact voice channel.
-    await clearPendingConfirmationDurably(session.userId, confirmationScope);
+    await clearPendingConfirmationDurably(context.session.userId, context.confirmationScope);
   }
   if (
-    actionTaskExecution.state?.taskId
-    && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+    context.actionTaskExecution.state?.taskId
+    && (context.actionTaskExecution.kind === 'new' || context.actionTaskExecution.kind === 'resume')
   ) {
-    session.activeTaskConversationId = conversationTurn.conversation.id;
-    session.activeTaskRequestId = requestId;
-    session.activeTaskId = actionTaskExecution.state.taskId;
+    context.session.activeTaskConversationId = context.conversationTurn.conversation.id;
+    context.session.activeTaskRequestId = context.requestId;
+    context.session.activeTaskId = context.actionTaskExecution.state.taskId;
     try {
       updateConversationActionFocus({
-        taskId: actionTaskExecution.state.taskId,
-        userId: session.userId,
-        domain: session.domain,
-        orgId: session.orgId,
-        commitment: actionTaskExecution.state.goal,
-        nextAction: actionIntentText,
-        resumePoint: actionTaskExecution.kind === 'resume'
-          ? actionTaskExecution.state.assistantState || actionTaskExecution.state.latestBlocker || ''
+        taskId: context.actionTaskExecution.state.taskId,
+        userId: context.session.userId,
+        domain: context.session.domain,
+        orgId: context.session.orgId,
+        commitment: context.actionTaskExecution.state.goal,
+        nextAction: context.actionIntentText,
+        resumePoint: context.actionTaskExecution.kind === 'resume'
+          ? context.actionTaskExecution.state.assistantState || context.actionTaskExecution.state.latestBlocker || ''
           : '',
       });
     } catch {}
   }
-  const priorTaskRecords = actionTaskExecution.kind === 'resume'
-    ? taskReceiptsToRecords(actionTaskExecution.state?.receipts || [])
+  const priorTaskRecords = context.actionTaskExecution.kind === 'resume'
+    ? taskReceiptsToRecords(context.actionTaskExecution.state?.receipts || [])
     : [];
   const taskAwareRecords = (records: ToolExecutionRecord[]) => (
     coalesceToolExecutionRecords([...priorTaskRecords, ...records])
   );
   if (
-    toolSessionActive
-    && (actionTaskExecution.kind === 'new' || actionTaskExecution.kind === 'resume')
+    context.toolSessionActive
+    && (context.actionTaskExecution.kind === 'new' || context.actionTaskExecution.kind === 'resume')
   ) {
     setConversationActionExecutionStatus(
-      conversationTurn.conversation.id,
-      session.userId,
+      context.conversationTurn.conversation.id,
+      context.session.userId,
       'executing',
-      { requestId },
+      { requestId: context.requestId },
     );
   }
-  const remoteRestricted = toolSecurityContext.executionBoundary === 'remote_restricted';
-  logger.info(`[Audio] tool gate: ${executionDecision.allowToolUse ? 'authorized' : 'off'} session=${toolSessionActive ? 'active' : 'conversation'} mode=${operationMode} effective=${effectiveOperationMode} surface=${turnFlow.surface} clientActionOnly=${clientActionOnlyTurn} selfRepair=${selfRepairTurn} capabilityLane=${capabilitySelection.lane} trace=${intentTrace.summary} route=${visibleToolRoute ? `${visibleToolRoute.toolNames.length}/${visibleToolRoute.totalAvailable}` : 'none'}`);
-  emitAgent('agent:intent_trace', intentTrace);
-  if (visibleToolRoute) {
-    emitAgent('agent:tool_route', {
-      categories: visibleToolRoute.categories,
-      reasons: visibleToolRoute.reasons,
-      toolNames: visibleToolRoute.toolNames,
-      totalAvailable: visibleToolRoute.totalAvailable,
-      truncated: visibleToolRoute.truncated,
+  const remoteRestricted = context.toolSecurityContext.executionBoundary === 'remote_restricted';
+  logger.info(`[Audio] tool gate: ${context.executionDecision.allowToolUse ? 'authorized' : 'off'} session=${context.toolSessionActive ? 'active' : 'conversation'} mode=${context.operationMode} effective=${context.effectiveOperationMode} surface=${context.turnFlow.surface} clientActionOnly=${context.clientActionOnlyTurn} selfRepair=${context.selfRepairTurn} capabilityLane=${context.capabilitySelection.lane} trace=${context.intentTrace.summary} route=${context.visibleToolRoute ? `${context.visibleToolRoute.toolNames.length}/${context.visibleToolRoute.totalAvailable}` : 'none'}`);
+  context.emitAgent('agent:intent_trace', context.intentTrace);
+  if (context.visibleToolRoute) {
+    context.emitAgent('agent:tool_route', {
+      categories: context.visibleToolRoute.categories,
+      reasons: context.visibleToolRoute.reasons,
+      toolNames: context.visibleToolRoute.toolNames,
+      totalAvailable: context.visibleToolRoute.totalAvailable,
+      truncated: context.visibleToolRoute.truncated,
       source: 'voice',
-      trace: intentTrace,
+      trace: context.intentTrace,
     });
   }
   const visiblePreferredTools = restrictVisibleToolNamesForExecutionBoundary(
-    capabilitySelection.preferredTools,
-    toolSecurityContext.executionBoundary,
+    context.capabilitySelection.preferredTools,
+    context.toolSecurityContext.executionBoundary,
   );
-  emitAgent('agent:capability_selection', {
+  context.emitAgent('agent:capability_selection', {
     lane: remoteRestricted
       ? (visiblePreferredTools.length > 0 ? 'web_or_account' : 'conversation')
-      : capabilitySelection.lane,
+      : context.capabilitySelection.lane,
     primary: remoteRestricted
       ? (visiblePreferredTools[0] || 'conversation')
-      : capabilitySelection.primary,
+      : context.capabilitySelection.primary,
     reasons: remoteRestricted
       ? ['remote execution boundary applied']
-      : capabilitySelection.reasons,
+      : context.capabilitySelection.reasons,
     preferredTools: visiblePreferredTools,
     source: 'voice',
   });
-  if (desktopExecutionPolicy.applies && toolSecurityContext.executionBoundary !== 'remote_restricted') {
-    emitAgent('agent:desktop_execution_policy', {
-      reason: desktopExecutionPolicy.reason,
-      evidenceTools: desktopExecutionPolicy.evidenceTools,
-      actuationTools: desktopExecutionPolicy.actuationTools,
-      verificationTools: desktopExecutionPolicy.verificationTools,
+  if (context.desktopExecutionPolicy.applies && context.toolSecurityContext.executionBoundary !== 'remote_restricted') {
+    context.emitAgent('agent:desktop_execution_policy', {
+      reason: context.desktopExecutionPolicy.reason,
+      evidenceTools: context.desktopExecutionPolicy.evidenceTools,
+      actuationTools: context.desktopExecutionPolicy.actuationTools,
+      verificationTools: context.desktopExecutionPolicy.verificationTools,
       source: 'voice',
     });
   }
-  const needsExecutionPrompt = toolSessionActive && !remoteRestricted;
-  const opModeOverlay = remoteRestricted ? '' : '\n\n' + buildInteractionModeOverlay(turnFlow);
-  const workSurfaceOverlay = workSurfaceRoute.promptOverlay && needsExecutionPrompt ? '\n\n' + workSurfaceRoute.promptOverlay : '';
-  const visionRoutingOverlay = visionIntent && effectiveOperationMode !== 'meeting' && needsExecutionPrompt ? '\n\n' + buildVisionRoutingOverlay(session.userId, routedUserText) : '';
+  const needsExecutionPrompt = context.toolSessionActive && !remoteRestricted;
+  const opModeOverlay = remoteRestricted ? '' : '\n\n' + buildInteractionModeOverlay(context.turnFlow);
+  const workSurfaceOverlay = context.workSurfaceRoute.promptOverlay && needsExecutionPrompt ? '\n\n' + context.workSurfaceRoute.promptOverlay : '';
+  const visionRoutingOverlay = context.visionIntent && context.effectiveOperationMode !== 'meeting' && needsExecutionPrompt ? '\n\n' + buildVisionRoutingOverlay(context.session.userId, context.routedUserText) : '';
   const interactionOverlay = remoteRestricted
-    ? baseVoiceOverlay
-    : toolSessionActive
-      ? baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn has an authorized execution plan. Use only the declarations provided for this request, keep spoken progress brief, and do not claim completion without a verified receipt.'
-      : baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is conversational. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
+    ? context.baseVoiceOverlay
+    : context.toolSessionActive
+      ? context.baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn has an authorized execution plan. Use only the declarations provided for this request, keep spoken progress brief, and do not claim completion without a verified receipt.'
+      : context.baseVoiceOverlay + '\n\n## Interaction Mode\nThis turn is conversational. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.';
 
-  const clientSelfPrompt = !remoteRestricted && (needsExecutionPrompt || isCapabilityMetaQuestion(actionIntentText))
-    ? '\n\n' + formatCompactClientSelfPrompt(session.userId, voiceScope)
+  const clientSelfPrompt = !remoteRestricted && (needsExecutionPrompt || isCapabilityMetaQuestion(context.actionIntentText))
+    ? '\n\n' + formatCompactClientSelfPrompt(context.session.userId, context.voiceScope)
     : '';
-  const dispatchOverlay = needsExecutionPrompt ? '\n\n' + turnDispatch.promptOverlay : '';
+  const dispatchOverlay = needsExecutionPrompt ? '\n\n' + context.turnDispatch.promptOverlay : '';
   const executionOverlay = needsExecutionPrompt || remoteRestricted
     ? '\n\n' + executionBoundaryPromptOverlay(
-        executionDecision.promptOverlay,
-        toolSecurityContext.executionBoundary,
+        context.executionDecision.promptOverlay,
+        context.toolSecurityContext.executionBoundary,
       )
     : '';
-  const capabilitySelectionOverlay = needsExecutionPrompt ? '\n\n' + capabilitySelection.promptOverlay : '';
-  const desktopExecutionOverlay = desktopExecutionPolicy.promptOverlay && needsExecutionPrompt ? '\n\n' + desktopExecutionPolicy.promptOverlay : '';
-  const turnFlowOverlay = remoteRestricted ? '' : '\n\n' + turnFlow.promptOverlay;
+  const capabilitySelectionOverlay = needsExecutionPrompt ? '\n\n' + context.capabilitySelection.promptOverlay : '';
+  const desktopExecutionOverlay = context.desktopExecutionPolicy.promptOverlay && needsExecutionPrompt ? '\n\n' + context.desktopExecutionPolicy.promptOverlay : '';
+  const turnFlowOverlay = remoteRestricted ? '' : '\n\n' + context.turnFlow.promptOverlay;
   const runtimeCapabilityOverlay = needsExecutionPrompt
     ? '\n\n' + buildLumiRuntimeCapabilityContext({
-        userId: session.userId,
-        text: turnFlow.routeText,
-        flow: turnFlow,
+        userId: context.session.userId,
+        text: context.turnFlow.routeText,
+        flow: context.turnFlow,
         toolRegistry,
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
+        domain: context.voiceScope.domain,
+        orgId: context.voiceScope.orgId,
       })
     : '';
   const operatingKernelOverlay = needsExecutionPrompt
     ? '\n\n' + buildLumiOperatingKernelPrompt({
         channel: 'voice',
-        flow: turnFlow,
+        flow: context.turnFlow,
       })
     : '';
-  const actionContinuationOverlay = actionContinuationBridge ? `\n\n${actionContinuationBridge}` : '';
-  const pendingConfirmationOverlay = pendingConfirmationPrompt ? `\n\n${pendingConfirmationPrompt}` : '';
-  const organizationKnowledgeOverlay = voiceOrganizationKnowledge
-    ? `\n\n## Company Knowledge Base\n${voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
+  const actionContinuationOverlay = context.actionContinuationBridge ? `\n\n${context.actionContinuationBridge}` : '';
+  const pendingConfirmationOverlay = context.pendingConfirmationPrompt ? `\n\n${context.pendingConfirmationPrompt}` : '';
+  const organizationKnowledgeOverlay = context.voiceOrganizationKnowledge
+    ? `\n\n## Company Knowledge Base\n${context.voiceOrganizationKnowledge}\n\nUse this authorized organization knowledge when relevant and cite article titles when referencing it.`
     : '';
   const voiceSystemPrompt = restrictSystemPromptForExecutionBoundary(
-    fullPersonalityPrompt,
-    toolSecurityContext.executionBoundary,
-  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
+    context.fullPersonalityPrompt,
+    context.toolSecurityContext.executionBoundary,
+  ) + interactionOverlay + opModeOverlay + workSurfaceOverlay + visionRoutingOverlay + buildVoiceReplyStyleOverlay() + actionContinuationOverlay + pendingConfirmationOverlay + clientSelfPrompt + context.topicContext + organizationKnowledgeOverlay + dispatchOverlay + turnFlowOverlay + executionOverlay + capabilitySelectionOverlay + desktopExecutionOverlay + runtimeCapabilityOverlay + operatingKernelOverlay;
 
-  const userLLMPrefs = getScopedPreferredLLM(session.userId, voiceScope);
+  const userLLMPrefs = getScopedPreferredLLM(context.session.userId, context.voiceScope);
   const provider = userLLMPrefs.provider || 'deepseek';
   const voiceModel = userLLMPrefs.model;
   const reasoningRoutePolicy = {
     selectionMode: userLLMPrefs.selectionMode,
     fallbackCandidates: userLLMPrefs.fallbackCandidates,
     allowCloudFallback: userLLMPrefs.allowCloudFallback,
-    conversationId: conversationTurn.conversation.id,
-    requestId,
-    ...(voiceTurnProvenance || {}),
-    interactionId: requestId,
+    conversationId: context.conversationTurn.conversation.id,
+    requestId: context.requestId,
+    ...(context.voiceTurnProvenance || {}),
+    interactionId: context.requestId,
     source: 'voice',
   };
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    provider: provider as typeof provider,
+    voiceModel: voiceModel as typeof voiceModel,
+    reasoningRoutePolicy: reasoningRoutePolicy as typeof reasoningRoutePolicy,
+    foregroundRequestIdentity: foregroundRequestIdentity as typeof foregroundRequestIdentity,
+    taskAwareRecords: taskAwareRecords as typeof taskAwareRecords,
+    voiceSystemPrompt: voiceSystemPrompt as typeof voiceSystemPrompt,
+  }) };
+}
+
+async function prepareVoiceReceiptsAndTools(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceExecutionAndPrompt>>["context"]>) {
+
   const scheduleVoiceSummary = (conversationId: string) => {
-    if (!turnAuthorization.isCurrent()) return;
+    if (!context.turnAuthorization.isCurrent()) return;
     scheduleConversationSummary({
-      isAuthorized: turnAuthorization.isCurrent,
-      userId: session.userId,
-      provider,
-      model: voiceModel,
-      ...reasoningRoutePolicy,
+      isAuthorized: context.turnAuthorization.isCurrent,
+      userId: context.session.userId,
+      provider: context.provider,
+      model: context.voiceModel,
+      ...context.reasoningRoutePolicy,
       conversationId,
       source: 'voice_summary',
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      llmGetters,
+      domain: context.voiceScope.domain,
+      orgId: context.voiceScope.orgId,
+      llmGetters: context.llmGetters,
       log: {
         info: message => logger.info(message),
         warn: (message, error) => logger.warn(message, error),
@@ -1033,7 +1137,7 @@ export async function processVoiceInput(
     if (voiceAssistantMessagePersisted || !String(text || '').trim()) {
       return voiceAssistantMessageId;
     }
-    voiceAssistantMessageId = writeVoiceMessage({
+    voiceAssistantMessageId = context.writeVoiceMessage({
       conversationId,
       role: 'assistant',
       content: text,
@@ -1041,20 +1145,20 @@ export async function processVoiceInput(
       toolCalls: options.toolCalls?.length ? options.toolCalls : undefined,
       cognitiveIntent: options.cognitiveIntent || 'voice_response',
       llmWasCalled: options.llmWasCalled === true,
-      requestId,
-      ...(voiceTurnProvenance || {}),
-      taskIntent: toolSessionActive ? 'task' : 'conversation',
+      requestId: context.requestId,
+      ...(context.voiceTurnProvenance || {}),
+      taskIntent: context.toolSessionActive ? 'task' : 'conversation',
       terminalTaskDisposition: options.terminalTaskDisposition,
     });
     voiceAssistantMessagePersisted = true;
     return voiceAssistantMessageId;
   };
   const persistSidecarConversation = (conversationId: string) => {
-    const history = session.sidecarHistory.splice(0);
+    const history = context.session.sidecarHistory.splice(0);
     for (const [index, item] of history.entries()) {
       if (!item.persist) continue;
-      const sidecarRequestId = `${requestId}:sidecar:${index}`;
-      writeVoiceMessage({
+      const sidecarRequestId = `${context.requestId}:sidecar:${index}`;
+      context.writeVoiceMessage({
         conversationId,
         role: 'user',
         content: item.userText,
@@ -1066,7 +1170,7 @@ export async function processVoiceInput(
         requestId: sidecarRequestId,
         skipActionContinuation: true,
       });
-      writeVoiceMessage({
+      context.writeVoiceMessage({
         conversationId,
         role: 'assistant',
         content: item.responseText,
@@ -1081,126 +1185,8 @@ export async function processVoiceInput(
     }
   };
 
-  const commitVoiceTerminal = async <T = unknown>(input: {
-    text: string;
-    source: string;
-    blocked: boolean;
-    reason?: string;
-    cognitiveIntent: string;
-    llmWasCalled: boolean;
-    toolCalls?: ToolExecutionRecord[];
-    speechText?: string;
-    notification?: Record<string, any>;
-    persistTerminalState?: () => T;
-    publishAfter?: (terminalState: T | undefined) => void;
-  }): Promise<boolean> => {
-    // An interrupted/superseded turn no longer owns persistence, publication,
-    // or speech. Its cancellation terminal is committed by the transport
-    // handler against the captured request identity instead.
-    if (!isCurrentTurn()) return false;
-    if (actionLeaseHeartbeat?.isLeaseLost()) {
-      await actionLeaseHeartbeat.leaseLoss;
-      return false;
-    }
-    const terminalPayload = normalizeAgentPayload('agent:response', {
-      text: input.text,
-      agentName: 'Lumi',
-      source: input.source,
-      finalized: true,
-      blocked: input.blocked,
-      reason: input.reason || '',
-    });
-    const committed = await commitChatTerminalBoundary<T | undefined>({
-      persistTerminalState: () => {
-        if (!isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
-        persistVoiceUserMessage(input.cognitiveIntent);
-        persistSidecarConversation(conversationTurn.conversation.id);
-        return input.persistTerminalState?.();
-      },
-      persistAssistantMessage: () => {
-        if (!isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
-        // Keep the request lease alive until the assistant row has consumed
-        // the terminal tool receipts. Settling it first clears the pending
-        // turn and makes the durable transcript lose the very evidence needed
-        // to complete the task.
-        const assistantMessageId = persistVoiceAssistantMessage(
-          conversationTurn.conversation.id,
-          input.text,
-          {
-            toolCalls: input.toolCalls,
-            cognitiveIntent: input.cognitiveIntent,
-            llmWasCalled: input.llmWasCalled,
-            source: input.source,
-            terminalTaskDisposition: input.blocked && foregroundRequestIdentity?.expectedTaskId
-              ? {
-                  outcome: 'blocked',
-                  taskId: foregroundRequestIdentity.expectedTaskId,
-                  requestId,
-                  reason: input.reason || 'Voice terminal response reported a blocked execution.',
-                }
-              : undefined,
-          },
-        );
-        return assistantMessageId;
-      },
-      flush: flushDBOrThrow,
-      persistTerminalReceipt: () => persistAuthorizedTerminalReceipt({ scope: executionScope, requestId,
-        event: 'agent:response', payload: terminalPayload, unknownPayload: executionUnknownPayload,
-        authorization: turnAuthorization, channel: 'voice', flush: flushDBOrThrow }),
-      persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
-        executionScope,
-        requestId,
-        executionUnknownPayload,
-      ),
-      publishCommitted: terminalState => {
-        if (!turnAuthorization.isCurrent()) { publishRecordedAgent('agent:response', terminalPayload); return; }
-        if (!isCurrentTurn()) return;
-        if (input.notification) {
-          publishRecordedAgent(
-            'agent:notification',
-            normalizeAgentPayload('agent:notification', input.notification),
-          );
-        }
-        const executionWriteback = terminalState as any;
-        if (executionWriteback?.recorded) {
-          publishRecordedAgent(
-            'agent:task_execution_writeback',
-            normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
-          );
-        }
-        publishRecordedAgent('agent:response', terminalPayload);
-        socket.emit('chat:conversation_updated', {
-          conversationId: conversationTurn.conversation.id,
-          agentId: session.agentId,
-          source: input.source,
-          requestId,
-        });
-        scheduleVoiceSummary(conversationTurn.conversation.id);
-        if (String(input.speechText || '').trim()) queueFinalizedSpeech(input.speechText!);
-        input.publishAfter?.(terminalState);
-      },
-      publishUnknown: () => {
-        publishRecordedAgent('agent:response', executionUnknownPayload);
-      },
-      persistenceUnknownProjection: {
-        text: executionUnknownPayload.text,
-        completionFeedback: executionUnknownPayload.completionFeedback,
-        reason: 'Terminal persistence outcome is unknown.',
-      },
-      onPersistenceError: error => {
-        logger.error(`[Audio] ${input.source} terminal persistence failed:`, error);
-      },
-    });
-    if (committed && !terminalPayload.blocked && turnAuthorization.isCurrent()) scheduleTurnMemory({
-      userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, userText,
-      channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
-      agentId: session.agentId, authorization: turnAuthorization, llmGetters,
-    });
-    return committed;
-  };
-
-  const maxIterations = toolSessionActive
-    ? Math.max(1, routedToolPolicy.maxIterations || 1)
+  const maxIterations = context.toolSessionActive
+    ? Math.max(1, context.routedToolPolicy.maxIterations || 1)
     : 1;
   const toolResultPreviewLimit = 500;
   const formatToolResultForUi = (value?: string) => value?.slice(0, toolResultPreviewLimit) || '';
@@ -1211,18 +1197,18 @@ export async function processVoiceInput(
     result?: string;
     error?: string;
   }) => {
-    if (session.isBackgroundWork) {
-      session.activeWorkStatus = 'executing';
-      session.activeWorkStep = payload.error !== undefined
+    if (context.session.isBackgroundWork) {
+      context.session.activeWorkStatus = 'executing';
+      context.session.activeWorkStep = payload.error !== undefined
         ? `${payload.name} failed`
         : payload.result !== undefined
           ? `${payload.name} completed`
           : `Running ${payload.name}`;
-      if (payload.result !== undefined || payload.error !== undefined) session.activeWorkToolCalls++;
+      if (payload.result !== undefined || payload.error !== undefined) context.session.activeWorkToolCalls++;
       emitVoiceWorkProgress(
-        socket,
-        session,
-        requestId,
+        context.socket,
+        context.session,
+        context.requestId,
         payload.error !== undefined
           ? 'blocked'
           : payload.result !== undefined
@@ -1231,110 +1217,110 @@ export async function processVoiceInput(
       );
     }
     const normalized = { ...payload, args: payload.arguments, source: 'voice' };
-    emitAgent("agent:tool_call", normalized);
-    emitAgent("agent:tool", normalized);
+    context.emitAgent("agent:tool_call", normalized);
+    context.emitAgent("agent:tool", normalized);
   };
 
   const receiptObserver = createConversationReceiptObserver({
-    userId: session.userId, conversationId: conversationTurn.conversation.id,
-    taskId: actionTaskExecution.state?.taskId, requestId, turnRowId: actionTaskExecution.turnRowId, ...voiceScope,
-  }, turnAuthorization.isCurrent);
+    userId: context.session.userId, conversationId: context.conversationTurn.conversation.id,
+    taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId, turnRowId: context.actionTaskExecution.turnRowId, ...context.voiceScope,
+  }, context.turnAuthorization.isCurrent);
   const desktopRelay = createDesktopRelay({
-    io,
-    userId: session.userId,
-    domain: voiceScope.domain,
-    orgId: voiceScope.orgId,
+    io: context.io,
+    userId: context.session.userId,
+    domain: context.voiceScope.domain,
+    orgId: context.voiceScope.orgId,
     source: 'voice',
-    taskId: actionTaskExecution.state?.taskId,
-    requestId,
-    requestSocket: socket,
+    taskId: context.actionTaskExecution.state?.taskId,
+    requestId: context.requestId,
+    requestSocket: context.socket,
     emitToolLifecycle,
     onLateResult: receiptObserver.onDesktopLateResult,
     formatResultForLifecycle: formatToolResultForUi,
     cancelOnRequestSocketDisconnect: true,
-    signal: pipelineAbort.signal,
+    signal: context.pipelineAbort.signal,
     leaseTimeoutMs: VOICE_DESKTOP_LEASE_WAIT_MS,
   });
 
   const runtimeOwnedDeterministicRecoveryCall = buildDurableTaskDeterministicToolRecoveryCall(
-    actionTaskExecution.state,
-    requestId,
-    confirmationResolution.revokedCorrectionBasis,
+    context.actionTaskExecution.state,
+    context.requestId,
+    context.confirmationResolution.revokedCorrectionBasis,
   );
   let pendingConfirmationCreatedThisTurn: Awaited<ReturnType<typeof recordPendingConfirmationDurably>> | null = null;
   const requestConfirmation = createTurnConfirmation({
-    userId: session.userId, source: 'voice', requestId, actionIntent: actionIntentText,
-    autoApprovalIntent: routedUserText,
-    pending: pendingConfirmation,
-    consumeScope: () => confirmationScope,
-    proposalScope: () => ({ ...confirmationChannelScope, taskId: actionTaskExecution.state?.taskId }),
-    correctionRequiresFreshConfirmation,
-    exactWriteCorrection: correctionRequiresFreshConfirmation && confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file',
+    userId: context.session.userId, source: 'voice', requestId: context.requestId, actionIntent: context.actionIntentText,
+    autoApprovalIntent: context.routedUserText,
+    pending: context.pendingConfirmation,
+    consumeScope: () => context.confirmationScope,
+    proposalScope: () => ({ ...context.confirmationChannelScope, taskId: context.actionTaskExecution.state?.taskId }),
+    correctionRequiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
+    exactWriteCorrection: context.correctionRequiresFreshConfirmation && context.confirmationResolution.revokedCorrectionBasis?.toolName === 'write_file',
     recoveryCall: () => runtimeOwnedDeterministicRecoveryCall,
-    isCancelled: () => pipelineAbort.signal.aborted,
+    isCancelled: () => context.pipelineAbort.signal.aborted,
     onPending: pending => {
       pendingConfirmationCreatedThisTurn = pending;
-      trustedVoiceConfirmationText = formatPendingConfirmationRequest(pending);
-      setConversationActionExecutionStatus(conversationTurn.conversation.id, session.userId, 'waiting_confirmation', {
-        assistantState: trustedVoiceConfirmationText, requestId,
+      context.trustedVoiceConfirmationText = formatPendingConfirmationRequest(pending);
+      setConversationActionExecutionStatus(context.conversationTurn.conversation.id, context.session.userId, 'waiting_confirmation', {
+        assistantState: context.trustedVoiceConfirmationText, requestId: context.requestId,
       });
     },
   });
 
   const toolContext = {
-    ...toolSecurityContext,
-    currentTurnExecutionRequested: executionPipeline.executionRequested,
-    resolutionId: executionPipeline.resolution.id,
-    trustedActionContinuation: executionPipeline.trustedActionContinuation,
-    acceptedTaskTarget: turnFlow.acceptedTaskTarget,
-            currentAppTarget: turnFlow.currentAppEditTarget,
-    userId: session.userId,
-    taskId: actionTaskExecution.state?.taskId,
-    conversationId: conversationTurn.conversation.id,
-    turnId: requestId,
-    turnRowId: actionTaskExecution.turnRowId,
-    requestId,
-    domain: voiceScope.domain,
-    orgId: voiceScope.orgId,
+    ...context.toolSecurityContext,
+    currentTurnExecutionRequested: context.executionPipeline.executionRequested,
+    resolutionId: context.executionPipeline.resolution.id,
+    trustedActionContinuation: context.executionPipeline.trustedActionContinuation,
+    acceptedTaskTarget: context.turnFlow.acceptedTaskTarget,
+            currentAppTarget: context.turnFlow.currentAppEditTarget,
+    userId: context.session.userId,
+    taskId: context.actionTaskExecution.state?.taskId,
+    conversationId: context.conversationTurn.conversation.id,
+    turnId: context.requestId,
+    turnRowId: context.actionTaskExecution.turnRowId,
+    requestId: context.requestId,
+    domain: context.voiceScope.domain,
+    orgId: context.voiceScope.orgId,
     desktopRelay,
-    llmGetters,
-    taskRevision: actionTaskExecution.state?.revision,
+    llmGetters: context.llmGetters,
+    taskRevision: context.actionTaskExecution.state?.revision,
     source: 'voice',
     supervisedExternalCommits: true,
-    allowLocalFileWrites,
-    localWriteIntentReason,
-    actionIntent: actionIntentText,
-    routedTaskText: turnFlow.routeText,
-    ...(effectiveOperationMode === 'assistant' || effectiveOperationMode === 'autonomous' || clientActionOnlyTurn || selfRepairTurn ? { requestConfirmation } : {}),
-    executionSignal: pipelineAbort?.signal,
-    isCancelled: () => !isCurrentTurn(),
-    onToolStart: executionReceipts.onToolStart,
+    allowLocalFileWrites: context.allowLocalFileWrites,
+    localWriteIntentReason: context.localWriteIntentReason,
+    actionIntent: context.actionIntentText,
+    routedTaskText: context.turnFlow.routeText,
+    ...(context.effectiveOperationMode === 'assistant' || context.effectiveOperationMode === 'autonomous' || context.clientActionOnlyTurn || context.selfRepairTurn ? { requestConfirmation } : {}),
+    executionSignal: context.pipelineAbort?.signal,
+    isCancelled: () => !context.isCurrentTurn(),
+    onToolStart: context.executionReceipts.onToolStart,
     onToolRecord: (record: ToolExecutionRecord) => {
-      executionReceipts.onToolRecord(record);
+      context.executionReceipts.onToolRecord(record);
       receiptObserver.onToolRecord(record);
     },
-    onToolFinished: executionReceipts.onToolFinished,
+    onToolFinished: context.executionReceipts.onToolFinished,
     onProgress: (step: string) => {
-      if (!isCurrentTurn()) return;
-      if (session.isBackgroundWork && step.trim()) {
-        session.activeWorkStatus = 'executing';
-        session.activeWorkStep = step.trim().slice(0, 160);
-        emitVoiceWorkProgress(socket, session, requestId, 'executing');
+      if (!context.isCurrentTurn()) return;
+      if (context.session.isBackgroundWork && step.trim()) {
+        context.session.activeWorkStatus = 'executing';
+        context.session.activeWorkStep = step.trim().slice(0, 160);
+        emitVoiceWorkProgress(context.socket, context.session, context.requestId, 'executing');
       }
       if (shouldForwardPreFinalizationProgress(step)) {
-        emitAgent("agent:progress", { text: step, agentName: "Lumi" });
+        context.emitAgent("agent:progress", { text: step, agentName: "Lumi" });
       }
     },
-    toolPolicy: routedToolPolicy,
-    modelToolProjection,
-    desktopExecutionTracker,
+    toolPolicy: context.routedToolPolicy,
+    modelToolProjection: context.modelToolProjection,
+    desktopExecutionTracker: context.desktopExecutionTracker,
   };
   const observeVoiceTools = (onRecord?: (record: ToolExecutionRecord) => void) => createToolLifecycleCallbacks({
     emit: emitToolLifecycle, correlationPrefix: 'voice-tool', formatResult: formatToolResultForUi,
-    isCurrent: isCurrentTurn, onStart: toolContext.onToolStart, onRecord,
+    isCurrent: context.isCurrentTurn, onStart: toolContext.onToolStart, onRecord,
   });
   const turnEmotionState = (() => {
-    try { return loadEmotionalState(voiceStateKey); } catch { return undefined; }
+    try { return loadEmotionalState(context.voiceStateKey); } catch { return undefined; }
   })();
   let responseText = '';
   let completionGuard: LLMResult['completionGuard'];
@@ -1348,20 +1334,20 @@ export async function processVoiceInput(
       logLabel?: string;
     } = {},
   ) => {
-    if (!turnAuthorization.isCurrent()) return;
+    if (!context.turnAuthorization.isCurrent()) return;
     persistLumiPostTurnLearning(
       {
-        userId: session.userId,
-        userText,
+        userId: context.session.userId,
+        userText: context.userText,
         defaultChannel: 'voice',
-        flow: turnFlow,
+        flow: context.turnFlow,
         getToolNames: () => toolRegistry.getToolDeclarations({
-          context: { userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId, source: 'voice' },
+          context: { userId: context.session.userId, domain: context.voiceScope.domain, orgId: context.voiceScope.orgId, source: 'voice' },
         }).map(declaration => declaration.function.name),
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
+        domain: context.voiceScope.domain,
+        orgId: context.voiceScope.orgId,
         defaultSourceInteractionId: `voice_${Date.now()}`,
-        agentId: session.agentId,
+        agentId: context.session.agentId,
         log: { info: logger.info.bind(logger), warn: logger.warn.bind(logger) },
       },
       assistantText,
@@ -1384,15 +1370,15 @@ export async function processVoiceInput(
     // only a ledger produced by this turn is eligible for task writeback.
     if (currentToolRecords.length === 0) return null;
     const executionWriteback = persistWorkTakeoverTurnExecution({
-      userId: session.userId,
-      userText: actionIntentText,
+      userId: context.session.userId,
+      userText: context.actionIntentText,
       assistantText,
       source: options.source || 'voice',
       interactionId: options.sourceInteractionId || `voice_${Date.now()}`,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      flow: turnFlow,
-      capabilitySelection,
+      domain: context.voiceScope.domain,
+      orgId: context.voiceScope.orgId,
+      flow: context.turnFlow,
+      capabilitySelection: context.capabilitySelection,
       toolRecords: currentToolRecords,
       finalizationBlocked: options.finalizationBlocked === true,
       assistantTextTrusted: options.assistantTextTrusted
@@ -1403,14 +1389,44 @@ export async function processVoiceInput(
   };
   const ttsPromises: Promise<void>[] = [];
   const deferCompletionSpeech = shouldDeferModelOutputUntilFinalized({
-    taskText: actionIntentText,
-    allowToolUse: toolSessionActive,
-    flow: turnFlow,
+    taskText: context.actionIntentText,
+    allowToolUse: context.toolSessionActive,
+    flow: context.turnFlow,
   });
   const modelTextGate = createPreFinalizationTextGate();
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    turnEmotionState: turnEmotionState as typeof turnEmotionState,
+    deferCompletionSpeech: deferCompletionSpeech as typeof deferCompletionSpeech,
+    get responseText(): typeof responseText { return responseText; },
+    set responseText(value: typeof responseText) { responseText = value; },
+    ttsPromises: ttsPromises as typeof ttsPromises,
+    get pendingConfirmationCreatedThisTurn(): typeof pendingConfirmationCreatedThisTurn { return pendingConfirmationCreatedThisTurn; },
+    set pendingConfirmationCreatedThisTurn(value: typeof pendingConfirmationCreatedThisTurn) { pendingConfirmationCreatedThisTurn = value; },
+    persistSidecarConversation: persistSidecarConversation as typeof persistSidecarConversation,
+    persistVoiceAssistantMessage: persistVoiceAssistantMessage as typeof persistVoiceAssistantMessage,
+    scheduleVoiceSummary: scheduleVoiceSummary as typeof scheduleVoiceSummary,
+    desktopRelay: desktopRelay as typeof desktopRelay,
+    emitToolLifecycle: emitToolLifecycle as typeof emitToolLifecycle,
+    toolContext: toolContext as typeof toolContext,
+    formatToolResultForUi: formatToolResultForUi as typeof formatToolResultForUi,
+    observeVoiceTools: observeVoiceTools as typeof observeVoiceTools,
+    get completionGuard(): typeof completionGuard { return completionGuard; },
+    set completionGuard(value: typeof completionGuard) { completionGuard = value; },
+    persistVoiceLearning: persistVoiceLearning as typeof persistVoiceLearning,
+    persistVoiceTakeoverExecution: persistVoiceTakeoverExecution as typeof persistVoiceTakeoverExecution,
+    modelTextGate: modelTextGate as typeof modelTextGate,
+    get toolResults(): typeof toolResults { return toolResults; },
+    set toolResults(value: typeof toolResults) { toolResults = value; },
+    maxIterations: maxIterations as typeof maxIterations,
+    runtimeOwnedDeterministicRecoveryCall: runtimeOwnedDeterministicRecoveryCall as typeof runtimeOwnedDeterministicRecoveryCall,
+  }) };
+}
+
+async function prepareVoiceSpeech(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceReceiptsAndTools>>["context"]>) {
+
 
   // ── Generation gating: only latest command gets TTS output ──
-  session.bgGeneration++;
+  context.session.bgGeneration++;
   let turnSpeechGeneration = -1;
   let turnSpeechAbort: AbortController | null = null;
   let ttsQueue: Promise<void> = Promise.resolve();
@@ -1426,16 +1442,16 @@ export async function processVoiceInput(
     requestedVoiceId: string | null,
   ): Promise<LockedVoiceTurnTtsRoute | null> => {
     const voiceResolution = await resolveVoiceForProvider(
-      voiceProfileScope(session.userId, session.domain, session.orgId),
+      voiceProfileScope(context.session.userId, context.session.domain, context.session.orgId),
       provider,
       requestedVoiceId,
     );
     if (!voiceResolution.voiceId) return null;
-    const emotionVoice = resolveEmotionVoice(voiceResolution.voiceId, turnEmotionState);
+    const emotionVoice = resolveEmotionVoice(voiceResolution.voiceId, context.turnEmotionState);
     return lockVoiceTurnTtsRoute({
       provider,
       voiceId: emotionVoice.voiceId,
-      ...(provider === 'relay' && turnTtsSelection.model ? { model: turnTtsSelection.model } : {}),
+      ...(provider === 'relay' && context.turnTtsSelection.model ? { model: context.turnTtsSelection.model } : {}),
       ...(emotionVoice.speechRate !== undefined ? { speechRate: emotionVoice.speechRate } : {}),
       ...(emotionVoice.pitch !== undefined ? { pitch: emotionVoice.pitch } : {}),
       ...(emotionVoice.volume !== undefined ? { volume: emotionVoice.volume } : {}),
@@ -1446,26 +1462,26 @@ export async function processVoiceInput(
     if (lockedTurnTtsRoute !== undefined) return Promise.resolve(lockedTurnTtsRoute);
     if (lockedTurnTtsRoutePromise) return lockedTurnTtsRoutePromise;
     lockedTurnTtsRoutePromise = (async () => {
-      if (!turnTtsSelection.provider || !turnTtsSelection.requestedVoiceId) return null;
+      if (!context.turnTtsSelection.provider || !context.turnTtsSelection.requestedVoiceId) return null;
       const route = await resolveLockedRoute(
-        turnTtsSelection.provider,
-        turnTtsSelection.requestedVoiceId,
+        context.turnTtsSelection.provider,
+        context.turnTtsSelection.requestedVoiceId,
       );
       // Reconcile the server selection for future turns, but never overwrite a
       // newer explicit switch that arrived while this route was resolving.
       if (
         route
-        && route.voiceId !== turnTtsSelection.requestedVoiceId
-        && session.voiceSwitchGeneration === turnTtsSelection.switchGeneration
-        && session.currentVoiceId === turnTtsSelection.requestedVoiceId
+        && route.voiceId !== context.turnTtsSelection.requestedVoiceId
+        && context.session.voiceSwitchGeneration === context.turnTtsSelection.switchGeneration
+        && context.session.currentVoiceId === context.turnTtsSelection.requestedVoiceId
       ) {
-        const previousVoiceId = session.currentVoiceId;
-        session.currentVoiceId = route.voiceId;
-        session.voiceSwitchGeneration += 1;
-        socket.emit('audio:voice_changed', {
+        const previousVoiceId = context.session.currentVoiceId;
+        context.session.currentVoiceId = route.voiceId;
+        context.session.voiceSwitchGeneration += 1;
+        context.socket.emit('audio:voice_changed', {
           voiceId: route.voiceId,
           previousVoiceId,
-          sessionId: session.sessionId,
+          sessionId: context.session.sessionId,
           provider: route.provider,
           fallback: true,
           reason: 'provider_compatibility',
@@ -1499,12 +1515,12 @@ export async function processVoiceInput(
     if (!fallbackProvider || fallbackProvider === failedRoute.provider) return null;
     const fallbackRoute = await resolveLockedRoute(
       fallbackProvider,
-      turnTtsSelection.requestedVoiceId,
+      context.turnTtsSelection.requestedVoiceId,
     );
     if (!fallbackRoute) return null;
     lockedTurnTtsRoute = fallbackRoute;
     logger.warn(
-      `[Audio TTS] Primary route failed before playback; locked request=${requestId} fallback=${fallbackRoute.provider} voice=${fallbackRoute.voiceId}`,
+      `[Audio TTS] Primary route failed before playback; locked request=${context.requestId} fallback=${fallbackRoute.provider} voice=${fallbackRoute.voiceId}`,
     );
     return fallbackRoute;
   };
@@ -1514,7 +1530,7 @@ export async function processVoiceInput(
     route: LockedVoiceTurnTtsRoute,
     signal: AbortSignal,
   ) => {
-    turnAuthorization.assertCurrent();
+    context.turnAuthorization.assertCurrent();
     const ttsRequestedAt = Date.now();
     const result = await synthesizeSpeech(text, {
       provider: route.provider,
@@ -1540,14 +1556,14 @@ export async function processVoiceInput(
     if (
       !turnSpeechAbort
       || turnSpeechAbort.signal.aborted
-      || turnSpeechGeneration !== session.bgGeneration
+      || turnSpeechGeneration !== context.session.bgGeneration
     ) {
-      if (session.ttsAbortController && session.ttsAbortController !== turnSpeechAbort) {
-        session.ttsAbortController.abort();
+      if (context.session.ttsAbortController && context.session.ttsAbortController !== turnSpeechAbort) {
+        context.session.ttsAbortController.abort();
       }
       turnSpeechAbort = new AbortController();
-      turnSpeechGeneration = session.bgGeneration;
-      session.ttsAbortController = turnSpeechAbort;
+      turnSpeechGeneration = context.session.bgGeneration;
+      context.session.ttsAbortController = turnSpeechAbort;
     }
     return { controller: turnSpeechAbort, generation: turnSpeechGeneration };
   };
@@ -1579,16 +1595,16 @@ export async function processVoiceInput(
   const maybeStartSpeculativeSpeech = () => {
     if (
       speculativeSpeech
-      || toolSessionActive
-      || deferCompletionSpeech
-      || !turnTtsSelection.provider
-      || !turnTtsSelection.requestedVoiceId
-      || pipelineAbort?.signal.aborted
+      || context.toolSessionActive
+      || context.deferCompletionSpeech
+      || !context.turnTtsSelection.provider
+      || !context.turnTtsSelection.requestedVoiceId
+      || context.pipelineAbort?.signal.aborted
     ) return;
-    const firstSentence = extractFirstCompleteSpeechSentence(responseText);
+    const firstSentence = extractFirstCompleteSpeechSentence(context.responseText);
     if (!firstSentence) return;
     const controller = new AbortController();
-    pipelineAbort?.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    context.pipelineAbort?.signal.addEventListener('abort', () => controller.abort(), { once: true });
     const promise = getLockedTurnTtsRoute()
       .then(async route => {
         if (!route) return { error: new Error('No compatible TTS route is available') };
@@ -1630,19 +1646,19 @@ export async function processVoiceInput(
 
   const flushSentence = (sentence: string): Promise<number> => {
     const txt = sentence.trim();
-    if (!txt || txt.length <= 1 || turnTtsUnavailable || !session.isActive || session.suppressedSpeechRequestIds.has(requestId)) return Promise.resolve(0);
+    if (!txt || txt.length <= 1 || turnTtsUnavailable || !context.session.isActive || context.session.suppressedSpeechRequestIds.has(context.requestId)) return Promise.resolve(0);
     if (!/[a-zA-Z一-鿿㐀-䶿\d]/.test(txt)) return Promise.resolve(0);
     const speech = ensureTurnSpeechController();
-    if (!isCurrentTurn() || speech.controller.signal.aborted) return Promise.resolve(0);
+    if (!context.isCurrentTurn() || speech.controller.signal.aborted) return Promise.resolve(0);
     let resolvePlayback: (value: number) => void = () => {};
     const playbackDone = new Promise<number>(resolve => { resolvePlayback = resolve; });
     // Serialize TTS to avoid 429 rate limits
     ttsQueue = ttsQueue.then(async () => {
-      if (!isCurrentTurn() || speech.controller.signal.aborted) {
+      if (!context.isCurrentTurn() || speech.controller.signal.aborted) {
         resolvePlayback(0);
         return;
       }
-      if (session.bgGeneration !== speech.generation) {
+      if (context.session.bgGeneration !== speech.generation) {
         resolvePlayback(0);
         return;
       }
@@ -1650,14 +1666,14 @@ export async function processVoiceInput(
         resolvePlayback(0);
         return;
       }
-      session.isSpeaking = true;
+      context.session.isSpeaking = true;
       voiceTransportState.ttsSpeakingCount++;
       try {
         const initialRoute = await getLockedTurnTtsRoute();
         if (!initialRoute) {
           turnTtsUnavailable = true;
           logger.warn('[Audio TTS] No configured healthy provider; delivering text and reporting the unavailable audio lane');
-          emitVoiceTtsFailure(socket, requestId, 'conversation');
+          emitVoiceTtsFailure(context.socket, context.requestId, 'conversation');
           resolvePlayback(0);
           return;
         }
@@ -1681,24 +1697,24 @@ export async function processVoiceInput(
           }
           synthesized = await synthesizeWithLockedTurnRoute(txt, speech.controller.signal);
         }
-        if (isCurrentTurn() && !speech.controller.signal.aborted && session.bgGeneration === speech.generation) {
+        if (context.isCurrentTurn() && !speech.controller.signal.aborted && context.session.bgGeneration === speech.generation) {
           // Only the audio segment actually accepted for playback owns these
           // timestamps. Discarded speculative speech is not a delivery metric.
-          markVoiceLatencyMilestone(requestId, 'firstTtsRequestedAt', synthesized.result.ttsRequestedAt);
-          markVoiceLatencyMilestone(requestId, 'firstTtsReadyAt', synthesized.result.ttsReadyAt);
-          socket.emit("audio:status", { status: "speaking", requestId });
-          addEchoText(txt, voiceEchoScope(session));
+          markVoiceLatencyMilestone(context.requestId, 'firstTtsRequestedAt', synthesized.result.ttsRequestedAt);
+          markVoiceLatencyMilestone(context.requestId, 'firstTtsReadyAt', synthesized.result.ttsReadyAt);
+          context.socket.emit("audio:status", { status: "speaking", requestId: context.requestId });
+          addEchoText(txt, voiceEchoScope(context.session));
           const volumeGain = computeVolumeGain();
-          socket.emit("audio:response", {
+          context.socket.emit("audio:response", {
             buffer: synthesized.result.audioBuffer,
             format: synthesized.result.format,
             volumeGain,
-            requestId,
+            requestId: context.requestId,
             lane: 'conversation',
           });
           turnTtsEmittedSegments += 1;
           logger.info(
-            `[Audio TTS] Emitted request=${requestId} provider=${synthesized.route.provider} voice=${synthesized.route.voiceId} bytes=${synthesized.result.audioBuffer.length}`,
+            `[Audio TTS] Emitted request=${context.requestId} provider=${synthesized.route.provider} voice=${synthesized.route.voiceId} bytes=${synthesized.result.audioBuffer.length}`,
           );
           const playbackMs = estimatePlaybackMs(synthesized.result.audioBuffer, txt);
           setTimeout(() => resolvePlayback(0), playbackMs);
@@ -1712,29 +1728,29 @@ export async function processVoiceInput(
         }
         logger.warn(`[Audio TTS] ${e.message?.slice(0, 80)}`);
         turnTtsUnavailable = true;
-        emitVoiceTtsFailure(socket, requestId, 'conversation');
+        emitVoiceTtsFailure(context.socket, context.requestId, 'conversation');
         resolvePlayback(0);
       } finally {
-        if (session.bgGeneration === speech.generation) session.isSpeaking = false;
+        if (context.session.bgGeneration === speech.generation) context.session.isSpeaking = false;
         // Keep voiceTransportState.ttsSpeakingCount elevated for 3s after synthesis — client playback continues
         const decay = () => { voiceTransportState.ttsSpeakingCount = Math.max(0, voiceTransportState.ttsSpeakingCount - 1); };
         const t = setTimeout(decay, 3000);
-        session.ttsDecayTimers.push(t);
+        context.session.ttsDecayTimers.push(t);
       }
     });
-    ttsPromises.push(ttsQueue);
+    context.ttsPromises.push(ttsQueue);
     return playbackDone;
   };
 
   const queueFinalizedSpeech = (text: string) => {
-    if (!isCurrentTurn()) return;
-    if (session.isBackgroundWork) {
-      session.activeWorkStatus = pendingConfirmationCreatedThisTurn
+    if (!context.isCurrentTurn()) return;
+    if (context.session.isBackgroundWork) {
+      context.session.activeWorkStatus = context.pendingConfirmationCreatedThisTurn
         ? 'waiting_confirmation'
         : 'completed';
     }
-    if (session.suppressedSpeechRequestIds.has(requestId)) return;
-    session.bgGeneration++;
+    if (context.session.suppressedSpeechRequestIds.has(context.requestId)) return;
+    context.session.bgGeneration++;
     const sentences = String(text || '').split(/(?<=[。！？.!?\n])/u);
     const firstFinalSentence = String(sentences[0] || '').trim();
     if (speculativeSpeech && speculativeSpeech.text !== firstFinalSentence) {
@@ -1742,245 +1758,381 @@ export async function processVoiceInput(
       speculativeSpeech = null;
     }
     for (const sentence of sentences) {
-      if (pipelineAbort?.signal.aborted) break;
+      if (context.pipelineAbort?.signal.aborted) break;
       flushSentence(sentence);
     }
   };
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    queueFinalizedSpeech: queueFinalizedSpeech as typeof queueFinalizedSpeech,
+    get speculativeSpeech(): typeof speculativeSpeech { return speculativeSpeech; },
+    set speculativeSpeech(value: typeof speculativeSpeech) { speculativeSpeech = value; },
+    get turnSpeechAbort(): typeof turnSpeechAbort { return turnSpeechAbort; },
+    set turnSpeechAbort(value: typeof turnSpeechAbort) { turnSpeechAbort = value; },
+    maybeStartSpeculativeSpeech: maybeStartSpeculativeSpeech as typeof maybeStartSpeculativeSpeech,
+  }) };
+}
+
+async function prepareVoiceRelease(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceSpeech>>["context"]>) {
+
+
+  const commitVoiceTerminal = async <T = unknown>(input: {
+    text: string;
+    source: string;
+    blocked: boolean;
+    reason?: string;
+    cognitiveIntent: string;
+    llmWasCalled: boolean;
+    toolCalls?: ToolExecutionRecord[];
+    speechText?: string;
+    notification?: Record<string, any>;
+    persistTerminalState?: () => T;
+    publishAfter?: (terminalState: T | undefined) => void;
+  }): Promise<boolean> => {
+    // An interrupted/superseded turn no longer owns persistence, publication,
+    // or speech. Its cancellation terminal is committed by the transport
+    // handler against the captured request identity instead.
+    if (!context.isCurrentTurn()) return false;
+    if (context.actionLeaseHeartbeat?.isLeaseLost()) {
+      await context.actionLeaseHeartbeat.leaseLoss;
+      return false;
+    }
+    const terminalPayload = context.normalizeAgentPayload('agent:response', {
+      text: input.text,
+      agentName: 'Lumi',
+      source: input.source,
+      finalized: true,
+      blocked: input.blocked,
+      reason: input.reason || '',
+    });
+    const committed = await commitChatTerminalBoundary<T | undefined>({
+      persistTerminalState: () => {
+        if (!context.isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
+        context.persistVoiceUserMessage(input.cognitiveIntent);
+        context.persistSidecarConversation(context.conversationTurn.conversation.id);
+        return input.persistTerminalState?.();
+      },
+      persistAssistantMessage: () => {
+        if (!context.isCurrentTurn()) throw Object.assign(new Error('Voice turn superseded'), { name: 'AbortError' });
+        // Keep the request lease alive until the assistant row has consumed
+        // the terminal tool receipts. Settling it first clears the pending
+        // turn and makes the durable transcript lose the very evidence needed
+        // to complete the task.
+        const assistantMessageId = context.persistVoiceAssistantMessage(
+          context.conversationTurn.conversation.id,
+          input.text,
+          {
+            toolCalls: input.toolCalls,
+            cognitiveIntent: input.cognitiveIntent,
+            llmWasCalled: input.llmWasCalled,
+            source: input.source,
+            terminalTaskDisposition: input.blocked && context.foregroundRequestIdentity?.expectedTaskId
+              ? {
+                  outcome: 'blocked',
+                  taskId: context.foregroundRequestIdentity.expectedTaskId,
+                  requestId: context.requestId,
+                  reason: input.reason || 'Voice terminal response reported a blocked execution.',
+                }
+              : undefined,
+          },
+        );
+        return assistantMessageId;
+      },
+      flush: flushDBOrThrow,
+      persistTerminalReceipt: () => persistAuthorizedTerminalReceipt({ scope: context.executionScope, requestId: context.requestId,
+        event: 'agent:response', payload: terminalPayload, unknownPayload: context.executionUnknownPayload,
+        authorization: context.turnAuthorization, channel: 'voice', flush: flushDBOrThrow }),
+      persistUnknownReceipt: () => recordChatExecutionPersistenceUnknownDurably(
+        context.executionScope,
+        context.requestId,
+        context.executionUnknownPayload,
+      ),
+      publishCommitted: terminalState => {
+        if (!context.turnAuthorization.isCurrent()) { context.publishRecordedAgent('agent:response', terminalPayload); return; }
+        if (!context.isCurrentTurn()) return;
+        if (input.notification) {
+          context.publishRecordedAgent(
+            'agent:notification',
+            context.normalizeAgentPayload('agent:notification', input.notification),
+          );
+        }
+        const executionWriteback = terminalState as any;
+        if (executionWriteback?.recorded) {
+          context.publishRecordedAgent(
+            'agent:task_execution_writeback',
+            context.normalizeAgentPayload('agent:task_execution_writeback', executionWriteback),
+          );
+        }
+        context.publishRecordedAgent('agent:response', terminalPayload);
+        context.socket.emit('chat:conversation_updated', {
+          conversationId: context.conversationTurn.conversation.id,
+          agentId: context.session.agentId,
+          source: input.source,
+          requestId: context.requestId,
+        });
+        context.scheduleVoiceSummary(context.conversationTurn.conversation.id);
+        if (String(input.speechText || '').trim()) context.queueFinalizedSpeech(input.speechText!);
+        input.publishAfter?.(terminalState);
+      },
+      publishUnknown: () => {
+        context.publishRecordedAgent('agent:response', context.executionUnknownPayload);
+      },
+      persistenceUnknownProjection: {
+        text: context.executionUnknownPayload.text,
+        completionFeedback: context.executionUnknownPayload.completionFeedback,
+        reason: 'Terminal persistence outcome is unknown.',
+      },
+      onPersistenceError: error => {
+        logger.error(`[Audio] ${input.source} terminal persistence failed:`, error);
+      },
+    });
+    if (committed && !terminalPayload.blocked && context.turnAuthorization.isCurrent()) scheduleTurnMemory({
+      userId: context.session.userId, domain: context.voiceScope.domain, orgId: context.voiceScope.orgId, userText: context.userText,
+      channel: 'voice', source: 'voice', requestId: context.requestId, conversationId: context.conversationTurn.conversation.id,
+      agentId: context.session.agentId, authorization: context.turnAuthorization, llmGetters: context.llmGetters,
+    });
+    return committed;
+  };
 
   const releaseVoiceTransportResources = (): void => {
-    resources.admission?.release();
-    actionLeaseHeartbeat?.stop();
-    speculativeSpeech?.controller.abort();
-    speculativeSpeech = null;
-    desktopRelay.releaseControlLease('voice_turn_complete');
+    context.resources.admission?.release();
+    context.actionLeaseHeartbeat?.stop();
+    context.speculativeSpeech?.controller.abort();
+    context.speculativeSpeech = null;
+    context.desktopRelay.releaseControlLease('voice_turn_complete');
 
     // An older aborted pipeline must never clear state/controllers that already
     // belong to a newer barge-in turn.
-    if (session.pipelineAbortController !== pipelineAbort) return;
+    if (context.session.pipelineAbortController !== context.pipelineAbort) return;
     if (
-      session.activeTaskConversationId
-      && session.activeTaskRequestId === requestId
+      context.session.activeTaskConversationId
+      && context.session.activeTaskRequestId === context.requestId
     ) {
-      session.activeTaskConversationId = null;
-      session.activeTaskRequestId = null;
-      session.activeTaskId = null;
+      context.session.activeTaskConversationId = null;
+      context.session.activeTaskRequestId = null;
+      context.session.activeTaskId = null;
     }
-    if (session.activeForegroundRequestIdentity?.requestId === requestId) {
-      session.activeForegroundRequestIdentity = null;
+    if (context.session.activeForegroundRequestIdentity?.requestId === context.requestId) {
+      context.session.activeForegroundRequestIdentity = null;
     }
-    session.sidecarAbortController?.abort();
-    session.sidecarAbortController = null;
-    session.sidecarGeneration++;
-    session.sidecarHistory = [];
-    session.isSpeaking = false;
-    session.isProcessing = false;
-    session.isBackgroundWork = false;
-    session.activeWorkStatus = 'idle';
-    session.activeWorkStep = '';
-    session.activeWorkToolCalls = 0;
-    stopVoiceWorkHeartbeat(session);
-    if (session.ttsAbortController === turnSpeechAbort) session.ttsAbortController = null;
-    session.pipelineAbortController = null;
-    session.activeTurnText = '';
-    session.activeRoutingText = '';
+    context.session.sidecarAbortController?.abort();
+    context.session.sidecarAbortController = null;
+    context.session.sidecarGeneration++;
+    context.session.sidecarHistory = [];
+    context.session.isSpeaking = false;
+    context.session.isProcessing = false;
+    context.session.isBackgroundWork = false;
+    context.session.activeWorkStatus = 'idle';
+    context.session.activeWorkStep = '';
+    context.session.activeWorkToolCalls = 0;
+    stopVoiceWorkHeartbeat(context.session);
+    if (context.session.ttsAbortController === context.turnSpeechAbort) context.session.ttsAbortController = null;
+    context.session.pipelineAbortController = null;
+    context.session.activeTurnText = '';
+    context.session.activeRoutingText = '';
 
-    if (session.isActive) {
-      resetSilenceTimer(session, socket);
-      socket.emit('audio:status', { status: 'listening', requestId });
-      emitAgent('agent:status', { status: 'idle' });
+    if (context.session.isActive) {
+      resetSilenceTimer(context.session, context.socket);
+      context.socket.emit('audio:status', { status: 'listening', requestId: context.requestId });
+      context.emitAgent('agent:status', { status: 'idle' });
     }
-    session.activeTurnRequestId = null;
-    session.activeTurnProvenance = null;
-    session.suppressedSpeechRequestIds.delete(requestId);
+    context.session.activeTurnRequestId = null;
+    context.session.activeTurnProvenance = null;
+    context.session.suppressedSpeechRequestIds.delete(context.requestId);
   };
   const voiceReleaseGate = createDurableForegroundReleaseGate({
     converge: async reason => {
       // The cancellation owner must consume completed/in-flight tool receipts
       // before this old pipeline can settle its task or release the lease.
-      if (executionReceipts.cancellation) await executionReceipts.cancellation;
+      if (context.executionReceipts.cancellation) await context.executionReceipts.cancellation;
       // Durable ownership always converges before any heartbeat, desktop lease,
       // or mutable voice work lane is released. This remains safe for an older
       // aborted pipeline because the immutable identity is local to this turn.
       const releaseResult = await enforceVoiceForegroundConvergenceBeforeRelease({
-        identity: foregroundRequestIdentity,
-        aborted: pipelineAbort.signal.aborted,
+        identity: context.foregroundRequestIdentity,
+        aborted: context.pipelineAbort.signal.aborted,
         reason,
-        assistantState: finalAgentResponseDelivered ? responseText : undefined,
+        assistantState: context.finalAgentResponseDelivered ? context.responseText : undefined,
       });
       return Boolean(releaseResult?.converged);
     },
     releaseResources: releaseVoiceTransportResources,
     onRecoveryTakeover: ({ attempts }) => logger.error('[Audio] voice_foreground_release_recovery_takeover', {
       code: 'VOICE_FOREGROUND_RELEASE_RECOVERY_TAKEOVER',
-      identity: foregroundRequestIdentity,
+      identity: context.foregroundRequestIdentity,
       attempts,
     }),
   });
-  resources.ownedByDurableRelease = true;
+  context.resources.ownedByDurableRelease = true;
   const releaseVoiceTurnResources = (
     reason = 'Voice turn reached its release boundary.',
   ): Promise<boolean> => {
-    const cancel = !turnAuthorization.isCurrent() && !finalAgentResponseDelivered
-      ? session.cancelAuthorizationTurn?.(requestId)
+    const cancel = !context.turnAuthorization.isCurrent() && !context.finalAgentResponseDelivered
+      ? context.session.cancelAuthorizationTurn?.(context.requestId)
       : undefined;
     return Promise.resolve(cancel).then(() => voiceReleaseGate.release(reason));
   };
 
   const finishVoiceTerminal = createVoiceTerminalCompletion({
     commit: commitVoiceTerminal,
-    drainSpeech: () => Promise.allSettled(ttsPromises),
-    isCurrent: isCurrentTurn,
+    drainSpeech: () => Promise.allSettled(context.ttsPromises),
+    isCurrent: context.isCurrentTurn,
   });
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    finishVoiceTerminal: finishVoiceTerminal as typeof finishVoiceTerminal,
+    releaseVoiceTurnResources: releaseVoiceTurnResources as typeof releaseVoiceTurnResources,
+  }) };
+}
 
-  try {
-    if (transcriptExecutionGuard.action === 'clarify') {
+async function executeVoiceConfirmedAndDeterministicTurn(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceRelease>>["context"]>) {
+
+    if (context.transcriptExecutionGuard.action === 'clarify') {
       // Resolve uncertain STT before confirmation, meeting control, or tools.
-      responseText = transcriptExecutionGuard.responseText;
-      await finishVoiceTerminal({
-        text: responseText,
+      context.responseText = context.transcriptExecutionGuard.responseText;
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: 'voice_transcript_guard',
         blocked: false,
-        reason: transcriptExecutionGuard.reason,
+        reason: context.transcriptExecutionGuard.reason,
         cognitiveIntent: 'voice_transcript_clarification',
         llmWasCalled: false,
-        speechText: responseText,
+        speechText: context.responseText,
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
-    if (!session.agentId?.startsWith('memory_avatar_') && isExplicitMemoryRequest(userText)) {
-        const receipt = await persistTurnMemory({ userId: session.userId, domain: voiceScope.domain, orgId: voiceScope.orgId,
-          userText, channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
-          agentId: session.agentId, authorization: turnAuthorization, signal: pipelineAbort.signal, llmGetters });
-        responseText = receipt.text;
-        await finishVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
+    if (!context.session.agentId?.startsWith('memory_avatar_') && isExplicitMemoryRequest(context.userText)) {
+        const receipt = await persistTurnMemory({ userId: context.session.userId, domain: context.voiceScope.domain, orgId: context.voiceScope.orgId,
+          userText: context.userText, channel: 'voice', source: 'voice', requestId: context.requestId, conversationId: context.conversationTurn.conversation.id,
+          agentId: context.session.agentId, authorization: context.turnAuthorization, signal: context.pipelineAbort.signal, llmGetters: context.llmGetters });
+        context.responseText = receipt.text;
+        await context.finishVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
           blocked: receipt.status === 'failed', reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved',
           cognitiveIntent: 'memory', llmWasCalled: true, toolCalls: [] });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
     const deterministicConversationResponse = (() => {
-      if (userObservedCompletion) return null;
-      if (isConversationExecutionFactQuestion(actionIntentText)) {
+      if (context.userObservedCompletion) return null;
+      if (isConversationExecutionFactQuestion(context.actionIntentText)) {
         return {
           text: formatConversationExecutionFactAnswer(getConversationExecutionFacts({
-            conversationId: conversationTurn.conversation.id,
-            userId: session.userId,
-            domain: voiceScope.domain,
-            orgId: voiceScope.orgId,
-            currentRequestId: requestId,
-            taskId: actionTaskExecution.state?.taskId
-              || conversationTurn.conversation.actionContinuationState?.taskId
+            conversationId: context.conversationTurn.conversation.id,
+            userId: context.session.userId,
+            domain: context.voiceScope.domain,
+            orgId: context.voiceScope.orgId,
+            currentRequestId: context.requestId,
+            taskId: context.actionTaskExecution.state?.taskId
+              || context.conversationTurn.conversation.actionContinuationState?.taskId
               || undefined,
-          }), actionIntentText),
+          }), context.actionIntentText),
           intent: 'execution_facts',
           source: 'voice_conversation_execution_facts',
         };
       }
-      const corrected = resolveExactConversationCorrection(actionIntentText, recentVoiceHistory);
+      const corrected = resolveExactConversationCorrection(context.actionIntentText, context.recentVoiceHistory);
       return corrected
         ? { text: corrected, intent: 'exact_correction', source: 'voice_exact_correction' }
         : null;
     })();
     if (deterministicConversationResponse) {
-      responseText = deterministicConversationResponse.text;
-      await finishVoiceTerminal({
-        text: responseText,
+      context.responseText = deterministicConversationResponse.text;
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: deterministicConversationResponse.source,
         blocked: false,
         reason: deterministicConversationResponse.intent,
         cognitiveIntent: deterministicConversationResponse.intent,
         llmWasCalled: false,
-        speechText: responseText,
+        speechText: context.responseText,
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
-    if (userObservedCompletion) {
-      const conversation = conversationTurn.conversation;
-      const observedTask = userObservedCompletionTask!;
-      await clearPendingConfirmationDurably(session.userId, buildTransportNeutralConfirmationScope({
-        domain: voiceScope.domain, orgId: voiceScope.orgId,
+    if (context.userObservedCompletion) {
+      const conversation = context.conversationTurn.conversation;
+      const observedTask = context.userObservedCompletionTask!;
+      await clearPendingConfirmationDurably(context.session.userId, buildTransportNeutralConfirmationScope({
+        domain: context.voiceScope.domain, orgId: context.voiceScope.orgId,
         conversationId: conversation.id, taskId: observedTask.taskId,
       }));
-      pendingConfirmation = null;
-      pendingConfirmationPrompt = '';
-      responseText = formatConversationActionTaskStatus({
+      context.pendingConfirmation = null;
+      context.pendingConfirmationPrompt = '';
+      context.responseText = formatConversationActionTaskStatus({
         ...observedTask, status: 'completed', unfinished: false,
         latestBlocker: '', completionSource: 'user_observation',
       });
-      await finishVoiceTerminal({
-        text: responseText,
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: 'voice_task_user_observation',
         blocked: false,
         reason: '',
         cognitiveIntent: 'task_user_observation',
         llmWasCalled: false,
-        speechText: responseText,
+        speechText: context.responseText,
         persistTerminalState: () => {
           const completed = completeConversationActionFromUserObservation(
-            conversation.id, session.userId, userText,
-            { taskId: observedTask.taskId!, requestId, userMessageId: voiceUserMessageId },
+            conversation.id, context.session.userId, context.userText,
+            { taskId: observedTask.taskId!, requestId: context.requestId, userMessageId: context.voiceUserMessageId },
           );
           if (!completed) throw new Error('User observation no longer owns the pending task');
           return completed;
         },
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
-    if (actionFollowupIntent === 'status') {
-      responseText = getConversationActionStatus(
-        conversationTurn.conversation.id,
-        session.userId,
-        actionIntentText,
-        conversationTurn.conversation.actionContinuationState,
+    if (context.actionFollowupIntent === 'status') {
+      context.responseText = getConversationActionStatus(
+        context.conversationTurn.conversation.id,
+        context.session.userId,
+        context.actionIntentText,
+        context.conversationTurn.conversation.actionContinuationState,
       );
-      await finishVoiceTerminal({
-        text: responseText,
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: 'voice_task_status',
         blocked: false,
         reason: '',
         cognitiveIntent: 'task_status',
         llmWasCalled: false,
-        speechText: responseText,
+        speechText: context.responseText,
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
     // A short confirmation utterance is a continuation of the exact pending
     // action, not a fresh chat turn. Execute the stored tool/arguments directly
     // so the model cannot forget, rewrite, or merely print the tool protocol.
-    if (pendingConfirmation) {
-      const confirmedTask = pendingConfirmation.actionIntent || actionIntentText;
-      const confirmedArgs = pendingConfirmation.exactArgs || {};
+    if (context.pendingConfirmation) {
+      const confirmedTask = context.pendingConfirmation.actionIntent || context.actionIntentText;
+      const confirmedArgs = context.pendingConfirmation.exactArgs || {};
       const confirmationConsumed = await consumePendingConfirmationDurably(
-        session.userId,
-        pendingConfirmation.id,
-        pendingConfirmation.toolName,
+        context.session.userId,
+        context.pendingConfirmation.id,
+        context.pendingConfirmation.toolName,
         confirmedArgs,
-        confirmationScope,
+        context.confirmationScope,
       );
       const confirmationRecordId =
         `voice-confirmed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      session.isBackgroundWork = true;
-      session.activeWorkStatus = 'executing';
-      session.activeWorkStep = `Running ${pendingConfirmation.toolName}`;
-      if (!isDirectDesktopTool(pendingConfirmation.toolName)) {
-        emitToolLifecycle({
+      context.session.isBackgroundWork = true;
+      context.session.activeWorkStatus = 'executing';
+      context.session.activeWorkStep = `Running ${context.pendingConfirmation.toolName}`;
+      if (!isDirectDesktopTool(context.pendingConfirmation.toolName)) {
+        context.emitToolLifecycle({
           correlationId: confirmationRecordId,
-          name: pendingConfirmation.toolName,
+          name: context.pendingConfirmation.toolName,
           arguments: confirmedArgs,
         });
       }
       const confirmationRecord = await executeToolCall({
         registry: toolRegistry,
         id: confirmationRecordId,
-        name: pendingConfirmation.toolName,
+        name: context.pendingConfirmation.toolName,
         arguments: confirmedArgs,
         context: {
-          ...toolContext,
-          toolPolicy: routedToolPolicy,
+          ...context.toolContext,
+          toolPolicy: context.routedToolPolicy,
           userConfirmed: true,
           requestConfirmation: undefined,
           actionIntent: confirmedTask,
@@ -1994,23 +2146,23 @@ export async function processVoiceInput(
               reason: 'The one-time confirmation expired before execution.',
             },
       });
-      if (!isCurrentTurn()) {
-        return;
+      if (!context.isCurrentTurn()) {
+        { return { terminal: true as const, context: undefined }; }
       }
       if (!isDirectDesktopTool(confirmationRecord.name)) {
         if (confirmationRecord.error) {
-          emitToolLifecycle({
+          context.emitToolLifecycle({
             correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
             name: confirmationRecord.name,
             arguments: confirmedArgs,
             error: confirmationRecord.error,
           });
         } else {
-          emitToolLifecycle({
+          context.emitToolLifecycle({
             correlationId: confirmationRecord.id || `voice-confirmed-${Date.now()}`,
             name: confirmationRecord.name,
             arguments: confirmedArgs,
-            result: formatToolResultForUi(confirmationRecord.result),
+            result: context.formatToolResultForUi(confirmationRecord.result),
           });
         }
       }
@@ -2021,11 +2173,11 @@ export async function processVoiceInput(
       const completedConfirmedAction = tryFinalizeVerifiedBoundedAction({
         taskText: confirmedTask,
         responseText: '',
-        toolRecords: taskAwareRecords([confirmationRecord]),
+        toolRecords: context.taskAwareRecords([confirmationRecord]),
         source: 'voice_confirmation',
-        flow: { ...turnFlow, routeText: confirmedTask },
-        taskId: actionTaskExecution.state?.taskId,
-        requestId,
+        flow: { ...context.turnFlow, routeText: confirmedTask },
+        taskId: context.actionTaskExecution.state?.taskId,
+        requestId: context.requestId,
       });
       let confirmationCandidate = completedConfirmedAction?.text || (confirmationSucceeded
         ? CN_VOICE_FAST_PATH_MESSAGES.confirmationExecuted
@@ -2035,57 +2187,57 @@ export async function processVoiceInput(
               || confirmationRecord.result,
           ));
 
-      if (!completedConfirmedAction && confirmedStepNeedsContinuation(confirmedTask, taskAwareRecords([confirmationRecord])) && isCurrentTurn()) {
+      if (!completedConfirmedAction && confirmedStepNeedsContinuation(confirmedTask, context.taskAwareRecords([confirmationRecord])) && context.isCurrentTurn()) {
         // Confirmation is a boundary inside the same task, not the end of the
         // task. Continue the remaining plan immediately with the exact confirmed
         // receipt in context; a later hard boundary will stop once again.
-        turnAuthorization.assertCurrent();
+        context.turnAuthorization.assertCurrent();
         const continuation = await runToolSession({
           messages: [
-            { role: 'system', content: voiceSystemPrompt },
+            { role: 'system', content: context.voiceSystemPrompt },
             ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {
-              messageId: voiceUserMessageId,
-              text: userText,
+              messageId: context.voiceUserMessageId,
+              text: context.userText,
             }),
           ],
           registry: toolRegistry,
           config: {
-            provider,
-            model: voiceModel,
-            modelTurnState,
-            userId: session.userId,
-            domain: voiceScope.domain,
-            orgId: voiceScope.orgId,
-            signal: pipelineAbort.signal,
-            inputTokenBudget: voiceInputTokenBudget,
-            ...reasoningRoutePolicy,
+            provider: context.provider,
+            model: context.voiceModel,
+            modelTurnState: context.modelTurnState,
+            userId: context.session.userId,
+            domain: context.voiceScope.domain,
+            orgId: context.voiceScope.orgId,
+            signal: context.pipelineAbort.signal,
+            inputTokenBudget: context.voiceInputTokenBudget,
+            ...context.reasoningRoutePolicy,
           },
-          onToolCall: observeVoiceTools().onToolCall,
-          maxIterations: Math.max(1, routedToolPolicy.maxIterations || 5),
+          onToolCall: context.observeVoiceTools().onToolCall,
+          maxIterations: Math.max(1, context.routedToolPolicy.maxIterations || 5),
           context: {
-            ...toolContext,
+            ...context.toolContext,
             actionIntent: confirmedTask,
             routedTaskText: confirmedTask,
-            toolPolicy: routedToolPolicy,
-            priorToolRecords: taskAwareRecords([confirmationRecord]),
+            toolPolicy: context.routedToolPolicy,
+            priorToolRecords: context.taskAwareRecords([confirmationRecord]),
           },
-          getters: llmGetters,
+          getters: context.llmGetters,
         });
-        if (!isCurrentTurn()) {
-          return;
+        if (!context.isCurrentTurn()) {
+          { return { terminal: true as const, context: undefined }; }
         }
         confirmationRecords = coalesceToolExecutionRecords([confirmationRecord, ...(continuation.toolCalls || [])]);
         confirmationLlmWasCalled = continuation.usageRecords.length > 0;
-        recordTokenUsageBatch(session.userId, continuation.usageRecords, requestId, 'voice');
-        completionGuard = continuation.completionGuard;
-        confirmationCandidate = pendingConfirmationCreatedThisTurn
-          ? trustedVoiceConfirmationText!
+        recordTokenUsageBatch(context.session.userId, continuation.usageRecords, context.requestId, 'voice');
+        context.completionGuard = continuation.completionGuard;
+        confirmationCandidate = context.pendingConfirmationCreatedThisTurn
+          ? context.trustedVoiceConfirmationText!
           : continuation.text || confirmationCandidate;
       }
-      confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, desktopExecutionTracker);
-      const confirmedFinal = pendingConfirmationCreatedThisTurn
+      confirmationRecords = withDesktopExecutionReceipt(confirmationRecords, context.desktopExecutionTracker);
+      const confirmedFinal = context.pendingConfirmationCreatedThisTurn
         ? {
-            text: trustedVoiceConfirmationText!,
+            text: context.trustedVoiceConfirmationText!,
             blocked: false,
             reason: 'waiting_confirmation',
             notification: undefined,
@@ -2093,79 +2245,86 @@ export async function processVoiceInput(
         : finalizeLumiResponse({
             taskText: confirmedTask,
             responseText: confirmationCandidate,
-            completionGuard,
-            toolRecords: taskAwareRecords(confirmationRecords),
+            completionGuard: context.completionGuard,
+            toolRecords: context.taskAwareRecords(confirmationRecords),
             source: 'voice_confirmation',
-            flow: { ...turnFlow, routeText: confirmedTask },
-            taskId: actionTaskExecution.state?.taskId,
-            requestId,
+            flow: { ...context.turnFlow, routeText: confirmedTask },
+            taskId: context.actionTaskExecution.state?.taskId,
+            requestId: context.requestId,
           });
-      responseText = confirmedFinal.text;
-      await finishVoiceTerminal({
-        text: responseText,
+      context.responseText = confirmedFinal.text;
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: 'voice_confirmation',
         blocked: confirmedFinal.blocked,
         reason: confirmedFinal.reason || '',
         cognitiveIntent: confirmedFinal.blocked ? 'work_product_guard' : 'confirmation',
         llmWasCalled: confirmationLlmWasCalled,
         toolCalls: confirmationRecords,
-        speechText: responseText,
+        speechText: context.responseText,
         notification: confirmedFinal.notification,
       }, {
         onCommitted: () => {
-          persistVoiceLearning(responseText, {
+          context.persistVoiceLearning(context.responseText, {
             toolRecords: confirmationRecords,
             sourceInteractionId: `voice_confirmation_${Date.now()}`,
             logLabel: 'voice confirmation',
           });
         },
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
-    let recentActionExplanation: string | null = interruptedActivityResponse;
+    let recentActionExplanation: string | null = context.interruptedActivityResponse;
     let recentActionEvidence: ToolExecutionRecord[] = [];
     try {
-      const conversation = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
-      const recentActionHistory = recentVoiceHistory.length > 0
-        ? recentVoiceHistory
+      const conversation = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
+      const recentActionHistory = context.recentVoiceHistory.length > 0
+        ? context.recentVoiceHistory
         : getMessages(conversation.id, 30);
       recentActionEvidence = collectRecentActionToolRecords(recentActionHistory);
       if (!recentActionExplanation) {
-        recentActionExplanation = describeRecentActionsFromHistory(userText, recentActionHistory);
+        recentActionExplanation = describeRecentActionsFromHistory(context.userText, recentActionHistory);
       }
     } catch {}
     if (recentActionExplanation) {
       const finalizedRecentAction = finalizeLumiResponse({
-        taskText: actionIntentText,
+        taskText: context.actionIntentText,
         responseText: recentActionExplanation,
         toolRecords: recentActionEvidence,
         source: 'voice_action_history',
-        flow: turnFlow,
+        flow: context.turnFlow,
       });
-      responseText = finalizedRecentAction.text;
-      await finishVoiceTerminal({
-        text: responseText,
+      context.responseText = finalizedRecentAction.text;
+      await context.finishVoiceTerminal({
+        text: context.responseText,
         source: 'voice_action_history',
         blocked: finalizedRecentAction.blocked,
         reason: finalizedRecentAction.reason || '',
         cognitiveIntent: finalizedRecentAction.blocked ? 'work_product_guard' : 'action_history',
         llmWasCalled: false,
-        speechText: responseText,
+        speechText: context.responseText,
         notification: finalizedRecentAction.notification,
       }, {
         onCommitted: () => {
-          persistVoiceLearning(responseText, {
+          context.persistVoiceLearning(context.responseText, {
             sourceInteractionId: `voice_action_history_${Date.now()}`,
             logLabel: 'voice action history explanation',
           });
         },
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
+  return { terminal: false as const, context: extendTurnBindings(context, {
+
+  }) };
+}
+
+async function executeVoiceModeAndMessagingTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceConfirmedAndDeterministicTurn>>["context"]>) {
+
 
     // Explicit meeting control keeps its immediate client acknowledgement.
-    const directlyAppliedMode: OperationMode | null = requestedMode === 'meeting' ? 'meeting' : null;
+    const directlyAppliedMode: OperationMode | null = context.requestedMode === 'meeting' ? 'meeting' : null;
     if (directlyAppliedMode) {
       const modeToolRecord: ToolExecutionRecord = {
         id: `voice-mode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -2178,47 +2337,47 @@ export async function processVoiceInput(
         result: '',
       };
       try {
-        modeToolRecord.result = await desktopRelay('client_action', modeToolRecord.arguments)
+        modeToolRecord.result = await context.desktopRelay('client_action', modeToolRecord.arguments)
           || JSON.stringify({ ok: false, error: 'Client returned no mode-switch receipt' });
       } catch (err: any) {
         modeToolRecord.error = err?.message || String(err);
-        emitAgent('agent:notification', {
+        context.emitAgent('agent:notification', {
           type: 'client_action',
           level: 'warning',
           message: `Mode switch did not reach the client: ${err?.message || err}`,
         });
       }
-      if (!isCurrentTurn()) {
-        return;
+      if (!context.isCurrentTurn()) {
+        { return { terminal: true as const, context: undefined }; }
       }
       const modeSynced = toolRecordSucceeded(modeToolRecord);
       if (modeSynced) {
-        saveStoredOperationMode(session.userId, directlyAppliedMode);
+        saveStoredOperationMode(context.session.userId, directlyAppliedMode);
       }
 
-      if (isPureOperationModeSwitchRequest(userText, requestedMode)) {
-        responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, userText);
+      if (isPureOperationModeSwitchRequest(context.userText, context.requestedMode)) {
+        context.responseText = formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, context.userText);
         const finalizedMode = finalizeLumiResponse({
-          taskText: actionIntentText,
-          responseText,
+          taskText: context.actionIntentText,
+          responseText: context.responseText,
           toolRecords: [modeToolRecord],
           source: 'voice',
-          flow: turnFlow,
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
+          flow: context.turnFlow,
+          taskId: context.actionTaskExecution.state?.taskId,
+          requestId: context.requestId,
         });
-        responseText = finalizedMode.text;
-        await finishVoiceTerminal({
-          text: responseText,
+        context.responseText = finalizedMode.text;
+        await context.finishVoiceTerminal({
+          text: context.responseText,
           source: "voice_mode",
           blocked: finalizedMode.blocked,
           reason: finalizedMode.reason || '',
           cognitiveIntent: finalizedMode.blocked ? 'work_product_guard' : 'operation_mode',
           llmWasCalled: false,
           toolCalls: [modeToolRecord],
-          speechText: responseText,
+          speechText: context.responseText,
           notification: finalizedMode.notification,
-          persistTerminalState: () => persistVoiceTakeoverExecution(responseText, {
+          persistTerminalState: () => context.persistVoiceTakeoverExecution(context.responseText, {
             toolRecords: [modeToolRecord],
             source: 'voice_mode',
             sourceInteractionId: `voice_mode_${Date.now()}`,
@@ -2228,23 +2387,23 @@ export async function processVoiceInput(
           }),
         }, {
           onCommitted: () => {
-            persistVoiceLearning(responseText, {
+            context.persistVoiceLearning(context.responseText, {
               toolRecords: [modeToolRecord],
               sourceInteractionId: `voice_mode_${Date.now()}`,
               logLabel: 'voice mode switch',
             });
           },
         });
-        return;
+        { return { terminal: true as const, context: undefined }; }
       }
     }
 
-    const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', executionPipeline.normalizedIntent);
-    const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', executionPipeline.normalizedIntent);
+    const foregroundWeChatReadArgs = buildForegroundMessagingArguments('read', context.executionPipeline.normalizedIntent);
+    const foregroundWeChatSendArgs = buildForegroundMessagingArguments('send', context.executionPipeline.normalizedIntent);
     // Read intent retains precedence: incoming messages must never enter a send capability.
     const foregroundMessagingAction = foregroundWeChatReadArgs ? 'read' : 'send';
     const foregroundMessagingArgs = foregroundWeChatReadArgs || foregroundWeChatSendArgs;
-    if (foregroundMessagingArgs && toolSessionActive && !clientActionOnlyTurn && !selfRepairTurn) {
+    if (foregroundMessagingArgs && context.toolSessionActive && !context.clientActionOnlyTurn && !context.selfRepairTurn) {
       const reading = foregroundMessagingAction === 'read';
       const source = reading ? 'voice_foreground_messaging_read' : 'voice_foreground_messaging';
       const correlationId = `voice-wechat-${foregroundMessagingAction}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2252,26 +2411,26 @@ export async function processVoiceInput(
         name: reading ? 'wechat_read_recent_chat' : 'wechat_send_message', arguments: foregroundMessagingArgs, result: '' };
       try {
         const foregroundExecution = await executeForegroundMessagingAction({
-          action: foregroundMessagingAction, normalizedIntent: executionPipeline.normalizedIntent,
-          executionPlan: executionPipeline.executionPlan, registry: toolRegistry, correlationId,
-          arguments: foregroundMessagingArgs, context: toolContext,
-          onLifecycle: event => emitToolLifecycle({ correlationId: event.correlationId,
+          action: foregroundMessagingAction, normalizedIntent: context.executionPipeline.normalizedIntent,
+          executionPlan: context.executionPipeline.executionPlan, registry: toolRegistry, correlationId,
+          arguments: foregroundMessagingArgs, context: context.toolContext,
+          onLifecycle: event => context.emitToolLifecycle({ correlationId: event.correlationId,
             name: event.name, arguments: event.arguments,
-            ...(event.phase === 'finish' && event.result ? { result: formatToolResultForUi(event.result) } : {}),
+            ...(event.phase === 'finish' && event.result ? { result: context.formatToolResultForUi(event.result) } : {}),
             ...(event.error ? { error: event.error } : {}),
           }),
         });
         toolRecord = foregroundExecution.record;
         if (toolRecord.error) throw new Error(toolRecord.error);
-        if (!isCurrentTurn()) {
-          return;
+        if (!context.isCurrentTurn()) {
+          { return { terminal: true as const, context: undefined }; }
         }
         const parsed = foregroundExecution.parsed;
         const contact = String(foregroundMessagingArgs.contact || '').trim();
         if (reading) {
           const summary = String(parsed.contentSummary || '').trim();
           const evidence = String(parsed.uiSnapshotPreview || '').slice(0, 1200);
-          responseText = parsed.read && summary
+          context.responseText = parsed.read && summary
             ? contact
               ? `我已经定位到你和${contact}的微信聊天。可见最近内容如下：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
               : `我已经读到当前微信聊天的可见最近内容：\n\n${summary}` // i18n-allow: reviewed Chinese verified messaging-read receipt.
@@ -2281,228 +2440,243 @@ export async function processVoiceInput(
                 : `我已经定位到当前微信聊天，但视觉摘要不可用。当前可验证的窗口证据：\n\n${evidence}` // i18n-allow: reviewed Chinese partial messaging-read receipt.
               : `这次还没完成。卡住的位置：微信前台聊天读取。${String(parsed.visionError || parsed.note || '没有拿到可读的聊天内容证据。')}`; // i18n-allow: reviewed Chinese messaging-read blocker.
         } else {
-          responseText = formatCnVoiceWeChatSendResult(contact, String(foregroundMessagingArgs.message || '').trim(),
+          context.responseText = formatCnVoiceWeChatSendResult(contact, String(foregroundMessagingArgs.message || '').trim(),
             parsed.sent === true && parsed.verificationStatus === 'verified');
         }
       } catch (error: any) {
         toolRecord.error = error?.message || String(error);
-        if (!isCurrentTurn()) {
-          return;
+        if (!context.isCurrentTurn()) {
+          { return { terminal: true as const, context: undefined }; }
         }
-        responseText = reading
+        context.responseText = reading
           ? `这次还没完成。卡住的位置：微信前台聊天读取：${toolRecord.error}。我不会把只打开或聚焦微信说成已读到聊天内容。` // i18n-allow: reviewed Chinese messaging-read failure receipt.
           : formatCnVoiceWeChatSendError(toolRecord.error);
       }
-      const directFinal = finalizeLumiResponse({ taskText: actionIntentText, responseText, toolRecords: [toolRecord],
-        source: 'voice', flow: turnFlow, taskId: actionTaskExecution.state?.taskId, requestId });
-      responseText = directFinal.text;
+      const directFinal = finalizeLumiResponse({ taskText: context.actionIntentText, responseText: context.responseText, toolRecords: [toolRecord],
+        source: 'voice', flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId });
+      context.responseText = directFinal.text;
       const interactionId = () => `voice_wechat_${foregroundMessagingAction}_${Date.now()}`;
-      await finishVoiceTerminal({ text: responseText, source, blocked: directFinal.blocked,
+      await context.finishVoiceTerminal({ text: context.responseText, source, blocked: directFinal.blocked,
         reason: directFinal.reason || '', cognitiveIntent: directFinal.blocked ? 'work_product_guard' : reading ? 'messaging_read' : 'messaging',
-        llmWasCalled: false, toolCalls: [toolRecord], speechText: responseText, notification: directFinal.notification,
-        persistTerminalState: () => persistVoiceTakeoverExecution(responseText, { toolRecords: [toolRecord], source,
+        llmWasCalled: false, toolCalls: [toolRecord], speechText: context.responseText, notification: directFinal.notification,
+        persistTerminalState: () => context.persistVoiceTakeoverExecution(context.responseText, { toolRecords: [toolRecord], source,
           sourceInteractionId: interactionId(), finalizationBlocked: directFinal.blocked,
           assistantTextTrusted: !directFinal.blocked, finalizationReason: directFinal.reason }),
       }, {
-        onCommitted: () => persistVoiceLearning(responseText, { toolRecords: [toolRecord], sourceInteractionId: interactionId(),
+        onCommitted: () => context.persistVoiceLearning(context.responseText, { toolRecords: [toolRecord], sourceInteractionId: interactionId(),
           logLabel: reading ? 'voice foreground messaging read' : 'voice foreground messaging' }),
       });
-      return;
+      { return { terminal: true as const, context: undefined }; }
     }
 
-    if (!isCurrentTurn()) return;
+    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
+  return { terminal: false as const, context: extendTurnBindings(context, {
+
+  }) };
+}
+
+async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>) {
+
 
     // Reuse the configured model and the shared execution decision.
-    const effectiveModel = voiceModel;
-    logger.info(`[Audio] Intent: ${executionPipeline.normalizedIntent.kind}, model: ${effectiveModel}`);
+    const effectiveModel = context.voiceModel;
+    logger.info(`[Audio] Intent: ${context.executionPipeline.normalizedIntent.kind}, model: ${effectiveModel}`);
 
     // The shared loop and any bounded recovery receive the same persisted
     // conversation, including both user and assistant messages with their roles.
-    const recentMsgs = getMessagesByTokenBudget(conversationTurn.conversation.id, 6_000, 6, requestId).filter(message => !(
-      message.role === 'user' && message.externalMessageId === requestId
+    const recentMsgs = getMessagesByTokenBudget(context.conversationTurn.conversation.id, 6_000, 6, context.requestId).filter(message => !(
+      message.role === 'user' && message.externalMessageId === context.requestId
     ));
     const voiceHistory: NormalizedMessage[] = normalizeVoiceHistory(recentMsgs);
     const historyChars = voiceHistory.reduce((total, message) => (
       total + (typeof message.content === 'string' ? message.content.length : 0)
     ), 0);
-    logger.info(`[Audio] Prompt budget request=${requestId} systemChars=${voiceSystemPrompt.length} historyMessages=${voiceHistory.length} historyChars=${historyChars}`);
+    logger.info(`[Audio] Prompt budget request=${context.requestId} systemChars=${context.voiceSystemPrompt.length} historyMessages=${voiceHistory.length} historyChars=${historyChars}`);
 
     const messages: NormalizedMessage[] = [
-      { role: 'system', content: voiceSystemPrompt },
+      { role: 'system', content: context.voiceSystemPrompt },
       ...voiceHistory,
-      { role: 'user', content: userText, sourceMessageId: voiceUserMessageId },
+      { role: 'user', content: context.userText, sourceMessageId: context.voiceUserMessageId },
     ];
     const recoveryConversationMessages = messages;
 
     const modelConfig: LLMConfig = {
-      modelTurnState,
-      provider,
+      modelTurnState: context.modelTurnState,
+      provider: context.provider,
       model: effectiveModel,
-      userId: session.userId,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
-      conversationId: conversationTurn.conversation.id,
-      requestId,
+      userId: context.session.userId,
+      domain: context.voiceScope.domain,
+      orgId: context.voiceScope.orgId,
+      conversationId: context.conversationTurn.conversation.id,
+      requestId: context.requestId,
       source: 'voice',
-      signal: pipelineAbort.signal,
-      inputTokenBudget: voiceInputTokenBudget,
-      ...reasoningRoutePolicy,
+      signal: context.pipelineAbort.signal,
+      inputTokenBudget: context.voiceInputTokenBudget,
+      ...context.reasoningRoutePolicy,
     };
     const onChunk = (chunk: string) => {
-      if (!isCurrentTurn()) return;
-      if (chunk) markVoiceLatencyMilestone(requestId, 'firstModelTokenAt');
-      responseText += chunk;
-      maybeStartSpeculativeSpeech();
-      if (!deferCompletionSpeech) {
-        const safeText = modelTextGate.push(chunk);
-        if (safeText) emitAgent('agent:chunk', { text: safeText, agentName: 'Lumi' });
+      if (!context.isCurrentTurn()) return;
+      if (chunk) markVoiceLatencyMilestone(context.requestId, 'firstModelTokenAt');
+      context.responseText += chunk;
+      context.maybeStartSpeculativeSpeech();
+      if (!context.deferCompletionSpeech) {
+        const safeText = context.modelTextGate.push(chunk);
+        if (safeText) context.emitAgent('agent:chunk', { text: safeText, agentName: 'Lumi' });
       }
     };
-    turnAuthorization.assertCurrent();
+    context.turnAuthorization.assertCurrent();
     // Both transports use the same execution loop and conversational recovery.
     // Voice owns recognition, speech and presentation; it cannot independently
     // decide to repeat a tool, end an unfinished task or discard a receipt.
-    markVoiceLatencyMilestone(requestId, 'firstModelRequestAt');
-    const toolLifecycle = observeVoiceTools(record => toolResults.push(record));
-    const result = toolSessionActive
+    markVoiceLatencyMilestone(context.requestId, 'firstModelRequestAt');
+    const toolLifecycle = context.observeVoiceTools(record => context.toolResults.push(record));
+    const result = context.toolSessionActive
       ? await runToolSession({
         messages: messages,
         registry: toolRegistry,
         config: modelConfig,
         onToolCall: toolLifecycle.onToolCall,
-        maxIterations: maxIterations,
+        maxIterations: context.maxIterations,
         onStreamChunk: onChunk,
         context: {
-            ...toolContext,
-            ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
-            priorToolRecords: taskAwareRecords(toolResults),
+            ...context.toolContext,
+            ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
+            priorToolRecords: context.taskAwareRecords(context.toolResults),
             onToolStart: toolLifecycle.onToolStart,
           },
-        getters: llmGetters,
+        getters: context.llmGetters,
       })
       : await runConversationTurn({
           messages,
           config: modelConfig,
           onChunk,
-          getters: llmGetters,
-          isCancelled: () => !isCurrentTurn(),
-          assertCurrent: () => turnAuthorization.assertCurrent(),
-          taskText: userText,
+          getters: context.llmGetters,
+          isCancelled: () => !context.isCurrentTurn(),
+          assertCurrent: () => context.turnAuthorization.assertCurrent(),
+          taskText: context.userText,
         });
-    if (!isCurrentTurn()) return;
-    responseText = result.text || '';
-    completionGuard = result.completionGuard;
-    recordTokenUsageBatch(session.userId, result.usageRecords, requestId, 'voice');
+    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
+    context.responseText = result.text || '';
+    context.completionGuard = result.completionGuard;
+    recordTokenUsageBatch(context.session.userId, result.usageRecords, context.requestId, 'voice');
 
-    if (!isCurrentTurn()) return;
+    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
 
-    if (pendingConfirmationCreatedThisTurn) {
-      responseText = trustedVoiceConfirmationText!;
+    if (context.pendingConfirmationCreatedThisTurn) {
+      context.responseText = context.trustedVoiceConfirmationText!;
     }
 
-    modelTextGate.finish();
-    const finalizedDesktopRecords = withDesktopExecutionReceipt(toolResults, desktopExecutionTracker);
-    if (finalizedDesktopRecords.length > toolResults.length) {
-      toolResults.push(...finalizedDesktopRecords.slice(toolResults.length));
+    context.modelTextGate.finish();
+    const finalizedDesktopRecords = withDesktopExecutionReceipt(context.toolResults, context.desktopExecutionTracker);
+    if (finalizedDesktopRecords.length > context.toolResults.length) {
+      context.toolResults.push(...finalizedDesktopRecords.slice(context.toolResults.length));
     }
+  return { terminal: false as const, context: extendTurnBindings(context, {
+    recoveryConversationMessages: recoveryConversationMessages as typeof recoveryConversationMessages,
+    effectiveModel: effectiveModel as typeof effectiveModel,
+  }) };
+}
+
+async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModelTurn>>["context"]>) {
+
     const responseFinalizer = createTurnResponseFinalizer({
-      taskText: actionIntentText, flow: turnFlow, taskId: actionTaskExecution.state?.taskId, requestId,
-      pendingConfirmation: () => pendingConfirmationCreatedThisTurn,
-      controlPauseReason: () => desktopRelay.getControlPauseReason(), pauseTaskText: routedUserText,
+      taskText: context.actionIntentText, flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
+      controlPauseReason: () => context.desktopRelay.getControlPauseReason(), pauseTaskText: context.routedUserText,
     });
-    const desktopPauseBlocksCurrentTask = (records = taskAwareRecords(toolResults)) => responseFinalizer.isDesktopPaused(records);
+    const desktopPauseBlocksCurrentTask = (records = context.taskAwareRecords(context.toolResults)) => responseFinalizer.isDesktopPaused(records);
     let finalResponse = responseFinalizer.finalize({
-      responseText, completionGuard, toolRecords: taskAwareRecords(toolResults), source: 'voice',
+      responseText: context.responseText, completionGuard: context.completionGuard, toolRecords: context.taskAwareRecords(context.toolResults), source: 'voice',
     });
     const guardRecovery = await recoverBlockedExecutionOnce({
-      task: routedUserText,
-      responseText,
+      task: context.routedUserText,
+      responseText: context.responseText,
       finalization: finalResponse,
-      allowToolUse: toolSessionActive,
-      pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-      requiresFreshConfirmation: correctionRequiresFreshConfirmation,
-      aborted: !isCurrentTurn() || desktopPauseBlocksCurrentTask(),
+      allowToolUse: context.toolSessionActive,
+      pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
+      requiresFreshConfirmation: context.correctionRequiresFreshConfirmation,
+      aborted: !context.isCurrentTurn() || desktopPauseBlocksCurrentTask(),
       // Losing the current voice turn is cancellation. A desktop pause is a
       // resumable customer-visible state and must not become AbortError.
-      isAborted: () => !isCurrentTurn(),
-      isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
-      toolRecords: taskAwareRecords(toolResults),
+      isAborted: () => !context.isCurrentTurn(),
+      isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
+      toolRecords: context.taskAwareRecords(context.toolResults),
       attempt: async ({ instruction, priorToolRecords, recordTool }) => {
         logger.warn('[Audio] Recovering blocked execution internally.');
-          turnAuthorization.assertCurrent();
-      const recoveryLifecycle = observeVoiceTools(recordTool);
+          context.turnAuthorization.assertCurrent();
+      const recoveryLifecycle = context.observeVoiceTools(recordTool);
       const recovery = await runToolSession({
         messages: [
-              ...recoveryConversationMessages,
-              { role: 'assistant', content: responseText },
+              ...context.recoveryConversationMessages,
+              { role: 'assistant', content: context.responseText },
               { role: 'user', content: instruction },
           ],
         registry: toolRegistry,
         config: {
-            provider,
-            model: effectiveModel,
-            modelTurnState,
-            userId: session.userId,
-            domain: voiceScope.domain,
-            orgId: voiceScope.orgId,
-            signal: pipelineAbort.signal,
-            inputTokenBudget: voiceInputTokenBudget,
-            ...reasoningRoutePolicy,
+            provider: context.provider,
+            model: context.effectiveModel,
+            modelTurnState: context.modelTurnState,
+            userId: context.session.userId,
+            domain: context.voiceScope.domain,
+            orgId: context.voiceScope.orgId,
+            signal: context.pipelineAbort.signal,
+            inputTokenBudget: context.voiceInputTokenBudget,
+            ...context.reasoningRoutePolicy,
           },
         onToolCall: recoveryLifecycle.onToolCall,
-        maxIterations: Math.max(2, Math.min(12, routedToolPolicy.maxIterations || maxIterations || 8)),
+        maxIterations: Math.max(2, Math.min(12, context.routedToolPolicy.maxIterations || context.maxIterations || 8)),
         context: {
-            ...toolContext,
-            ...(runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall } : {}),
+            ...context.toolContext,
+            ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
             source: 'voice_guard_recovery',
             priorToolRecords,
-            isCancelled: () => !isCurrentTurn(),
+            isCancelled: () => !context.isCurrentTurn(),
             onToolStart: recoveryLifecycle.onToolStart,
           },
-        getters: llmGetters,
+        getters: context.llmGetters,
       });
-        recordTokenUsageBatch(session.userId, recovery.usageRecords, () => `voice_guard_recovery_${Date.now()}`, 'voice');
+        recordTokenUsageBatch(context.session.userId, recovery.usageRecords, () => `voice_guard_recovery_${Date.now()}`, 'voice');
         return {
           text: recovery.text,
           completionGuard: recovery.completionGuard,
-          toolRecords: withDesktopExecutionReceipt(recovery.toolCalls, desktopExecutionTracker),
+          toolRecords: withDesktopExecutionReceipt(recovery.toolCalls, context.desktopExecutionTracker),
         };
       },
       finalize: (candidateText, records, recoveryCompletionGuard) => {
-        const recoveredRecords = taskAwareRecords(records);
+        const recoveredRecords = context.taskAwareRecords(records);
         return responseFinalizer.finalize({
           responseText: candidateText, completionGuard: recoveryCompletionGuard,
           toolRecords: recoveredRecords, source: 'voice_guard_recovery',
         });
       },
     });
-    if (!isCurrentTurn()) return;
+    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
     finalResponse = guardRecovery.finalization;
-    toolResults = withDesktopExecutionReceipt(guardRecovery.toolRecords, desktopExecutionTracker);
-    responseText = finalResponse.text;
+    context.toolResults = withDesktopExecutionReceipt(guardRecovery.toolRecords, context.desktopExecutionTracker);
+    context.responseText = finalResponse.text;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
     }
 
     let mainTerminalCommitted = false;
-    if (responseText) {
-      logger.info(`[Audio] Response: "${responseText.slice(0, 80)}" (${toolResults.length} tool calls)`);
-      mainTerminalCommitted = await finishVoiceTerminal({
-        text: responseText,
+    if (context.responseText) {
+      logger.info(`[Audio] Response: "${context.responseText.slice(0, 80)}" (${context.toolResults.length} tool calls)`);
+      mainTerminalCommitted = await context.finishVoiceTerminal({
+        text: context.responseText,
         source: "voice",
         blocked: finalResponse.blocked,
         reason: finalResponse.reason || '',
-        cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : executionPipeline.normalizedIntent.kind,
+        cognitiveIntent: finalResponse.blocked ? 'work_product_guard' : context.executionPipeline.normalizedIntent.kind,
         llmWasCalled: true,
-        toolCalls: toolResults,
-        speechText: responseText,
+        toolCalls: context.toolResults,
+        speechText: context.responseText,
         notification: finalResponse.notification,
         persistTerminalState: () => {
           // commitVoiceTerminal consumes the receipts and blocks the task in
           // the same assistant write. Releasing the lease here would classify
           // these current receipts as stale and lose cross-channel progress.
-          return persistVoiceTakeoverExecution(responseText, {
-            toolRecords: toolResults,
+          return context.persistVoiceTakeoverExecution(context.responseText, {
+            toolRecords: context.toolResults,
             source: 'voice',
             sourceInteractionId: `voice_main_${Date.now()}`,
             finalizationBlocked: finalResponse.blocked,
@@ -2512,72 +2686,116 @@ export async function processVoiceInput(
         },
       });
     } else {
-      await Promise.allSettled(ttsPromises);
+      await Promise.allSettled(context.ttsPromises);
     }
 
     // Candidate model text is never spoken before the strict
     // database and terminal-receipt fences have both committed.
-    if (!isCurrentTurn()) return;
+    if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
 
-    const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
+    const conv = getOrCreateActiveConversation(context.session.userId, context.session.agentId, context.voiceScope.domain, context.voiceScope.orgId);
     // The user, assistant, task writeback, and terminal receipt committed
     // before TTS. Playback or
     // disconnect failures must never make a completed/blocked task disappear.
     // Topic tracking — extract and record topics for cross-session continuity
     if (!finalResponse.blocked) {
       try {
-        const topics = extractTopics(userText + ' ' + responseText);
+        const topics = extractTopics(context.userText + ' ' + context.responseText);
         for (const topic of topics) {
           trackTopic(conv.id, topic);
         }
       } catch {}
     }
     // Text sentiment analysis on user input (matching chat.ts behavior)
-    const textSentiment = extractSentiment(userText);
+    const textSentiment = extractSentiment(context.userText);
     if (textSentiment.valence !== 0 || textSentiment.urgency > 0 || textSentiment.frustration > 0) {
       try {
-        const es = loadEmotionalState(voiceStateKey);
+        const es = loadEmotionalState(context.voiceStateKey);
         const updated = updateEmotionalState(es, {
           type: 'sentiment_analysis',
           timestamp: new Date().toISOString(),
-          userId: session.userId,
+          userId: context.session.userId,
           sentiment: {
             valence: textSentiment.valence,
             frustration: textSentiment.frustration,
             urgency: textSentiment.urgency,
           },
         });
-        saveEmotionalState(voiceStateKey, updated);
-        try { const hm = loadHIMState(voiceStateKey); const { him: nh } = himTick(updated, hm); saveHIMState(voiceStateKey, nh); } catch {}
+        saveEmotionalState(context.voiceStateKey, updated);
+        try { const hm = loadHIMState(context.voiceStateKey); const { him: nh } = himTick(updated, hm); saveHIMState(context.voiceStateKey, nh); } catch {}
       } catch { /* best-effort */ }
     }
     if (mainTerminalCommitted && !finalResponse.blocked) {
-      persistVoiceLearning(responseText, { toolRecords: toolResults, logLabel: 'voice' });
+      context.persistVoiceLearning(context.responseText, { toolRecords: context.toolResults, logLabel: 'voice' });
     }
+  return { terminal: false as const, context: extendTurnBindings(context, {
 
-  } catch (err: any) {
-    if (isTtsCancellationError(err, pipelineAbort.signal)) {
+  }) };
+}
+
+async function processAdmittedVoiceTurn(socket: Socket, session: AudioSession, userText: string, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, io: Server, userReceivedAt = new Date().toISOString(), voiceAuthorized = false, inputTiming: VoiceInputTiming = {}, resources: ConversationResourceLifetime = {}): Promise<void> {
+  const prepareVoiceIdentityAndAdmissionResult = await prepareVoiceIdentityAndAdmission(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
+  if (prepareVoiceIdentityAndAdmissionResult.terminal) return;
+  const prepareVoiceContextAndRoutingResult = await prepareVoiceContextAndRouting(prepareVoiceIdentityAndAdmissionResult.context);
+  if (prepareVoiceContextAndRoutingResult.terminal) return;
+  const prepareVoiceExecutionAndPromptResult = await prepareVoiceExecutionAndPrompt(prepareVoiceContextAndRoutingResult.context);
+  if (prepareVoiceExecutionAndPromptResult.terminal) return;
+  const prepareVoiceReceiptsAndToolsResult = await prepareVoiceReceiptsAndTools(prepareVoiceExecutionAndPromptResult.context);
+  if (prepareVoiceReceiptsAndToolsResult.terminal) return;
+  const prepareVoiceSpeechResult = await prepareVoiceSpeech(prepareVoiceReceiptsAndToolsResult.context);
+  if (prepareVoiceSpeechResult.terminal) return;
+  const prepareVoiceReleaseResult = await prepareVoiceRelease(prepareVoiceSpeechResult.context);
+  if (prepareVoiceReleaseResult.terminal) return;
+  const context = prepareVoiceReleaseResult.context;
+  try {
+  const executeVoiceConfirmedAndDeterministicTurnResult = await executeVoiceConfirmedAndDeterministicTurn(context);
+  if (executeVoiceConfirmedAndDeterministicTurnResult.terminal) return;
+  const executeVoiceModeAndMessagingTurnResult = await executeVoiceModeAndMessagingTurn(executeVoiceConfirmedAndDeterministicTurnResult.context);
+  if (executeVoiceModeAndMessagingTurnResult.terminal) return;
+  const executeVoiceModelTurnResult = await executeVoiceModelTurn(executeVoiceModeAndMessagingTurnResult.context);
+  if (executeVoiceModelTurnResult.terminal) return;
+  const finalizeVoiceModelTurnResult = await finalizeVoiceModelTurn(executeVoiceModelTurnResult.context);
+  if (finalizeVoiceModelTurnResult.terminal) return;
+
+  }  catch (err: any) {
+    if (isTtsCancellationError(err, context.pipelineAbort.signal)) {
       logger.info('[Audio] Pipeline aborted (barge-in or stop)');
     } else {
       logger.error("[Audio Error]:", err);
-      if (finalAgentResponseDelivered) {
+      if (context.finalAgentResponseDelivered) {
         logger.warn('[Audio] Post-response persistence failed; suppressing a contradictory UI error');
       } else {
         const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
-        await finishVoiceTerminal({
+        await context.finishVoiceTerminal({
           text: failureText,
           source: 'voice_error',
           blocked: true,
           reason: 'voice_processing_failed',
           cognitiveIntent: 'voice_processing_failed',
           llmWasCalled: false,
-          toolCalls: toolResults,
+          toolCalls: context.toolResults,
           speechText: failureText,
         });
       }
     }
   } finally {
-    await releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.');
+
+    await context.releaseVoiceTurnResources('Voice model/tool pipeline reached its finally boundary.');
   }
+}
+
+export async function processVoiceInput(
+  socket: Socket,
+  session: AudioSession,
+  userText: string,
+  llmGetters: LlmGetters,
+  sensoryFn: (uid: string) => any,
+  io: Server,
+  userReceivedAt = new Date().toISOString(),
+  voiceAuthorized = false,
+  inputTiming: VoiceInputTiming = {},
+  resources: ConversationResourceLifetime = {},
+): Promise<void> {
+  return processAdmittedVoiceTurn(socket, session, userText, llmGetters, sensoryFn, io, userReceivedAt, voiceAuthorized, inputTiming, resources);
 }
 export { respondAlongsideActiveVoiceWork } from "./voice_side_response";

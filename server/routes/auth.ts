@@ -40,6 +40,14 @@ function sanitizeVoiceprintFrames(value: unknown): number[][] {
 }
 
 export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOptions: () => any) {
+  mountAccountSessionRoutes(router, jwtSecret, getCookieOptions);
+  mountAccountProvisioningRoutes(router, jwtSecret, getCookieOptions);
+  mountOrganizationSessionRoute(router, jwtSecret, getCookieOptions);
+  mountBiometricIdentityRoutes(router, jwtSecret);
+  mountAccountScopeRoutes(router, jwtSecret);
+}
+
+function mountAccountSessionRoutes(router: Router, jwtSecret: string, getCookieOptions: () => any) {
   router.post("/auth/register", authLimiter, async (req, res) => {
     try {
     const { username, password, phone } = req.body;
@@ -142,7 +150,9 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
     res.clearCookie("token", getCookieOptions());
     res.json({ success: true });
   });
+}
 
+function mountAccountProvisioningRoutes(router: Router, jwtSecret: string, getCookieOptions: () => any) {
   // Native-only bootstrap handoff. Loopback is necessary but not sufficient.
   router.post("/auth/bootstrap", async (req, res) => {
     try {
@@ -280,7 +290,9 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
+}
 
+function mountOrganizationSessionRoute(router: Router, jwtSecret: string, getCookieOptions: () => any) {
   // Switch into organization context — returns a new JWT with orgId + orgRole
   // Validate membership in the target org below, so a former member can still
   // leave the old org context and return to their personal workspace.
@@ -328,7 +340,9 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       res.status(401).json({ error: "Invalid token" });
     }
   });
+}
 
+function mountBiometricIdentityRoutes(router: Router, jwtSecret: string) {
   // ── Biometric enrollment ──
 
   // Enroll a voiceprint: receives MFCC features extracted in-browser
@@ -525,7 +539,9 @@ export function mountAuthRoutes(router: Router, jwtSecret: string, getCookieOpti
       res.status(401).json({ error: "Invalid token" });
     }
   });
+}
 
+function mountAccountScopeRoutes(router: Router, jwtSecret: string) {
   // Face/voice signals currently support presence and command gating, not
   // cryptographic authentication. Keep old clients from silently impersonating
   // another local user until an explicit biometric challenge is implemented.

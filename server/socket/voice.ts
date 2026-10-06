@@ -56,13 +56,10 @@ import { captureVoiceTurnOwner, cancelActiveVoiceTurn, quiesceActiveVoiceTranspo
 import { respondAlongsideActiveVoiceWork } from "./voice_conversation_turn";
 import { runVoiceInputPipeline } from "./voice_input_pipeline";
 
-export function registerVoiceHandlers(
-  socket: Socket,
-  llmGetters: LlmGetters,
-  sensoryFn: (uid: string) => any,
-  getUserId: (s: Socket) => string,
-  io: Server,
-) {
+type ProactiveContext = { contextId: string; userId: string; domain: 'personal' | 'work'; orgId: string; voiceId: string | null; enabled: boolean };
+
+function createVoiceConnectionRuntime(socket: Socket, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, getUserId: (s: Socket) => string, io: Server) {
+
   const commitActiveVoiceCancellation = async (
     session: AudioSession,
     options: {
@@ -253,9 +250,30 @@ export function registerVoiceHandlers(
 
   const callAdmission = createVoiceCallAdmission();
   let pendingStandardStart: { sessionId: string; cancelled: boolean } | undefined;
-  registerMemoryAvatarVoiceHandlers(socket, llmGetters, getUserId, callAdmission);
+  let proactiveContext: ProactiveContext | null = null;
+  let proactiveController: AbortController | null = null;
+  const cancelProactive = () => { proactiveController?.abort(); proactiveController = null; };
+  return {
+    socket,
+    llmGetters,
+    sensoryFn,
+    getUserId,
+    io,
+    commitActiveVoiceCancellation,
+    stopVoiceCall,
+    callAdmission,
+    get pendingStandardStart() { return pendingStandardStart; },
+    set pendingStandardStart(value: { sessionId: string; cancelled: boolean } | undefined) { pendingStandardStart = value; },
+    get proactiveContext() { return proactiveContext; },
+    set proactiveContext(value: ProactiveContext | null) { proactiveContext = value; },
+    get proactiveController() { return proactiveController; },
+    set proactiveController(value: AbortController | null) { proactiveController = value; },
+    cancelProactive,
+  };
+}
+type VoiceConnectionRuntime = ReturnType<typeof createVoiceConnectionRuntime>;
 
-  socket.on("audio:start", async (data: {
+type StandardVoiceStartRequest = {
     voiceId?: string;
     personalityId?: string;
     agentId?: string;
@@ -266,20 +284,23 @@ export function registerVoiceHandlers(
     sessionId?: string;
     audioInputKind?: string;
     captureSessionId?: string;
-  }) => {
-    logger.info(`[Audio] Voice call started by ${socket.id}`);
-    cancelProactive();
+  };
+
+async function handleStandardVoiceStart(runtime: VoiceConnectionRuntime, data: StandardVoiceStartRequest): Promise<void> {
+
+    logger.info(`[Audio] Voice call started by ${runtime.socket.id}`);
+    runtime.cancelProactive();
     const pendingOwner = { sessionId: normalizeVoiceSessionId(data.sessionId), cancelled: false };
-    pendingStandardStart = pendingOwner;
+    runtime.pendingStandardStart = pendingOwner;
     let admittedSession: AudioSession | undefined;
-    const candidate = callAdmission.claim(async () => {
+    const candidate = runtime.callAdmission.claim(async () => {
       pendingOwner.cancelled = true;
-      if (admittedSession) await stopVoiceCall(admittedSession, { source: 'voice_call_replaced', error: { code: 'CALL_REPLACED', message: 'Another voice call started.' } });
+      if (admittedSession) await runtime.stopVoiceCall(admittedSession, { source: 'voice_call_replaced', error: { code: 'CALL_REPLACED', message: 'Another voice call started.' } });
     }, 'lumi');
     const reservation = candidate instanceof Promise ? await candidate : candidate;
-    if (!reservation.isCurrent() || !socket.connected || pendingOwner.cancelled || pendingStandardStart !== pendingOwner) { reservation.release(); return; }
-    pendingStandardStart = undefined;
-    const session = getAudioSession(socket);
+    if (!reservation.isCurrent() || !runtime.socket.connected || pendingOwner.cancelled || runtime.pendingStandardStart !== pendingOwner) { reservation.release(); return; }
+    runtime.pendingStandardStart = undefined;
+    const session = getAudioSession(runtime.socket);
     admittedSession = session;
     const startControlGeneration = ++session.callControlGeneration;
     session.stopAuthorizationWatch?.();
@@ -296,14 +317,14 @@ export function registerVoiceHandlers(
     // Even an inactive call can still have cancellation timers awaiting
     // convergence. The new owner must finish clearing those before admission.
     if (session.userId) {
-      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+      setRealtimeVoiceSessionActive(session.userId, runtime.socket.id, false);
       if (session.activeTurnRequestId) {
-        await commitActiveVoiceCancellation(session, { source: 'voice_restarted' });
+        await runtime.commitActiveVoiceCancellation(session, { source: 'voice_restarted' });
       } else {
         await cancelActiveVoiceTurn(session);
       }
     }
-    if (session.callControlGeneration !== startControlGeneration || !socket.connected) return;
+    if (session.callControlGeneration !== startControlGeneration || !runtime.socket.connected) return;
     session.isActive = true;
     session.voiceSwitchGeneration += 1;
     const voiceStartGeneration = session.voiceSwitchGeneration;
@@ -326,8 +347,8 @@ export function registerVoiceHandlers(
     session.lastAcceptedCommandKey = '';
     session.lastAcceptedCommandAt = 0;
     session.lastAcceptedCommandChunkAt = 0;
-    session.userId = getUserId(socket);
-    setRealtimeVoiceSessionActive(session.userId, socket.id, true);
+    session.userId = runtime.getUserId(runtime.socket);
+    setRealtimeVoiceSessionActive(session.userId, runtime.socket.id, true);
     const requestedAgentId = String(data.agentId || 'lumi').trim() || 'lumi';
     // Memory Avatars are deliberately text-only, frozen, tool-free surfaces.
     // Voice currently uses the full Lumi execution lane, so accepting a
@@ -336,9 +357,9 @@ export function registerVoiceHandlers(
     if (requestedAgentId.startsWith('memory_avatar_')) {
       logger.warn(`[Audio] Refused voice start for Memory Avatar lane: ${requestedAgentId}`);
       session.isActive = false;
-      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
+      setRealtimeVoiceSessionActive(session.userId, runtime.socket.id, false);
       session.agentId = 'lumi';
-      socket.emit('audio:error', {
+      runtime.socket.emit('audio:error', {
         code: 'MEMORY_AVATAR_VOICE_UNAVAILABLE',
         message: 'Memory Avatars are available in their private text sanctuary, not in the voice execution lane.',
       });
@@ -350,16 +371,16 @@ export function registerVoiceHandlers(
         ? data.captureSessionId
         : '',
       audioInputKind: data.audioInputKind,
-      nativeBinding: buildSocketNativeRequestBinding(socket),
+      nativeBinding: buildSocketNativeRequestBinding(runtime.socket),
       syntheticBinding: getTaskRegressionSyntheticVoiceBinding(),
     });
     session.activeTurnProvenance = null;
     session.activeForegroundRequestIdentity = null;
-    const sessionScope = resolveSocketScope(socket, session.userId, data);
+    const sessionScope = resolveSocketScope(runtime.socket, session.userId, data);
     session.domain = sessionScope.domain;
     session.orgId = sessionScope.orgId;
-    if (socket.data?.authenticatedOrgId && sessionScope.domain !== 'work') {
-      await stopVoiceCall(session, { source: 'voice_authorization_revoked', error: { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.' } });
+    if (runtime.socket.data?.authenticatedOrgId && sessionScope.domain !== 'work') {
+      await runtime.stopVoiceCall(session, { source: 'voice_authorization_revoked', error: { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.' } });
       return;
     }
     const authorization = captureChatAuthorization(session.userId, sessionScope);
@@ -368,7 +389,7 @@ export function registerVoiceHandlers(
     let authorizationCancellation: Promise<void> | undefined;
     session.cancelAuthorizationTurn = (requestId: string) => {
       if (session.authorization !== authorization || session.activeTurnRequestId !== requestId) return Promise.resolve();
-      if (!authorizationCancellation) authorizationCancellation = commitActiveVoiceCancellation(session, {
+      if (!authorizationCancellation) authorizationCancellation = runtime.commitActiveVoiceCancellation(session, {
         source: 'voice_authorization_revoked',
       }).then(() => undefined);
       return authorizationCancellation;
@@ -383,8 +404,8 @@ export function registerVoiceHandlers(
       const revokedStt = session.sttSession;
       session.sttSession = null;
       try { revokedStt?.end(); } catch { /* The revoked call remains closed. */ }
-      setRealtimeVoiceSessionActive(session.userId, socket.id, false);
-      socket.emit('audio:error', { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.', sessionId: voiceStartSessionId });
+      setRealtimeVoiceSessionActive(session.userId, runtime.socket.id, false);
+      runtime.socket.emit('audio:error', { code: 'ORGANIZATION_ACCESS_CHANGED', message: 'Organization access changed. Start a new authorized session.', sessionId: voiceStartSessionId });
     }, { once: true });
     session.stopAuthorizationWatch = authorization.watch(authorizationAbort);
 
@@ -411,7 +432,7 @@ export function registerVoiceHandlers(
     session.voiceprintLastAt = 0;
     session.voiceprintUtteranceEpoch += 1;
     resetUtteranceVoiceprint(session);
-    socket.emit('voiceprint:utterance_reset', { epoch: session.voiceprintUtteranceEpoch });
+    runtime.socket.emit('voiceprint:utterance_reset', { epoch: session.voiceprintUtteranceEpoch });
     const personalityCfg = personalityRegistry.getForUser(
       data.personalityId || 'lumi',
       session.userId,
@@ -425,7 +446,7 @@ export function registerVoiceHandlers(
     if (requestedVoiceId && !isVoiceProfileAccessible(voiceScope, requestedVoiceId)) {
       logger.warn(`[Audio] Refused voice profile from another domain: ${requestedVoiceId}`);
       session.currentVoiceId = null;
-      socket.emit('audio:voice_unavailable', {
+      runtime.socket.emit('audio:voice_unavailable', {
         reason: 'voice_profile_scope_mismatch',
         requestedVoiceId,
         currentVoiceId: session.currentVoiceId,
@@ -455,7 +476,7 @@ export function registerVoiceHandlers(
               logger.info(
                 `[Audio] Reconciled live voice for provider=${activeTtsProvider} requested=${requestedVoiceId || 'none'} resolved=${voiceResolution.voiceId}`,
               );
-              socket.emit('audio:voice_changed', {
+              runtime.socket.emit('audio:voice_changed', {
                 voiceId: voiceResolution.voiceId,
                 previousVoiceId: requestedVoiceId,
                 sessionId: session.sessionId,
@@ -480,17 +501,28 @@ export function registerVoiceHandlers(
             logger.warn(
               `[Audio] Could not reconcile live voice for provider=${activeTtsProvider}: ${error?.message || String(error)}`,
             );
-            if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+            if (!session.transcriptionOnly) emitVoiceTtsFailure(runtime.socket, undefined, 'conversation');
           }
         }
       } else {
         // Preserve the requested id so a provider that recovers during this
         // call can reconcile it at synthesis time. STT remains usable.
         session.currentVoiceId = requestedVoiceId;
-        if (!session.transcriptionOnly) emitVoiceTtsFailure(socket, undefined, 'conversation');
+        if (!session.transcriptionOnly) emitVoiceTtsFailure(runtime.socket, undefined, 'conversation');
       }
     }
     session.personalityId = data.personalityId || 'lumi';
+  return startVoiceTranscription(runtime, session, startControlGeneration, voiceStartSessionId, authorization);
+}
+
+async function startVoiceTranscription(
+  runtime: VoiceConnectionRuntime,
+  session: AudioSession,
+  startControlGeneration: number,
+  voiceStartSessionId: string,
+  authorization: ReturnType<typeof captureChatAuthorization>,
+): Promise<void> {
+
 
     const sttProvider = getActiveStreamingSTTProvider();
     if (sttProvider) {
@@ -502,7 +534,7 @@ export function registerVoiceHandlers(
             onRecovering: ({ attempt, delayMs, error }) => {
               if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.warn(`[Audio] STT connection recovering (attempt=${attempt}, delayMs=${delayMs}): ${error.message}`);
-              socket.emit('audio:status', {
+              runtime.socket.emit('audio:status', {
                 status: 'connecting',
                 sessionId: voiceStartSessionId,
                 reason: 'stt_recovering',
@@ -514,14 +546,14 @@ export function registerVoiceHandlers(
               if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.info(`[Audio] STT connection recovered after attempt ${attempt}`);
               if (!session.isProcessing && !session.isSpeaking) {
-                socket.emit('audio:status', { status: 'listening', reason: 'stt_recovered', sessionId: voiceStartSessionId });
+                runtime.socket.emit('audio:status', { status: 'listening', reason: 'stt_recovered', sessionId: voiceStartSessionId });
               }
             },
           },
         );
         const callbackSttSession = session.sttSession;
         const callbackSessionId = session.sessionId;
-        resetSilenceTimer(session, socket);
+        resetSilenceTimer(session, runtime.socket);
 
         session.sttSession.onResult(async (result) => {
           if (!authorization.isCurrent()) return;
@@ -553,7 +585,7 @@ export function registerVoiceHandlers(
           ) {
             logger.info(`[Audio] Ignored echoed priority control (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
-            if (result.isFinal) advanceVoiceprintUtterance(socket, session);
+            if (result.isFinal) advanceVoiceprintUtterance(runtime.socket, session);
             return;
           }
           if (
@@ -563,10 +595,10 @@ export function registerVoiceHandlers(
           ) {
             logger.info(`[Audio] Voice-call end command recognized (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
-            await commitActiveVoiceCancellation(session, { source: 'voice_end_command' });
+            await runtime.commitActiveVoiceCancellation(session, { source: 'voice_end_command' });
             if (!inputOwner.isCurrent()) return;
             resetUtteranceVoiceprint(session);
-            socket.emit('audio:end-call-request', { sessionId: callbackSessionId });
+            runtime.socket.emit('audio:end-call-request', { sessionId: callbackSessionId });
             return;
           }
           if (
@@ -577,9 +609,9 @@ export function registerVoiceHandlers(
             logger.info(`[Audio] Priority stop recognized (${result.isFinal ? 'final' : 'interim'})`);
             session.accumulatedText = '';
             await handlePriorityVoiceStop(
-              socket,
+              runtime.socket,
               session,
-              () => commitActiveVoiceCancellation(session).then(() => undefined),
+              () => runtime.commitActiveVoiceCancellation(session).then(() => undefined),
             );
             return;
           }
@@ -629,19 +661,19 @@ export function registerVoiceHandlers(
             const isFiller = /^[嗯啊哦呃哼唉呀哈呵嗨喂诶唔嘶啧哎哦哟嘿嘛哇啦嘞][。！？.!?，,～~]*$/.test(text);
             if (isFiller || isVoiceFiller(text)) {
               logger.info(`[Audio] Ignored filler (${text.length} chars)`);
-              advanceVoiceprintUtterance(socket, session);
+              advanceVoiceprintUtterance(runtime.socket, session);
               return;
             }
             if (isSpeechClearlyDirectedAwayFromLumi(text)) {
               logger.info(`[Audio] Ignored speech explicitly directed to another person (${text.length} chars)`);
-              advanceVoiceprintUtterance(socket, session);
+              advanceVoiceprintUtterance(runtime.socket, session);
               return;
             }
             // ── Filter pure noise (no CJK, no letters, no digits) ──
             const hasContent = /[a-zA-Z一-鿿㐀-䶿\d]/.test(text);
             if (!hasContent) {
               logger.info(`[Audio] Ignored pure noise (${text.length} chars)`);
-              advanceVoiceprintUtterance(socket, session);
+              advanceVoiceprintUtterance(runtime.socket, session);
               return;
             }
 
@@ -649,7 +681,7 @@ export function registerVoiceHandlers(
             // voiceprint gate so self speech cannot mutate the call state.
             if (isEchoText(text, session.isSpeaking, voiceEchoScope(session))) {
               logger.info(`[Audio] Echo cancelled during speech (${text.length} chars)`);
-              advanceVoiceprintUtterance(socket, session);
+              advanceVoiceprintUtterance(runtime.socket, session);
               return;
             }
 
@@ -657,15 +689,15 @@ export function registerVoiceHandlers(
             if (!session.transcriptionOnly && !isVoiceprintGateOpen(session)) {
               const verifiedAfterSync = await waitForVoiceprintGate(session);
               if (!verifiedAfterSync) {
-                blockUnverifiedVoice(socket, session, 'Ignored transcript before command/barge-in');
-                advanceVoiceprintUtterance(socket, session);
-                resetSilenceTimer(session, socket);
+                blockUnverifiedVoice(runtime.socket, session, 'Ignored transcript before command/barge-in');
+                advanceVoiceprintUtterance(runtime.socket, session);
+                resetSilenceTimer(session, runtime.socket);
                 return;
               }
               voiceAuthorized = true;
             }
             const transcriptSpeakerMeta = getVoiceprintSpeakerMeta(session);
-            advanceVoiceprintUtterance(socket, session);
+            advanceVoiceprintUtterance(runtime.socket, session);
             const commandKey = speechCommandKey(text);
             const duplicateActiveFinal = isRepeatedVoiceFinal({
               commandKey,
@@ -677,8 +709,8 @@ export function registerVoiceHandlers(
             });
             if (duplicateActiveFinal) {
               logger.info(`[Audio] Ignored duplicate final transcript (${text.length} chars)`);
-              socket.emit('audio:confirm', { text });
-              resetSilenceTimer(session, socket);
+              runtime.socket.emit('audio:confirm', { text });
+              resetSilenceTimer(session, runtime.socket);
               return;
             }
             session.lastAcceptedCommandKey = commandKey;
@@ -699,21 +731,21 @@ export function registerVoiceHandlers(
               );
               const workRequestId = session.activeTurnRequestId;
               interruptVoiceSpeech(session);
-              socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
-              socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
-              socket.emit('audio:confirm', { text });
+              runtime.socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
+              runtime.socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
+              runtime.socket.emit('audio:confirm', { text });
               void respondAlongsideActiveVoiceWork(
-                socket,
+                runtime.socket,
                 session,
                 text,
-                llmGetters,
+                runtime.llmGetters,
                 'side_chat',
                 {
                   text: transcriptExecutionGuard.responseText,
                   cognitiveIntent: 'voice_transcript_clarification',
                 },
               );
-              resetSilenceTimer(session, socket);
+              resetSilenceTimer(session, runtime.socket);
               return;
             }
             if (session.isProcessing || session.isSpeaking) {
@@ -742,8 +774,8 @@ export function registerVoiceHandlers(
                   // exact pending action remain intact for the confirmation
                   // turn that starts immediately below.
                   if (!await reservePriorityVoiceHandoff(session, false)) return;
-                  socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
-                  socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: false });
+                  runtime.socket.emit('audio:status', { status: 'interrupted', sessionId: callbackSessionId });
+                  runtime.socket.emit('audio:interrupt-ack', { sessionId: callbackSessionId, workContinues: false });
                   // Fall through to the normal pipeline, which executes the
                   // exact one-time pending action deterministically.
                 } else {
@@ -755,12 +787,12 @@ export function registerVoiceHandlers(
                 const interruptionKind = activeWorkDecision.kind;
                 logger.info(`[Audio] Work-lane interruption=${interruptionKind} source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (interruptionKind === 'cancel_work') {
-                  await commitActiveVoiceCancellation(session, { source: 'voice_cancel_command' });
+                  await runtime.commitActiveVoiceCancellation(session, { source: 'voice_cancel_command' });
                   if (!inputOwner.isCurrent()) return;
-                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
-                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
-                  socket.emit("audio:status", { status: "listening" });
-                  resetSilenceTimer(session, socket);
+                  runtime.socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  runtime.socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
+                  runtime.socket.emit("audio:status", { status: "listening" });
+                  resetSilenceTimer(session, runtime.socket);
                   return;
                 }
                 if (interruptionKind === 'modify_work') {
@@ -769,17 +801,17 @@ export function registerVoiceHandlers(
                   // durable task id, receipts, permission snapshot, and
                   // pending confirmation for the corrected continuation.
                   if (!await reservePriorityVoiceHandoff(session, true)) return;
-                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
-                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
+                  runtime.socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  runtime.socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: false });
                   // Fall through: the correction is merged into a replacement work turn.
                 } else {
                   const workRequestId = session.activeTurnRequestId;
                   interruptVoiceSpeech(session);
-                  socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
-                  socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
+                  runtime.socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                  runtime.socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId, workContinues: true, requestId: workRequestId });
                   if (interruptionKind === 'stop_speaking') {
-                    socket.emit("audio:status", { status: "listening", requestId: workRequestId, lane: 'work' });
-                    resetSilenceTimer(session, socket);
+                    runtime.socket.emit("audio:status", { status: "listening", requestId: workRequestId, lane: 'work' });
+                    resetSilenceTimer(session, runtime.socket);
                     return;
                   }
                   if (activeWorkDecision.queueIncomingWork) {
@@ -800,19 +832,19 @@ export function registerVoiceHandlers(
                         captureChunkSequence: session.voiceCaptureProvenance.chunkSequence,
                       },
                     });
-                    socket.emit('audio:work_queued', {
+                    runtime.socket.emit('audio:work_queued', {
                       text,
                       queuePosition: session.inputQueue.findIndex(item => speechCommandKey(item.text) === commandKey) + 1,
                       activeRequestId: workRequestId,
                     });
-                    socket.emit("audio:confirm", { text });
-                    void respondAlongsideActiveVoiceWork(socket, session, text, llmGetters, interruptionKind);
-                    resetSilenceTimer(session, socket);
+                    runtime.socket.emit("audio:confirm", { text });
+                    void respondAlongsideActiveVoiceWork(runtime.socket, session, text, runtime.llmGetters, interruptionKind);
+                    resetSilenceTimer(session, runtime.socket);
                     return;
                   } else {
-                    socket.emit("audio:confirm", { text });
-                    void respondAlongsideActiveVoiceWork(socket, session, text, llmGetters, interruptionKind);
-                    resetSilenceTimer(session, socket);
+                    runtime.socket.emit("audio:confirm", { text });
+                    void respondAlongsideActiveVoiceWork(runtime.socket, session, text, runtime.llmGetters, interruptionKind);
+                    resetSilenceTimer(session, runtime.socket);
                     return;
                   }
                 }
@@ -820,46 +852,46 @@ export function registerVoiceHandlers(
               } else if (session.isSpeaking) {
                 logger.info(`[Audio] Barge-in during speech source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (isPureInterruptCommand(text)) {
-                  await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                  await runtime.commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
                   if (!inputOwner.isCurrent()) return;
                 } else {
-                  await commitActiveVoiceCancellation(session, { source: 'voice_replaced', preserveInterruptedTurn: true });
+                  await runtime.commitActiveVoiceCancellation(session, { source: 'voice_replaced', preserveInterruptedTurn: true });
                   if (!inputOwner.isCurrent()) return;
                 }
-                socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
-                socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
+                runtime.socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                runtime.socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
                 if (isPureInterruptCommand(text)) {
-                  socket.emit("audio:status", { status: "listening" });
-                  resetSilenceTimer(session, socket);
+                  runtime.socket.emit("audio:status", { status: "listening" });
+                  resetSilenceTimer(session, runtime.socket);
                   return;
                 }
               } else {
                 logger.info(`[Audio] Barge-in during processing source=semantic_transcript request=${session.activeTurnRequestId || 'none'} (${text.length} chars)`);
                 if (isPureInterruptCommand(text)) {
-                  await commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
+                  await runtime.commitActiveVoiceCancellation(session, { source: 'voice_interrupt_command' });
                   if (!inputOwner.isCurrent()) return;
                 } else {
-                  await commitActiveVoiceCancellation(session, { source: 'voice_replaced', preserveInterruptedTurn: true });
+                  await runtime.commitActiveVoiceCancellation(session, { source: 'voice_replaced', preserveInterruptedTurn: true });
                   if (!inputOwner.isCurrent()) return;
                 }
-                socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
-                socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
+                runtime.socket.emit("audio:status", { status: "interrupted", sessionId: callbackSessionId });
+                runtime.socket.emit("audio:interrupt-ack", { sessionId: callbackSessionId });
                 if (isPureInterruptCommand(text)) {
-                  socket.emit("audio:status", { status: "listening" });
-                  resetSilenceTimer(session, socket);
+                  runtime.socket.emit("audio:status", { status: "listening" });
+                  resetSilenceTimer(session, runtime.socket);
                   return;
                 }
               }
             }
 
             // Echo confirmation — brief window for user to see what was heard and interrupt if wrong
-            socket.emit("audio:confirm", { text });
+            runtime.socket.emit("audio:confirm", { text });
             logger.info(`[Audio] Accepted transcript (${text.length} chars)`);
 
             if (session.transcriptionOnly) {
-              socket.emit("audio:transcript", { text, isFinal: true, ...transcriptSpeakerMeta });
-              socket.emit("audio:status", { status: "listening" });
-              resetSilenceTimer(session, socket);
+              runtime.socket.emit("audio:transcript", { text, isFinal: true, ...transcriptSpeakerMeta });
+              runtime.socket.emit("audio:status", { status: "listening" });
+              resetSilenceTimer(session, runtime.socket);
               return;
             }
 
@@ -871,12 +903,12 @@ export function registerVoiceHandlers(
               session.bargeinTimer = null;
               if (!session.isActive) return;
               void runVoiceInputPipeline(
-                socket,
+                runtime.socket,
                 session,
                 text,
-                llmGetters,
-                sensoryFn,
-                io,
+                runtime.llmGetters,
+                runtime.sensoryFn,
+                runtime.io,
                 new Date(asrFinalAt).toISOString(),
                 voiceAuthorized,
                 {
@@ -895,7 +927,7 @@ export function registerVoiceHandlers(
             // utterance has passed its own speaker-verification gate.
             && (session.transcriptionOnly || !session.voiceprintRequired || isVoiceprintGateOpen(session))
           ) {
-            socket.emit("audio:transcript", { text: result.text, isFinal: false });
+            runtime.socket.emit("audio:transcript", { text: result.text, isFinal: false });
           }
         });
 
@@ -908,30 +940,33 @@ export function registerVoiceHandlers(
             callbackSttSession,
           })) return;
           logger.error("[Audio STT Error]:", err);
-          await stopVoiceCall(session, { source: 'voice_stt_failed', error: {
+          await runtime.stopVoiceCall(session, { source: 'voice_stt_failed', error: {
             code: 'STT_RUNTIME_FAILED',
             message: 'Speech recognition temporarily failed. Please try again.',
           } });
         });
 
-        socket.emit("audio:status", { status: "listening", sessionId: voiceStartSessionId });
+        runtime.socket.emit("audio:status", { status: "listening", sessionId: voiceStartSessionId });
       } catch (err: any) {
         logger.error("[Audio Start Error]:", err);
-        await stopVoiceCall(session, { source: 'voice_start_failed', error: {
+        await runtime.stopVoiceCall(session, { source: 'voice_start_failed', error: {
           code: 'VOICE_START_FAILED',
           message: 'Voice input could not be started. Check the voice settings and try again.',
         } });
       }
     } else {
-      await stopVoiceCall(session, { source: 'voice_stt_not_configured', error: {
+      await runtime.stopVoiceCall(session, { source: 'voice_stt_not_configured', error: {
         code: 'STT_NOT_CONFIGURED',
         message: 'Realtime speech recognition is not configured. Choose an available speech-recognition service in Voice settings.',
       } });
     }
-  });
+}
 
-  socket.on('audio:switch-voice', async (data: VoiceSwitchRequest = {}) => {
-    const session = getAudioSession(socket);
+function registerVoiceCaptureAndControl(runtime: VoiceConnectionRuntime) {
+
+
+  runtime.socket.on('audio:switch-voice', async (data: VoiceSwitchRequest = {}) => {
+    const session = getAudioSession(runtime.socket);
     const switchGeneration = ++session.voiceSwitchGeneration;
     const requestedVoiceId = normalizeVoiceSwitchId(data?.voiceId);
     const scope = voiceProfileScope(session.userId, session.domain, session.orgId);
@@ -939,7 +974,7 @@ export function registerVoiceHandlers(
       ? await isVoiceSwitchSelectionAvailable(scope, requestedVoiceId)
       : false;
     if (session.voiceSwitchGeneration !== switchGeneration) {
-      socket.emit('audio:voice_unavailable', {
+      runtime.socket.emit('audio:voice_unavailable', {
         accepted: false,
         reason: 'voice_switch_superseded',
         requestedVoiceId,
@@ -955,11 +990,11 @@ export function registerVoiceHandlers(
       () => available,
     );
     if (!resolution.accepted) {
-      socket.emit('audio:voice_unavailable', resolution);
+      runtime.socket.emit('audio:voice_unavailable', resolution);
       return;
     }
 
-    socket.emit('audio:voice_changed', {
+    runtime.socket.emit('audio:voice_changed', {
       voiceId: resolution.voiceId,
       previousVoiceId: resolution.previousVoiceId,
       sessionId: resolution.sessionId,
@@ -967,29 +1002,29 @@ export function registerVoiceHandlers(
   });
 
   const resolveMeetingRequest = (data: { meetingId?: string; refinementId?: string }) => {
-    const userId = getUserId(socket);
-    const scope = resolveSocketScope(socket, userId);
-    if (!userId || (socket.data?.authenticatedOrgId && scope.domain !== 'work')) throw new Error('Organization access changed.');
+    const userId = runtime.getUserId(runtime.socket);
+    const scope = resolveSocketScope(runtime.socket, userId);
+    if (!userId || (runtime.socket.data?.authenticatedOrgId && scope.domain !== 'work')) throw new Error('Organization access changed.');
     const meetingId = normalizeMeetingId(data?.meetingId);
     if (!meetingId) throw new Error('A meeting identity is required.');
     const authorization = captureChatAuthorization(userId, scope);
     const directory = getMeetingAudioDir({ userId, domain: scope.domain, orgId: scope.orgId });
     const recording = findPausedMeetingRecording(directory, meetingId, meetingAuthorizationKey(userId, scope), authorization.isCurrent);
-    return { recording, snapshot: { ...getAudioSession(socket), ...scope, userId, meetingId, authorization } };
+    return { recording, snapshot: { ...getAudioSession(runtime.socket), ...scope, userId, meetingId, authorization } };
   };
-  socket.on('meeting:refine', (data: { meetingId?: string; refinementId?: string }) => {
+  runtime.socket.on('meeting:refine', (data: { meetingId?: string; refinementId?: string }) => {
     const identity = { meetingId: normalizeMeetingId(data?.meetingId), refinementId: normalizeMeetingId(data?.refinementId) };
     try {
       const { recording, snapshot } = resolveMeetingRequest(data);
       const detached = recording && takeMeetingRecording(recording);
       if (!detached) throw new Error('No paused recording is available; keeping the live transcript.');
-      void refineMeetingTranscript(io, socket, snapshot, detached, identity.refinementId);
+      void refineMeetingTranscript(runtime.io, runtime.socket, snapshot, detached, identity.refinementId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Meeting recording is unavailable.';
-      socket.emit('meeting:refine_error', { ...identity, message, ...(/authorization|Organization access/i.test(message) ? { reason: 'authorization_revoked' } : {}) });
+      runtime.socket.emit('meeting:refine_error', { ...identity, message, ...(/authorization|Organization access/i.test(message) ? { reason: 'authorization_revoked' } : {}) });
     }
   });
-  socket.on('meeting:discard', (data: { meetingId?: string }) => {
+  runtime.socket.on('meeting:discard', (data: { meetingId?: string }) => {
     try {
       const { recording } = resolveMeetingRequest(data);
       const detached = recording && takeMeetingRecording(recording);
@@ -998,11 +1033,11 @@ export function registerVoiceHandlers(
   });
 
   let chunkCount = 0;
-  socket.on("audio:chunk", (data: Buffer) => {
-    const session = getAudioSession(socket);
+  runtime.socket.on("audio:chunk", (data: Buffer) => {
+    const session = getAudioSession(runtime.socket);
     if (!session.isActive || session.authorization?.isCurrent() === false) return;
     session.lastChunkTime = Date.now();
-    resetSilenceTimer(session, socket);
+    resetSilenceTimer(session, runtime.socket);
     if (session.transcriptionOnly && session.meetingPcmPath) {
       try {
         const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -1035,8 +1070,8 @@ export function registerVoiceHandlers(
   });
 
   // ── Voiceprint: receive MFCC match results from frontend hook ──
-  socket.on("voiceprint:result", (data: { isOwnerSpeaking: boolean; confidence: number; speakerLabel?: string | null; source?: string; quality?: number; frameCount?: number; reason?: string; utteranceEpoch?: number }) => {
-    const session = getAudioSession(socket);
+  runtime.socket.on("voiceprint:result", (data: { isOwnerSpeaking: boolean; confidence: number; speakerLabel?: string | null; source?: string; quality?: number; frameCount?: number; reason?: string; utteranceEpoch?: number }) => {
+    const session = getAudioSession(runtime.socket);
     if (session.domain === 'work') return;
     session.voiceprintMatched = data.isOwnerSpeaking === true;
     session.voiceprintConfidence = Number(data.confidence) || 0;
@@ -1064,10 +1099,10 @@ export function registerVoiceHandlers(
     logger.info(`[Voiceprint] result epoch=${resultEpoch} source=${data.source || 'unknown'} matched=${data.isOwnerSpeaking} conf=${session.utteranceVoiceprintConfidence.toFixed(2)} quality=${session.utteranceVoiceprintQuality.toFixed(2)} frames=${session.utteranceVoiceprintFrameCount} reason=${data.reason || '-'}`);
   });
 
-  socket.on('audio:playback_started', (data: { requestId?: string; lane?: string; durationMs?: number; clientDecodeMs?: number; clientReceiptToPlaybackMs?: number }) => {
+  runtime.socket.on('audio:playback_started', (data: { requestId?: string; lane?: string; durationMs?: number; clientDecodeMs?: number; clientReceiptToPlaybackMs?: number }) => {
     const requestId = String(data?.requestId || '').trim();
     if (!requestId.startsWith('voice_')) return;
-    const session = getAudioSession(socket);
+    const session = getAudioSession(runtime.socket);
     const durationMs = Math.max(250, Math.min(120_000, Number(data?.durationMs) || 3_000));
     session.ttsPlaybackUntil = Math.max(session.ttsPlaybackUntil, Date.now() + durationMs + 250);
     recordVoicePlaybackMetrics(requestId, data);
@@ -1078,11 +1113,11 @@ export function registerVoiceHandlers(
   });
 
   // ── Presence: periodic heartbeat from usePresence hook ──
-  socket.on("presence:heartbeat", (data: { facePresent: boolean; faceMatched?: boolean; faceConfidence: number; voiceprintMatched: boolean; voiceprintConfidence: number }) => {
-    const userId = getUserId(socket);
-    const presenceScope = resolveSocketScope(socket, userId);
+  runtime.socket.on("presence:heartbeat", (data: { facePresent: boolean; faceMatched?: boolean; faceConfidence: number; voiceprintMatched: boolean; voiceprintConfidence: number }) => {
+    const userId = runtime.getUserId(runtime.socket);
+    const presenceScope = resolveSocketScope(runtime.socket, userId);
     if (presenceScope.domain === 'work') {
-      socket.emit('presence:state_change', { isAway: true, status: 'unavailable_in_organization' });
+      runtime.socket.emit('presence:state_change', { isAway: true, status: 'unavailable_in_organization' });
       return;
     }
     const state = updatePresence(userId, {
@@ -1093,23 +1128,23 @@ export function registerVoiceHandlers(
       voiceprintConfidence: Number(data.voiceprintConfidence) || 0,
     });
     const status = state.isAway ? 'away' : (state.faceMatched || state.voiceprintMatched ? 'present' : 'uncertain');
-    socket.emit('presence:state_change', { isAway: state.isAway, status });
+    runtime.socket.emit('presence:state_change', { isAway: state.isAway, status });
   });
 
-  socket.on('audio:interrupt-candidate', (data?: {
+  runtime.socket.on('audio:interrupt-candidate', (data?: {
     source?: string;
     rms?: number;
     threshold?: number;
     frames?: number;
     ttsAgeMs?: number;
   }) => {
-    const session = getAudioSession(socket);
+    const session = getAudioSession(runtime.socket);
     logger.info(`[Audio] Interrupt candidate source=${String(data?.source || 'unknown')} rms=${Number(data?.rms || 0).toFixed(4)} threshold=${Number(data?.threshold || 0).toFixed(4)} frames=${Math.max(0, Number(data?.frames || 0))} ttsAgeMs=${Math.max(0, Number(data?.ttsAgeMs || 0))} speaking=${session.isSpeaking} processing=${session.isProcessing} request=${session.activeTurnRequestId || 'none'}`);
   });
 
-  socket.on("audio:interrupt", async (data?: { source?: string; sessionId?: string; requestId?: string }) => {
-    logger.info(`[Audio] Interrupt source=${String(data?.source || 'legacy')} socket=${socket.id}`);
-    const session = getAudioSession(socket);
+  runtime.socket.on("audio:interrupt", async (data?: { source?: string; sessionId?: string; requestId?: string }) => {
+    logger.info(`[Audio] Interrupt source=${String(data?.source || 'legacy')} socket=${runtime.socket.id}`);
+    const session = getAudioSession(runtime.socket);
     if (data?.sessionId && data.sessionId !== session.sessionId) return;
     if (data?.requestId && data.requestId !== session.activeTurnRequestId) return;
     const owner = captureVoiceTurnOwner(session);
@@ -1119,18 +1154,18 @@ export function registerVoiceHandlers(
       const workRequestId = session.activeTurnRequestId;
       if (workRequestId) session.suppressedSpeechRequestIds.add(workRequestId);
       interruptVoiceSpeech(session);
-      socket.emit("audio:status", { status: "interrupted", sessionId, requestId: workRequestId });
-      socket.emit("audio:interrupt-ack", { workContinues: true, sessionId, requestId: workRequestId });
+      runtime.socket.emit("audio:status", { status: "interrupted", sessionId, requestId: workRequestId });
+      runtime.socket.emit("audio:interrupt-ack", { workContinues: true, sessionId, requestId: workRequestId });
       return;
     }
-    await commitActiveVoiceCancellation(session, { source: 'voice_interrupt' });
+    await runtime.commitActiveVoiceCancellation(session, { source: 'voice_interrupt' });
     if (!owner.isCurrent()) return;
-    socket.emit("audio:status", { status: "interrupted", sessionId, requestId });
-    socket.emit("audio:interrupt-ack", { workContinues: false, sessionId, requestId });
+    runtime.socket.emit("audio:status", { status: "interrupted", sessionId, requestId });
+    runtime.socket.emit("audio:interrupt-ack", { workContinues: false, sessionId, requestId });
   });
 
-  socket.on('audio:cancel_turn', async (data?: { requestId?: string; reason?: string; sessionId?: string }) => {
-    const session = getAudioSession(socket);
+  runtime.socket.on('audio:cancel_turn', async (data?: { requestId?: string; reason?: string; sessionId?: string }) => {
+    const session = getAudioSession(runtime.socket);
     if (data?.sessionId && data.sessionId !== session.sessionId) return;
     const owner = captureVoiceTurnOwner(session);
     const sessionId = session.sessionId;
@@ -1140,7 +1175,7 @@ export function registerVoiceHandlers(
       logger.warn(`[Audio] Ignored legacy UI watchdog cancellation for live request ${requestId}`);
       if (session.isBackgroundWork && session.isProcessing) {
         emitVoiceWorkProgress(
-          socket,
+          runtime.socket,
           session,
           requestId,
           session.activeWorkStatus,
@@ -1148,22 +1183,22 @@ export function registerVoiceHandlers(
           true,
         );
       } else {
-        socket.emit('audio:status', { status: 'thinking', requestId });
+        runtime.socket.emit('audio:status', { status: 'thinking', requestId });
       }
       return;
     }
     logger.warn(`[Audio] Cancelling stuck voice turn ${requestId} (${data?.reason || 'client_request'})`);
-    await commitActiveVoiceCancellation(session, {
+    await runtime.commitActiveVoiceCancellation(session, {
       source: 'voice_turn_cancelled',
     });
     if (!owner.isCurrent()) return;
-    socket.emit('audio:interrupt-ack', { workContinues: false, requestId, sessionId });
-    socket.emit('audio:status', { status: 'listening', requestId, sessionId });
-    resetSilenceTimer(session, socket);
+    runtime.socket.emit('audio:interrupt-ack', { workContinues: false, requestId, sessionId });
+    runtime.socket.emit('audio:status', { status: 'listening', requestId, sessionId });
+    resetSilenceTimer(session, runtime.socket);
   });
 
-  socket.on('audio:work_status_probe', (data?: { requestId?: string; lane?: string }) => {
-    const session = getAudioSession(socket);
+  runtime.socket.on('audio:work_status_probe', (data?: { requestId?: string; lane?: string }) => {
+    const session = getAudioSession(runtime.socket);
     const requestId = session.activeTurnRequestId;
     const requestedRequestId = String(data?.requestId || '').trim();
     if (requestedRequestId) {
@@ -1174,12 +1209,12 @@ export function registerVoiceHandlers(
         source: 'voice',
       }, requestedRequestId);
       if (recovered?.terminalEvent) {
-        socket.emit(recovered.terminalEvent.event, recovered.terminalEvent.payload);
-        socket.emit('audio:status', { status: 'listening', requestId: requestedRequestId });
+        runtime.socket.emit(recovered.terminalEvent.event, recovered.terminalEvent.payload);
+        runtime.socket.emit('audio:status', { status: 'listening', requestId: requestedRequestId });
         return;
       }
       if (recovered && !recovered.terminal && !requestId) {
-        socket.emit('audio:status', {
+        runtime.socket.emit('audio:status', {
           status: recovered.status === 'waiting_confirmation' ? 'listening' : 'thinking',
           requestId: requestedRequestId,
           lane: data?.lane || 'work',
@@ -1188,12 +1223,12 @@ export function registerVoiceHandlers(
       }
     }
     if (!requestId || (data?.requestId && data.requestId !== requestId)) {
-      socket.emit('audio:status', { status: 'listening', requestId: data?.requestId });
+      runtime.socket.emit('audio:status', { status: 'listening', requestId: data?.requestId });
       return;
     }
     if (session.isBackgroundWork && session.isProcessing) {
       emitVoiceWorkProgress(
-        socket,
+        runtime.socket,
         session,
         requestId,
         session.activeWorkStatus,
@@ -1202,66 +1237,64 @@ export function registerVoiceHandlers(
       );
       return;
     }
-    socket.emit('audio:status', {
+    runtime.socket.emit('audio:status', {
       status: session.isProcessing ? 'thinking' : 'listening',
       requestId,
       lane: data?.lane || 'conversation',
     });
   });
 
-  socket.on("audio:stop", async (data?: { refineTranscript?: boolean; preserveMeeting?: boolean; refinementId?: string; sessionId?: string }) => {
-    logger.info(`[Audio] Voice call ended by ${socket.id}`);
-    if (pendingStandardStart && (!data?.sessionId || data.sessionId === pendingStandardStart.sessionId)) {
-      pendingStandardStart.cancelled = true;
-      pendingStandardStart = undefined;
+  runtime.socket.on("audio:stop", async (data?: { refineTranscript?: boolean; preserveMeeting?: boolean; refinementId?: string; sessionId?: string }) => {
+    logger.info(`[Audio] Voice call ended by ${runtime.socket.id}`);
+    if (runtime.pendingStandardStart && (!data?.sessionId || data.sessionId === runtime.pendingStandardStart.sessionId)) {
+      runtime.pendingStandardStart.cancelled = true;
+      runtime.pendingStandardStart = undefined;
       return;
     }
-    const session = getAudioSession(socket);
+    const session = getAudioSession(runtime.socket);
     if (data?.sessionId && session.sessionId && data.sessionId !== session.sessionId) return;
-    await stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript, preserveMeeting: data?.preserveMeeting, refinementId: data?.refinementId });
+    await runtime.stopVoiceCall(session, { source: 'voice_call_stopped', refineTranscript: data?.refineTranscript, preserveMeeting: data?.preserveMeeting, refinementId: data?.refinementId });
   });
+}
 
-  // Track ambient noise level for environment-gated proactive speech
-  type ProactiveContext = { contextId: string; userId: string; domain: 'personal' | 'work'; orgId: string; voiceId: string | null; enabled: boolean };
-  let proactiveContext: ProactiveContext | null = null;
-  let proactiveController: AbortController | null = null;
-  const cancelProactive = () => { proactiveController?.abort(); proactiveController = null; };
-  socket.on('proactive:configure', (data: Partial<ProactiveContext>) => {
-    cancelProactive();
-    proactiveContext = null;
-    const userId = getUserId(socket);
-    const scope = resolveAuthorizedSocketScope(socket, userId);
+function registerVoiceProactiveOutput(runtime: VoiceConnectionRuntime) {
+
+  runtime.socket.on('proactive:configure', (data: Partial<ProactiveContext>) => {
+    runtime.cancelProactive();
+    runtime.proactiveContext = null;
+    const userId = runtime.getUserId(runtime.socket);
+    const scope = resolveAuthorizedSocketScope(runtime.socket, userId);
     const contextId = normalizeVoiceSessionId(data?.contextId);
     if (!scope || !contextId || data?.userId !== userId || data.domain !== scope.domain || String(data.orgId || '') !== scope.orgId) return;
-    proactiveContext = { contextId, userId, ...scope, voiceId: normalizeVoiceSwitchId(data.voiceId) || null, enabled: data.enabled === true };
+    runtime.proactiveContext = { contextId, userId, ...scope, voiceId: normalizeVoiceSwitchId(data.voiceId) || null, enabled: data.enabled === true };
   });
   function beginProactive() {
-    const context = proactiveContext;
-    if (!context?.enabled || proactiveController || callAdmission.hasCall() || !socket.connected) return null;
-    const scope = resolveAuthorizedSocketScope(socket, getUserId(socket));
-    if (!scope || getUserId(socket) !== context.userId || scope.domain !== context.domain || scope.orgId !== context.orgId) return null;
+    const context = runtime.proactiveContext;
+    if (!context?.enabled || runtime.proactiveController || runtime.callAdmission.hasCall() || !runtime.socket.connected) return null;
+    const scope = resolveAuthorizedSocketScope(runtime.socket, runtime.getUserId(runtime.socket));
+    if (!scope || runtime.getUserId(runtime.socket) !== context.userId || scope.domain !== context.domain || scope.orgId !== context.orgId) return null;
     const authorization = captureChatAuthorization(context.userId, scope);
     if (!authorization.isCurrent() || shouldStayQuiet(context.userId).quiet) return null;
     // A notification must not need an earlier microphone call to initialize
     // identity, emotional state, model preferences or the selected speaker.
-    const session: AudioSession = { ...getAudioSession(socket), userId: context.userId, ...scope, personalityId: 'lumi', currentVoiceId: context.voiceId };
+    const session: AudioSession = { ...getAudioSession(runtime.socket), userId: context.userId, ...scope, personalityId: 'lumi', currentVoiceId: context.voiceId };
     const controller = new AbortController();
-    proactiveController = controller;
+    runtime.proactiveController = controller;
     const stopWatch = authorization.watch(controller);
     const assertCurrent = () => {
       authorization.assertCurrent();
-      if (controller.signal.aborted || proactiveContext !== context || !socket.connected || getUserId(socket) !== context.userId || callAdmission.hasCall() || shouldStayQuiet(context.userId).quiet) {
+      if (controller.signal.aborted || runtime.proactiveContext !== context || !runtime.socket.connected || runtime.getUserId(runtime.socket) !== context.userId || runtime.callAdmission.hasCall() || shouldStayQuiet(context.userId).quiet) {
         throw new DOMException('Proactive voice is no longer allowed', 'AbortError');
       }
     };
     return {
       session, authorization, controller, assertCurrent,
       envelope: { contextId: context.contextId, userId: context.userId, domain: context.domain, orgId: context.orgId },
-      release: () => { stopWatch(); if (proactiveController === controller) proactiveController = null; },
+      release: () => { stopWatch(); if (runtime.proactiveController === controller) runtime.proactiveController = null; },
     };
   }
-  socket.on('disconnect', () => { proactiveContext = null; cancelProactive(); });
-  socket.on("ambient:noise_level", (data: { rms: number; isSpeaking: boolean; callState: string }) => {
+  runtime.socket.on('disconnect', () => { runtime.proactiveContext = null; runtime.cancelProactive(); });
+  runtime.socket.on("ambient:noise_level", (data: { rms: number; isSpeaking: boolean; callState: string }) => {
     voiceTransportState.ambientRms = data.rms;
     voiceTransportState.ambientRmsLastUpdate = Date.now();
   });
@@ -1304,10 +1337,10 @@ export function registerVoiceHandlers(
 
   const reportProactiveFailure = (operation: NonNullable<ReturnType<typeof beginProactive>>) => {
     try { operation.assertCurrent(); } catch { return; }
-    socket.emit('audio:proactive_error', { ...operation.envelope, code: 'VOICE_OUTPUT_UNAVAILABLE' });
+    runtime.socket.emit('audio:proactive_error', { ...operation.envelope, code: 'VOICE_OUTPUT_UNAVAILABLE' });
   };
 
-  socket.on("proactive:request_speak", async (data: { message: string; interactionId?: string }) => {
+  runtime.socket.on("proactive:request_speak", async (data: { message: string; interactionId?: string }) => {
     if (typeof data?.message !== 'string' || !data.message.trim() || data.message.length > 4000) return;
     const operation = beginProactive();
     if (!operation) return;
@@ -1390,7 +1423,7 @@ export function registerVoiceHandlers(
       });
       operation.assertCurrent();
       const proactiveGain = computeVolumeGain();
-      const emitSpeech = () => socket.emit("audio:proactive_speak", {
+      const emitSpeech = () => runtime.socket.emit("audio:proactive_speak", {
         ...operation.envelope,
         ...(reminder ? { interactionId: reminder.interactionId } : {}),
         audioBuffer: result.audioBuffer,
@@ -1413,7 +1446,7 @@ export function registerVoiceHandlers(
   });
 
   // LLM-generated greeting — replaces hardcoded templates with personalized, scene-aware greetings
-  socket.on("greeting:generate", async (data: { scene?: string }) => {
+  runtime.socket.on("greeting:generate", async (data: { scene?: string }) => {
     const operation = beginProactive();
     if (!operation) return;
     try {
@@ -1507,7 +1540,7 @@ export function registerVoiceHandlers(
         [{ role: 'user', content: greetingPrompt }],
         [],
         greetingLLM,
-        ...providerGetterArguments(llmGetters),
+        ...providerGetterArguments(runtime.llmGetters),
       );
 
       operation.assertCurrent();
@@ -1535,7 +1568,7 @@ export function registerVoiceHandlers(
         allowFallback: false,
       });
       operation.assertCurrent();
-      socket.emit("audio:proactive_speak", {
+      runtime.socket.emit("audio:proactive_speak", {
         ...operation.envelope,
         audioBuffer: result.audioBuffer,
         text: spokenGreeting,
@@ -1577,7 +1610,7 @@ export function registerVoiceHandlers(
         allowFallback: false,
         });
         operation.assertCurrent();
-        socket.emit("audio:proactive_speak", { ...operation.envelope, audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
+        runtime.socket.emit("audio:proactive_speak", { ...operation.envelope, audioBuffer: result.audioBuffer, text: fallback, timestamp: new Date().toISOString(), volumeGain: computeVolumeGain() });
       } catch (error: any) {
         logger.warn(`[Greeting] Fallback speech failed: ${error.message}`);
         if (error?.name !== 'AbortError') reportProactiveFailure(operation);
@@ -1585,30 +1618,45 @@ export function registerVoiceHandlers(
     } finally { stopWatch(); }
     } finally { operation.release(); }
   });
+}
 
-  socket.on("audio:switch-personality", (data: { personalityId: string }) => {
-    const session = getAudioSession(socket);
+function registerVoiceConnectionCleanup(runtime: VoiceConnectionRuntime) {
+
+
+  runtime.socket.on("audio:switch-personality", (data: { personalityId: string }) => {
+    const session = getAudioSession(runtime.socket);
     if (session.isActive) {
       session.personalityId = data.personalityId;
       logger.info(`[Audio] Personality switched to ${data.personalityId} mid-call`);
     }
   });
 
-  socket.on("disconnect", async () => {
-    if (pendingStandardStart) pendingStandardStart.cancelled = true;
-    pendingStandardStart = undefined;
-    const pausedSession = getAudioSession(socket);
+  runtime.socket.on("disconnect", async () => {
+    if (runtime.pendingStandardStart) runtime.pendingStandardStart.cancelled = true;
+    runtime.pendingStandardStart = undefined;
+    const pausedSession = getAudioSession(runtime.socket);
     if (pausedSession.userId && pausedSession.meetingId) {
       releasePausedMeetingRecording(getMeetingAudioDir({ userId: pausedSession.userId, domain: pausedSession.domain, orgId: pausedSession.orgId }), pausedSession.meetingId);
     }
 
-    const session = socket.data.audioSession as AudioSession | undefined;
+    const session = runtime.socket.data.audioSession as AudioSession | undefined;
     if (session) {
-      await stopVoiceCall(session, { source: 'voice_disconnected', publish: false });
+      await runtime.stopVoiceCall(session, { source: 'voice_disconnected', publish: false });
     }
-    console.log(`[Socket] Client disconnected: ${socket.id}`);
+    console.log(`[Socket] Client disconnected: ${runtime.socket.id}`);
   });
 }
+
+export function registerVoiceHandlers(socket: Socket, llmGetters: LlmGetters, sensoryFn: (uid: string) => any, getUserId: (s: Socket) => string, io: Server) {
+  const runtime = createVoiceConnectionRuntime(socket, llmGetters, sensoryFn, getUserId, io);
+
+  registerMemoryAvatarVoiceHandlers(runtime.socket, runtime.llmGetters, runtime.getUserId, runtime.callAdmission);
+  runtime.socket.on("audio:start", (data: StandardVoiceStartRequest) => handleStandardVoiceStart(runtime, data));
+  registerVoiceCaptureAndControl(runtime);
+  registerVoiceProactiveOutput(runtime);
+  registerVoiceConnectionCleanup(runtime);
+}
+
 export { type VoiceSwitchRequest, type VoiceSwitchSession, clearVoiceSessionTtsSelection, type VoiceStartAsyncFence, resolveVoiceStartAsyncFence, type VoiceSwitchResolution, applyVoiceSwitchRequest, type ProviderVoiceResolution, type LockedVoiceTurnTtsRoute, lockVoiceTurnTtsRoute, canFallbackVoiceTurnTtsRoute, chooseVoiceForProvider } from "./voice/selection";
 export { addEchoText, isEchoText, isPureInterruptCommand, isVoiceCallEndCommand, isEchoedImmediateVoiceControl } from "./voice/echo";
 export { type VoiceprintUtteranceDecision, isVoiceprintUtteranceAccepted } from "./voice/voiceprint";

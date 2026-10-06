@@ -154,7 +154,8 @@ function makeFallbackStats(articles: Article[]): KnowledgeStats {
   };
 }
 
-export function KnowledgeBaseBrowser() {
+function useKnowledgeBaseBrowserState() {
+
   const t = useT();
   const isZh = t.langCode !== 'en';
 
@@ -381,6 +382,16 @@ export function KnowledgeBaseBrowser() {
       setIndexingId(null);
     }
   };
+  return { t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue };
+}
+
+export function KnowledgeBaseBrowser() {
+  return renderKnowledgeBaseBrowser(useKnowledgeBaseBrowserState());
+}
+
+function renderKnowledgeBaseBrowser(input: ReturnType<typeof useKnowledgeBaseBrowserState>) {
+  const { t, fileInputRef, handleImportFiles, loadKnowledgeBase, loading, uploading, goNew, error, effectiveStats, searchQuery, setSearchQuery, searching, categoryFilter, setCategoryFilter, categoryOptions, isZh, statusFilter, setStatusFilter, sortMode, setSortMode, searchResults, articles, setSelectedArticle, visibleArticles, selectedArticle, healthById, selectedHealth, handleReindex, indexingId, goEdit, selectedTags, maintenanceQueue } = input;
+
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-5 text-white">
@@ -716,6 +727,8 @@ export function KnowledgeBaseBrowser() {
     </div>
   );
 }
+
+
 
 function Metric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: string }) {
   return (

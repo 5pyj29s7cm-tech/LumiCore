@@ -238,8 +238,8 @@ describe('live voice selection', () => {
 
     const source = readVoiceImplementationSource().replace(/\r\n/g, '\n');
     const startHandler = source.slice(
-      source.indexOf('socket.on("audio:start"'),
-      source.indexOf("socket.on('audio:switch-voice'"),
+      source.indexOf('async function handleStandardVoiceStart('),
+      source.indexOf('function registerVoiceCaptureAndControl('),
     );
     expect(startHandler).toContain("if (voiceStartFence === 'abandon_start') return;");
     expect(startHandler).toContain("if (voiceStartFence === 'current') {");

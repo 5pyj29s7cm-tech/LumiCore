@@ -44,7 +44,8 @@ export function KnowledgeBase(props: KnowledgeBaseProps) {
   return <KnowledgeBaseScope key={props.scopeKey || props.domain || 'personal'} {...props} />;
 }
 
-function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal', scopeKey }: KnowledgeBaseProps) {
+function useKnowledgeBaseScopeState({ t, isOpen, onClose, domain = 'personal', scopeKey }: KnowledgeBaseProps) {
+
   const appConfirm = useAppConfirm(JSON.stringify([isOpen, domain, scopeKey]));
   const socket = useSocket();
   const isZh = t?.langCode !== 'en';
@@ -455,6 +456,16 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal', scopeKey 
   }, [isOpen, onClose, selectedId]);
 
   const totalFiles = files.length;
+  return { memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, setCardPos, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, cardPos, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat };
+}
+
+function KnowledgeBaseScope(props: Parameters<typeof useKnowledgeBaseScopeState>[0]) {
+  return renderKnowledgeBaseScope(useKnowledgeBaseScopeState(props));
+}
+
+function renderKnowledgeBaseScope(input: ReturnType<typeof useKnowledgeBaseScopeState>) {
+  const { memories, isOpen, treeNodes, branchCurves, search, selectedId, setSelectedId, setCardPos, loading, t, loadError, visibleFiles, totalFiles, absorbedFileCount, pendingFileCount, isZh, partialFileCount, needsAttentionFileCount, files, fileIsAbsorbed, ingestingFiles, handleIngest, setSearch, fileSearchResults, searchResults, fileInputRef, handleUpload, uploading, handleOpenKnowledgeFolder, setObsidianOpen, obsidianOpen, obsidianVaults, ingestableFiles, handleIngestAll, bulkIngesting, onClose, fetchObsidianStatus, obsidianSyncing, obsidianPath, setObsidianPath, handleObsidianConnect, syncObsidianVault, handleObsidianDisconnect, selectedNode, selectedFileData, selectedMemoryData, cardPos, handleDelete, handleToggleProtect, handleChangeTier, handleEdit, referenceKnowledgeFileInChat } = input;
+
   const totalMemories = memories.filter(m => m.nodeType !== 'branch').length;
   const totalBranches = memories.filter(m => m.nodeType === 'branch').length;
 
@@ -918,5 +929,7 @@ function KnowledgeBaseScope({ t, isOpen, onClose, domain = 'personal', scopeKey 
         </div>
   );
 }
+
+
 
 export { layoutTree3D };

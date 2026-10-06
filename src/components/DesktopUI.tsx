@@ -65,25 +65,26 @@ declare global {
   }
 }
 
-export function DesktopUI({ 
-  t, 
-  user, 
+function useDesktopSurfaceState({
+  t,
+  user,
   lang,
   setLang,
-  activeTab, 
-  setActiveTab, 
-  onLogin, 
-  renderTabContent 
-}: { 
-  t: any; 
-  user: any; 
+  activeTab,
+  setActiveTab,
+  onLogin,
+  renderTabContent
+}: {
+  t: any;
+  user: any;
   lang: 'en' | 'zh';
   setLang: (l: 'en' | 'zh') => void;
-  activeTab: string; 
-  setActiveTab: (tab: string) => void; 
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
   onLogin: () => void;
   renderTabContent: (tab: string) => React.ReactNode;
 }) {
+
   // Camera and Environment state
   const [viewMode, setViewMode] = useState<'personal' | 'world'>('personal');
   const [nexusReturnTarget, setNexusReturnTarget] = useState<'home' | 'command-center'>('home');
@@ -177,11 +178,11 @@ export function DesktopUI({
   const [memoryLabOpen, setMemoryLabOpen] = useState(false);
   const surfaceReturnTargetRef = useRef<SurfaceReturnTarget>('home');
 
-  const triggerPetReaction = (animation: string, ms: number = 1500) => {
+  const triggerPetReaction = useCallback((animation: string, ms: number = 1500) => {
     if (petReactionTimeout.current) clearTimeout(petReactionTimeout.current);
     setPetReaction({ animation, until: Date.now() + ms });
     petReactionTimeout.current = setTimeout(() => setPetReaction(null), ms);
-  };
+  }, []);
 
   const [equippedAccessories, setEquippedAccessories] = useState<string[]>(() => {
     try {
@@ -480,6 +481,39 @@ export function DesktopUI({
       window.dispatchEvent(new CustomEvent('lumi:submit-command-input'));
     }, 120);
   }, [openCommandCenter]);
+  return {
+    memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, setMemoryAvatars, memoryAvatars,
+    memoryAvatarOpenGenerationRef, memoryAvatarSurfaceGeneration, setMemoryLabOpen, setSanctuaryAgent,
+    setSanctuaryLoaded, setSanctuaryOpen, inferSurfaceReturnTarget, surfaceReturnTargetRef, dismissUtilitySurfaces,
+    setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter,
+    setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest,
+    setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities,
+    setWallpaperUrl, setWallpaper, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys,
+    meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user,
+    selectedVoiceId, volume, setOperationMode, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef,
+    aiConfig, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, windowCommand,
+    setVolume, wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef,
+    isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, isDesktopWidgetMode,
+    wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, setWallpaperWorkPromptVisible,
+    triggerPetReaction, petPrefsSavingRef, setSelectedPet, petStorageKeys, setEquippedAccessories, sanctuaryOpen,
+    memoryLabOpen, closeKnowledgeBase, isWallpaperWorkbench, isSearchOpen, setTime, canCustomizeLumiAppearance,
+    savePetPrefsToServer, equippedAccessories, setPersonalizationSection, openKnowledgeBase, setNexusReturnTarget,
+    nexusReturnTarget, activeTab, desktopWidgetFallbackRef, openWindows, switchDomain, setSettingsSection,
+    clientRuntime, viewMode, focusedWindow, settingsSection, commandCenterView, isNotificationPanelOpen,
+    organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState,
+    minimizedWindows, wallpaperPresentation, wallpaperWorkspace, selectedPet, petReaction, resolvedAppearanceMode,
+    desktopChrome, isCompactDesktopLayout, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef,
+    personalScale, personalOpacity, syncRate, setSyncRate, unreadCount, time, isCompactWindowMode,
+    dockPositionClassName, onLogin, launchExternalCapability, notifications, wallpaperWorkPromptVisible,
+    askComputerProfileQuestion, setCreationRequestId, setLang, personalizationSection, petPreferenceScopeKey,
+    renderTabContent, knowledgeLoaded, chatLoaded, setCommandCenterView, chatPrefill, creationRequestId,
+    chatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent
+  } as const;
+}
+
+function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof useDesktopSurfaceState>) {
+  const { memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, setMemoryAvatars, memoryAvatars, memoryAvatarOpenGenerationRef, memoryAvatarSurfaceGeneration, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, inferSurfaceReturnTarget, surfaceReturnTargetRef, dismissUtilitySurfaces, setIsSearchOpen, setViewMode, setActiveTab, restoreSurfaceReturnTarget, isTauri, openCommandCenter, setIsNotificationPanelOpen, setChatPrefill, lang, workDomain, orgConnection, setChatAttachmentRequest, setKnowledgeOpen, desktopIconLayout, desktopIconColumns, canUseExternalCapabilities, externalCapabilities, setWallpaperUrl, setWallpaper, setIsCompactWindowMode, setIsDesktopWidgetMode, meetingStorageKeys, meetingPreferenceScopeKey, operationMode, knowledgeOpen, setKnowledgeLoaded, chatOpen, setChatLoaded, user, selectedVoiceId, volume, setOperationMode } = previousBindings;
+
 
   // Memory Avatars are private, tool-free surfaces. Keep the list in the
   // shell so the command center can open an existing avatar, switch between
@@ -496,7 +530,7 @@ export function DesktopUI({
       return data.avatars;
     } catch {}
     return memoryAvatarOwnerRef.current === memoryAvatarOwnerScope && memoryAvatarListOwnerRef.current === ownerId ? memoryAvatars : [];
-  }, [memoryAvatars, memoryAvatarOwnerScope]);
+  }, [memoryAvatarOwnerScope, memoryAvatarOwnerRef, memoryAvatarListOwnerRef, memoryAvatars, setMemoryAvatars]);
 
   const enterCreatedMemoryAvatar = useCallback((avatar: any) => {
     // Exit animations can keep a closed lab mounted. Its late request must not
@@ -508,7 +542,7 @@ export function DesktopUI({
     setSanctuaryAgent(avatar);
     setSanctuaryLoaded(true);
     setSanctuaryOpen(true);
-  }, [memoryAvatarOwnerScope, memoryAvatarSurfaceGeneration]);
+  }, [memoryAvatarOpenGenerationRef, memoryAvatarOwnerRef, memoryAvatarOwnerScope, memoryAvatarSurfaceGeneration, setMemoryAvatars, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen]);
 
   const openMemoryAvatar = useCallback(async (avatarId?: string, returnTarget?: SurfaceReturnTarget) => {
     const openGeneration = ++memoryAvatarOpenGenerationRef.current;
@@ -532,7 +566,7 @@ export function DesktopUI({
     if (selected) setSanctuaryLoaded(true);
     setSanctuaryOpen(Boolean(selected));
     setMemoryLabOpen(!selected);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, loadMemoryAvatars, setActiveTab]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, loadMemoryAvatars, memoryAvatarOpenGenerationRef, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryLoaded, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
 
   const openMemoryAvatarLab = useCallback((returnTarget?: SurfaceReturnTarget) => {
     memoryAvatarOpenGenerationRef.current++;
@@ -544,7 +578,7 @@ export function DesktopUI({
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     setMemoryLabOpen(true);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, setActiveTab]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, memoryAvatarOpenGenerationRef, setActiveTab, setIsSearchOpen, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen, setViewMode, surfaceReturnTargetRef]);
 
   const closeMemoryAvatar = useCallback(() => {
     memoryAvatarOpenGenerationRef.current++;
@@ -552,7 +586,7 @@ export function DesktopUI({
     setSanctuaryOpen(false);
     setSanctuaryAgent(null);
     restoreSurfaceReturnTarget();
-  }, [restoreSurfaceReturnTarget]);
+  }, [memoryAvatarOpenGenerationRef, restoreSurfaceReturnTarget, setMemoryLabOpen, setSanctuaryAgent, setSanctuaryOpen]);
 
   useEffect(() => {
     const handler = () => { void openMemoryAvatar(undefined, 'home'); };
@@ -585,7 +619,7 @@ export function DesktopUI({
     setIsNotificationPanelOpen(false);
     setChatPrefill({ text: formatProactiveChatPrefill(detail, lang), source: 'proactive_context' });
     openCommandCenter('office');
-  }, [lang, openCommandCenter]);
+  }, [lang, openCommandCenter, setChatPrefill, setIsNotificationPanelOpen]);
 
   useEffect(() => {
     const handleOpenProactiveChat = (event: Event) => {
@@ -613,7 +647,7 @@ export function DesktopUI({
     };
     window.addEventListener('lumi:reference-file-in-chat', handleFileReference);
     return () => window.removeEventListener('lumi:reference-file-in-chat', handleFileReference);
-  }, [lang, openCommandCenter, orgConnection?.connected, orgConnection?.orgId, workDomain]);
+  }, [lang, openCommandCenter, orgConnection?.connected, orgConnection?.orgId, setChatAttachmentRequest, setKnowledgeOpen, workDomain]);
 
   const getDefaultDesktopIconPosition = useCallback((index: number) => ({
     x: desktopIconLayout.startX + (index % desktopIconColumns) * desktopIconLayout.cellWidth,
@@ -707,7 +741,7 @@ export function DesktopUI({
     };
     void syncWidgetMode();
     return () => { disposed = true; };
-  }, [isTauri]);
+  }, [isTauri, setIsCompactWindowMode, setIsDesktopWidgetMode]);
 
   const [isTrainingOpen, setIsTrainingOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -761,11 +795,11 @@ export function DesktopUI({
 
   useEffect(() => {
     if (knowledgeOpen) setKnowledgeLoaded(true);
-  }, [knowledgeOpen]);
+  }, [knowledgeOpen, setKnowledgeLoaded]);
 
   useEffect(() => {
     if (chatOpen) setChatLoaded(true);
-  }, [chatOpen]);
+  }, [chatOpen, setChatLoaded]);
 
   const voiceprint = useVoiceprint({ socket });
   const loadVoiceprintTemplates = voiceprint.loadTemplates;
@@ -914,6 +948,24 @@ export function DesktopUI({
       window.removeEventListener('storage', onStorage);
     };
   }, []);
+  return {
+    ...previousBindings, wakeEnabled, sensorPrimerSeen, socket, startCallRef, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt,
+    backgroundFaceRecognitionOptedIn, cameraAccessEnabled, voiceprint, isMuted, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport,
+    meetingNotes, formatMeetingNoteForExport, meetingIdentityRef, setMeetingReport, setMeetingReportGenerating, lastLegalMeetingArchiveRef,
+    setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, endCall, setMeetingPaused, meetingVoiceActiveRef,
+    meetingStartAttemptRef, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef,
+    setPendingOperationMode, pendingOperationMode, resetMeetingCapture, setMcpActivities, setAgentStatus, seenWorkflowToolEvents, callStateRef,
+    startStandardVoiceCall, closeMemoryAvatar, meetingModeRef, startCall, getVoiceScopeOptions, isSpacebarRecording, openMemoryAvatar, meetingNotesOpen,
+    meetingReportGenerating, agentStatus, mcpActivities, desktopIcons, audioLevel, transcript, handleWallpaperUpload, handleTopbarPointerDown,
+    setShowOnboarding, toggleMute, handleWindowMinimize, handleWindowMaximize, handleWindowClose, openProactiveChat, desktopIconAreaHeight,
+    getDefaultDesktopIconPosition, meetingSpeakerCount, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, finishSensorPrimer, showOnboarding, isTrainingOpen,
+    setIsTrainingOpen, openMemoryAvatarLab, enterCreatedMemoryAvatar
+  } as const;
+}
+
+function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typeof useDesktopCaptureAndIdentity>) {
+  const { isTauri, wakeEnabled, sensorPrimerSeen, setClientPermissions, setClientRuntime, closeToBackgroundSyncRef, socket, startCallRef, selectedVoiceId, voiceScopeOptions, ownerVoiceGateOpen, callState, interrupt, backgroundFaceRecognitionOptedIn, cameraAccessEnabled, workDomain, voiceprint, user, isMuted, volume, callError, meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode, resetMeetingCapture, knowledgeRefreshSequenceRef, setKnowledgeRuntimeState, setOrganizationWorkspaceView, surfaceReturnTargetRef, windowCommand, dismissUtilitySurfaces, setActiveTab, openCommandCenter, setVolume } = previousBindings;
+
 
   useEffect(() => {
     let disposed = false;
@@ -965,7 +1017,7 @@ export function DesktopUI({
       window.removeEventListener('visibilitychange', onSensorChange);
       window.clearInterval(interval);
     };
-  }, [isTauri, sensorPrimerSeen, wakeEnabled]);
+  }, [isTauri, sensorPrimerSeen, setClientPermissions, wakeEnabled]);
 
   useEffect(() => {
     if (!isTauri) {
@@ -1001,7 +1053,7 @@ export function DesktopUI({
       disposed = true;
       window.clearInterval(interval);
     };
-  }, [isTauri]);
+  }, [isTauri, setClientRuntime]);
 
   useEffect(() => {
     if (!isTauri || closeToBackgroundSyncRef.current) return;
@@ -1020,7 +1072,7 @@ export function DesktopUI({
       } catch {}
     };
     void syncClosePreference();
-  }, [isTauri]);
+  }, [closeToBackgroundSyncRef, isTauri]);
 
   const wakeWord = useWakeWord({
     socket,
@@ -1083,7 +1135,15 @@ export function DesktopUI({
   useEffect(() => {
     if (callError) toast.error(callError);
   }, [callError]);
-  const { endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange } = useMeetingWorkflow({ meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang, meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, workDomain, orgConnection, aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, user, waitForMeetingRefinement, stopMeetingAudio, setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef, callState, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount, setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode, resetMeetingCapture });
+  const { endMeetingAndReport, endVoiceCallFromUI, openMeetingModeWithConfirm, copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange } = useMeetingWorkflow({
+    meetingStartedAt, legalMeetingCaseTitle, meetingReport, meetingNotes, formatMeetingNoteForExport, lang,
+    meetingIdentityRef, setMeetingReport, meetingStorageKeys, setMeetingReportGenerating, workDomain, orgConnection,
+    aiConfig, lastLegalMeetingArchiveRef, setLegalMeetingCaseTitle, user, waitForMeetingRefinement, stopMeetingAudio,
+    setMeetingNotesOpen, operationMode, endCall, setMeetingPaused, meetingVoiceActiveRef, meetingStartAttemptRef,
+    callState, setOperationMode, meetingPaused, renewMeetingIdentity, setMeetingNotes, setMeetingSpeakerCount,
+    setMeetingStartedAt, lastMeetingTranscriptRef, setPendingOperationMode, pendingOperationMode,
+    resetMeetingCapture
+  });
 
   const refreshKnowledgeRuntimeState = useCallback(async () => {
     const sequence = ++knowledgeRefreshSequenceRef.current;
@@ -1140,7 +1200,7 @@ export function DesktopUI({
     next.refreshedAt = Date.now();
     next.lastError = errors.join('; ');
     if (sequence === knowledgeRefreshSequenceRef.current) setKnowledgeRuntimeState(next);
-  }, [orgConnection?.connected, orgConnection?.orgId, workDomain]);
+  }, [knowledgeRefreshSequenceRef, orgConnection?.connected, orgConnection?.orgId, setKnowledgeRuntimeState, workDomain]);
 
   useEffect(() => {
     void refreshKnowledgeRuntimeState();
@@ -1149,7 +1209,7 @@ export function DesktopUI({
       knowledgeRefreshSequenceRef.current += 1;
       window.clearInterval(interval);
     };
-  }, [refreshKnowledgeRuntimeState]);
+  }, [knowledgeRefreshSequenceRef, refreshKnowledgeRuntimeState]);
 
   useEffect(() => {
     let delayedRefresh: number | null = null;
@@ -1170,7 +1230,7 @@ export function DesktopUI({
 
   useEffect(() => {
     setOrganizationWorkspaceView('dashboard');
-  }, [orgConnection?.orgId]);
+  }, [orgConnection.orgId, setOrganizationWorkspaceView]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -1183,7 +1243,7 @@ export function DesktopUI({
     };
     window.addEventListener('lumi:org-view-changed', handler);
     return () => window.removeEventListener('lumi:org-view-changed', handler);
-  }, [orgConnection?.orgId, orgConnection?.orgRole]);
+  }, [orgConnection?.orgId, orgConnection?.orgRole, setOrganizationWorkspaceView]);
 
   // Listen for org navigation events
   useEffect(() => {
@@ -1210,12 +1270,21 @@ export function DesktopUI({
     };
     window.addEventListener('lumi:navigate', handler);
     return () => window.removeEventListener('lumi:navigate', handler);
-  }, [dismissUtilitySurfaces, openCommandCenter, setActiveTab, windowCommand]);
+  }, [dismissUtilitySurfaces, openCommandCenter, setActiveTab, surfaceReturnTargetRef, windowCommand]);
 
   // Read system volume for voice output and proactive greetings.
   useEffect(() => {
     systemService.getVolume().then(setVolume).catch(() => setVolume(null));
-  }, []);
+  }, [setVolume]);
+  return {
+    ...previousBindings, endMeetingAndReport, wakeWord, endVoiceCallFromUI, openMeetingModeWithConfirm, facePresenceRequested, faceRecognition, presence,
+    copyMeetingNotes, downloadMeetingNotes, formatMeetingTime, toggleMeetingCapturePaused, clearMeetingNotes, confirmOperationModeChange
+  } as const;
+}
+
+function useDesktopWallpaper(previousBindings: ReturnType<typeof useDesktopRuntimeAndPreferences>) {
+  const { wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef, isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, chatOpen, isDesktopWidgetMode, wallpaperBeforeAutomationRef, addNotification, t, isWallpaperMode, setWallpaperWorkPromptVisible, socket, setMcpActivities } = previousBindings;
+
 
   const applyWallpaperMode = useCallback(async (
     enabled: boolean,
@@ -1335,7 +1404,7 @@ export function DesktopUI({
       });
     }
     return resolvedState;
-  }, [t, addNotification, chatOpen, inferWallpaperWorkspace, isDesktopWidgetMode, syncWallpaperModeView]);
+  }, [wallpaperAutomationTimerRef, wallpaperPresentationRef, inferWallpaperWorkspace, wallpaperWorkspaceRef, isWallpaperModeRef, syncWallpaperModeView, wallpaperNativeTransitionDepthRef, chatOpen, isDesktopWidgetMode, wallpaperBeforeAutomationRef, addNotification, t.wallpaperAutoRestored, t.wallpaperFusionActive, t.standardFocusMode]);
 
   useEffect(() => {
     let disposed = false;
@@ -1384,7 +1453,7 @@ export function DesktopUI({
       disposed = true;
       unlisten?.();
     };
-  }, [syncWallpaperModeView]);
+  }, [syncWallpaperModeView, wallpaperAutomationTimerRef, wallpaperBeforeAutomationRef, wallpaperNativeTransitionDepthRef, wallpaperPresentationRef, wallpaperWorkspaceRef]);
 
   useEffect(() => () => {
     if (!isWallpaperModeRef.current || wallpaperPresentationRef.current !== 'desktop-control') return;
@@ -1399,7 +1468,7 @@ export function DesktopUI({
       restore.presentation,
       restore.workspace,
     ).catch(error => console.error('Failed to safely exit desktop-control wallpaper:', error));
-  }, []);
+  }, [isWallpaperModeRef, wallpaperBeforeAutomationRef, wallpaperPresentationRef, wallpaperWorkspaceRef]);
 
   const toggleWallpaperMode = useCallback(() => {
     void applyWallpaperMode(!isWallpaperMode, { presentation: 'workbench' });
@@ -1407,7 +1476,7 @@ export function DesktopUI({
 
   const dismissWallpaperWorkPrompt = useCallback(() => {
     setWallpaperWorkPromptVisible(false);
-  }, []);
+  }, [setWallpaperWorkPromptVisible]);
 
   const enterWallpaperFromWorkPrompt = useCallback(() => {
     dismissWallpaperWorkPrompt();
@@ -1469,7 +1538,7 @@ export function DesktopUI({
         wallpaperAutomationTimerRef.current = null;
       }
     };
-  }, [applyWallpaperMode]);
+  }, [applyWallpaperMode, isWallpaperModeRef, wallpaperAutomationTimerRef, wallpaperBeforeAutomationRef, wallpaperPresentationRef, wallpaperWorkspaceRef]);
 
   // MCP Live Activity socket listener
   useEffect(() => {
@@ -1488,7 +1557,15 @@ export function DesktopUI({
     };
     socket.on('mcp:activity', handler);
     return () => { socket.off('mcp:activity', handler); };
-  }, [socket, addNotification]);
+  }, [socket, addNotification, setMcpActivities]);
+  return {
+    ...previousBindings, toggleWallpaperMode, applyWallpaperMode, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt
+  } as const;
+}
+
+function useDesktopNotificationsAndShortcuts(previousBindings: ReturnType<typeof useDesktopWallpaper>) {
+  const { socket, setAgentStatus, seenWorkflowToolEvents, triggerPetReaction, petPrefsSavingRef, workDomain, orgConnection, setSelectedPet, petStorageKeys, setEquippedAccessories, addNotification, lang, chatOpen, setIsSearchOpen, setIsNotificationPanelOpen, openCommandCenter, callStateRef, startStandardVoiceCall, endCall, sanctuaryOpen, memoryLabOpen, closeMemoryAvatar, knowledgeOpen, closeKnowledgeBase, isWallpaperWorkbench, toggleWallpaperMode, isSearchOpen, meetingModeRef, interrupt, startCall, selectedVoiceId, getVoiceScopeOptions, isSpacebarRecording, setTime } = previousBindings;
+
 
   // Workflow status listener — agent:status, agent:tool_call, agent:response, agent:error
   useEffect(() => {
@@ -1740,14 +1817,7 @@ export function DesktopUI({
       socket.off('wake:started', onWakeStarted);
       if (terminalResetTimer) clearTimeout(terminalResetTimer);
     };
-  }, [
-    addNotification,
-    lang,
-    orgConnection?.orgId,
-    petStorageKeys,
-    socket,
-    workDomain,
-  ]);
+  }, [addNotification, lang, orgConnection?.orgId, petPrefsSavingRef, petStorageKeys, seenWorkflowToolEvents, setAgentStatus, setEquippedAccessories, setSelectedPet, socket, triggerPetReaction, workDomain]);
 
   // Fetch pet preferences from server on mount (cross-device sync source of truth)
   useEffect(() => {
@@ -1774,7 +1844,7 @@ export function DesktopUI({
       } catch {}
     };
     fetchPrefs();
-  }, [petStorageKeys]);
+  }, [petStorageKeys, setEquippedAccessories, setSelectedPet]);
 
   useEffect(() => {
     const isInputFocused = () => {
@@ -1891,12 +1961,20 @@ export function DesktopUI({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isSearchOpen, isWallpaperWorkbench, knowledgeOpen, meetingModeRef, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, startCall, startStandardVoiceCall, toggleWallpaperMode]);
+  }, [callStateRef, chatOpen, closeKnowledgeBase, closeMemoryAvatar, endCall, getVoiceScopeOptions, interrupt, isSearchOpen, isSpacebarRecording, isWallpaperWorkbench, knowledgeOpen, meetingModeRef, memoryLabOpen, openCommandCenter, sanctuaryOpen, selectedVoiceId, setIsNotificationPanelOpen, setIsSearchOpen, startCall, startStandardVoiceCall, toggleWallpaperMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [setTime]);
+  return {
+    ...previousBindings
+  } as const;
+}
+
+function useDesktopSurfaceControls(previousBindings: ReturnType<typeof useDesktopNotificationsAndShortcuts>) {
+  const { canCustomizeLumiAppearance, lang, setSelectedPet, savePetPrefsToServer, equippedAccessories, t, setIsNotificationPanelOpen, windowCommand, setPersonalizationSection, openKnowledgeBase, openCommandCenter, openMemoryAvatar, inferSurfaceReturnTarget, dismissUtilitySurfaces, surfaceReturnTargetRef, setIsSearchOpen, setViewMode, setActiveTab, setNexusReturnTarget, knowledgeOpen, closeKnowledgeBase, closeMemoryAvatar, nexusReturnTarget, activeTab, desktopWidgetFallbackRef, setIsDesktopWidgetMode, isTauri, isWallpaperModeRef, chatOpen, wallpaperPresentationRef, applyWallpaperMode, endMeetingAndReport, isDesktopWidgetMode, openWindows, operationMode, orgConnection, resetMeetingCapture, setOperationMode, switchDomain, workDomain, setMeetingPaused, setMeetingNotesOpen, setLegalMeetingCaseTitle, setSettingsSection, socket, callError, clientRuntime, viewMode, focusedWindow, settingsSection, isSearchOpen, memoryLabOpen, sanctuaryOpen, commandCenterView, isNotificationPanelOpen, meetingNotesOpen, isWallpaperMode, organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState, minimizedWindows, wallpaperPresentation, wallpaperWorkspace, callState, isMuted, meetingPaused, meetingNotes, meetingReport, meetingStartedAt, meetingReportGenerating, agentStatus, mcpActivities } = previousBindings;
+
 
   const handleSelectPet = (pet: PetConfig) => {
     if (!canCustomizeLumiAppearance) {
@@ -1911,7 +1989,7 @@ export function DesktopUI({
   const setNotificationSurface = useCallback((open?: boolean) => {
     setIsNotificationPanelOpen(previous => open ?? !previous);
     windowCommand('remove', 'notifications');
-  }, [windowCommand]);
+  }, [setIsNotificationPanelOpen, windowCommand]);
 
   const openSurface = useCallback((value: string, returnTarget?: SurfaceReturnTarget) => {
     if (value === 'avatar-studio') setPersonalizationSection('appearance');
@@ -1939,7 +2017,7 @@ export function DesktopUI({
     if (windowId === 'notifications') { setNotificationSurface(true); return; }
     windowCommand('open', windowId);
     setActiveTab(windowId);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab, setNotificationSurface, windowCommand]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab, setIsNotificationPanelOpen, setIsSearchOpen, setNexusReturnTarget, setNotificationSurface, setPersonalizationSection, setViewMode, surfaceReturnTargetRef, windowCommand]);
 
   const toggleWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
@@ -1994,7 +2072,7 @@ export function DesktopUI({
       return;
     }
     closeWindow(windowId);
-  }, [activeTab, closeKnowledgeBase, closeMemoryAvatar, closeWindow, dismissUtilitySurfaces, nexusReturnTarget, openCommandCenter, setActiveTab]);
+  }, [activeTab, closeKnowledgeBase, closeMemoryAvatar, closeWindow, dismissUtilitySurfaces, nexusReturnTarget, openCommandCenter, setActiveTab, setIsNotificationPanelOpen, setIsSearchOpen, setNexusReturnTarget, setViewMode, surfaceReturnTargetRef]);
 
   const minimizeOsWindow = useCallback((tab: string) => { windowCommand('minimize', tab); }, [windowCommand]);
 
@@ -2052,7 +2130,7 @@ export function DesktopUI({
     await appWindow.setSize(new windowApi.LogicalSize(widgetWidth, widgetHeight));
     await appWindow.setPosition(new windowApi.PhysicalPosition(Math.round(physicalX), Math.round(physicalY)));
     await appWindow.setFocus().catch(() => {});
-  }, []);
+  }, [desktopWidgetFallbackRef]);
 
   const restoreDesktopWidgetFallback = useCallback(async () => {
     const fallback = desktopWidgetFallbackRef.current;
@@ -2084,7 +2162,7 @@ export function DesktopUI({
       }
     }
     await appWindow.setFocus().catch(() => {});
-  }, []);
+  }, [desktopWidgetFallbackRef]);
 
   const enterDesktopWidgetMode = useCallback(async () => {
     try { sounds.playClick(); } catch {}
@@ -2116,7 +2194,7 @@ export function DesktopUI({
         );
       }
     }
-  }, [applyDesktopWidgetFallback, dismissUtilitySurfaces, isTauri, lang, setActiveTab, windowCommand]);
+  }, [applyDesktopWidgetFallback, desktopWidgetFallbackRef, dismissUtilitySurfaces, isTauri, lang, setActiveTab, setIsDesktopWidgetMode, setIsNotificationPanelOpen, setIsSearchOpen, surfaceReturnTargetRef, windowCommand]);
 
   const exitDesktopWidgetMode = useCallback(async (nextSurface?: string) => {
     try { sounds.playClick(); } catch {}
@@ -2144,7 +2222,7 @@ export function DesktopUI({
     if (nextSurface) {
       window.setTimeout(() => toggleWindow(nextSurface), 120);
     }
-  }, [chatOpen, isTauri, lang, restoreDesktopWidgetFallback, toggleWindow]);
+  }, [chatOpen, desktopWidgetFallbackRef, isTauri, isWallpaperModeRef, lang, restoreDesktopWidgetFallback, setIsDesktopWidgetMode, toggleWindow, wallpaperPresentationRef]);
 
   const hideDesktopWidgetMode = async () => {
     try { sounds.playClick(); } catch {}
@@ -2315,6 +2393,15 @@ export function DesktopUI({
     viewMode,
     workDomain,
   ]);
+  return {
+    ...previousBindings, exitDesktopWidgetMode, hideDesktopWidgetMode, toggleWindow, openSurface, closeSurface, enterDesktopWidgetMode, focusOsWindow,
+    minimizeOsWindow, closeWindow, handleSelectPet
+  } as const;
+}
+
+function useDesktopPresentation(previousBindings: ReturnType<typeof useDesktopSurfaceControls>) {
+  const { t, desktopIcons, lang, openWindows, chatOpen, pendingOperationMode, isDesktopWidgetMode, selectedPet, equippedAccessories, petReaction, callState, audioLevel, transcript, operationMode, workDomain, wakeEnabled, wakeWord, startStandardVoiceCall, endVoiceCallFromUI, exitDesktopWidgetMode, hideDesktopWidgetMode, resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, personalScale, personalOpacity, syncRate, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, dockPositionClassName, focusedWindow, minimizedWindows, user, onLogin, setPersonalizationSection, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, isTauri, interrupt, desktopIconAreaHeight, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, setPendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, focusOsWindow, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar } = previousBindings;
+
 
   const appIcons = [
     { id: 'personality', label: t.personality || 'Personality Lab', icon: <UserIcon size={24} />, color: 'from-violet-500 to-fuchsia-600' },
@@ -2426,6 +2513,44 @@ export function DesktopUI({
       />
     );
   }
-  return <DesktopShellView {...{ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, focusOsWindow, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }} />;
+  return <DesktopShellView {...{
+    resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation,
+    wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl,
+    wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale,
+    personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown,
+    toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain,
+    orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill,
+    chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen,
+    isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time,
+    enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose,
+    openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow,
+    minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction,
+    equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode,
+    openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer,
+    facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled,
+    wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition,
+    launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle,
+    copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt,
+    meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel,
+    toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption,
+    setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible,
+    enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding,
+    askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, focusOsWindow,
+    minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang,
+    settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey,
+    handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded,
+    commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest,
+    setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab,
+    setMemoryAvatars, enterCreatedMemoryAvatar
+  }} />;
+}
 
+export function DesktopUI(props: Parameters<typeof useDesktopSurfaceState>[0]) {
+  const state0 = useDesktopSurfaceState(props);
+  const state1 = useDesktopCaptureAndIdentity(state0);
+  const state2 = useDesktopRuntimeAndPreferences(state1);
+  const state3 = useDesktopWallpaper(state2);
+  const state4 = useDesktopNotificationsAndShortcuts(state3);
+  const state5 = useDesktopSurfaceControls(state4);
+  return useDesktopPresentation(state5);
 }

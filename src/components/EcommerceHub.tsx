@@ -217,7 +217,7 @@ function SourceBadge({
   );
 }
 
-export function EcommerceHub({
+function useEcommerceHubState({
   lang,
   draft: initialDraft,
   onDraftChange,
@@ -232,6 +232,7 @@ export function EcommerceHub({
   workflowEntryId?: 'today-operations' | 'store-data';
   onSnapshotChange?: (snapshot: EcommerceWorkbenchSnapshot | null) => void;
 }) {
+
   const copy = ecommerceWorkbenchCopy[lang];
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedKind, setSelectedKind] = useState<EcommerceReportKind>(initialReportKind);
@@ -412,6 +413,16 @@ export function EcommerceHub({
     URL.revokeObjectURL(url);
     toast.success(copy.exported);
   };
+  return { inputRef, handleFile, copy, hasData, archiving, archiveDiagnosis, lang, exportDiagnosis, clearReports, archiveTaskId, error, snapshot, selectedPlatform, edit, setSelectedKind, selectedKind, processing, reports, downloadTemplate, pasteValue, analyzePaste, grossMarginPercent, targetStockDays, sourceNames, columnMappings, removeReport, changeMapping };
+}
+
+export function EcommerceHub(props: Parameters<typeof useEcommerceHubState>[0]) {
+  return renderEcommerceHub(useEcommerceHubState(props));
+}
+
+function renderEcommerceHub(input: ReturnType<typeof useEcommerceHubState>) {
+  const { inputRef, handleFile, copy, hasData, archiving, archiveDiagnosis, lang, exportDiagnosis, clearReports, archiveTaskId, error, snapshot, selectedPlatform, edit, setSelectedKind, selectedKind, processing, reports, downloadTemplate, pasteValue, analyzePaste, grossMarginPercent, targetStockDays, sourceNames, columnMappings, removeReport, changeMapping } = input;
+
 
   return (
     <div className="h-full min-h-0 overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.09),transparent_32%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.08),transparent_28%)] text-white">

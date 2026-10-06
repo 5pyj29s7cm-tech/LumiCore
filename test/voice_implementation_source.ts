@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-/** Read the complete production implementation after its responsibility split. */
+import { readImplementationSource } from './implementation_source';
+/** Read all live voice modules and unwrap their explicit turn-state accessors. */
 export function readVoiceImplementationSource(): string {
-  return ['voice_transport_runtime','voice_turn_policy','voice_side_response','voice_conversation_turn','voice_input_pipeline','voice']
-    .map(name => readFileSync('server/socket/' + name + '.ts', 'utf8')).join('\n');
+  return readImplementationSource('server/socket/voice.ts', 'utf8');
 }

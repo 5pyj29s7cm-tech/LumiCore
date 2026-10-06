@@ -36,6 +36,14 @@ export function mountMemoryRoutes(
   _jwtSecret: string,
   llmGetters: SharedProviderGetters,
 ) {
+  mountMemoryRecordRoutes(router);
+  mountReminderRoutes(router);
+  mountMemoryLearningRoutes(router, llmGetters);
+  mountMemoryOrganizationRoutes(router, llmGetters);
+  mountMemoryProtectionRoutes(router, llmGetters);
+}
+
+function mountMemoryRecordRoutes(router: Router) {
   router.get("/memory/firewall/policy", (_req, res) => {
     res.json(getMemoryFirewallPolicy());
   });
@@ -153,7 +161,9 @@ export function mountMemoryRoutes(
       res.status(500).json({ error: err.message });
     }
   }));
+}
 
+function mountReminderRoutes(router: Router) {
   // Reminders CRUD
   router.get("/reminders", requireAuth, (req, res) => {
     try {
@@ -220,7 +230,9 @@ export function mountMemoryRoutes(
       res.status(500).json({ error: e.message });
     }
   });
+}
 
+function mountMemoryLearningRoutes(router: Router, llmGetters: SharedProviderGetters) {
   // Memory consolidation
   router.post("/memory/consolidate", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     try {
@@ -353,7 +365,9 @@ export function mountMemoryRoutes(
     if (!updated) return res.status(404).json({ error: 'Memory not found' });
     return sendDurableMutation(req, res, { success: true, memory: updated }, () => broadcastMemoryChange({ userId: mem.userId, ...scope }, 'updated', updated.id));
   }));
+}
 
+function mountMemoryOrganizationRoutes(router: Router, llmGetters: SharedProviderGetters) {
   // Memory tree — returns full nested tree structure
   router.get("/memory/tree", requireAuth, (req, res) => {
     try {
@@ -411,7 +425,9 @@ export function mountMemoryRoutes(
       }
     } finally { res.off('close', onClose); }
   }));
+}
 
+function mountMemoryProtectionRoutes(router: Router, llmGetters: SharedProviderGetters) {
   // Toggle core identity protection
   router.put("/memory/:id/protect", requireAuth, serializedScopeRoute("memory", async (req, res) => {
     const decoded3 = req.user!;

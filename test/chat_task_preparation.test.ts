@@ -1,7 +1,7 @@
-import fs from 'node:fs';
+import { readImplementationSource } from './implementation_source';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-const source = fs.readFileSync('server/socket/chat.ts', 'utf8');
+const source = readImplementationSource('server/socket/chat.ts', 'utf8');
 const ast = ts.createSourceFile('chat.ts', source, ts.ScriptTarget.Latest, true);
 let preparation: ts.VariableDeclaration | undefined, resumes: ts.VariableDeclaration | undefined;
 const visit = (node: ts.Node) => {

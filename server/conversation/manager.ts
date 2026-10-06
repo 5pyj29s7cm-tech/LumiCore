@@ -1003,7 +1003,6 @@ export function addMessage(msg: {
   const completionFeedback = normalizeCompletionFeedbackForPersistence(msg.completionFeedback);
   const nativeRequestBinding = normalizeNativeRequestBinding(msg);
   const voiceTurnProvenance = normalizeVoiceTurnProvenance(msg);
-  let currentUserMessageIdForLedger = '';
 
   const interaction: any = {
     id,
@@ -1065,6 +1064,217 @@ export function addMessage(msg: {
       return accepted.turn.userMessageId;
     }
   }
+  const terminalArchiveId = updateConversationForMessage(db, msg, id, now, normalizedToolCalls);
+  if (terminalArchiveId !== undefined) return terminalArchiveId;
+
+
+  if (
+    msg.role === 'assistant'
+    && msg.mode !== 'proactive'
+    && msg.conversationId
+    && msg.requestId
+  ) {
+    finalizePersistedAssistantActionTurnInDb(db, {
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      requestId: msg.requestId,
+      assistantMessageId: id,
+      assistantText: msg.content,
+      now,
+    });
+  }
+
+  commitDatabaseTables(db);
+  return id;
+}
+
+export type IdempotentConversationMessage = Parameters<typeof addMessage>[0] & {
+  conversationId: string;
+  requestId: string;
+};
+
+/**
+ * Find the durable transcript row for one accepted socket request. Native chat
+ * mirrors the request id into externalMessageId because that column survives a
+ * database restart; older in-memory rows can still be found through requestId.
+ */
+export function getMessageByRequestId(input: {
+  userId: string;
+  agentId?: string;
+  conversationId?: string;
+  requestId: string;
+  role: string;
+  source?: string;
+  channel?: string;
+}): MessageRecord | null {
+  const requestId = String(input.requestId || '').trim();
+  if (!requestId) return null;
+  const source = String(input.source || '');
+  const channel = String(input.channel || '');
+  const row = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).find((item: any) => (
+    item.userId === input.userId
+    && (!input.agentId || item.agentId === input.agentId)
+    && (!input.conversationId || item.conversationId === input.conversationId)
+    && item.role === input.role
+    && (!source || item.source === source)
+    && (!channel || item.channel === channel)
+    && (
+      String(item.requestId || '') === requestId
+      || String(item.externalMessageId || '') === requestId
+    )
+  ));
+  return row || null;
+}
+
+/**
+ * Persist one role exactly once for a received socket request. The monotonic
+ * routeSequence is used as a durable receive/commit order for native chat;
+ * user rows are written when accepted, while assistant rows take their order
+ * only when the terminal result is committed.
+ */
+export function addMessageIdempotent(msg: IdempotentConversationMessage): string {
+  const requestId = String(msg.requestId || '').trim();
+  if (!requestId) return addMessage(msg);
+  const existing = getMessageByRequestId({
+    userId: msg.userId,
+    agentId: msg.agentId,
+    conversationId: msg.conversationId,
+    requestId,
+    role: msg.role,
+    source: msg.source,
+    channel: msg.channel,
+  });
+  if (existing) {
+    if (msg.role === 'user') {
+      acceptConversationActionTurn({
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        requestId,
+        userMessageId: existing.id,
+        domain: msg.domain,
+        orgId: msg.orgId,
+        channel: msg.channel,
+        source: msg.source,
+        now: existing.receivedAt || existing.timestamp,
+      });
+    } else if (msg.role === 'assistant') {
+      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
+      const conversation = (db.conversations || []).find((item: Conversation) => (
+        item.id === msg.conversationId && item.userId === msg.userId
+      ));
+      if (conversation) {
+        const replayRecords = normalizeToolCalls(msg.toolCalls) || [];
+        const receiptOwnership = partitionConversationReceiptsByOwnership(replayRecords, {
+          taskId: conversation.actionContinuationState?.taskId,
+          requestId: conversation.actionContinuationState?.activeRequestId
+            || conversation.pendingActionContinuation?.requestId,
+        });
+        if (receiptOwnership.staleRecords.length > 0) {
+          // The transcript row is immutable and already user-visible. A late
+          // transport replay may contribute only archive-bound receipts; it
+          // must never append or rewrite the assistant projection.
+          archiveBoundConversationActionReceipts(db, {
+            conversationId: conversation.id,
+            userId: conversation.userId,
+            records: receiptOwnership.staleRecords,
+            turnId: requestId,
+          });
+        }
+        finalizeConversationActionRequestInDb(db, conversation, requestId, {
+          assistantState: existing.message,
+          fallbackBlocker: 'The terminal assistant record was replayed without a verified task outcome.',
+        });
+      }
+      finalizeManagerActionTurnFromAssistant({
+        conversationId: msg.conversationId,
+        userId: msg.userId,
+        requestId,
+        assistantMessageId: existing.id,
+        reason: 'idempotent assistant transcript replay',
+        now: existing.receivedAt || existing.timestamp,
+      });
+      commitDatabaseTables(db);
+    }
+    return existing.id;
+  }
+
+  const rows = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).filter((item: any) => (
+    item.conversationId === msg.conversationId
+  ));
+  const nextRouteSequence = rows.reduce((largest: number, item: any) => (
+    Number.isFinite(Number(item.routeSequence))
+      ? Math.max(largest, Math.floor(Number(item.routeSequence)))
+      : largest
+  ), 0) + 1;
+
+  return addMessage({
+    ...msg,
+    requestId,
+    externalMessageId: msg.externalMessageId || requestId,
+    routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : nextRouteSequence,
+  });
+}
+
+/**
+ * Replace only the user-visible terminal projection of an already accepted
+ * assistant turn. This is used when cancellation or a failed durability fence
+ * supersedes a response that was staged in memory before the strict flush.
+ */
+export function updateAssistantMessageTerminalPresentation(input: {
+  userId: string;
+  conversationId: string;
+  requestId: string;
+  content: string;
+  completionFeedback: unknown;
+  source?: string;
+  channel?: string;
+}): boolean {
+  const completionFeedback = normalizeCompletionFeedbackForPersistence(input.completionFeedback);
+  if (!completionFeedback) return false;
+  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
+  const requestId = String(input.requestId || '').trim();
+  const row = (db.interactions || []).find((item: any) => (
+    item.userId === input.userId
+    && item.conversationId === input.conversationId
+    && item.role === 'assistant'
+    && (!input.source || item.source === input.source)
+    && (!input.channel || item.channel === input.channel)
+    && (
+      String(item.requestId || '') === requestId
+      || String(item.externalMessageId || '') === requestId
+    )
+  ));
+  if (!row) return false;
+  const content = String(input.content || '').replace(/\0/g, '').trim().slice(0, 8_000);
+  row.message = content;
+  row.content = content;
+  row.response = '';
+  row.completionFeedback = completionFeedback;
+  commitDatabaseTables(db);
+  return true;
+}
+
+function normalizeToolCalls(value: unknown): any[] | undefined {
+  return sanitizeToolRecordsForPersistence(value);
+}
+export { type Conversation, type MessageRecord, type ConversationTurnOptions, type ConversationTurnResult } from "./manager/contracts";
+export { compactRecordForPrompt, getMessages, getMessagesByTokenBudget, getMessagesThroughExternalMessage } from "./manager/message_history";
+export { type DurableForegroundReleaseGateSnapshot, type DurableForegroundReleaseGate, type CreateDurableForegroundReleaseGateInput, createDurableForegroundReleaseGate } from "./manager/foreground_release_gate";
+export { type AutoSummaryCheckResult, checkAutoSummary, beginConversationSummary, cancelConversationSummary, setConversationSummary, getConversationSummary, trackTopic, extractTopics, getTopicContext } from "./summary_state";
+export { CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS, CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS, type ConversationTerminalPersistenceUnknownProjection, type ConversationTerminalDurabilityStage, runWithConversationTerminalDurabilityStage, renewConversationActionExecutionLease, type ConversationActionExecutionLeaseLoss, type ConversationActionExecutionHeartbeat, startConversationActionExecutionHeartbeat } from "./action_execution_runtime";
+export { finalizeForegroundRequest, type SupersedeConversationActionExecutionRequestInput, type SupersedeConversationActionExecutionRequestResult, convergeConversationActionRequestLease, convergeForegroundRequestBeforeRelease, convergeConversationActionRequestLeaseDurably, finalizeForegroundRequestDurably } from "./foreground_finalization";
+export { type ConvergeConversationActionRequestLeaseInput, type ConversationActionRequestLeaseEvidence, type ConvergeConversationActionRequestLeaseResult, type ForegroundRequestFinalizationOutcome, type FinalizeForegroundRequestInput, type ForegroundRequestFinalizationEvidence, type FinalizeForegroundRequestResult, type ForegroundRequestDurabilityDependencies, type ForegroundRequestIdentity, type ForegroundRequestReleaseInput, type ForegroundRequestReleaseResult } from "./foreground_request_types";
+export { getConversationFocusThreads, updateConversationActionFocus, getConversationActionStatus, getConversationForScope, getOrCreateActiveConversation, startNewConversation, startIsolatedConversation, type DeletedConversationData, deleteConversationData, shouldRolloverConversationForTurn, getOrCreateConversationForTurn, closeConversation, getActiveConversation, setConversationMode, getUserConversations, activateConversation, type BindConversationActionExecutionTurnInput, type BoundConversationActionExecutionTurn, getMessagesForAgent } from "./conversation_lifecycle";
+
+function updateConversationForMessage(
+  db: Pick<ReturnType<typeof readDatabaseTables>, "conversationActionReceipts" | "conversationActionTasks" | "conversationActionTurns" | "conversations" | "interactions" | "modelRoutingReceipts">,
+  msg: Parameters<typeof addMessage>[0],
+  id: string,
+  now: string,
+  normalizedToolCalls: ReturnType<typeof normalizeToolCalls>,
+): string | undefined {
+  let currentUserMessageIdForLedger = "";
+
 
   // Update conversation messageCount and lastActiveAt
   if (msg.conversationId && db.conversations) {
@@ -1495,201 +1705,4 @@ export function addMessage(msg: {
       }
     }
   }
-
-  if (
-    msg.role === 'assistant'
-    && msg.mode !== 'proactive'
-    && msg.conversationId
-    && msg.requestId
-  ) {
-    finalizePersistedAssistantActionTurnInDb(db, {
-      conversationId: msg.conversationId,
-      userId: msg.userId,
-      requestId: msg.requestId,
-      assistantMessageId: id,
-      assistantText: msg.content,
-      now,
-    });
-  }
-
-  commitDatabaseTables(db);
-  return id;
 }
-
-export type IdempotentConversationMessage = Parameters<typeof addMessage>[0] & {
-  conversationId: string;
-  requestId: string;
-};
-
-/**
- * Find the durable transcript row for one accepted socket request. Native chat
- * mirrors the request id into externalMessageId because that column survives a
- * database restart; older in-memory rows can still be found through requestId.
- */
-export function getMessageByRequestId(input: {
-  userId: string;
-  agentId?: string;
-  conversationId?: string;
-  requestId: string;
-  role: string;
-  source?: string;
-  channel?: string;
-}): MessageRecord | null {
-  const requestId = String(input.requestId || '').trim();
-  if (!requestId) return null;
-  const source = String(input.source || '');
-  const channel = String(input.channel || '');
-  const row = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).find((item: any) => (
-    item.userId === input.userId
-    && (!input.agentId || item.agentId === input.agentId)
-    && (!input.conversationId || item.conversationId === input.conversationId)
-    && item.role === input.role
-    && (!source || item.source === source)
-    && (!channel || item.channel === channel)
-    && (
-      String(item.requestId || '') === requestId
-      || String(item.externalMessageId || '') === requestId
-    )
-  ));
-  return row || null;
-}
-
-/**
- * Persist one role exactly once for a received socket request. The monotonic
- * routeSequence is used as a durable receive/commit order for native chat;
- * user rows are written when accepted, while assistant rows take their order
- * only when the terminal result is committed.
- */
-export function addMessageIdempotent(msg: IdempotentConversationMessage): string {
-  const requestId = String(msg.requestId || '').trim();
-  if (!requestId) return addMessage(msg);
-  const existing = getMessageByRequestId({
-    userId: msg.userId,
-    agentId: msg.agentId,
-    conversationId: msg.conversationId,
-    requestId,
-    role: msg.role,
-    source: msg.source,
-    channel: msg.channel,
-  });
-  if (existing) {
-    if (msg.role === 'user') {
-      acceptConversationActionTurn({
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        requestId,
-        userMessageId: existing.id,
-        domain: msg.domain,
-        orgId: msg.orgId,
-        channel: msg.channel,
-        source: msg.source,
-        now: existing.receivedAt || existing.timestamp,
-      });
-    } else if (msg.role === 'assistant') {
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
-      const conversation = (db.conversations || []).find((item: Conversation) => (
-        item.id === msg.conversationId && item.userId === msg.userId
-      ));
-      if (conversation) {
-        const replayRecords = normalizeToolCalls(msg.toolCalls) || [];
-        const receiptOwnership = partitionConversationReceiptsByOwnership(replayRecords, {
-          taskId: conversation.actionContinuationState?.taskId,
-          requestId: conversation.actionContinuationState?.activeRequestId
-            || conversation.pendingActionContinuation?.requestId,
-        });
-        if (receiptOwnership.staleRecords.length > 0) {
-          // The transcript row is immutable and already user-visible. A late
-          // transport replay may contribute only archive-bound receipts; it
-          // must never append or rewrite the assistant projection.
-          archiveBoundConversationActionReceipts(db, {
-            conversationId: conversation.id,
-            userId: conversation.userId,
-            records: receiptOwnership.staleRecords,
-            turnId: requestId,
-          });
-        }
-        finalizeConversationActionRequestInDb(db, conversation, requestId, {
-          assistantState: existing.message,
-          fallbackBlocker: 'The terminal assistant record was replayed without a verified task outcome.',
-        });
-      }
-      finalizeManagerActionTurnFromAssistant({
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        requestId,
-        assistantMessageId: existing.id,
-        reason: 'idempotent assistant transcript replay',
-        now: existing.receivedAt || existing.timestamp,
-      });
-      commitDatabaseTables(db);
-    }
-    return existing.id;
-  }
-
-  const rows = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]).interactions || []).filter((item: any) => (
-    item.conversationId === msg.conversationId
-  ));
-  const nextRouteSequence = rows.reduce((largest: number, item: any) => (
-    Number.isFinite(Number(item.routeSequence))
-      ? Math.max(largest, Math.floor(Number(item.routeSequence)))
-      : largest
-  ), 0) + 1;
-
-  return addMessage({
-    ...msg,
-    requestId,
-    externalMessageId: msg.externalMessageId || requestId,
-    routeSequence: Number.isFinite(msg.routeSequence) ? msg.routeSequence : nextRouteSequence,
-  });
-}
-
-/**
- * Replace only the user-visible terminal projection of an already accepted
- * assistant turn. This is used when cancellation or a failed durability fence
- * supersedes a response that was staged in memory before the strict flush.
- */
-export function updateAssistantMessageTerminalPresentation(input: {
-  userId: string;
-  conversationId: string;
-  requestId: string;
-  content: string;
-  completionFeedback: unknown;
-  source?: string;
-  channel?: string;
-}): boolean {
-  const completionFeedback = normalizeCompletionFeedbackForPersistence(input.completionFeedback);
-  if (!completionFeedback) return false;
-  const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
-  const requestId = String(input.requestId || '').trim();
-  const row = (db.interactions || []).find((item: any) => (
-    item.userId === input.userId
-    && item.conversationId === input.conversationId
-    && item.role === 'assistant'
-    && (!input.source || item.source === input.source)
-    && (!input.channel || item.channel === input.channel)
-    && (
-      String(item.requestId || '') === requestId
-      || String(item.externalMessageId || '') === requestId
-    )
-  ));
-  if (!row) return false;
-  const content = String(input.content || '').replace(/\0/g, '').trim().slice(0, 8_000);
-  row.message = content;
-  row.content = content;
-  row.response = '';
-  row.completionFeedback = completionFeedback;
-  commitDatabaseTables(db);
-  return true;
-}
-
-function normalizeToolCalls(value: unknown): any[] | undefined {
-  return sanitizeToolRecordsForPersistence(value);
-}
-export { type Conversation, type MessageRecord, type ConversationTurnOptions, type ConversationTurnResult } from "./manager/contracts";
-export { compactRecordForPrompt, getMessages, getMessagesByTokenBudget, getMessagesThroughExternalMessage } from "./manager/message_history";
-export { type DurableForegroundReleaseGateSnapshot, type DurableForegroundReleaseGate, type CreateDurableForegroundReleaseGateInput, createDurableForegroundReleaseGate } from "./manager/foreground_release_gate";
-export { type AutoSummaryCheckResult, checkAutoSummary, beginConversationSummary, cancelConversationSummary, setConversationSummary, getConversationSummary, trackTopic, extractTopics, getTopicContext } from "./summary_state";
-export { CONVERSATION_ACTION_EXECUTION_LEASE_TTL_MS, CONVERSATION_ACTION_EXECUTION_HEARTBEAT_INTERVAL_MS, type ConversationTerminalPersistenceUnknownProjection, type ConversationTerminalDurabilityStage, runWithConversationTerminalDurabilityStage, renewConversationActionExecutionLease, type ConversationActionExecutionLeaseLoss, type ConversationActionExecutionHeartbeat, startConversationActionExecutionHeartbeat } from "./action_execution_runtime";
-export { finalizeForegroundRequest, type SupersedeConversationActionExecutionRequestInput, type SupersedeConversationActionExecutionRequestResult, convergeConversationActionRequestLease, convergeForegroundRequestBeforeRelease, convergeConversationActionRequestLeaseDurably, finalizeForegroundRequestDurably } from "./foreground_finalization";
-export { type ConvergeConversationActionRequestLeaseInput, type ConversationActionRequestLeaseEvidence, type ConvergeConversationActionRequestLeaseResult, type ForegroundRequestFinalizationOutcome, type FinalizeForegroundRequestInput, type ForegroundRequestFinalizationEvidence, type FinalizeForegroundRequestResult, type ForegroundRequestDurabilityDependencies, type ForegroundRequestIdentity, type ForegroundRequestReleaseInput, type ForegroundRequestReleaseResult } from "./foreground_request_types";
-export { getConversationFocusThreads, updateConversationActionFocus, getConversationActionStatus, getConversationForScope, getOrCreateActiveConversation, startNewConversation, startIsolatedConversation, type DeletedConversationData, deleteConversationData, shouldRolloverConversationForTurn, getOrCreateConversationForTurn, closeConversation, getActiveConversation, setConversationMode, getUserConversations, activateConversation, type BindConversationActionExecutionTurnInput, type BoundConversationActionExecutionTurn, getMessagesForAgent } from "./conversation_lifecycle";

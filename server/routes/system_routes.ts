@@ -331,6 +331,16 @@ export async function getSystemStatsSnapshot() {
 }
 
 export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, llm: TestableModelRuntime = {}) {
+  mountSystemHealthRoutes(router);
+  mountVoiceProviderRoutes(router);
+  mountToolSchedulerRoutes(router);
+  mountModelDiagnosticRoutes(router, llm);
+  mountModelPreferenceRoutes(router);
+  mountSettingsRoutes(router);
+  mountSystemInventoryRoutes(router, io);
+}
+
+function mountSystemHealthRoutes(router: Router) {
   router.get("/version", (_req, res) => {
     res.json(getRuntimeVersionInfo());
   });
@@ -569,7 +579,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       res.status(500).json({ error: error.message });
     }
   });
+}
 
+function mountVoiceProviderRoutes(router: Router) {
   // Explicit functional probe for local OpenAI-compatible runtimes. This is
   // separate from the cheap cached /health response so monitoring can choose
   // when to incur a network probe.
@@ -722,7 +734,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       },
     });
   });
+}
 
+function mountToolSchedulerRoutes(router: Router) {
   // Tool list for security config
   router.get("/tools", requireAuth, (_req, res) => {
     const tools = toolRegistry.list().map(t => ({
@@ -762,7 +776,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
     }
     return res.json({ id, ...result });
   });
+}
 
+function mountModelDiagnosticRoutes(router: Router, llm: TestableModelRuntime) {
   // Token usage aggregation
   router.get("/llm/usage", requireAuth, (req, res) => {
     try {
@@ -979,7 +995,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       return res.status(502).json({ ok: false, error: message });
     }
   });
+}
 
+function mountModelPreferenceRoutes(router: Router) {
   // API Keys — read/write user-configured keys
   // LLM model preferences — read/write per user
   router.put("/preferences/llm", requireAuth, async (req, res) => {
@@ -1157,7 +1175,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       res.status(500).json({ error: err.message });
     }
   });
+}
 
+function mountSettingsRoutes(router: Router) {
   router.get("/settings/keys", requireAuth, requireAdmin, requireLocalRequest, (_req, res) => {
     try {
       const stored = loadKeys();
@@ -1264,7 +1284,9 @@ export function mountSystemRoutes(router: Router, _jwtSecret: string, io?: any, 
       res.status(500).json({ error: err.message });
     }
   });
+}
 
+function mountSystemInventoryRoutes(router: Router, io?: any) {
   // System stats — real-time CPU / memory / platform info
   router.get("/system/stats", requireAuth, async (_req: any, res: any) => {
     try {

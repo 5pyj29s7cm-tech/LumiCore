@@ -64,7 +64,8 @@ function mcpToolFailure(operation: string, error: unknown) {
   };
 }
 
-export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle): McpServer {
+function createMcpToolRuntime(llmGetters?: Partial<SharedProviderGetters>, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle) {
+
   const g = llmGetters || {};
   const tr = toolReg || toolRegistry;
   const bc = broadcast || (() => {});
@@ -124,6 +125,13 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
   if (lifecycle) attachMcpCallLifecycle(mcp, lifecycle);
 
   const chatConversations = new Map<string, string>();
+  return { g, tr, bc, scope, mcpToolSecurityContext, memoryScope, isWorkViewer, viewerMutationDenied, resolveMcpLLM, mcp, chatConversations, lifecycle };
+}
+
+type McpToolRuntime = ReturnType<typeof createMcpToolRuntime>;
+
+function registerLumiChatTool({ mcp, bc, chatConversations, scope, isWorkViewer, resolveMcpLLM, tr, mcpToolSecurityContext, g, lifecycle, memoryScope }: Pick<McpToolRuntime, "mcp" | "bc" | "chatConversations" | "scope" | "isWorkViewer" | "resolveMcpLLM" | "tr" | "mcpToolSecurityContext" | "g" | "lifecycle" | "memoryScope">) {
+
 
   // Tool: send a chat message to Lumi
   mcp.registerTool(
@@ -468,6 +476,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiMemorySearchTool({ mcp, memoryScope }: Pick<McpToolRuntime, "mcp" | "memoryScope">) {
+
 
   // Tool: search memories
   mcp.registerTool(
@@ -501,6 +513,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiMemoryAddTool({ mcp, isWorkViewer, viewerMutationDenied, scope }: Pick<McpToolRuntime, "mcp" | "isWorkViewer" | "viewerMutationDenied" | "scope">) {
+
 
   // Tool: add a memory
   mcp.registerTool(
@@ -539,6 +555,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiReminderListTool({ mcp, memoryScope }: Pick<McpToolRuntime, "mcp" | "memoryScope">) {
+
 
   // Tool: list reminders
   mcp.registerTool(
@@ -568,6 +588,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiSpeakTool({ mcp, bc }: Pick<McpToolRuntime, "mcp" | "bc">) {
+
 
 
   // Tool: proactive speak — Lumi pushes TTS audio to xiaozhi
@@ -647,6 +671,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiNarrativeTool({ mcp, scope, g }: Pick<McpToolRuntime, "mcp" | "scope" | "g">) {
+
 
   // Tool: memory narrative chain — weave related memories into a chronological story
   mcp.registerTool(
@@ -694,6 +722,10 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
+}
+
+function registerLumiRouteTaskTool({ mcp, isWorkViewer, viewerMutationDenied, resolveMcpLLM, scope, bc, tr, mcpToolSecurityContext, g }: Pick<McpToolRuntime, "mcp" | "isWorkViewer" | "viewerMutationDenied" | "resolveMcpLLM" | "scope" | "bc" | "tr" | "mcpToolSecurityContext" | "g">) {
+
 
   // Execute a task through the same single LumiCore model/tool loop.
   mcp.registerTool(
@@ -820,9 +852,21 @@ export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>,
       }
     },
   );
-
-  return mcp;
 }
+
+export function createLumiMcpServer(llmGetters?: Partial<SharedProviderGetters>, toolReg?: ToolRegistry, broadcast?: (event: string, data: any) => void, callerScope?: McpCallerScope, lifecycle?: McpCallLifecycle): McpServer {
+  const runtime = createMcpToolRuntime(llmGetters, toolReg, broadcast, callerScope, lifecycle);
+  registerLumiChatTool(runtime);
+  registerLumiMemorySearchTool(runtime);
+  registerLumiMemoryAddTool(runtime);
+  registerLumiReminderListTool(runtime);
+  registerLumiSpeakTool(runtime);
+  registerLumiNarrativeTool(runtime);
+  registerLumiRouteTaskTool(runtime);
+  return runtime.mcp;
+}
+
+
 
 /**
  * Handle SSE connection — create transport and add to the Lumi MCP server.

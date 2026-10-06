@@ -1,3 +1,4 @@
+import { createChatStreamReceivers } from './agent_chat/chat_stream_receivers';
 import { ChatExecutionWatch } from '@/lib/chatExecutionWatch';
 import { useConversationTransitions } from "./agent_chat/useConversationTransitions";
 import { AgentChatView } from "./agent_chat/AgentChatView";
@@ -66,7 +67,7 @@ const CHAT_SEARCH_LIMIT = 200;
 
 const ACTIVE_CHAT_EXECUTION_TTL_MS = 24 * 60 * 60 * 1000;
 
-export function AgentChatPage({
+function useChatIdentityAndState({
   t,
   user,
   agent,
@@ -110,6 +111,7 @@ export function AgentChatPage({
   /** Desktop command center reuses the shell's single microphone session. */
   voiceSession?: AgentChatVoiceSession;
 }) {
+
   const prefersReducedMotion = useReducedMotion();
   const [messages, setMessageState] = useState<any[]>([]);
   const messagesRef = useRef<any[]>([]);
@@ -123,6 +125,7 @@ export function AgentChatPage({
     messagesRef.current = next;
     setMessageState(next);
   }, []);
+  const activeChatViewDetachersRef = useRef(new Map<string, () => void>());
   useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); for (const detach of activeChatViewDetachersRef.current.values()) detach(); activeChatViewDetachersRef.current.clear(); }, []);
   const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
@@ -225,6 +228,10 @@ export function AgentChatPage({
   // inline callback here used to tear those listeners down and recreate them
   // on every chat-state render, leaving a small window in which an
   // `audio:response` packet could be missed.
+  const messageInputRef = useRef<HTMLInputElement>(null);
+  const mediaStudioOpenRef = useRef(false);
+  const draftTextRef = useRef('');
+  const [hasDraftText, setHasDraftText] = useState(false);
   const handleLocalVoiceTranscript = useCallback((text: string, isFinal: boolean) => {
     if (!isFinal) return;
     if (inputDictationActiveRef.current) {
@@ -259,6 +266,7 @@ export function AgentChatPage({
   const localCallState = localVoiceSession.callState;
   const endLocalVoiceSession = localVoiceSession.endCall;
   const switchLocalVoice = localVoiceSession.switchVoice;
+  const agentId = agent?.id || 'lumi';
   const startVoiceSession = voiceSession?.onStart
     ?? (() => {
       void localVoiceSession.startCall(
@@ -357,10 +365,6 @@ export function AgentChatPage({
     return () => document.removeEventListener('mousedown', onClick);
   }, [showAttachmentMenu]);
 
-  const messageInputRef = useRef<HTMLInputElement>(null);
-  const mediaStudioOpenRef = useRef(false);
-  const draftTextRef = useRef('');
-  const [hasDraftText, setHasDraftText] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [attachmentUploadFailures, setAttachmentUploadFailures] = useState<ChatUploadFailure[]>([]);
@@ -467,7 +471,6 @@ export function AgentChatPage({
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The foreground view points to the request's metadata instead of copying its fields.
   const currentTurnUiMetaRef = useRef<ChatTurnUiMeta>({ hadTool: false, needsEvidence: false, finalization: null });
-  const activeChatViewDetachersRef = useRef(new Map<string, () => void>());
   const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   const chatRequestLedgerRef = useRef(new ChatRequestLedger());
   const taskRelationLedgerRef = useRef(new ChatTaskRelationLedger());
@@ -478,6 +481,48 @@ export function AgentChatPage({
   const conversationHistoryHasMoreRef = useRef(true);
   const conversationHistoryLoadingRef = useRef(false);
   const conversationHistoryRequestRef = useRef(0);
+  return {
+    mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef,
+    setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest,
+    setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen,
+    isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState,
+    endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines,
+    chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef,
+    showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu,
+    setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu,
+    setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef,
+    setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages,
+    mediaSourceArtifacts, mediaGenerationArtifacts, platform, socket, agentNameRef, recognition, setCopiedId,
+    mediaGenerationText, searchQuery, searchResults, isZh, setSearchResults, setIsSearchingHistory, setSearchError,
+    chatExecutionSource, activeChatViewDetachersRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef,
+    currentTurnUiMetaRef, setIsTyping, setMessages, setIsCreatingConversation, setRestoringConversationId,
+    setPendingAttachments, messagesRef, conversationTransitionRef, setConversationTransitionPending,
+    taskRelationLedgerRef, messagesRevisionRef, historyRefreshRevisionRef, isCreatingConversation,
+    restoringConversationId, setConversationHistory, setSearchQuery, conversationHistoryLoadingRef,
+    conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef,
+    setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore,
+    setConversationHistorySelectorExpanded, conversationHistory, conversationHistorySelectorExpanded,
+    conversationHistoryHasMore, conversationHistoryListRef, deletingConversationId, appConfirm,
+    setDeletingConversationId, scrollRef, chatProgressLines, attachmentUploadText, operationMode, creationRequestId,
+    onCreationRequestConsumed, mediaSourceUploading, mediaSourceFileInputRef, isTyping, setChatSongOpen,
+    chatSongWorkbenchRef, prefillMessage, prefillSource, onPrefillConsumed, isListening, localVoiceSession,
+    isElectron, callState, selectedVoiceId, attachmentRequest, onAttachmentRequestConsumed, setIsDraggingFiles,
+    nativeDropHandledAtRef, onClose, workflowStatus, chatAccentTheme, previewFile, layout, commandCenterView,
+    resolvedAppearanceMode, prefersReducedMotion, mediaStudioMode, mediaGenerationStatus, mediaGenerationDetail,
+    mediaSources, mediaGenerationRetryRequest, isWorkChat, chatSongOpen, isDraggingFiles, isCommandCenterUtility,
+    onCommandCenterViewChange, onOpenNexus, voices, voicePickerRef, setSelectedVoiceId, audioLevel,
+    startVoiceSession, endVoiceSession, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel,
+    runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryLoading,
+    conversationHistoryLoadingMore, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText,
+    visibleSuggestions, searchError, isSearchingHistory, copiedId, isOptimizing, attachmentUploadFailures,
+    optimizationProgress, attachmentMenuRef, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar,
+    onOpenKnowledge, activeCapabilities
+  } as const;
+}
+
+function useChatAttachmentsAndPresentation(previousBindings: ReturnType<typeof useChatIdentityAndState>) {
+  const { mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen, isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState, endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines, chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef, showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu, setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu, setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef, setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages, mediaSourceArtifacts, mediaGenerationArtifacts, platform } = previousBindings;
+
 
   const resetMediaGenerationSurface = useCallback(() => {
     mediaStudioOpenRef.current = false;
@@ -492,7 +537,7 @@ export function AgentChatPage({
     setMediaSources(EMPTY_MEDIA_GENERATION_SOURCES);
     setMediaSourceUploading(false);
     mediaSourceUploadTargetRef.current = null;
-  }, []);
+  }, [activeMediaGenerationRef, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaSourceUploadTargetRef, mediaStudioOpenRef, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSourceUploading, setMediaSources, setMediaStudioMode]);
 
   useEffect(() => {
     if (!isOpen || !isOfficeCommandCenter) {
@@ -502,7 +547,7 @@ export function AgentChatPage({
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
-  }, [pendingAttachments]);
+  }, [pendingAttachments, pendingAttachmentsRef]);
 
   useEffect(() => {
     if (inputDictationActiveRef.current && localCallState === 'idle') {
@@ -510,7 +555,7 @@ export function AgentChatPage({
       endLocalVoiceSession();
       setIsListening(false);
     }
-  }, [endLocalVoiceSession, localCallState]);
+  }, [endLocalVoiceSession, inputDictationActiveRef, localCallState, setIsListening]);
 
   const clearChatProgress = useCallback(() => {
     if (chatProgressClearTimerRef.current) {
@@ -519,7 +564,7 @@ export function AgentChatPage({
     }
     lastChatProgressTextRef.current = '';
     setChatProgressLines([]);
-  }, []);
+  }, [chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines]);
 
   const pushChatProgress = useCallback((text: string, tone: ChatProgressTone = 'thinking') => {
     const clean = String(text || '').trim();
@@ -539,7 +584,7 @@ export function AgentChatPage({
         time: now,
       },
     ].slice(-4));
-  }, []);
+  }, [chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines]);
 
   const finishChatProgress = useCallback((text: string, tone: ChatProgressTone = 'done') => {
     pushChatProgress(text, tone);
@@ -549,30 +594,30 @@ export function AgentChatPage({
       setChatProgressLines([]);
       chatProgressClearTimerRef.current = null;
     }, 4200);
-  }, [pushChatProgress]);
+  }, [chatProgressClearTimerRef, lastChatProgressTextRef, pushChatProgress, setChatProgressLines]);
 
   const scheduleWorkflowReset = useCallback((requestId?: string) => {
     chatTurnTimerGuardRef.current.schedule(String(requestId || ''), 5000, () => {
       setWorkflowStatus('idle');
       seenWorkflowToolEvents.current.clear();
     });
-  }, []);
+  }, [chatTurnTimerGuardRef, seenWorkflowToolEvents, setWorkflowStatus]);
 
   useEffect(() => () => {
     if (chatProgressClearTimerRef.current) clearTimeout(chatProgressClearTimerRef.current);
     chatTurnTimerGuardRef.current.dispose();
-  }, []);
+  }, [chatProgressClearTimerRef, chatTurnTimerGuardRef]);
 
   const updateDraftText = useCallback((value: string) => {
     draftTextRef.current = value;
     const nextHasDraft = value.trim().length > 0;
     setHasDraftText(prev => prev === nextHasDraft ? prev : nextHasDraft);
-  }, []);
+  }, [draftTextRef, setHasDraftText]);
 
   const setDraftText = useCallback((value: string) => {
     updateDraftText(value);
     if (messageInputRef.current) messageInputRef.current.value = value;
-  }, [updateDraftText]);
+  }, [messageInputRef, updateDraftText]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -587,7 +632,7 @@ export function AgentChatPage({
     };
     window.addEventListener('paste', pasteIntoCommandInput);
     return () => window.removeEventListener('paste', pasteIntoCommandInput);
-  }, [isOpen, setDraftText]);
+  }, [isOpen, messageInputRef, setDraftText]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -599,7 +644,7 @@ export function AgentChatPage({
     };
     window.addEventListener('lumi:replace-command-input', replaceCommandInput);
     return () => window.removeEventListener('lumi:replace-command-input', replaceCommandInput);
-  }, [isOpen, setDraftText]);
+  }, [isOpen, messageInputRef, setDraftText]);
 
   // Escape to close panels
   useEffect(() => {
@@ -614,11 +659,10 @@ export function AgentChatPage({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [conversationContextMenu, conversationHistoryOpen, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
+  }, [conversationContextMenu, conversationHistoryOpen, setConversationContextMenu, setConversationHistoryOpen, setShowAttachmentMenu, setShowVoicePicker, setShowWeChatSettings, showAttachmentMenu, showVoicePicker, showWeChatSettings]);
 
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
-  const agentId = agent?.id || 'lumi';
   const attachmentContextStoragePrefix = `lumi_chat_attachment_context:${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
   const invalidateChatViewWork = useCallback(() => {
     chatViewWorkRef.current.invalidate();
@@ -628,11 +672,11 @@ export function AgentChatPage({
     setOptimizationProgress(0);
     setMediaSourceUploading(false);
     mediaSourceUploadTargetRef.current = null;
-  }, []);
+  }, [chatUploadsRef, chatViewWorkRef, mediaSourceUploadTargetRef, setAttachmentUploadFailures, setIsOptimizing, setMediaSourceUploading, setOptimizationProgress]);
   const resetAttachmentConversationView = useCallback(() => {
     invalidateChatViewWork();
     setPreviewFile(null);
-  }, [invalidateChatViewWork]);
+  }, [invalidateChatViewWork, setPreviewFile]);
   const { conversationAttachments, conversationAttachmentsRef, attachmentConversationIdRef,
     bindAttachmentContextToConversation, rememberConversationAttachments, clearConversationAttachments: clearStoredAttachments,
   } = useConversationAttachments(attachmentContextStoragePrefix, resetAttachmentConversationView);
@@ -785,7 +829,7 @@ export function AgentChatPage({
       ? scopedFileUrl(`/api/files/download/${encodeURIComponent(file.fileId)}?inline=1`)
       : file.path ? makeChatArtifact(file.path, attachmentConversationIdRef.current).url : '');
     if (url) setPreviewFile({ fileName: file.fileName, path: file.path, url });
-  }, [attachmentConversationIdRef, scopedFileUrl]);
+  }, [attachmentConversationIdRef, scopedFileUrl, setPreviewFile]);
 
   const chatFileSections = useMemo(() => {
     const pending: ChatFilePanelItem[] = pendingAttachments.map(item => ({
@@ -846,6 +890,18 @@ export function AgentChatPage({
 
     return { pending, generated, knowledge };
   }, [generatedChatFiles, isKnowledgeReady, knowledgeFiles, pendingAttachments, scopedFileUrl]);
+  return {
+    ...previousBindings, chatFileSections, agentCategory, agentName, refreshKnowledgeFiles, setDraftText, openChatFile, scopedConversationUrl,
+    attachmentConversationIdRef, resetMediaGenerationSurface, clearChatProgress, bindAttachmentContextToConversation, invalidateChatViewWork,
+    attachmentContextStoragePrefix, pushChatProgress, finishChatProgress, scheduleWorkflowReset, rememberConversationAttachments, clearStoredAttachments,
+    conversationAttachmentsRef, scopedFileUrl, notifyKnowledgeUpdated, fileKindLabel, openChatFileInSystem, libraryMediaArtifacts, knowledgeLoading,
+    knowledgeFailed, availableMediaSourceArtifacts, knowledgeFiles, knowledgeStatusText, conversationAttachments, updateDraftText
+  } as const;
+}
+
+function useChatHistoryAndRequests(previousBindings: ReturnType<typeof useChatAttachmentsAndPresentation>) {
+  const { pendingAttachments, chatFileSections, agentId, agentCategory, agentName, isOpen, refreshKnowledgeFiles, activeDomain, activeOrgId, socket, agentNameRef, recognition, setDraftText, setIsListening, t, setCopiedId, mediaGenerationText, openChatFile, searchQuery, messages, searchResults, user, isZh, setSearchResults, setIsSearchingHistory, setSearchError, scopedConversationUrl, chatExecutionSource, attachmentConversationIdRef, activeMediaGenerationRef, activeChatViewDetachersRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setMessages, bindAttachmentContextToConversation } = previousBindings;
+
   const pendingAttachmentKeys = useMemo(
     () => new Set(pendingAttachments.map(chatAttachmentIdentity)),
     [pendingAttachments],
@@ -889,7 +945,7 @@ export function AgentChatPage({
     };
   }, [isFounder, isOpen, refreshKnowledgeFiles, socket]);
 
-  useEffect(() => { agentNameRef.current = agentName; }, [agentName]);
+  useEffect(() => { agentNameRef.current = agentName; }, [agentName, agentNameRef]);
 
   useEffect(() => {
     // Initialize Speech Recognition
@@ -916,7 +972,7 @@ export function AgentChatPage({
         setIsListening(false);
       };
     }
-  }, [setDraftText, t.speechNotSupported]);
+  }, [recognition, setDraftText, setIsListening, t.speechNotSupported]);
 
   const handleCopyMessage = useCallback(async (text: string, id: string, container?: HTMLElement | null) => {
     try {
@@ -924,7 +980,7 @@ export function AgentChatPage({
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 1500);
     } catch {}
-  }, []);
+  }, [setCopiedId]);
 
   const renderGeneratedFiles = useCallback((files: GeneratedFileLink[], align: 'start' | 'end' = 'start') => {
     if (files.length === 0) return null;
@@ -1061,7 +1117,7 @@ export function AgentChatPage({
       seen.add(m.id);
       return true;
     });
-  }, [isZh, user?.displayName, user?.username, t.chatUserFallback]);
+  }, [user?.displayName, user?.username, t.chatUserFallback, agentNameRef, isZh]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1100,7 +1156,7 @@ export function AgentChatPage({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [agentId, isFounder, normalizePersistedMessages, scopedConversationUrl, searchQuery]);
+  }, [agentId, isFounder, normalizePersistedMessages, scopedConversationUrl, searchQuery, setIsSearchingHistory, setSearchError, setSearchResults]);
 
   const streamingMsgIdsRef = useRef(new Map<string, string>());
   const streamingRawTextRef = useRef(new Map<string, string>());
@@ -1135,7 +1191,7 @@ export function AgentChatPage({
         JSON.stringify(upsertPersistedPendingChatExecution(current, execution)),
       );
     } catch {}
-  }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, chatExecutionSource, chatRecoveryUserId, recoveryOwner]);
+  }, [activeExecutionStorageKey, chatRecoveryUserId, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, activeMediaGenerationRef, recoveryOwner]);
   const clearPersistedExecution = useCallback((requestId?: string) => {
     if (!activeExecutionStorageKey) return;
     try {
@@ -1163,7 +1219,7 @@ export function AgentChatPage({
     setWorkflowStatus('idle');
     clearChatProgress();
     seenWorkflowToolEvents.current.clear();
-  }, [clearPersistedExecution, clearChatProgress, resetMediaGenerationSurface]);
+  }, [activeChatViewDetachersRef, clearPersistedExecution, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents]);
 
   const dropRequestStream = useCallback((requestId?: string) => {
     const id = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
@@ -1173,7 +1229,7 @@ export function AgentChatPage({
     const nextMeta = chatTurnUiMetaRef.current.get(requestId);
     currentTurnUiMetaRef.current = nextMeta || { hadTool: false, needsEvidence: false, finalization: null };
     setWorkflowStatus('thinking');
-  }, []);
+  }, [chatTurnUiMetaRef, currentTurnUiMetaRef, setWorkflowStatus]);
 
 
   const settleTrackedChatRequest = useCallback((requestId?: string) => {
@@ -1189,7 +1245,7 @@ export function AgentChatPage({
       resumeForegroundRequest(result.foregroundRequestId);
     }
     return result;
-  }, [clearPersistedExecution, resumeForegroundRequest]);
+  }, [activeChatViewDetachersRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, resumeForegroundRequest]);
   const acceptChatExecutionEvent = useCallback((
     data?: { requestId?: string; source?: string; conversationId?: string },
     expectedRequestId?: string | null,
@@ -1215,7 +1271,18 @@ export function AgentChatPage({
       }
     }
     return true;
-  }, [attachmentConversationIdRef, bindAttachmentContextToConversation, chatExecutionSource, persistActiveExecution]);
+  }, [attachmentConversationIdRef, bindAttachmentContextToConversation, chatExecutionSource, chatRequestLedgerRef, persistActiveExecution]);
+  return {
+    ...previousBindings, lastConversationScopeRef, initialLoadDoneRef, detachPreviousExecution, isFounder, normalizePersistedMessages,
+    acceptChatExecutionEvent, streamingRawTextRef, streamingMsgIdsRef, settleTrackedChatRequest, dropRequestStream, clearPersistedExecution,
+    activeExecutionStorageKey, recoveryOwner, lastResumedRequestIdsRef, persistActiveExecution, pendingAttachmentKeys, searchDisplayMessages,
+    requestMeetingMode, renderGeneratedFiles, handleCopyMessage, referenceableChatFiles
+  } as const;
+}
+
+function useChatScopeInitialization(previousBindings: ReturnType<typeof useChatHistoryAndRequests>) {
+  const { agentId, user, activeDomain, activeOrgId, lastConversationScopeRef, invalidateChatViewWork, setIsCreatingConversation, setRestoringConversationId, initialLoadDoneRef, detachPreviousExecution, attachmentContextStoragePrefix, setMessages, setPendingAttachments, pendingAttachmentsRef, bindAttachmentContextToConversation, isFounder, attachmentConversationIdRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, scopedConversationUrl, chatRequestLedgerRef, normalizePersistedMessages } = previousBindings;
+
 
   useEffect(() => {
     if (!agentId) return;
@@ -1300,182 +1367,25 @@ export function AgentChatPage({
         setConversationTransitionPending(false);
       }
     };
-  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, detachPreviousExecution, scopedConversationUrl, setMessages, user?.uid, user?.id, user?.username]);
+  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, detachPreviousExecution, scopedConversationUrl, setMessages, user?.uid, user?.id, user?.username, lastConversationScopeRef, initialLoadDoneRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, setIsCreatingConversation, setRestoringConversationId, setPendingAttachments, pendingAttachmentsRef, chatRequestLedgerRef]);
+  return {
+    ...previousBindings
+  } as const;
+}
+
+function useChatSocketEvents(previousBindings: ReturnType<typeof useChatScopeInitialization>) {
+  const { isFounder, socket, acceptChatExecutionEvent, taskRelationLedgerRef, isZh, setMessages, agentName, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, mediaGenerationText, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, pushChatProgress, terminalReceiptsRef, settleTrackedChatRequest, setIsTyping, finishChatProgress, scheduleWorkflowReset, clearChatProgress, dropRequestStream, t, agentNameRef, attachmentConversationIdRef, chatExecutionSource, bindAttachmentContextToConversation, agentId, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef, scopedConversationUrl, normalizePersistedMessages, activeDomain, activeOrgId, clearPersistedExecution } = previousBindings;
+
 
   useEffect(() => {
     if (isFounder || !socket) return;
+    const { isCurrentChatEvent, recordTaskRelation, onProactive, onChunk, receiveMediaArtifacts, onTool, onProgress } = createChatStreamReceivers({
+    acceptChatExecutionEvent, taskRelationLedgerRef, isZh, setMessages, agentName, streamingRawTextRef,
+    streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef,
+    setMediaGenerationArtifacts, setMediaGeneration, mediaGenerationText, seenWorkflowToolEvents, chatTurnUiMetaRef,
+    chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, pushChatProgress
+  });
 
-    const isCurrentChatEvent = (data?: { requestId?: string; source?: string; conversationId?: string }) => (
-      acceptChatExecutionEvent(data)
-    );
-
-    const recordTaskRelation = (data?: ServerTaskRelationEvent) => {
-      if (!data) return;
-      taskRelationLedgerRef.current.record(data);
-    };
-
-    const onProactive = (data: {
-      message: string;
-      timestamp: string;
-      requestId?: string;
-      conversationId?: string;
-      source?: string;
-      type?: string;
-      taskId?: string;
-      finalized?: boolean;
-      blocked?: boolean;
-      reason?: string;
-    }) => {
-      const proactiveType = data.type || data.taskId;
-      if (proactiveType === 'greeting' && localStorage.getItem('lumi_allow_proactive_voice') !== 'true') return;
-      if ((data.requestId || data.source) && !isCurrentChatEvent(data)) return;
-      if (!shouldDisplayAgentResponse({ ...data, text: data.message })) return;
-      const publicMessage = sanitizeAgentResponseTextForDisplay(data.message, isZh ? 'zh' : 'en');
-      if (!publicMessage) return;
-      setMessages(prev => {
-        if (prev.some(m => m.text === publicMessage && m.type === 'agent')) return prev;
-        return [...prev, {
-          id: `proactive-${Date.now()}`,
-          text: publicMessage,
-          userName: agentName,
-          timestamp: data.timestamp || new Date().toISOString(),
-          type: 'agent',
-          source: 'proactive',
-        }];
-      });
-    };
-
-    const onChunk = (data: { text: string; agentName: string; requestId?: string; source?: string; conversationId?: string }) => {
-      if (!isCurrentChatEvent(data)) return;
-      const streamKey = String(data.requestId || '__legacy__');
-      const rawText = `${streamingRawTextRef.current.get(streamKey) || ''}${data.text}`;
-      streamingRawTextRef.current.set(streamKey, rawText);
-      const publicText = sanitizeAgentStreamingTextForDisplay(rawText, isZh ? 'zh' : 'en');
-      if (!publicText) return;
-      const currentStreamId = streamingMsgIdsRef.current.get(streamKey);
-      if (currentStreamId) {
-        const sid = currentStreamId;
-        setMessages(prev => prev.map(m =>
-          m.id === sid ? { ...m, text: publicText } : m
-        ));
-      } else {
-        const id = makeChatMessageId('stream');
-        streamingMsgIdsRef.current.set(streamKey, id);
-        setMessages(prev => [...prev, {
-          id,
-          text: publicText,
-          userName: data.agentName,
-          timestamp: new Date().toISOString(),
-          type: 'agent'
-        }]);
-      }
-    };
-
-    const receiveMediaArtifacts = (
-      receipt: unknown,
-      active: NonNullable<typeof activeMediaGenerationRef.current>,
-      merge = true,
-    ): boolean => {
-      const incoming = extractMediaGenerationArtifacts(receipt, active.mode)
-        .filter(artifact => artifact.kind === active.mode)
-        .map(artifact => ({ ...artifact, requestId: active.requestId, operation: resolveMediaGenerationOperation(active.request) }));
-      if (!incoming.length) return false;
-      const artifacts = merge ? [...mediaGenerationArtifactsRef.current, ...incoming].filter((artifact, index, all) => (
-        all.findIndex(candidate => candidate.kind === artifact.kind && candidate.url === artifact.url) === index
-      )) : incoming;
-      const prior = merge ? mediaGenerationArtifactValidationRef.current : null;
-      const expectedIds = new Set(artifacts.map(artifact => artifact.id));
-      const requiredCount = active.mode === 'image' ? Math.max(1, Number(active.request.count) || 1) : 1;
-      const contractValid = artifacts.length >= requiredCount;
-      mediaGenerationArtifactValidationRef.current = {
-        expectedIds,
-        readyIds: new Set([...(prior?.readyIds || [])].filter(id => expectedIds.has(id))),
-        failedIds: new Set([...(prior?.failedIds || [])].filter(id => expectedIds.has(id))),
-        requiredCount,
-        contractValid,
-        finalized: prior?.finalized || false,
-        terminalSucceeded: prior?.terminalSucceeded || false,
-        terminalBlocked: prior?.terminalBlocked || false,
-      };
-      mediaGenerationArtifactsRef.current = artifacts;
-      setMediaGenerationArtifacts(artifacts);
-      setMediaGeneration({ status: contractValid ? 'generating' : 'error', detail: contractValid ? mediaGenerationText.validatingArtifact : mediaGenerationText.artifactCountMismatch });
-      return true;
-    };
-
-    const onTool = (data: { correlationId?: string; name: string; args?: any; arguments?: any; result?: string; artifactReceipt?: unknown; error?: string; publicText?: string; requestId?: string; source?: string; conversationId?: string; taskRelation?: unknown }) => {
-      if (!isCurrentChatEvent(data)) return;
-      recordTaskRelation(data);
-      const requestId = String(data.requestId || '').trim();
-      const args = data.arguments ?? data.args;
-      const phase = data.error !== undefined
-        ? 'error'
-        : data.artifactReceipt !== undefined || data.result !== undefined
-          ? 'result'
-          : 'start';
-      const eventRequestKey = requestId || '__legacy__';
-      const workflowEventKey = data.correlationId
-        ? `${eventRequestKey}:${data.correlationId}:${phase}`
-        : `${eventRequestKey}:${data.name}:${phase}:${String(data.result ?? data.error ?? '').slice(0, 120)}`;
-      if (seenWorkflowToolEvents.current.has(workflowEventKey)) return;
-      seenWorkflowToolEvents.current.add(workflowEventKey);
-
-      const activeMediaGeneration = activeMediaGenerationRef.current;
-      const mediaToolBelongsToActiveRequest = activeMediaGeneration?.requestId === requestId
-        && MEDIA_GENERATION_TOOL_NAMES.has(data.name);
-      if (
-        mediaToolBelongsToActiveRequest
-        && activeMediaGeneration
-        && !isExpectedMediaGenerationTool(activeMediaGeneration.request, data.name)
-      ) {
-        mediaGenerationArtifactValidationRef.current = null;
-        setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
-      }
-      if (
-        mediaToolBelongsToActiveRequest
-        && activeMediaGeneration
-        && isExpectedMediaGenerationTool(activeMediaGeneration.request, data.name)
-      ) {
-        if (data.error !== undefined) {
-          mediaGenerationArtifactValidationRef.current = null;
-          setMediaGeneration({ status: 'error', detail: mediaGenerationText.toolFailed });
-        } else if (data.artifactReceipt !== undefined || data.result !== undefined) {
-          if (!mediaGenerationArgumentsMatch(activeMediaGeneration.request, args)) {
-            mediaGenerationArtifactValidationRef.current = null;
-            setMediaGeneration({ status: 'error', detail: mediaGenerationText.settingsMismatch });
-          } else if (!receiveMediaArtifacts(data.artifactReceipt ?? data.result, activeMediaGeneration)) {
-            mediaGenerationArtifactValidationRef.current = null;
-            setMediaGeneration({ status: 'generating', detail: mediaGenerationText.toolReturnedNoArtifact });
-          }
-        } else {
-          setMediaGeneration({ status: 'generating', detail: '' });
-        }
-      }
-
-      const turnMeta = chatTurnUiMetaRef.current.get(requestId);
-      if (turnMeta) turnMeta.hadTool = true;
-      if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
-        currentTurnUiMetaRef.current.hadTool = true;
-      }
-      if (requestId && chatRequestLedgerRef.current.foreground !== requestId) return;
-      setWorkflowStatus('executing');
-      const customerToolText = sanitizeAgentResponseTextForDisplay(
-        data.publicText || describeToolProgress(data.name, phase, isZh),
-        isZh ? 'zh' : 'en',
-      );
-      pushChatProgress(customerToolText, phase === 'error' ? 'error' : 'tool');
-    };
-
-    const onProgress = (data: { text?: string; publicText?: string; tone?: ChatProgressTone; requestId?: string; source?: string; conversationId?: string }) => {
-      if (!isCurrentChatEvent(data)) return;
-      const requestId = String(data.requestId || '').trim();
-      if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
-        pushChatProgress(sanitizeAgentResponseTextForDisplay(data.publicText || data.text || '', isZh ? 'zh' : 'en'), data.tone || 'tool');
-      }
-      if (activeMediaGenerationRef.current?.requestId === requestId && data.text?.trim()) {
-        setMediaGeneration({ status: 'generating', detail: data.text.trim() });
-      }
-    };
 
     const onResponse = (data: {
       text: string;
@@ -1844,34 +1754,15 @@ export function AgentChatPage({
       socket.off("agent:error", onError);
       socket.off("chat:conversation_updated", onConversationUpdated);
     };
-  }, [
-    attachmentConversationIdRef,
-    activeDomain,
-    activeOrgId,
-    acceptChatExecutionEvent,
-    agentId,
-    agentName,
-    bindAttachmentContextToConversation,
-    chatExecutionSource,
-    clearChatProgress,
-    clearPersistedExecution,
-    dropRequestStream,
-    finishChatProgress,
-    isFounder,
-    isZh,
-    mediaGenerationText,
-    normalizePersistedMessages,
-    pushChatProgress,
-    scheduleWorkflowReset,
-    scopedConversationUrl,
-    setMessages,
-    settleTrackedChatRequest,
-    socket,
-    t.failedToRouteNeuralMesh,
-    t.requestFailed,
-    t.workflowAnalyzing,
-    t.workflowError,
-  ]);
+  }, [attachmentConversationIdRef, activeDomain, activeOrgId, acceptChatExecutionEvent, agentId, agentName, bindAttachmentContextToConversation, chatExecutionSource, clearChatProgress, clearPersistedExecution, dropRequestStream, finishChatProgress, isFounder, isZh, mediaGenerationText, normalizePersistedMessages, pushChatProgress, scheduleWorkflowReset, scopedConversationUrl, setMessages, settleTrackedChatRequest, socket, t.failedToRouteNeuralMesh, t.requestFailed, t.workflowAnalyzing, t.workflowError, taskRelationLedgerRef, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, terminalReceiptsRef, setIsTyping, agentNameRef, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef]);
+  return {
+    ...previousBindings
+  } as const;
+}
+
+function useChatRequestControls(previousBindings: ReturnType<typeof useChatSocketEvents>) {
+  const { isFounder, socket, activeExecutionStorageKey, chatViewWorkRef, agentId, activeDomain, activeOrgId, recoveryOwner, clearPersistedExecution, isOfficeCommandCenter, chatRequestLedgerRef, chatTurnTimerGuardRef, setIsTyping, lastResumedRequestIdsRef, pushChatProgress, isZh, attachmentConversationIdRef, scopedConversationUrl, bindAttachmentContextToConversation, chatExecutionSource, activeMediaGenerationRef, resetMediaGenerationSurface, settleTrackedChatRequest, setWorkflowStatus, mediaStudioOpenRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, mediaGenerationText, setMediaStudioMode, setMediaSources, conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, detachPreviousExecution, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, conversationHistoryOpen, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, setConversationContextMenu, appConfirm, setDeletingConversationId, scrollRef, chatProgressLines, messages, clearChatProgress, seenWorkflowToolEvents, rememberConversationAttachments, clearStoredAttachments, pendingAttachments, chatUploadsRef, attachmentUploadText, conversationAttachmentsRef, user, messagesRef, chatTurnUiMetaRef, currentTurnUiMetaRef, setDraftText, taskRelationLedgerRef, persistActiveExecution, dropRequestStream, activeChatViewDetachersRef, agentCategory, operationMode } = previousBindings;
+
 
   useEffect(() => {
     if (isFounder || !socket) return;
@@ -1997,8 +1888,20 @@ export function AgentChatPage({
     socket.on('connect', resumeActiveExecution);
     if (socket.connected) resumeActiveExecution();
     return () => { disposed = true; socket.off('connect', resumeActiveExecution); };
-  }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
-  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId });
+  }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket, chatViewWorkRef, chatTurnTimerGuardRef, chatRequestLedgerRef, setIsTyping, lastResumedRequestIdsRef, setWorkflowStatus, activeMediaGenerationRef, mediaStudioOpenRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, setMediaStudioMode, setMediaSources]);
+  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({
+    conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending,
+    setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain,
+    detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages,
+    setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef,
+    agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef,
+    conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading,
+    setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen,
+    isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore,
+    conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId,
+    normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm,
+    setDeletingConversationId
+  });
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -2009,7 +1912,7 @@ export function AgentChatPage({
         }
       });
     }
-  }, [chatProgressLines.length, messages]);
+  }, [chatProgressLines.length, messages, scrollRef]);
 
   // Scroll to bottom on mount when messages first load
   useEffect(() => {
@@ -2020,14 +1923,14 @@ export function AgentChatPage({
         }
       });
     }
-  }, [isOpen, messages.length]);
+  }, [isOpen, messages.length, scrollRef]);
 
   useEffect(() => {
     if (isOpen) return;
     setWorkflowStatus('idle');
     clearChatProgress();
     seenWorkflowToolEvents.current.clear();
-  }, [clearChatProgress, isOpen]);
+  }, [clearChatProgress, isOpen, seenWorkflowToolEvents, setWorkflowStatus]);
 
   const rememberAttachmentContext = useCallback((attachments: ChatAttachment[]) => {
     const reusable = attachments
@@ -2190,31 +2093,16 @@ export function AgentChatPage({
     // No frontend AI fallback here. If the realtime backend is down, show the
     // connection problem instead of generating a second, inconsistent answer.
     return requestId;
-  }, [
-    attachmentConversationIdRef, conversationAttachmentsRef,
-    attachmentUploadText,
-    activeDomain,
-    activeOrgId,
-    agentCategory,
-    agentId,
-    chatExecutionSource,
-    clearChatProgress,
-    dropRequestStream,
-    isZh,
-    mediaGenerationText,
-    messages,
-    operationMode,
-    pendingAttachments,
-    persistActiveExecution,
-    pushChatProgress,
-    rememberAttachmentContext,
-    setDraftText,
-    setMessages,
-    settleTrackedChatRequest,
-    socket,
-    t.chatUserFallback,
-    user,
-  ]);
+  }, [pendingAttachments, conversationTransitionRef, chatUploadsRef, conversationAttachmentsRef, user, t.chatUserFallback, messagesRef, messages, chatRequestLedgerRef, chatTurnUiMetaRef, setMessages, setDraftText, setPendingAttachments, rememberAttachmentContext, setIsTyping, taskRelationLedgerRef, attachmentConversationIdRef, chatTurnTimerGuardRef, persistActiveExecution, chatExecutionSource, activeChatViewDetachersRef, agentCategory, agentId, activeDomain, activeOrgId, operationMode, socket, attachmentUploadText.processing, attachmentUploadText.failed, currentTurnUiMetaRef, clearChatProgress, pushChatProgress, isZh, setWorkflowStatus, pendingAttachmentsRef, activeMediaGenerationRef, setMediaGeneration, mediaGenerationText.backendLostTask, mediaGenerationText.backendRejected, mediaGenerationText.backendNoAck, dropRequestStream, settleTrackedChatRequest]);
+  return {
+    ...previousBindings, sendText, handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll,
+    orderedConversationHistory, restoreTextConversation, toggleConversationHistory, clearConversationAttachmentContext, deleteConversationFromHistory
+  } as const;
+}
+
+function useChatMediaControls(previousBindings: ReturnType<typeof useChatRequestControls>) {
+  const { refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, mediaSourceFileInputRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t } = previousBindings;
+
 
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
     void refreshKnowledgeFiles();
@@ -2233,7 +2121,7 @@ export function AgentChatPage({
       setMediaGeneration({ status: 'idle', detail: '' });
     }
     setMediaStudioMode(mode);
-  }, [refreshKnowledgeFiles]);
+  }, [activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaStudioOpenRef, refreshKnowledgeFiles, setMediaGeneration, setMediaGenerationArtifacts, setMediaStudioMode]);
 
   const consumedCreationRequestRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2250,7 +2138,7 @@ export function AgentChatPage({
       if (change.slot === 'primary') return { ...current, primaryImage: change.value, primaryArtifactId: artifactId };
       return { ...current, referenceImages: change.value.trim() ? [change.value] : [], referenceArtifactIds: artifactId ? [artifactId] : [] };
     });
-  }, []);
+  }, [setMediaSources]);
 
   const requestMediaSourceImage = useCallback((
     operation: MediaGenerationSourceOperation,
@@ -2259,7 +2147,7 @@ export function AgentChatPage({
     if (mediaSourceUploading) return;
     mediaSourceUploadTargetRef.current = { operation, slot };
     mediaSourceFileInputRef.current?.click();
-  }, [mediaSourceUploading]);
+  }, [mediaSourceFileInputRef, mediaSourceUploadTargetRef, mediaSourceUploading]);
 
   const generateMediaFromStudio = useCallback((request: MediaGenerationRequest) => {
     if (isTyping || activeMediaGenerationRef.current) {
@@ -2322,7 +2210,7 @@ export function AgentChatPage({
       activeMediaGenerationRef.current = null;
       setMediaGeneration({ status: 'error', detail: mediaGenerationText.requestNotCreated });
     });
-  }, [isTyping, isZh, mediaGenerationText, sendText]);
+  }, [activeMediaGenerationRef, isTyping, isZh, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaGenerationText.animateImage, mediaGenerationText.anotherTaskRunning, mediaGenerationText.editImage, mediaGenerationText.generateImage, mediaGenerationText.generateVideo, mediaGenerationText.requestNotCreated, mediaGenerationText.settingsMismatch, sendText, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest]);
 
   const closeMediaGenerationStudio = useCallback(() => {
     mediaStudioOpenRef.current = false;
@@ -2330,7 +2218,7 @@ export function AgentChatPage({
     setMediaSourceUploading(false);
     setChatSongOpen(false);
     setMediaStudioMode(null);
-  }, []);
+  }, [mediaSourceUploadTargetRef, mediaStudioOpenRef, setChatSongOpen, setMediaSourceUploading, setMediaStudioMode]);
 
   const requestCloseCreativeStudio = useCallback(async () => {
     const workbench = chatSongWorkbenchRef.current;
@@ -2339,7 +2227,7 @@ export function AgentChatPage({
       return;
     }
     closeMediaGenerationStudio();
-  }, [closeMediaGenerationStudio]);
+  }, [chatSongWorkbenchRef, closeMediaGenerationStudio, setChatSongOpen]);
 
   const markMediaGenerationArtifactReady = useCallback((artifact: MediaGenerationArtifact) => {
     const validation = mediaGenerationArtifactValidationRef.current;
@@ -2354,7 +2242,7 @@ export function AgentChatPage({
     ) {
       setMediaGeneration({ status: 'completed', detail: '' });
     }
-  }, []);
+  }, [mediaGenerationArtifactValidationRef, setMediaGeneration]);
 
   const markMediaGenerationArtifactFailed = useCallback((artifact: MediaGenerationArtifact) => {
     const validation = mediaGenerationArtifactValidationRef.current;
@@ -2365,7 +2253,7 @@ export function AgentChatPage({
     if (!validation.contractValid || remainingPossible < validation.requiredCount) {
       setMediaGeneration({ status: 'error', detail: mediaGenerationText.artifactLoadFailed });
     }
-  }, [mediaGenerationText.artifactLoadFailed]);
+  }, [mediaGenerationArtifactValidationRef, mediaGenerationText.artifactLoadFailed, setMediaGeneration]);
 
   const openMediaGenerationArtifact = useCallback((artifact: MediaGenerationArtifact) => {
     void openChatFile({
@@ -2456,7 +2344,7 @@ export function AgentChatPage({
     };
     window.addEventListener('lumi:submit-command-input', submitCommandInput);
     return () => window.removeEventListener('lumi:submit-command-input', submitCommandInput);
-  }, [isOpen, sendText]);
+  }, [draftTextRef, isOpen, pendingAttachmentsRef, sendText]);
 
   const toggleListening = () => {
     if (isListening) {
@@ -2491,6 +2379,16 @@ export function AgentChatPage({
       setIsListening(true);
     }
   };
+  return {
+    ...previousBindings, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, requestMediaSourceImage, generateMediaFromStudio,
+    closeMediaGenerationStudio, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
+    handleSendMessage, toggleListening
+  } as const;
+}
+
+function useChatUploadsAndView(previousBindings: ReturnType<typeof useChatMediaControls>) {
+  const { conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments, isOpen, attachmentRequest, activeDomain, activeOrgId, setShowAttachmentMenu, messageInputRef, onAttachmentRequestConsumed, scopedFileUrl, setOptimizationProgress, draftTextRef, setDraftText, notifyKnowledgeUpdated, chatUploadsRef, setIsOptimizing, setAttachmentUploadFailures, chatViewWorkRef, t, attachmentUploadText, mediaSourceUploadTargetRef, mediaSourceUploading, mediaGenerationText, setMediaSourceUploading, setMediaSourceArtifacts, handleMediaSourceChange, setIsDraggingFiles, nativeDropHandledAtRef, pendingAttachmentKeys, fileKindLabel, openChatFile, isFounder, user, onClose, chatProgressLines, workflowStatus, isZh, isTyping, chatAccentTheme, searchQuery, searchDisplayMessages, messages, previewFile, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, mediaSourceFileInputRef, isOfficeCommandCenter, mediaStudioMode, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, requestMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, setSearchQuery, setSearchResults, setSearchError, scrollRef, visibleSuggestions, searchError, isSearchingHistory, renderGeneratedFiles, handleCopyMessage, copiedId, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, isOptimizing, attachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, showAttachmentMenu, referenceableChatFiles, updateDraftText, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory } = previousBindings;
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -2512,7 +2410,7 @@ export function AgentChatPage({
       toast.error(formatUiMessage('agent-chat-page.up-to-value0-files-can.349aa29325', { value0: MAX_CHAT_ATTACHMENTS }));
     }
     return result;
-  }, [conversationAttachmentsRef]);
+  }, [conversationAttachmentsRef, pendingAttachmentsRef, setPendingAttachments]);
 
   useEffect(() => {
     if (!isOpen || !attachmentRequest?.requestId) return;
@@ -2525,7 +2423,7 @@ export function AgentChatPage({
       toast.error(uiMessage('agent-chat-page.file-reference-scope-mismatch.7655432d8b'));
     }
     onAttachmentRequestConsumed?.(attachmentRequest.requestId);
-  }, [activeDomain, activeOrgId, appendPendingAttachments, attachmentRequest, isOpen, onAttachmentRequestConsumed]);
+  }, [activeDomain, activeOrgId, appendPendingAttachments, attachmentRequest, isOpen, messageInputRef, onAttachmentRequestConsumed, setShowAttachmentMenu]);
 
   const acceptImportedChatFiles = useCallback((files: any[], skippedCount: number, work: ReturnType<ChatViewWorkRegistry['begin']>) => {
     if (!work.isCurrent()) return;
@@ -2550,7 +2448,7 @@ export function AgentChatPage({
       toast.info(formatUiMessage('agent-chat-page.some-dropped-files-skipped.d3df0abf37', { value0: skippedCount }));
     }
     notifyKnowledgeUpdated(attachments.map(item => ({ id: item.path || item.fileName, name: item.fileName, displayName: item.fileName })));
-  }, [appendPendingAttachments, scopedFileUrl, notifyKnowledgeUpdated, setDraftText]);
+  }, [scopedFileUrl, appendPendingAttachments, setOptimizationProgress, notifyKnowledgeUpdated, draftTextRef, setDraftText]);
 
   const runChatAttachmentUpload = useCallback(async (
     kind: ChatUploadKind, sources: ChatUploadSource[], retry = false,
@@ -2605,7 +2503,7 @@ export function AgentChatPage({
       if (work.isCurrent()) { setIsOptimizing(false); setOptimizationProgress(0); }
       work.finish();
     }
-  }, [conversationAttachmentsRef, acceptImportedChatFiles, activeDomain, activeOrgId, attachmentUploadText, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+  }, [chatUploadsRef, conversationAttachmentsRef, pendingAttachmentsRef, setIsOptimizing, setAttachmentUploadFailures, setOptimizationProgress, chatViewWorkRef, t.uploadFailed, t.chatConnError, attachmentUploadText.unknown, acceptImportedChatFiles, activeDomain, activeOrgId, scopedFileUrl]);
 
   const uploadChatAttachments = useCallback(async (files: FileList | null) => {
     await runChatAttachmentUpload('files', Array.from(files || []));
@@ -2671,7 +2569,7 @@ export function AgentChatPage({
       }
       work.finish();
     }
-  }, [activeDomain, activeOrgId, handleMediaSourceChange, mediaGenerationText, mediaSourceUploading, notifyKnowledgeUpdated, scopedFileUrl, t.chatConnError, t.uploadFailed]);
+  }, [activeDomain, activeOrgId, chatViewWorkRef, handleMediaSourceChange, mediaGenerationText.chooseImageFile, mediaGenerationText.sourceImageLoaded, mediaGenerationText.uploadMissingPath, mediaSourceUploadTargetRef, mediaSourceUploading, notifyKnowledgeUpdated, scopedFileUrl, setMediaSourceArtifacts, setMediaSourceUploading, t.chatConnError, t.uploadFailed]);
 
   const importChatAttachmentPaths = useCallback(async (paths: string[]) => {
     const uniquePaths = [...new Set(paths.map(item => String(item || '').trim()).filter(Boolean))];
@@ -2681,7 +2579,7 @@ export function AgentChatPage({
   useEffect(() => {
     if (!isOpen) return;
     return listenForNativeChatFileDrop(setIsDraggingFiles, nativeDropHandledAtRef, importChatAttachmentPaths);
-  }, [importChatAttachmentPaths, isOpen]);
+  }, [importChatAttachmentPaths, isOpen, nativeDropHandledAtRef, setIsDraggingFiles]);
 
   const handleChatDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2724,7 +2622,7 @@ export function AgentChatPage({
     });
     const result = appendPendingAttachments([attachment]);
     if (result.added.length > 0) setShowAttachmentMenu(false);
-  }, [appendPendingAttachments]);
+  }, [appendPendingAttachments, setShowAttachmentMenu]);
 
   const renderChatFileRow = (item: ChatFilePanelItem) => {
     const isAttached = item.source === 'pending' || pendingAttachmentKeys.has(chatAttachmentIdentity(item));
@@ -2831,6 +2729,52 @@ export function AgentChatPage({
   const hiddenMessageCount = searchQuery.trim()
     ? 0
     : Math.max(0, messages.length - displayMessages.length);
-  return <AgentChatView {...{ isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, mediaSourceFileInputRef, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, requestMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, onClose, setShowVoicePicker, showVoicePicker, voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession, endVoiceSession, activeDomain, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon, activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded, handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation, restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading, conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation, setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, chatPanelStyle, chatHeaderStyle, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen, commandCenterPlannerText, searchQuery, setSearchQuery, setSearchResults, setSearchError, setDraftText, messageInputRef, scrollRef, messages, visibleSuggestions, searchError, isSearchingHistory, searchDisplayMessages, hiddenMessageCount, displayMessages, renderGeneratedFiles, openChatFile, handleCopyMessage, copiedId, chatProgressLines, chatInputPanelStyle, conversationAttachments, clearConversationAttachmentContext, pendingAttachments, removePendingAttachment, isOptimizing, attachmentUploadFailures, runChatAttachmentUpload, chatUploadsRef, setAttachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef, setShowAttachmentMenu, showAttachmentMenu, referenceableChatFiles, pendingAttachmentKeys, referenceChatFile, updateDraftText, chatInputStyle, toggleListening, isListening, conversationTransitionPending, hasDraftText, onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, renderChatFileRow, isElectron, activeCapabilities, conversationContextMenu, deletingConversationId, deleteConversationFromHistory }} />;
-
+  return <AgentChatView {...{
+    isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView,
+    resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop,
+    chatAccentTheme, fileInputRef, uploadChatAttachments, mediaSourceFileInputRef, uploadMediaSourceImage,
+    isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaGenerationStatus,
+    mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed,
+    refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts,
+    mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange,
+    requestMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles,
+    generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText,
+    cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady,
+    markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t,
+    isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, onClose, setShowVoicePicker, showVoicePicker,
+    voices, selectedVoiceId, voicePickerRef, setSelectedVoiceId, callState, audioLevel, startVoiceSession,
+    endVoiceSession, activeDomain, requestMeetingMode, agentName, operationModeMeta, OperationModeIcon,
+    activeDomainDetail, activeDomainLabel, agentCategory, runtimeStatus, runtimeStatusLoading, runtimeStatusError,
+    refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen,
+    conversationHistorySelectorExpanded, setConversationHistorySelectorExpanded,
+    handleConversationHistorySelectorBlur, conversationHistory, startNewTextConversation, isCreatingConversation,
+    restoringConversationId, conversationHistoryListRef, handleConversationHistoryScroll, conversationHistoryLoading,
+    conversationHistoryLoadingMore, orderedConversationHistory, attachmentConversationIdRef, restoreTextConversation,
+    setConversationContextMenu, conversationHistoryHasMore, toggleConversationHistory, chatPanelStyle,
+    chatHeaderStyle, knowledgeStatusText, setCommandCenterPlannerOpen, commandCenterPlannerOpen,
+    commandCenterPlannerText, searchQuery, setSearchQuery, setSearchResults, setSearchError, setDraftText,
+    messageInputRef, scrollRef, messages, visibleSuggestions, searchError, isSearchingHistory, searchDisplayMessages,
+    hiddenMessageCount, displayMessages, renderGeneratedFiles, openChatFile, handleCopyMessage, copiedId,
+    chatProgressLines, chatInputPanelStyle, conversationAttachments, clearConversationAttachmentContext,
+    pendingAttachments, removePendingAttachment, isOptimizing, attachmentUploadFailures, runChatAttachmentUpload,
+    chatUploadsRef, setAttachmentUploadFailures, optimizationProgress, handleSendMessage, attachmentMenuRef,
+    setShowAttachmentMenu, showAttachmentMenu, referenceableChatFiles, pendingAttachmentKeys, referenceChatFile,
+    updateDraftText, chatInputStyle, toggleListening, isListening, conversationTransitionPending, hasDraftText,
+    onOpenMemoryAvatar, onOpenKnowledge, chatFileSections, renderChatFileRow, isElectron, activeCapabilities,
+    conversationContextMenu, deletingConversationId, deleteConversationFromHistory
+  }} />;
 }
+
+export function AgentChatPage(props: Parameters<typeof useChatIdentityAndState>[0]) {
+  const state0 = useChatIdentityAndState(props);
+  const state1 = useChatAttachmentsAndPresentation(state0);
+  const state2 = useChatHistoryAndRequests(state1);
+  const state3 = useChatScopeInitialization(state2);
+  const state4 = useChatSocketEvents(state3);
+  const state5 = useChatRequestControls(state4);
+  const state6 = useChatMediaControls(state5);
+  return useChatUploadsAndView(state6);
+}
+
+
+export type ChatStreamReceiverInput = Pick<ReturnType<typeof useChatHistoryAndRequests>, "acceptChatExecutionEvent" | "taskRelationLedgerRef" | "isZh" | "setMessages" | "agentName" | "streamingRawTextRef" | "streamingMsgIdsRef" | "activeMediaGenerationRef" | "mediaGenerationArtifactsRef" | "mediaGenerationArtifactValidationRef" | "setMediaGenerationArtifacts" | "setMediaGeneration" | "mediaGenerationText" | "seenWorkflowToolEvents" | "chatTurnUiMetaRef" | "chatRequestLedgerRef" | "currentTurnUiMetaRef" | "setWorkflowStatus" | "pushChatProgress">;

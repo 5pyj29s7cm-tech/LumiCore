@@ -214,9 +214,13 @@ export function formatMeetingTranscriptForAnalysis(notes: unknown[]): string {
 }
 
 export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>) {
-  const asyncHandler = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
-    (req: any, res: any, next: any) => Promise.resolve(fn(req, res, next)).catch(next);
+  const asyncHandler = chatRouteAsyncHandler;
+  mountConversationCompletionRoutes(router, llm, asyncHandler);
+  mountLegalCompletionRoutes(router, llm, asyncHandler);
+  mountMeetingCompletionRoutes(router, llm, asyncHandler);
+}
 
+function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>, asyncHandler: typeof chatRouteAsyncHandler) {
   const handleChat = asyncHandler(async (req, res) => {
     const { provider: reqProvider = "gemini", model: reqModel, messages, prompt: rawPrompt, message } = req.body;
     const prompt = rawPrompt ?? message;
@@ -545,7 +549,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedP
 
   router.post("/ai/chat", optionalAuth, handleChat);
   router.post("/chat", optionalAuth, handleChat);
+}
 
+function mountLegalCompletionRoutes(router: Router, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>, asyncHandler: typeof chatRouteAsyncHandler) {
   router.post("/legal/tool/:toolName", requireAuth, asyncHandler(async (req, res) => {
     const toolName = String(req.params?.toolName || '').trim();
     if (!DIRECT_LEGAL_TOOL_ALLOWLIST.has(toolName)) {
@@ -708,7 +714,9 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedP
       request.dispose();
     }
   }));
+}
 
+function mountMeetingCompletionRoutes(router: Router, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>, asyncHandler: typeof chatRouteAsyncHandler) {
   router.post("/meeting/analyze", requireAuth, asyncHandler(async (req, res) => {
     const { provider: reqProvider, notes, startedAt, endedAt, language = "zh", purpose = "meeting", legalCase } = req.body || {};
     const userId = req.user?.uid || 'anonymous';
@@ -835,3 +843,6 @@ export function mountChatRoutes(router: Router, _jwtSecret: string, llm: SharedP
     });
   }));
 }
+
+const chatRouteAsyncHandler = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
+    (req: any, res: any, next: any) => Promise.resolve(fn(req, res, next)).catch(next);

@@ -192,7 +192,8 @@ try {
   // Browser storage can be unavailable in non-DOM runtimes.
 }
 
-export function AppProvider({ children }: { children: ReactNode }) {
+function useAppSessionAndPreferences({ children }: { children: ReactNode }) {
+
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<AIConfig>(DEFAULT_AI_CONFIG);
@@ -447,6 +448,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute('data-mode', resolvedAppearanceMode);
     document.documentElement.style.colorScheme = resolvedAppearanceMode;
   }, [resolvedAppearanceMode]);
+  return {
+    aiConfigRef, visionConfigRef, modelAccountRef, user, modelPreferenceRequestRef, visionPreferenceRequestRef,
+    authGenerationRef, modelWriteTailsRef, applyModelPreference, toolRequestRef, setSessionUser, setOrgConnection,
+    notificationRevisionRef, notificationWriteRef, setNotifications, toolOverridesRef, setToolOverrides, setLoading,
+    orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys,
+    setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig,
+    reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides,
+    operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children
+  } as const;
+}
+
+function useAppAccountActionsAndProvider(previousBindings: ReturnType<typeof useAppSessionAndPreferences>) {
+  const { aiConfigRef, visionConfigRef, modelAccountRef, user, modelPreferenceRequestRef, visionPreferenceRequestRef, authGenerationRef, modelWriteTailsRef, applyModelPreference, toolRequestRef, setSessionUser, setOrgConnection, notificationRevisionRef, notificationWriteRef, setNotifications, toolOverridesRef, setToolOverrides, setLoading, orgConnection, switchDomain, setWorkDomain, workDomain, setUser, setSelectedVoiceIdState, voiceStorageKeys, setFavoriteVoices, notifications, setNotificationsBusy, toolWriteTailRef, loading, aiConfig, visionConfig, reloadModelPreferences, selectedVoiceId, favoriteVoices, notificationsBusy, unreadCount, toolOverrides, operationMode, setOperationMode, appearanceMode, resolvedAppearanceMode, setAppearanceMode, children } = previousBindings;
+
 
   const updateModelConfig = (role: 'llm' | 'vision', newConfig: Partial<AIConfig>, models: Record<string, string> = {}): Promise<boolean> => {
     const current = (role === 'llm' ? aiConfigRef : visionConfigRef).current;
@@ -756,6 +771,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     </AppContext.Provider>
   );
 }
+
+export function AppProvider(props: Parameters<typeof useAppSessionAndPreferences>[0]) {
+  const state0 = useAppSessionAndPreferences(props);
+  return useAppAccountActionsAndProvider(state0);
+}
+
 
 export function useApp() {
   const context = useContext(AppContext);

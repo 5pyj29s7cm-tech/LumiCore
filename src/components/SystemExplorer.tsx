@@ -363,7 +363,8 @@ export function SystemExplorer(props: SystemExplorerProps) {
   return <SystemExplorerContent key={JSON.stringify([user?.uid, user?.role, workDomain, orgConnection?.orgId, orgConnection?.connected])} {...props} />;
 }
 
-function SystemExplorerContent({ t, onSectionChange, onAsk }: SystemExplorerProps) {
+function useSystemExplorerContentState({ t, onSectionChange, onAsk }: SystemExplorerProps) {
+
   const { isDesktop, isTauri } = usePlatform();
   const { user, workDomain, orgConnection } = useApp();
   const isZh = t?.langCode !== 'en';
@@ -560,6 +561,16 @@ function SystemExplorerContent({ t, onSectionChange, onAsk }: SystemExplorerProp
       toast.error(err?.message || uiMessage('system-explorer.failed-to-copy-report.a19a8f9f8c', (isZh) ? 'zh' : 'en'));
     }
   };
+  return { loading, isZh, t, copyReport, updateExploration, scanning, updatingConsent, explorationAccess, consentCopy, report, structuredRuntimeStatus, structuredRuntimeLoading, structuredRuntimeError, runtimeScene, runtimeSceneLoading, runtimeSceneError, latest, ecosystem, evidenceCopy, inspectionPolicy, readyMachineOpportunities, onAsk, onSectionChange, detectedAppGroups, apps, discovery, permissions, desktopCapabilities, profiles, history };
+}
+
+function SystemExplorerContent(props: Parameters<typeof useSystemExplorerContentState>[0]) {
+  return renderSystemExplorerContent(useSystemExplorerContentState(props));
+}
+
+function renderSystemExplorerContent(input: ReturnType<typeof useSystemExplorerContentState>) {
+  const { loading, isZh, t, copyReport, updateExploration, scanning, updatingConsent, explorationAccess, consentCopy, report, structuredRuntimeStatus, structuredRuntimeLoading, structuredRuntimeError, runtimeScene, runtimeSceneLoading, runtimeSceneError, latest, ecosystem, evidenceCopy, inspectionPolicy, readyMachineOpportunities, onAsk, onSectionChange, detectedAppGroups, apps, discovery, permissions, desktopCapabilities, profiles, history } = input;
+
 
   if (loading) {
     return (
@@ -1037,6 +1048,8 @@ function SystemExplorerContent({ t, onSectionChange, onAsk }: SystemExplorerProp
     </div>
   );
 }
+
+
 
 function WorkflowTile({ title, detail, ready }: { title: string; detail: string; ready: boolean }) {
   return (

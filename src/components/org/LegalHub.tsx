@@ -881,7 +881,7 @@ function LegalCaseDeleteDialog({
   );
 }
 
-function LegalCaseWorkspace({
+function useLegalCaseWorkspaceState({
   caseFilter,
   setCaseFilter,
   cases,
@@ -922,6 +922,7 @@ function LegalCaseWorkspace({
   orgId?: string;
   refreshing: boolean;
 }) {
+
   const notice = useLegalDocument('', { error: 'Error' });
   const { text: noticeText, setText: setNoticeText, result: noticeStatus, busy: noticeLoading } = notice;
   const documents = useLegalDocument('', { error: 'Error' });
@@ -1068,6 +1069,16 @@ function LegalCaseWorkspace({
       includePdf: false,
     }, 'note', `${candidate.title} ${uiMessage('legal-hub.delivery-gate-record.410a32f38e')}`));
   };
+  return { activeCase, onCreateCase, selectedMaterialId, onStartConsultation, orgBacked, onRefreshCases, refreshing, caseFilter, setCaseFilter, filteredCases, onSelectCase, stageLabels, canDeleteCases, onDeleteCase, update, onSetView, onCreatePlan, generateReasoningMatrix, documentLoading, runDeliveryGate, createDateReminder, calculateAppealDeadline, onOpenMeetingNotes, noticeText, setNoticeText, notice, extractNotice, noticeLoading, processNoticeLink, noticeStatus, generateEngagementLetter, documentStatus, documents, setSelectedMaterialId };
+}
+
+function LegalCaseWorkspace(props: Parameters<typeof useLegalCaseWorkspaceState>[0]) {
+  return renderLegalCaseWorkspace(useLegalCaseWorkspaceState(props));
+}
+
+function renderLegalCaseWorkspace(input: ReturnType<typeof useLegalCaseWorkspaceState>) {
+  const { activeCase, onCreateCase, selectedMaterialId, onStartConsultation, orgBacked, onRefreshCases, refreshing, caseFilter, setCaseFilter, filteredCases, onSelectCase, stageLabels, canDeleteCases, onDeleteCase, update, onSetView, onCreatePlan, generateReasoningMatrix, documentLoading, runDeliveryGate, createDateReminder, calculateAppealDeadline, onOpenMeetingNotes, noticeText, setNoticeText, notice, extractNotice, noticeLoading, processNoticeLink, noticeStatus, generateEngagementLetter, documentStatus, documents, setSelectedMaterialId } = input;
+
 
   if (!activeCase) {
     return (
@@ -1430,6 +1441,8 @@ function LegalCaseWorkspace({
     </div>
   );
 }
+
+
 
 function CaseField({ label, value, onChange, type = 'text', onReminder }: { label: string; value: string; onChange: (value: string) => void; type?: 'text' | 'date'; onReminder?: () => void }) {
   return (

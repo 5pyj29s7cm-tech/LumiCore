@@ -401,7 +401,7 @@ function useSkillQuery<T>(key: string | null, initial: T, load: (signal: AbortSi
   return { ...(state.key === key ? state : { data: initial, loading: Boolean(key), error: '' }), refresh };
 }
 
-export function SkillCenter({
+function useSkillCenterState({
   t,
   lang,
   initialTab = 'featured',
@@ -414,6 +414,7 @@ export function SkillCenter({
   canUseExternalCapabilities?: boolean;
   canReviewExternalCapabilities?: boolean;
 }) {
+
   const [activeTab, setActiveTab] = useState<SkillCenterTab>(initialTab);
   const [installing, setInstalling] = useState<string | null>(null);
   const [repairing, setRepairing] = useState<string | null>(null);
@@ -779,6 +780,16 @@ export function SkillCenter({
     managementHint: uiMessage('skill-center.enable-disable-repair-publish-and.fa74468d2b', (lang === 'zh') ? 'zh' : 'en'),
   };
   const hasRecommendationSignals = professionProfiles.length > 0 || matchedWorkSignals.length > 0 || workSignalText.trim().length > 0;
+  return { t, canUseExternalCapabilities, canReviewExternalCapabilities, setExternalCapabilityIntakeOpen, externalCopy, sortedMarket, refreshAll, loadError, lang, tabs, setActiveTab, activeTab, installedSkills, recommendationCopy, fetchRecommendationSignals, professionProfiles, matchedWorkSignals, hasRecommendationSignals, recommendationError, recommendedSkills, savedKeys, setDetailSkill, installing, handleInstall, installedSkillRows, installProgress, search, setSearch, setActiveCategory, activeCategory, skillHallCategories, setSortKey, sortKey, searchingExternal, externalError, npm, github, externalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, fetchReviewedExternalCapabilities, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, handleRepair, repairing, handleToggle, handlePublish, handleUninstall, generatedDraft, setGeneratedDraft, genDescription, setGenDescription, handleGenerate, generating, SAMPLE_PROMPTS, installingGeneratedDraft, handleInstallGeneratedDraft, detailSkill, marketSkills, externalCapabilityIntakeOpen };
+}
+
+export function SkillCenter(props: Parameters<typeof useSkillCenterState>[0]) {
+  return renderSkillCenter(useSkillCenterState(props));
+}
+
+function renderSkillCenter(input: ReturnType<typeof useSkillCenterState>) {
+  const { t, canUseExternalCapabilities, canReviewExternalCapabilities, setExternalCapabilityIntakeOpen, externalCopy, sortedMarket, refreshAll, loadError, lang, tabs, setActiveTab, activeTab, installedSkills, savedKeys, setDetailSkill, installing, handleInstall, fetchReviewedExternalCapabilities, handleRepair, repairing, handleToggle, handleUninstall, detailSkill, marketSkills, externalCapabilityIntakeOpen } = input;
+
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -855,7 +866,51 @@ export function SkillCenter({
       {/* Content */}
       <AnimatePresence>
         {activeTab === 'featured' && (
-          <motion.div key="featured" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+          renderFeaturedSkills(input)
+        )}
+
+        {activeTab === 'marketplace' && (
+          renderSkillMarketplace(input)
+        )}
+
+        {activeTab === 'mcp' && (
+          <motion.div key="mcp" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="overflow-hidden rounded-3xl border border-white/5 bg-white/[0.03]">
+            <Suspense fallback={null}>
+              <GitHubMCPBrowser t={t} embedded />
+            </Suspense>
+          </motion.div>
+        )}
+
+        {activeTab === 'installed' && (
+          renderInstalledSkills(input)
+        )}
+
+        {activeTab === 'generate' && (
+          renderSkillGeneration(input)
+        )}
+
+
+      </AnimatePresence>
+      <AnimatePresence>
+        {detailSkill && (
+          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={marketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
+        )}
+      </AnimatePresence>
+      {canUseExternalCapabilities && canReviewExternalCapabilities && (
+        <ExternalCapabilityIntakeDialog
+          open={externalCapabilityIntakeOpen}
+          lang={lang}
+          onClose={() => setExternalCapabilityIntakeOpen(false)}
+          onActivated={fetchReviewedExternalCapabilities}
+        />
+      )}
+    </div>
+  );
+}
+
+function renderFeaturedSkills({ recommendationCopy, fetchRecommendationSignals, professionProfiles, matchedWorkSignals, lang, hasRecommendationSignals, recommendationError, recommendedSkills, installedSkills, savedKeys, setDetailSkill, t, installing, handleInstall, installedSkillRows, setActiveTab }: Pick<ReturnType<typeof useSkillCenterState>, "recommendationCopy" | "fetchRecommendationSignals" | "professionProfiles" | "matchedWorkSignals" | "lang" | "hasRecommendationSignals" | "recommendationError" | "recommendedSkills" | "installedSkills" | "savedKeys" | "setDetailSkill" | "t" | "installing" | "handleInstall" | "installedSkillRows" | "setActiveTab">) {
+  return (
+<motion.div key="featured" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
             <div className="lumi-panel p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -1032,10 +1087,12 @@ export function SkillCenter({
               )}
             </div>
           </motion.div>
-        )}
+  );
+}
 
-        {activeTab === 'marketplace' && (
-          <motion.div key="marketplace" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+function renderSkillMarketplace({ installProgress, t, search, setSearch, setActiveCategory, activeCategory, skillHallCategories, setSortKey, sortKey, sortedMarket, installedSkills, savedKeys, lang, setDetailSkill, installing, handleInstall, searchingExternal, externalError, npm, github }: Pick<ReturnType<typeof useSkillCenterState>, "installProgress" | "t" | "search" | "setSearch" | "setActiveCategory" | "activeCategory" | "skillHallCategories" | "setSortKey" | "sortKey" | "sortedMarket" | "installedSkills" | "savedKeys" | "lang" | "setDetailSkill" | "installing" | "handleInstall" | "searchingExternal" | "externalError" | "npm" | "github">) {
+  return (
+<motion.div key="marketplace" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
             {/* Install progress banner */}
             <AnimatePresence>
               {installProgress && (
@@ -1286,18 +1343,12 @@ export function SkillCenter({
                 </motion.div>
               )}
           </motion.div>
-        )}
+  );
+}
 
-        {activeTab === 'mcp' && (
-          <motion.div key="mcp" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="overflow-hidden rounded-3xl border border-white/5 bg-white/[0.03]">
-            <Suspense fallback={null}>
-              <GitHubMCPBrowser t={t} embedded />
-            </Suspense>
-          </motion.div>
-        )}
-
-        {activeTab === 'installed' && (
-          <motion.div key="installed" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+function renderInstalledSkills({ canUseExternalCapabilities, externalCapabilities, canReviewExternalCapabilities, externalCapabilitiesError, externalCapabilitiesLoading, lang, fetchReviewedExternalCapabilities, recommendationCopy, brokenSkillCount, handleCleanupBroken, cleaningBroken, loading, installedSkills, t, setDetailSkill, handleRepair, repairing, handleToggle, handlePublish, handleUninstall }: Pick<ReturnType<typeof useSkillCenterState>, "canUseExternalCapabilities" | "externalCapabilities" | "canReviewExternalCapabilities" | "externalCapabilitiesError" | "externalCapabilitiesLoading" | "lang" | "fetchReviewedExternalCapabilities" | "recommendationCopy" | "brokenSkillCount" | "handleCleanupBroken" | "cleaningBroken" | "loading" | "installedSkills" | "t" | "setDetailSkill" | "handleRepair" | "repairing" | "handleToggle" | "handlePublish" | "handleUninstall">) {
+  return (
+<motion.div key="installed" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
             {canUseExternalCapabilities && (externalCapabilities.length > 0 || canReviewExternalCapabilities || externalCapabilitiesError) && (
               <ExternalCapabilityManagerSection
                 capabilities={externalCapabilities}
@@ -1437,10 +1488,12 @@ export function SkillCenter({
               </div>
             )}
           </motion.div>
-        )}
+  );
+}
 
-        {activeTab === 'generate' && (
-          <motion.div key="generate" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
+function renderSkillGeneration({ lang, generatedDraft, setGeneratedDraft, setActiveTab, t, genDescription, setGenDescription, handleGenerate, generating, SAMPLE_PROMPTS, installingGeneratedDraft, handleInstallGeneratedDraft }: Pick<ReturnType<typeof useSkillCenterState>, "lang" | "generatedDraft" | "setGeneratedDraft" | "setActiveTab" | "t" | "genDescription" | "setGenDescription" | "handleGenerate" | "generating" | "SAMPLE_PROMPTS" | "installingGeneratedDraft" | "handleInstallGeneratedDraft">) {
+  return (
+<motion.div key="generate" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }} className="space-y-6">
             <GeneratedSkillHistory lang={lang} refreshToken={generatedDraft?.review.contentHash}
               onReview={draft => setGeneratedDraft(draft)} onInstalled={() => setActiveTab('installed')} />
             <div className="lumi-panel p-6 space-y-4">
@@ -1554,26 +1607,9 @@ export function SkillCenter({
               </div>
             )}
           </motion.div>
-        )}
-
-
-      </AnimatePresence>
-      <AnimatePresence>
-        {detailSkill && (
-          <SkillDetailPane detailSkill={detailSkill} setDetailSkill={setDetailSkill} t={t} lang={lang} marketSkills={marketSkills} installedSkills={installedSkills} installing={installing} repairing={repairing} savedKeys={savedKeys} handleInstall={handleInstall} handleToggle={handleToggle} handleUninstall={handleUninstall} handleRepair={handleRepair} />
-        )}
-      </AnimatePresence>
-      {canUseExternalCapabilities && canReviewExternalCapabilities && (
-        <ExternalCapabilityIntakeDialog
-          open={externalCapabilityIntakeOpen}
-          lang={lang}
-          onClose={() => setExternalCapabilityIntakeOpen(false)}
-          onActivated={fetchReviewedExternalCapabilities}
-        />
-      )}
-    </div>
   );
 }
+
 
 function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, installedSkills, installing, repairing, savedKeys, handleInstall, handleToggle, handleUninstall, handleRepair }: {
   detailSkill: any;
