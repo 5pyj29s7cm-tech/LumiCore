@@ -134,24 +134,24 @@ describe('finalized output paths', () => {
     expect(chat).toContain('responseText = finalResponse.text;');
   });
 
-  it('keeps MCP chat chunks, speech, and returns behind the shared finalizer', () => {
+  it('keeps MCP chunks, speech and returns behind the shared durable turn driver', () => {
     const mcp = source('server/mcp/lumi_server.ts');
-
-    expect(mcp).toContain("finalizeLumiResponseForDelivery");
-    expect(mcp).toContain('const bufferedChunks: string[] = [];');
-    expect(mcp).toContain('chunk => bufferedChunks.push(chunk)');
-    expect(mcp).not.toContain("(chunk) => bc('mcp:chunk'");
-    expect(mcp).toContain('finalizeLumiResponseForDelivery({');
-    expect(mcp).not.toContain('finalizeMcpResponseForDelivery(');
-    expect(mcp).toContain("entry.source + '_guard_recovery'");
+    const driver = source('server/cognition/turn_execution.ts');
+    expect(mcp).toContain('const responsePromise = runLumiEntryTurn({');
+    expect(source('server/mcp/server_tools/conversation.ts')).not.toContain('finalizeLumiResponseForDelivery({');
+    expect(mcp).not.toContain('runResolvedLumiTurn(');
+    expect(driver).toContain('await finalizeLumiResponseForDelivery({');
+    expect(driver).toContain("source: entry.source + '_guard_recovery'");
+    expect(driver.indexOf('await commit(finalized,')).toBeLessThan(driver.indexOf('return await input.deliver(executed)'));
+    expect(mcp).toContain('const deliver = async ({ finalized, toolRecords }: ExecutedLumiTurn)');
     expect(mcp).toContain("source: 'mcp_chat', action: 'chat'");
-    expect(mcp).toContain("source: background ? entry.source + '_background' : entry.source");
+    expect(mcp).toContain("deliverySource: () => background ? entry.source + '_background' : entry.source");
     expect(mcp).toContain("emit('agent:response', {");
     expect(mcp).toContain('finalized: true');
     expect(mcp).toContain('blocked: finalized.blocked');
     expect(mcp).toContain('const ttsResult = await synthesizeSpeech(finalized.text');
     expect(mcp).toContain("content: [{ type: 'text' as const, text: delivered.finalized.text }]");
-    expect(mcp).toContain('return await deliverFinalizedChatResponse(response, background)');
+    expect(mcp).not.toContain("chunk => emit('mcp:chunk'");
   });
 
   it('keeps proactive MCP speech behind the shared finalizer', () => {
@@ -173,8 +173,8 @@ describe('finalized output paths', () => {
 
     expect(mcp).toContain("source: 'mcp_route_task'");
     expect(mcp).toContain("runMcpConversationTurn(runtime, { message: task, personalityId: 'lumi' }, MCP_TASK_ENTRY)");
-    expect(mcp).toContain('const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || [])');
-    expect(mcp).toContain('toolRecords,');
+    expect(source('server/cognition/turn_execution.ts')).toContain('toolRecords = mergeToolExecutionRecords(toolRecords, result.toolCalls || [])');
+    expect(source('server/cognition/turn_execution.ts')).toContain('toolRecords, taskId, requestId: identity.requestId');
     expect(mcp).toContain('result: response.content[0].text');
     expect(mcp).toContain('text: delivered.finalized.text');
     expect(mcp).not.toContain("action: 'route_task', status: 'completed'");
@@ -372,7 +372,8 @@ describe('finalized output paths', () => {
     const delivery = source('server/cognition/response_delivery.ts');
     expect(rest).toContain('finalizeLumiResponseForDelivery as finalizeRestChatResponse');
     expect(delivery).toContain('finalizeExecutionForOutboundDelivery({');
-    expect(mcp).toContain('finalizeLumiResponseForDelivery({');
+    expect(mcp).toContain('runLumiEntryTurn({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
     expect(messaging).toContain('`${source}_guard_recovery`');
