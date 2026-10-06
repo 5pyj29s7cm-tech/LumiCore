@@ -1,21 +1,12 @@
-import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
+import type { prepareChatRuntimeControlAndModel } from './phases/prepare_chat_runtime_control_and_model';
+
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
-import type { ToolContext } from "../../tools/types";
-import type { ChatMessageWriter } from "./message_writer";
-
-
-
-
-import { Socket } from "socket.io";
 
 import { ToolExecutionRecord } from "../../tools/types";
-import { type MediaArtifactReceipt } from "../media_artifact_receipt";
 
 import { toolRegistry } from "../../tools/registry";
 import { executeToolCall } from "../../tools/execution_engine";
 import { buildConfirmedStepContinuationMessages, type LLMResult } from "../../llm/adapter";
-
-import { buildLumiCapabilitySelection } from "../../cognition/capability_selection";
 
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../../cognition/result_finalizer";
@@ -34,57 +25,7 @@ import { CN_TASK_EXECUTION_MESSAGES } from "../../regions/messages/task_executio
 
 import { isDirectDesktopTool } from "../desktop_relay";
 
-import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
-
-type executeConfirmedChatTurnInput = {
-executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
-toolContext: ToolContext;
-pendingConfirmation: import("../../tools/pending_confirmation").PendingToolConfirmation;
-visibleUserText: string;
-uid: string;
-confirmationScope: import("../../tools/pending_confirmation").PendingConfirmationScope;
-emitAgent: (event: string, payload?: Record<string, any>) => boolean;
-personality: Record<string, any> | import("../../personality/types").PersonalityConfig;
-emitToolLifecycle: (payload: { correlationId: string; name: string; arguments: Record<string, any>; args?: Record<string, any>; result?: string; error?: string; artifactReceipt?: MediaArtifactReceipt; }) => void;
-durableTaskId: string;
-requestId: string;
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-abortController: AbortController;
-isChatCancelled: () => boolean;
-turnFlow: import("../../cognition/turn_flow").LumiTurnFlow;
-modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
-rememberRequestToolRecord: (record: ToolExecutionRecord) => void;
-formatToolResultForUi: (value?: string) => string;
-formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
-taskAwareRecords: (records: ToolExecutionRecord[]) => ToolExecutionRecord[];
-runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
-effectiveSystemPrompt: string;
-acceptedUserMessageId: string;
-activeProvider: import("../../llm/user_preferences").UserLLMProvider;
-activeModel: string;
-reasoningRoutePolicy: { interactionId: `${string}-${string}-${string}-${string}-${string}`; source: string; inputTokenBudget: number; nativeDeviceId?: string; executionSessionId?: string; nativeClientIdentitySha256?: string; selectionMode: import("../../llm/user_preferences").UserLLMSelectionMode; fallbackCandidates: import("../../llm/user_preferences").UserLLMFallbackCandidate[]; allowCloudFallback: boolean; conversationId: string; requestId: string; thinkingMode?: "disabled"; };
-requestToolConfirmation: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-desktopExecutionTracker: import("../../desktop/execution_runtime").DesktopExecutionTracker;
-interactionId: `${string}-${string}-${string}-${string}-${string}`;
-turnAuthorization: import("../../conversation/lifecycle").RequestAuthorization;
-socket: Socket;
-requestToolRecords: ToolExecutionRecord[];
-pendingConfirmationCreatedThisTurn: import("../../tools/pending_confirmation").PendingToolConfirmation;
-normalizeAgentPayload: (event: string, payload?: Record<string, any>, outputProtection?: { trustedConfirmationRequestText?: string; }) => Record<string, any>;
-conversationId: string;
-pendingConfirmationAssistantState: string;
-chatDurabilityUnknownText: (userText: string) => string;
-actionLeaseHeartbeat: import("../../conversation/action_execution_runtime").ConversationActionExecutionHeartbeat;
-releaseChatSession: (reason?: string) => Promise<boolean>;
-commitRecordedTerminal: (input: { payload: Record<string, any>; unknownPayload: Record<string, any>; persistTerminalState: () => ReturnType<(assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult>; persistAssistantMessage: () => void; notification?: Record<string, any>; llmWasCalled?: boolean; repairUnknownAssistant?: boolean; updateSource?: string; errorContext: string; }) => Promise<boolean>;
-persistChatTakeoverExecution: (assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult;
-capabilitySelection: import("../../cognition/execution_pipeline").LumiCapabilityPlan;
-addMessageIdempotent: ChatMessageWriter;
-refreshTerminalPayloadTaskRelation: (payload: Record<string, any>, exactTaskId?: string) => ActiveTaskMessageResolution;
-scheduleChatSummary: (targetConversationId: string) => void;
-persistChatLearning: (assistantText: string, options?: { channel?: "chat" | "workflow"; toolRecords?: ToolExecutionRecord[]; sourceInteractionId?: string; logLabel?: string; }) => void;
-};
+type executeConfirmedChatTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatRuntimeControlAndModel>>['context']>;
 export async function executeConfirmedChatTurn(context: executeConfirmedChatTurnInput) {
 
         const confirmedTask = context.pendingConfirmation.actionIntent || context.visibleUserText;

@@ -1,26 +1,13 @@
-import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
-import type { ToolContext } from "../../tools/types";
-import type { ChatMessageWriter } from "./message_writer";
-
-
-
-import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
+import type { prepareChatModelState } from './phases/prepare_chat_model_state';
 
 import { scheduleTurnMemory } from "../../memory/turn_memory";
-import { Socket } from "socket.io";
 
 import { readDatabaseTables, commitDatabaseTables } from "../../../db_layer";
 import { pushNotification } from "../../routes/notifications";
-import { NormalizedMessage } from "../../llm/providers";
 
 import { ToolExecutionRecord } from "../../tools/types";
-import { type MediaArtifactReceipt } from "../media_artifact_receipt";
 
 import { toolRegistry } from "../../tools/registry";
-
-import { type LLMResult } from "../../llm/adapter";
-
-import { buildLumiCapabilitySelection } from "../../cognition/capability_selection";
 
 import { withDesktopExecutionReceipt } from "../../desktop/execution_runtime";
 import { buildForegroundTaskCompletionFeedback } from "../../cognition/acceptance_evidence";
@@ -41,81 +28,9 @@ import { summarizeToolRecordForPersistence } from "../../cognition/tool_record_s
 
 import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
-
-
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
-import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
-
-type completeChatTurnInput = {
-toolContext: ToolContext;
-pendingConfirmationCreatedThisTurn: import("../../tools/pending_confirmation").PendingToolConfirmation;
-executionTaskText: string;
-responseText: string;
-completionGuard: import("../../work_product/completion_guard").CompletionGuardResult;
-finalTaskRecords: ToolExecutionRecord[];
-turnFlow: import("../../cognition/turn_flow").LumiTurnFlow;
-durableTaskId: string;
-requestId: string;
-taskAwareRecords: (records: ToolExecutionRecord[]) => ToolExecutionRecord[];
-allToolRecords: ToolExecutionRecord[];
-desktopRelay: import("../desktop_relay").DesktopRelay;
-toolSessionActive: boolean;
-correctionRequiresFreshConfirmation: boolean;
-abortController: AbortController;
-isChatCancelled: () => boolean;
-llmWasCalled: boolean;
-runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
-normalTurnMessages: NormalizedMessage[];
-activeProvider: import("../../llm/user_preferences").UserLLMProvider;
-activeModel: string;
-uid: string;
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-reasoningRoutePolicy: { interactionId: `${string}-${string}-${string}-${string}-${string}`; source: string; inputTokenBudget: number; nativeDeviceId?: string; executionSessionId?: string; nativeClientIdentitySha256?: string; selectionMode: import("../../llm/user_preferences").UserLLMSelectionMode; fallbackCandidates: import("../../llm/user_preferences").UserLLMFallbackCandidate[]; allowCloudFallback: boolean; conversationId: string; requestId: string; thinkingMode?: "disabled"; };
-rememberRequestToolRecord: (record: ToolExecutionRecord) => void;
-formatToolResultForUi: (value?: string) => string;
-formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
-emitAgent: (event: string, payload?: Record<string, any>) => boolean;
-modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
-personality: Record<string, any> | import("../../personality/types").PersonalityConfig;
-actionTaskExecution: Exclude<import("../../conversation/manager").ConversationActionExecutionPreparation, { bindingFailure: unknown }>;
-llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, "getOpenAI" | "getAnthropic" | "getQwen" | "getOllama" | "isOllamaAvailable" | "getLmStudio" | "isLmStudioAvailable">>;
-emitToolLifecycle: (payload: { correlationId: string; name: string; arguments: Record<string, any>; args?: Record<string, any>; result?: string; error?: string; artifactReceipt?: MediaArtifactReceipt; }) => void;
-visibleUserText: string;
-executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
-runtimeOwnedDeterministicRecoveryCall: { source: "durable_task_capsule"; taskId: string; taskRevision: number; requestId: string; name: "write_file"; arguments: { path: string; content: string; }; } | { source: "structured_media_request"; taskId: string; taskRevision: number; requestId: string; name: "generate_image" | "ai_edit_image" | "generate_video"; arguments: Record<string, unknown>; };
-desktopExecutionTracker: import("../../desktop/execution_runtime").DesktopExecutionTracker;
-requestToolConfirmation: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-interactionId: `${string}-${string}-${string}-${string}-${string}`;
-priorTaskRecords: ToolExecutionRecord[];
-conversationId: string;
-completionTaskText: string;
-normalizeAgentPayload: (event: string, payload?: Record<string, any>, outputProtection?: { trustedConfirmationRequestText?: string; }) => Record<string, any>;
-pendingConfirmationAssistantState: string;
-chatDurabilityUnknownText: (userText: string) => string;
-actionLeaseHeartbeat: import("../../conversation/action_execution_runtime").ConversationActionExecutionHeartbeat;
-releaseChatSession: (reason?: string) => Promise<boolean>;
-commitRecordedTerminal: (input: { payload: Record<string, any>; unknownPayload: Record<string, any>; persistTerminalState: () => ReturnType<(assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult>; persistAssistantMessage: () => void; notification?: Record<string, any>; llmWasCalled?: boolean; repairUnknownAssistant?: boolean; updateSource?: string; errorContext: string; }) => Promise<boolean>;
-persistChatTakeoverExecution: (assistantText: string, options?: { toolRecords?: ToolExecutionRecord[]; source?: string; sourceInteractionId?: string; capabilitySelection?: ReturnType<typeof buildLumiCapabilitySelection>; finalizationBlocked?: boolean; assistantTextTrusted?: boolean; finalizationReason?: string; }) => import("../../work_takeover/execution_writeback").WorkTakeoverTurnExecutionWritebackResult;
-capabilitySelection: import("../../cognition/execution_pipeline").LumiCapabilityPlan;
-conversationAgentId: string;
-addMessageIdempotent: ChatMessageWriter;
-eventSource: string;
-refreshTerminalPayloadTaskRelation: (payload: Record<string, any>, exactTaskId?: string) => ActiveTaskMessageResolution;
-turnAuthorization: import("../../conversation/lifecycle").RequestAuthorization;
-text: string;
-scheduleChatSummary: (targetConversationId: string) => void;
-isMemoryAvatar: boolean;
-persistChatLearning: (assistantText: string, options?: { channel?: "chat" | "workflow"; toolRecords?: ToolExecutionRecord[]; sourceInteractionId?: string; logLabel?: string; }) => void;
-allowAdaptiveLearning: boolean;
-emotionalState: import("../../personality/state").EmotionalState;
-sentiment: import("../../cognition/sentiment").SentimentResult;
-isNovel: boolean;
-himState: import("../../personality/him").HIMState;
-emotionKey: string;
-socket: Socket;
-};
+type completeChatTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']> & { finalTaskRecords: ToolExecutionRecord[] };
 export async function completeChatTurn(context: completeChatTurnInput) {
 
       const responseFinalizer = createTurnResponseFinalizer({

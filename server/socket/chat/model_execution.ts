@@ -1,24 +1,12 @@
-import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
-import type { ToolContext } from "../../tools/types";
-
+import type { prepareChatModelState } from './phases/prepare_chat_model_state';
 
 import { normalizeChatHistoryRecord } from "./history";
 
-
-import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
-
 import { isExplicitMemoryRequest } from "../../memory/turn_memory";
-import { Socket } from "socket.io";
 
 import { NormalizedMessage, StreamCallback } from "../../llm/providers";
 
-
-import { ToolExecutionRecord } from "../../tools/types";
-import { type MediaArtifactReceipt } from "../media_artifact_receipt";
-
 import { toolRegistry } from "../../tools/registry";
-
-import { type LLMResult } from "../../llm/adapter";
 
 import { isModelConfigurationReadRequest } from "../../cognition/model_configuration_intent";
 
@@ -30,52 +18,7 @@ import { buildModelSelfAwareness } from "../../cognition/vision_routing";
 
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
-type executeChatModelTurnInput = {
-executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
-toolContext: ToolContext;
-responseText: string;
-conversationId: string;
-requestId: string;
-eventSource: string;
-history: any[];
-activeProvider: import("../../llm/user_preferences").UserLLMProvider;
-activeModel: string;
-uid: string;
-visionIntent: boolean;
-effectiveOperationMode: import("../../../shared/operation_modes").LumiClientMode;
-effectiveSystemPrompt: string;
-text: string;
-acceptedUserMessageId: string;
-toolSessionActive: boolean;
-normalTurnMessages: NormalizedMessage[];
-markTurnTiming: (phase: string) => void;
-deferCompletionStream: boolean;
-chatTextGate: import("../../cognition/response_delivery").PreFinalizationTextGate;
-emitAgent: (event: string, payload?: Record<string, any>) => boolean;
-personality: Record<string, any> | import("../../personality/types").PersonalityConfig;
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-abortController: AbortController;
-reasoningRoutePolicy: { interactionId: `${string}-${string}-${string}-${string}-${string}`; source: string; inputTokenBudget: number; nativeDeviceId?: string; executionSessionId?: string; nativeClientIdentitySha256?: string; selectionMode: import("../../llm/user_preferences").UserLLMSelectionMode; fallbackCandidates: import("../../llm/user_preferences").UserLLMFallbackCandidate[]; allowCloudFallback: boolean; conversationId: string; requestId: string; thinkingMode?: "disabled"; };
-llmGetters: SharedProviderGetters & Required<Pick<SharedProviderGetters, "getOpenAI" | "getAnthropic" | "getQwen" | "getOllama" | "isOllamaAvailable" | "getLmStudio" | "isLmStudioAvailable">>;
-isChatCancelled: () => boolean;
-turnAuthorization: import("../../conversation/lifecycle").RequestAuthorization;
-completionGuard: import("../../work_product/completion_guard").CompletionGuardResult;
-llmWasCalled: boolean;
-interactionId: `${string}-${string}-${string}-${string}-${string}`;
-socket: Socket;
-modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
-runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
-allToolRecords: ToolExecutionRecord[];
-formatToolResultForUi: (value?: string) => string;
-formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
-actionTaskExecution: Exclude<import("../../conversation/manager").ConversationActionExecutionPreparation, { bindingFailure: unknown }>;
-emitToolLifecycle: (payload: { correlationId: string; name: string; arguments: Record<string, any>; args?: Record<string, any>; result?: string; error?: string; artifactReceipt?: MediaArtifactReceipt; }) => void;
-priorTaskRecords: ToolExecutionRecord[];
-runtimeOwnedDeterministicRecoveryCall: { source: "durable_task_capsule"; taskId: string; taskRevision: number; requestId: string; name: "write_file"; arguments: { path: string; content: string; }; } | { source: "structured_media_request"; taskId: string; taskRevision: number; requestId: string; name: "generate_image" | "ai_edit_image" | "generate_video"; arguments: Record<string, unknown>; };
-desktopExecutionTracker: import("../../desktop/execution_runtime").DesktopExecutionTracker;
-requestToolConfirmation: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-};
+type executeChatModelTurnInput = NonNullable<Awaited<ReturnType<typeof prepareChatModelState>>['context']>;
 export async function executeChatModelTurn(context: executeChatModelTurnInput) {
 
   // LumiCore owns every normal and complex task through this single model/tool path.

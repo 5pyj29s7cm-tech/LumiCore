@@ -1,11 +1,9 @@
-import type { ChatIncomingAttachment } from "./attachments";
-
-
-import { type TurnResolution } from "../../cognition/turn_resolution";
+import type { retrieveChatContext } from './context_retrieval';
+import type { LumiClientMode } from '../../../shared/operation_modes';
+import type { MessageRecord } from '../../conversation/manager';
+import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task_query';
 
 import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
-
-import { ToolExecutionRecord } from "../../tools/types";
 
 import { toolRegistry } from "../../tools/registry";
 
@@ -22,42 +20,11 @@ import { getConversationSummary, getTopicContext } from "../../conversation/mana
 
 import { buildProfessionOverlay } from "../../autonomy/professions";
 
-import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
-
-type prepareChatPromptContextInput = {
-sensoryFn: (uid: string) => any;
-uid: string;
-relevantMemories: import("../../memory/types").Memory[];
-ragChunks: string[];
-emotionalState: import("../../personality/state").EmotionalState;
-text: string;
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-isMemoryAvatar: boolean;
-personalityConfig: Record<string, any> | import("../../personality/types").PersonalityConfig;
-personalityId: string;
-toolSecurityContext: { onToolRecord: (record: ToolExecutionRecord) => void; authenticated?: boolean; authRole?: string; orgRole?: string; localExecution?: boolean; executionBoundary?: "trusted_local" | "remote_restricted" | "trusted_system"; };
-conversationId: string;
-conversationMode: string;
-buildNaturalReplyStyleOverlay: (source?: string) => string;
-eventSource: string;
-pendingConfirmationPrompt: string;
-chatContextBridge: string;
-actionContinuationBridge: string;
-visibleUserText: string;
-mediaRoutingEnvelope: string;
-requestId: string;
-acceptedTurnResolution: TurnResolution;
-structuredMediaRequest: import("../../../shared/media_generation").StructuredMediaRequest;
-category: string;
-operationMode: import("../../../shared/operation_modes").LumiClientMode;
-conversationAgentId: string;
-conversation: import("../../conversation/manager").Conversation;
-resolvedTaskRelation: ActiveTaskMessageResolution;
-persistedConversationHistory: import("../../conversation/manager").MessageRecord[];
-pendingAssistantOfferContext: import("../../cognition/pending_assistant_offer").PendingAssistantOfferContext;
-attachments: ChatIncomingAttachment[];
-kbContext: string;
+type prepareChatPromptContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']> & Pick<Awaited<ReturnType<typeof retrieveChatContext>>, 'relevantMemories' | 'ragChunks' | 'emotionalState' | 'personalityConfig' | 'kbContext'> & {
+  conversationId: string;
+  conversationMode: string;
+  operationMode: LumiClientMode;
+  persistedConversationHistory: MessageRecord[];
 };
 export async function prepareChatPromptContext(context: prepareChatPromptContextInput) {
 

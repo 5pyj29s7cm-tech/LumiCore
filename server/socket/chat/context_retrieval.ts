@@ -1,4 +1,4 @@
-
+import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task_query';
 
 import { queryMemoriesVector, CONVERSATIONAL_MEMORY_EVIDENCE } from "../../memory";
 import { loadEmotionalState, loadHIMState, vectorMemoryBias } from "../../personality/state";
@@ -13,20 +13,7 @@ import { searchKnowledgeBase } from "../../org/kb";
 
 import { scopedEmotionalStateKey } from "../scope";
 
-type retrieveChatContextInput = {
-isMemoryAvatar: boolean;
-memoryAvatar: import("../../memory_avatar/store").MemoryAvatarRecord;
-personalityId: string;
-uid: string;
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-markTurnTiming: (phase: string) => void;
-text: string;
-conversationAgentId: string;
-abortController: AbortController;
-turnAuthorization: import("../../conversation/lifecycle").RequestAuthorization;
-requestScope: import("../scope").RuntimeScope;
-};
+type retrieveChatContextInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']>;
 export async function retrieveChatContext(context: retrieveChatContextInput) {
 
       // Retrieve personality vector early to bias memory retrieval (cross-system fusion: vector→memory)

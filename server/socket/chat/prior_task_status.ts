@@ -1,9 +1,4 @@
-import type { ChatMessageWriter } from "./message_writer";
-
-
-import { type TurnResolution } from "../../cognition/turn_resolution";
-
-import { ToolExecutionRecord } from "../../tools/types";
+import type { prepareChatPriorTaskQuery } from './phases/prepare_chat_prior_task_query';
 
 import { toolRegistry } from "../../tools/registry";
 import { executeToolCall } from "../../tools/execution_engine";
@@ -14,45 +9,13 @@ import { formatRuntimeCleanupReceipt } from "../../regions/messages/runtime_clea
 
 import { personalityRegistry } from "../../personality";
 
-import { addMessage, getConversationActionStatus, prepareConversationActionExecution, type ForegroundRequestIdentity as ChatForegroundRequestIdentity } from "../../conversation/manager";
+import { addMessage, getConversationActionStatus, prepareConversationActionExecution } from "../../conversation/manager";
 
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../conversation/execution_facts";
 
 import { summarizeToolRecordForPersistence } from "../../cognition/tool_record_status";
 
-import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
-
-type answerPriorTaskStatusInput = {
-runtimeCancellationRecheck: import("../../cognition/action_continuation").PendingRuntimeCancellationRecheck;
-conversation: import("../../conversation/manager").Conversation;
-uid: string;
-visibleUserText: string;
-requestId: string;
-acceptedUserMessageId: string;
-foregroundRequestIdentity: ChatForegroundRequestIdentity;
-resolvedTaskRelation: ActiveTaskMessageResolution;
-emitAgent: (event: string, payload?: Record<string, any>) => boolean;
-toolSecurityContext: { onToolRecord: (record: ToolExecutionRecord) => void; authenticated?: boolean; authRole?: string; orgRole?: string; localExecution?: boolean; executionBoundary?: "trusted_local" | "remote_restricted" | "trusted_system"; };
-resolvedDomain: import("../scope").RuntimeDomain;
-resolvedOrgId: string;
-acceptedTurnResolution: TurnResolution;
-previousActionState: import("../../cognition/action_continuation").ConversationActionContinuationState;
-abortController: AbortController;
-isChatCancelled: () => boolean;
-formatToolResultForUi: (value?: string) => string;
-commitDeterministicTerminal: (input: { event?: "agent:response" | "agent:error"; payload: Record<string, any>; persistAssistantMessage?: () => void; publishAfter?: () => void; errorContext?: string; }) => Promise<boolean>;
-conversationAgentId: string;
-addMessageIdempotent: ChatMessageWriter;
-emitConversationUpdated: (payload: Record<string, any>) => void;
-conversationTurn: import("../../conversation/manager").ConversationTurnResult;
-releaseChatSession: (reason?: string) => Promise<boolean>;
-acceptedFollowupIntent: import("../../cognition/action_continuation").RecentActionFollowupIntent;
-confirmationNeedsFreshReview: boolean;
-asksAboutBoundConversationTask: boolean;
-asksAboutRecentConversationTask: boolean;
-acceptedNormalizedIntent: Readonly<import("../../cognition/normalized_action_intent").NormalizedActionIntent>;
-serverBoundRecheckTaskId: string;
-};
+type answerPriorTaskStatusInput = NonNullable<Awaited<ReturnType<typeof prepareChatPriorTaskQuery>>['context']>;
 export async function answerPriorTaskStatus(context: answerPriorTaskStatusInput) {
 
       if (context.runtimeCancellationRecheck) {
