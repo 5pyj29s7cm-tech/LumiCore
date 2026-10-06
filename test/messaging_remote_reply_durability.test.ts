@@ -24,6 +24,8 @@ let confirmations: typeof import('../server/tools/pending_confirmation');
 let confirmationRepository: typeof import('../server/tools/pending_confirmation_repository');
 let bindings: typeof import('../server/messaging/bindings');
 let orgDb: typeof import('../server/org/db');
+let ingress: typeof import('../server/regions/packs/cn/messaging_ingress_runtime');
+let dbLayer: typeof import('../db_layer');
 
 function incoming(userId: string, text: string, messageId: string): IncomingMessage {
   return {
@@ -57,7 +59,7 @@ describe('remote reply durability boundary', () => {
   beforeAll(async () => {
     const app = await makeApp();
     cleanup = app.cleanup;
-    [routes, conversations, delivery, journal, scopes, confirmations, confirmationRepository, bindings, orgDb] = await Promise.all([
+    [routes, conversations, delivery, journal, scopes, confirmations, confirmationRepository, bindings, orgDb, ingress, dbLayer] = await Promise.all([
       import('../server/regions/packs/cn/messaging_routes'),
       import('../server/conversation/manager'),
       import('../server/messaging/delivery_ledger'),
@@ -67,6 +69,8 @@ describe('remote reply durability boundary', () => {
       import('../server/tools/pending_confirmation_repository'),
       import('../server/messaging/bindings'),
       import('../server/org/db'),
+      import('../server/regions/packs/cn/messaging_ingress_runtime'),
+      import('../db_layer'),
     ]);
   });
 
@@ -90,6 +94,53 @@ describe('remote reply durability boundary', () => {
     bindings.resetMessagingBindingsForTest();
     cleanup();
   });
+
+  it.each(['committed', 'superseded', 'failed'] as const)(
+    'fences deterministic dismissal replies through terminal flush: %s', async outcome => {
+      const suffix = `dismissal-${outcome}-${Date.now()}-${Math.random()}`;
+      const message = ingress.registerMessageRouteActivity(incoming(suffix, 'never mind', suffix));
+      const assistantUpdates: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let terminalFlushReached = false;
+      const assistantRows = () => dbLayer.readDatabaseTables(['interactions']).interactions.filter((row: any) => (
+        row.userId === suffix && row.role === 'assistant' && row.requestId === `wechat_bot:${suffix}`
+      ));
+      durability.flush.mockImplementation(async () => {
+        if (!terminalFlushReached && assistantRows().length) {
+          terminalFlushReached = true;
+          await gate;
+          if (outcome === 'failed') throw new Error('terminal transcript storage unavailable');
+        }
+      });
+      const result = routes.processWithPersonality(message, {
+        onConversationUpdated: update => {
+          if (assistantRows().some((row: any) => row.id === update.messageId)) assistantUpdates.push(update.messageId);
+        },
+      }).then(text => ({ text, error: null }), error => ({ text: null, error }));
+      try {
+        await waitFor(() => terminalFlushReached);
+        expect(assistantUpdates).toEqual([]);
+        if (outcome === 'superseded') ingress.registerMessageRouteActivity(incoming(suffix, 'another question', suffix + '-next'));
+      } finally {
+        release();
+      }
+      const settled = await result;
+      if (outcome === 'committed') {
+        expect(settled.error).toBeNull();
+        expect(settled.text).toBe("Okay. I'm here when you need me.");
+        expect(assistantUpdates).toHaveLength(1);
+      } else {
+        expect(assistantUpdates).toEqual([]);
+        if (outcome === 'superseded') {
+          expect(settled.text).toBe('');
+          expect(assistantRows()).toEqual([]);
+        } else {
+          expect(settled.error).toMatchObject({ name: 'MessagingReplyDurabilityError', stage: 'terminal_reply' });
+        }
+      }
+    },
+  );
 
   it('remote_attachment_enrichment_starts_only_after_accepted_turn_flush', async () => {
     const userId = `attachment-fence-${Date.now()}-${Math.random()}`;
@@ -167,6 +218,34 @@ describe('remote reply durability boundary', () => {
       false,
     );
     expect(followUp.resolution.kind).toBe('personal');
+  });
+
+  it('binding assistant notification waits for durable code consumption and reply', async () => {
+    const userId = `binding-notify-${Date.now()}-${Math.random()}`;
+    const code = bindings.createBindingCode('wechat', userId, '', 'personal');
+    const message = { ...incoming(userId, `绑定 Lumi ${code.code}`, userId), boundUserId: undefined };
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let terminalFlushReached = false;
+    const assistantUpdates: string[] = [];
+    durability.flush.mockImplementation(async () => {
+      const assistant = dbLayer.readDatabaseTables(['interactions']).interactions.find((row: any) => (
+        row.userId === userId && row.role === 'assistant'
+      ));
+      if (assistant && !terminalFlushReached) { terminalFlushReached = true; await gate; }
+    });
+    routes.dispatchIncomingMessage(message, { enrich: async value => value, reply: async () => 'binding-notify-reply' }, {
+      onConversationUpdated: update => {
+        const row = conversations.getMessages(update.conversationId).find(item => item.id === update.messageId);
+        if (row?.role === 'assistant') assistantUpdates.push(update.messageId);
+      },
+    });
+    try {
+      await waitFor(() => terminalFlushReached);
+      expect(assistantUpdates).toEqual([]);
+    } finally { release(); }
+    await waitFor(() => journalStatus(message.messageId) === 'completed');
+    expect(assistantUpdates).toHaveLength(1);
   });
 
   it('binding_code_is_not_consumed_before_durable_remote_admission', async () => {
@@ -493,8 +572,8 @@ describe('remote reply durability boundary', () => {
       'persist:user',
       'flush:accepted',
       'pipeline:failed',
-      'persist:assistant',
       'flush:terminal',
+      'persist:assistant',
       'reply:true:false',
     ]);
   });

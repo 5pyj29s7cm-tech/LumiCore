@@ -1,3 +1,4 @@
+import { createChatTerminalReply } from './chat/terminal_reply';
 import { createChatMessageWriter } from "./chat/message_writer";
 import { executeChatModelTurn } from "./chat/model_execution";
 import { answerPriorTaskStatus } from "./chat/prior_task_status";
@@ -664,6 +665,9 @@ export function registerChatHandler(
       if (committed) actionLeaseHeartbeat?.stop();
       return committed;
     };
+    const commitChatReply = createChatTerminalReply({
+      commit: commitDeterministicTerminal, write: addMessageIdempotent, getConversationId: () => selectedConversationId,
+    });
     const emitConversationUpdated = (payload: Record<string, any>) => {
       if (!turnAuthorization.isCurrent()) return;
       io.to(executionRoom).emit('chat:conversation_updated', {
@@ -856,12 +860,16 @@ export function registerChatHandler(
         personalityToolPolicy: (personalityRegistry.getForUser('lumi', uid, resolvedDomain === 'work' ? resolvedOrgId : undefined)
           || personalityRegistry.getDefault()).toolPolicy,
       });
-      await commitDeterministicTerminal({
-        payload:{text:result.text,agentName:'Lumi',finalized:true,blocked:result.blocked,
-          reason:'runtime_work_status',sidecar:true},
-        persistAssistantMessage:()=>addMessageIdempotent({conversationId:selectedConversationId,role:'assistant',
-          content:result.text,toolCalls:[result.record],cognitiveIntent:'runtime_work_status',
-          llmWasCalled:false,skipActionContinuation:true,
+      await commitChatReply({
+        text:result.text,
+        blocked:result.blocked,
+        reason:'runtime_work_status',
+        sidecar:true,
+        message: () => ({
+          toolCalls:[result.record],
+          cognitiveIntent:'runtime_work_status',
+          llmWasCalled:false,
+          skipActionContinuation:true,
         }),
         errorContext:'Read-only runtime status terminal',
       });
@@ -924,23 +932,15 @@ export function registerChatHandler(
         || CN_TASK_EXECUTION_MESSAGES.activeWithoutReceipt,
       ).trim();
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      await commitDeterministicTerminal({
-        payload: {
-          text: statusText,
-          agentName: 'Lumi',
-          source: eventSource,
-          requestId,
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'target_execution_status',
-          controlIntent: 'status',
-          targetRequestId: exactPostCancelStatusTarget,
-        },
-        persistAssistantMessage: () => addMessageIdempotent({
-          conversationId: selectedConversationId,
-          role: 'assistant',
-          content: statusText,
+      await commitChatReply({
+        text: statusText,
+        source: eventSource,
+        requestId,
+        sidecar: true,
+        reason: 'target_execution_status',
+        controlIntent: 'status',
+        targetRequestId: exactPostCancelStatusTarget,
+        message: () => ({
           cognitiveIntent: 'task_status',
           llmWasCalled: false,
           skipActionContinuation: true,
@@ -964,19 +964,11 @@ export function registerChatHandler(
         skipActionContinuation: true,
       });
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      await commitDeterministicTerminal({
-        payload: {
-          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: resolvedTaskRelation.reason,
-        },
-        persistAssistantMessage: () => addMessageIdempotent({
-          conversationId: selectedConversationId,
-          role: 'assistant',
-          content: CN_TASK_EXECUTION_MESSAGES.staleControl,
+      await commitChatReply({
+        text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+        sidecar: true,
+        reason: resolvedTaskRelation.reason,
+        message: () => ({
           cognitiveIntent: 'stale_task_control',
           llmWasCalled: false,
           skipActionContinuation: true,
@@ -1021,19 +1013,11 @@ export function registerChatHandler(
         resolvedTaskRelation = { ...resolvedTaskRelation, revision: cancelled?.revision };
       }
       try { ack?.({ ok: true, requestId, receivedAt: new Date().toISOString() }); } catch {}
-      await commitDeterministicTerminal({
-        payload: {
-          text: responseText,
-          agentName: 'Lumi',
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: cancelledCurrentTask ? 'cancelled_by_user' : 'stale_control',
-        },
-        persistAssistantMessage: () => addMessageIdempotent({
-          conversationId: selectedConversationId,
-          role: 'assistant',
-          content: responseText,
+      await commitChatReply({
+        text: responseText,
+        sidecar: true,
+        reason: cancelledCurrentTask ? 'cancelled_by_user' : 'stale_control',
+        message: () => ({
           cognitiveIntent: 'task_cancel',
           skipActionContinuation: true,
         }),
@@ -1162,28 +1146,28 @@ export function registerChatHandler(
       if (!turnAuthorization.isCurrent()) {
         // This control already has a durable reservation and an acceptance
         // acknowledgement. Settle it without touching its old target.
-        await commitDeterministicTerminal({
-          payload: {
-            text: CN_TASK_EXECUTION_MESSAGES.cancelled, agentName: 'Lumi',
-            sidecar: true, finalized: true, blocked: false, reason: 'cancelled',
-          },
-          persistAssistantMessage: () => addMessageIdempotent({ conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, cognitiveIntent: 'task_cancel', skipActionContinuation: true }),
+        await commitChatReply({
+          text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+          sidecar: true,
+          reason: 'cancelled',
+          message: () => ({
+            cognitiveIntent: 'task_cancel',
+            skipActionContinuation: true,
+          }),
           errorContext: 'Revoked cancellation control terminal',
         });
         return;
       }
       const currentTarget = getConversationExecution(executionScope, cancellationTargetRequestId);
       if (!currentTarget) {
-        await commitDeterministicTerminal({
-          payload: {
-            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-            agentName: 'Lumi',
-            sidecar: true,
-            finalized: true,
-            blocked: false,
-            reason: 'stale_control',
-          },
-          persistAssistantMessage: () => addMessageIdempotent({ conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.staleControl, cognitiveIntent: 'task_cancel', skipActionContinuation: true }),
+        await commitChatReply({
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          sidecar: true,
+          reason: 'stale_control',
+          message: () => ({
+            cognitiveIntent: 'task_cancel',
+            skipActionContinuation: true,
+          }),
           errorContext: 'Stale cancellation terminal',
         });
         return;
@@ -1216,18 +1200,16 @@ export function registerChatHandler(
         });
         return;
       }
-      await commitDeterministicTerminal({
-        payload: {
-          text: CN_TASK_EXECUTION_MESSAGES.cancelled,
-          agentName: 'Lumi',
-          source: eventSource,
-          requestId,
-          sidecar: true,
-          finalized: true,
-          blocked: false,
-          reason: 'cancelled_by_user',
-        },
-        persistAssistantMessage: () => addMessageIdempotent({ conversationId: selectedConversationId, role: 'assistant', content: CN_TASK_EXECUTION_MESSAGES.cancelled, cognitiveIntent: 'task_cancel', skipActionContinuation: true }),
+      await commitChatReply({
+        text: CN_TASK_EXECUTION_MESSAGES.cancelled,
+        source: eventSource,
+        requestId,
+        sidecar: true,
+        reason: 'cancelled_by_user',
+        message: () => ({
+          cognitiveIntent: 'task_cancel',
+          skipActionContinuation: true,
+        }),
         errorContext: 'Cancellation completion terminal',
       });
       return;
@@ -1442,15 +1424,13 @@ export function registerChatHandler(
       const terminalText = waitTimedOut
         ? CN_TASK_EXECUTION_MESSAGES.queueWaitTimedOut
         : CN_TASK_EXECUTION_MESSAGES.cancelled;
-      await commitDeterministicTerminal({
-        payload: {
-          text: terminalText,
-          agentName: 'Lumi',
-          finalized: true,
-          blocked: true,
-          reason: waitTimedOut ? 'queue_wait_timeout' : 'cancelled',
-        },
-        persistAssistantMessage: () => addMessageIdempotent({ conversationId: selectedConversationId, role: 'assistant', content: terminalText, cognitiveIntent: waitTimedOut ? 'queue_wait_timeout' : 'task_cancel', }),
+      await commitChatReply({
+        text: terminalText,
+        blocked: true,
+        reason: waitTimedOut ? 'queue_wait_timeout' : 'cancelled',
+        message: () => ({
+          cognitiveIntent: waitTimedOut ? 'queue_wait_timeout' : 'task_cancel',
+        }),
         errorContext: waitTimedOut ? 'Queued wait timeout terminal' : 'Queued cancellation terminal',
       });
       await releaseChatSession();
@@ -1524,12 +1504,16 @@ export function registerChatHandler(
         const receipt = await persistTurnMemory({ userId: uid, domain: resolvedDomain, orgId: resolvedOrgId,
           userText: visibleUserText, channel: 'chat', source: eventSource, requestId, conversationId: conversation.id,
           agentId: conversationAgentId, authorization: turnAuthorization, signal: abortController.signal, llmGetters });
-        await commitDeterministicTerminal({
-          payload: { text: receipt.text, agentName: 'Lumi', finalized: true, blocked: receipt.status === 'failed',
-            reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved' },
-          persistAssistantMessage: () => addMessageIdempotent({
-            conversationId: conversation.id, role: 'assistant', content: receipt.text, cognitiveIntent: 'memory',
-            llmWasCalled: true, skipActionContinuation: true }),
+        await commitChatReply({
+          text: receipt.text,
+          blocked: receipt.status === 'failed',
+          reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved',
+          message: () => ({
+            conversationId: conversation.id,
+            cognitiveIntent: 'memory',
+            llmWasCalled: true,
+            skipActionContinuation: true,
+          }),
           errorContext: 'Explicit memory terminal',
         });
         await releaseChatSession();
@@ -1541,18 +1525,11 @@ export function registerChatHandler(
         userObservedCompletionTaskId
         && conversation.actionContinuationState?.taskId !== userObservedCompletionTaskId
       )) {
-        await commitDeterministicTerminal({
-          payload: {
-            text: CN_TASK_EXECUTION_MESSAGES.staleControl,
-            agentName: 'Lumi',
-            finalized: true,
-            blocked: false,
-            reason: resolvedTaskRelation.reason || 'stale_control',
-          },
-          persistAssistantMessage: () => addMessageIdempotent({
+        await commitChatReply({
+          text: CN_TASK_EXECUTION_MESSAGES.staleControl,
+          reason: resolvedTaskRelation.reason || 'stale_control',
+          message: () => ({
             conversationId: conversation.id,
-            role: 'assistant',
-            content: CN_TASK_EXECUTION_MESSAGES.staleControl,
             cognitiveIntent: 'stale_task_control',
             llmWasCalled: false,
             skipActionContinuation: true,
@@ -1623,18 +1600,11 @@ export function registerChatHandler(
         const responseText = findLatestRepeatableAssistantReply(
           acceptedRepeatIndex >= 0 ? repeatTranscript.slice(0, acceptedRepeatIndex) : [],
         ) || CN_TASK_EXECUTION_MESSAGES.noRepeatableReply;
-        await commitDeterministicTerminal({
-          payload: {
-            text: responseText,
-            agentName: 'Lumi',
-            finalized: true,
-            blocked: false,
-            reason: 'repeat_previous_reply',
-          },
-          persistAssistantMessage: () => addMessageIdempotent({
+        await commitChatReply({
+          text: responseText,
+          reason: 'repeat_previous_reply',
+          message: () => ({
             conversationId: conversation.id,
-            role: 'assistant',
-            content: responseText,
             cognitiveIntent: 'task_repeat',
             llmWasCalled: false,
             skipActionContinuation: true,
@@ -1661,18 +1631,11 @@ export function registerChatHandler(
       const repeatedConfirmationWithoutPending = Boolean(adjacentConfirmedAction);
       if (repeatedConfirmationWithoutPending) {
         const responseText = CN_TASK_EXECUTION_MESSAGES.noPendingConfirmation;
-        await commitDeterministicTerminal({
-          payload: {
-            text: responseText,
-            agentName: 'Lumi',
-            finalized: true,
-            blocked: false,
-            reason: 'no_pending_confirmation',
-          },
-          persistAssistantMessage: () => addMessageIdempotent({
+        await commitChatReply({
+          text: responseText,
+          reason: 'no_pending_confirmation',
+          message: () => ({
             conversationId: conversation.id,
-            role: 'assistant',
-            content: responseText,
             cognitiveIntent: 'duplicate_confirmation_noop',
             llmWasCalled: false,
             skipActionContinuation: true,
@@ -1847,18 +1810,11 @@ export function registerChatHandler(
                 boundTerminalTask.goal,
                 boundTerminalTask.status || 'terminal',
               );
-          await commitDeterministicTerminal({
-            payload: {
-              text: responseText,
-              agentName: 'Lumi',
-              finalized: true,
-              blocked: false,
-              reason: 'task_already_terminal',
-            },
-            persistAssistantMessage: () => addMessageIdempotent({
+          await commitChatReply({
+            text: responseText,
+            reason: 'task_already_terminal',
+            message: () => ({
               conversationId,
-              role: 'assistant',
-              content: responseText,
               cognitiveIntent: 'task_already_terminal',
               llmWasCalled: false,
               skipActionContinuation: true,
@@ -2746,19 +2702,11 @@ export function registerChatHandler(
           status: 'cancelled',
           reason: 'Cancelled by the user; completed steps remain recorded.',
         }) : undefined;
-        await commitDeterministicTerminal({
-          payload: {
-            text: cancelledText,
-            agentName: 'Lumi',
-            finalized: true,
-            blocked: false,
-            reason: 'cancelled',
-            completionFeedback: cancelledFeedback,
-          },
-          persistAssistantMessage: () => addMessageIdempotent({
-            conversationId: selectedConversationId,
-            role: 'assistant',
-            content: cancelledText,
+        await commitChatReply({
+          text: cancelledText,
+          reason: 'cancelled',
+          completionFeedback: cancelledFeedback,
+          message: () => ({
             cognitiveIntent: 'task_cancelled',
             llmWasCalled: true,
             toolCalls: cancelledRecords.length ? cancelledRecords : undefined,
@@ -2796,19 +2744,12 @@ export function registerChatHandler(
         blocked: true,
         reason: String(publicError.reason || 'chat_execution_failed'),
       }) : undefined;
-      await commitDeterministicTerminal({
-        payload: {
-          text: failureText,
-          agentName: 'Lumi',
-          finalized: true,
-          blocked: true,
-          reason: String(publicError.reason || 'chat_execution_failed'),
-          completionFeedback: failedFeedback,
-        },
-        persistAssistantMessage: () => addMessageIdempotent({
-          conversationId: selectedConversationId,
-          role: 'assistant',
-          content: failureText,
+      await commitChatReply({
+        text: failureText,
+        blocked: true,
+        reason: String(publicError.reason || 'chat_execution_failed'),
+        completionFeedback: failedFeedback,
+        message: () => ({
           cognitiveIntent: String(publicError.code || 'CHAT_EXECUTION_FAILED').toLowerCase(),
           llmWasCalled: false,
           toolCalls: failedRecords.length ? failedRecords : undefined,

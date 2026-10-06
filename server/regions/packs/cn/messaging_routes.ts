@@ -20,10 +20,9 @@ import { buildLumiTurnDispatch, type LumiTurnDispatch } from '../../../cognition
 import { buildLumiExecutionPipeline, type LumiExecutionPipeline } from '../../../cognition/execution_pipeline';
 import { toolRegistry } from '../../../tools/registry';
 import { cancelConversationActionExecution, getConversationActionStatus, getMessagesByTokenBudget, getMessagesThroughExternalMessage, persistConversationExecutionPlan, prepareConversationActionExecution, settleConversationActionExecutionRequest, setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat } from '../../../conversation/manager';
-import { admitAcceptedUserTurnDurably, resolveAcceptedTurnConfirmation, type AcceptedUserTurnAdmission } from '../../../socket/action_turn_durability';
+import { resolveAcceptedTurnConfirmation, type AcceptedUserTurnAdmission } from '../../../socket/action_turn_durability';
 import { reserveConversationExecution } from '../../../cognition/conversation_execution';
 import { flushDBOrThrow } from '../../../../db_layer';
-import { ensurePendingConfirmationPersistenceInitialized } from '../../../tools/pending_confirmation_repository';
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, formatPendingConfirmationRequest, recordPendingConfirmationDurably } from '../../../tools/pending_confirmation';
 import { clearPendingLegalNotice } from '../../../messaging/legal_notice_pending';
 import { revalidateAcceptedTaskRelation, taskRelationFollowupIntent } from '../../../cognition/task_concurrency';
@@ -59,10 +58,10 @@ import { providerGetterArguments } from "../../../llm/provider_getters";
 import { recordTokenUsage, recordTokenUsageBatch } from '../../../llm/token_tracker';
 import { finalizeLumiResponse } from '../../../cognition/result_finalizer';
 import { WeComAdapter, type WeComConfig } from '../../../messaging/wecom';
-import { type MessagingRouteOptions, type IncomingMessageTransport, flushMessagingStateOrThrow, isMessagingReplyDurabilityError, MessagingReplyDurabilityError, buildRemoteRuntimeEvidenceContext, type MessagingDesktopRelay, type MessagingDesktopLifecycle, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "./messaging_finalization";
+import { type MessagingRouteOptions, type IncomingMessageTransport, flushMessagingStateOrThrow, isMessagingReplyDurabilityError, buildRemoteRuntimeEvidenceContext, type MessagingDesktopRelay, type MessagingDesktopLifecycle, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "./messaging_finalization";
 import { enrichFeishuAttachments, remotePlatformLabel, getRequestText, getDisplayText, buildRemoteTurnIntentText, enrichWeComAttachments } from "./remote_materials";
 import { acceptingMessagingIngress, assertMessagingAuthorization, registerMessageRouteActivity, acceptedMessageSettlements, correlateMessagingReply, enqueueMessageRoute, isMessagingAuthorizationCurrent, newerMessageSupersedesThisTurn, registerActiveMessageRouteController } from "./messaging_ingress_runtime";
-import { admitBoundMessagingTurnDurably, persistBoundMessagingExchange, removeSupersededAssistantMessage, notifyMessagingConversationUpdated, conversationForMessagingTurn, persistBoundMessagingMessage } from "./messaging_persistence";
+import { createMessagingReplyCommitter, admitBoundMessagingTurnDurably, removeSupersededAssistantMessage, conversationForMessagingTurn, persistBoundMessagingMessage } from "./messaging_persistence";
 import { handleRemoteOrgCommand } from "./remote_org_commands";
 
 const bindingCodeQueues = new Map<string, Promise<unknown>>();
@@ -464,6 +463,29 @@ export function dispatchIncomingMessage(
   const settlement = new Promise<void>((resolve, reject) => { settleAcceptedMessage = resolve; failAcceptedMessage = reject; });
   void settlement.catch(() => undefined);
   acceptedMessageSettlements.add(settlement);
+  const persistDispatchReply = (target: IncomingMessage, text: string) => createMessagingReplyCommitter(target, {
+    isCancelled: () => !isMessagingAuthorizationCurrent(target) || newerMessageSupersedesThisTurn(target),
+    onConversationUpdated: options?.onConversationUpdated,
+    flush: async () => {
+      if (!target.boundUserId) return;
+      await flushMessagingStateOrThrow('terminal_reply');
+      terminalReplyDurable = true;
+    },
+  })(text);
+  const deliverReply = async (target: IncomingMessage, text: string, transportTarget = target): Promise<void> => {
+    const current = correlateMessagingReply(target, text);
+    if (current.superseded || !current.text) {
+      finalJournalStatus = 'superseded';
+      if (retryableReplyDelivery) updateMessagingJournal(trackedMessage, { replyRetryable: false });
+      retryableReplyDelivery = false;
+      return;
+    }
+    const replyMessageId = await transport.reply(transportTarget, current.text);
+    retryableReplyDelivery = false;
+    updateMessagingJournal(trackedMessage, {
+      status: 'replied', replyText: text, replyMessageId: String(replyMessageId || ''), replyRetryable: false, error: '',
+    });
+  };
 
   setImmediate(() => {
     void (async () => {
@@ -490,21 +512,7 @@ export function dispatchIncomingMessage(
           throw new MessagingAuthorizationRevokedError();
         }
         assertMessagingAuthorization(retryTarget);
-        const interruptedCorrelation = correlateMessagingReply(retryTarget, interruptedDelivery.replyText);
-        if (interruptedCorrelation.superseded) {
-          retryableReplyDelivery = false;
-          finalJournalStatus = 'superseded';
-          return;
-        }
-        const replyMessageId = await transport.reply(trackedMessage, interruptedCorrelation.text);
-        retryableReplyDelivery = false;
-        updateMessagingJournal(trackedMessage, {
-          status: 'replied',
-          replyText: interruptedDelivery.replyText,
-          replyMessageId: String(replyMessageId || ''),
-          replyRetryable: false,
-          error: '',
-        });
+        await deliverReply(retryTarget, interruptedDelivery.replyText, trackedMessage);
         return;
       }
 
@@ -523,27 +531,8 @@ export function dispatchIncomingMessage(
               existingTarget,
               options?.onConversationUpdated,
             );
-            if (accepted.message.boundUserId) {
-              assertMessagingAuthorization(accepted.message);
-              persistBoundMessagingExchange(
-                accepted.message,
-                correlated.text,
-                options?.onConversationUpdated,
-              );
-              await flushMessagingStateOrThrow('terminal_reply');
-              terminalReplyDurable = true;
-            }
-            const deliveryCorrelation = correlateMessagingReply(trackedMessage, correlated.text);
-            if (deliveryCorrelation.superseded) {
-              finalJournalStatus = 'superseded';
-              return;
-            }
-            const replyMessageId = await transport.reply(trackedMessage, deliveryCorrelation.text);
-            updateMessagingJournal(trackedMessage, {
-              status: 'replied',
-              replyText: correlated.text,
-              replyMessageId: String(replyMessageId || ''),
-            });
+            const reply = await persistDispatchReply(accepted.message, correlated.text);
+            await deliverReply(accepted.message, reply, trackedMessage);
             return;
           }
 
@@ -557,17 +546,7 @@ export function dispatchIncomingMessage(
             );
             if (!refreshedPlan) {
               const invalidReply = `绑定码无效或已过期。请在 Lumi 桌面端重新生成${remotePlatformLabel(trackedMessage.platform)}绑定码。`;
-              const invalidCorrelation = correlateMessagingReply(trackedMessage, invalidReply);
-              if (invalidCorrelation.superseded) {
-                finalJournalStatus = 'superseded';
-                return;
-              }
-              const replyMessageId = await transport.reply(trackedMessage, invalidCorrelation.text);
-              updateMessagingJournal(trackedMessage, {
-                status: 'replied',
-                replyText: invalidReply,
-                replyMessageId: String(replyMessageId || ''),
-              });
+              await deliverReply(trackedMessage, invalidReply);
               return;
             }
             retryableBindingTurn = true;
@@ -588,18 +567,14 @@ export function dispatchIncomingMessage(
               boundOrgId: committed.binding.domain === 'work' ? committed.binding.orgId : undefined,
               bindingAuthorization: captureMessagingBinding(committed.binding),
             };
+            let committedReply: string;
             try {
-              persistBoundMessagingExchange(
-                committedTarget,
-                correlated.text,
-                options?.onConversationUpdated,
-              );
-              await flushMessagingStateOrThrow('terminal_reply');
-              terminalReplyDurable = true;
+              committedReply = await persistDispatchReply(committedTarget, correlated.text);
             } catch (error) {
               rollbackBindingCodeConsumption(committed);
               throw error;
             }
+            if (!committedReply) { finalJournalStatus = 'superseded'; return; }
             updateMessagingJournal(trackedMessage, {
               boundUserId: committedTarget.boundUserId || '',
               bindingAuthorization: committedTarget.bindingAuthorization,
@@ -610,21 +585,7 @@ export function dispatchIncomingMessage(
               replyRetryable: true,
             });
             retryableReplyDelivery = true;
-            const deliveryCorrelation = correlateMessagingReply(committedTarget, correlated.text);
-            if (deliveryCorrelation.superseded) {
-              retryableReplyDelivery = false;
-              updateMessagingJournal(trackedMessage, { replyRetryable: false });
-              finalJournalStatus = 'superseded';
-              return;
-            }
-            const replyMessageId = await transport.reply(trackedMessage, deliveryCorrelation.text);
-            retryableReplyDelivery = false;
-            updateMessagingJournal(trackedMessage, {
-              status: 'replied',
-              replyText: correlated.text,
-              replyMessageId: String(replyMessageId || ''),
-              replyRetryable: false,
-            });
+            await deliverReply(committedTarget, committedReply, trackedMessage);
           });
         });
         return;
@@ -680,29 +641,7 @@ export function dispatchIncomingMessage(
           userMessageId: routeBaseMessage.userMessageId,
         });
         const deliverExchange = async (target: IncomingMessage, reply: string): Promise<void> => {
-          const correlated = correlateMessagingReply(target, reply);
-          if (correlated.superseded) {
-            finalJournalStatus = 'superseded';
-            return;
-          }
-          const persistedReply = persistBoundMessagingExchange(target, correlated.text);
-          if (target.boundUserId) {
-            await flushMessagingStateOrThrow('terminal_reply');
-            terminalReplyDurable = true;
-          }
-          if (newerMessageSupersedesThisTurn(target)) {
-            removeSupersededAssistantMessage(persistedReply);
-            if (target.boundUserId) await flushMessagingStateOrThrow('terminal_reply');
-            finalJournalStatus = 'superseded';
-            return;
-          }
-          notifyMessagingConversationUpdated(persistedReply, options?.onConversationUpdated);
-          const replyMessageId = await transport.reply(target, correlated.text);
-          updateMessagingJournal(trackedMessage, {
-            status: 'replied',
-            replyText: correlated.text,
-            replyMessageId: String(replyMessageId || ''),
-          });
+          await deliverReply(target, await persistDispatchReply(target, reply));
         };
 
         if (scopePlan.resolution.kind === 'reply') {
@@ -717,18 +656,8 @@ export function dispatchIncomingMessage(
           finalJournalStatus = 'superseded';
           return;
         }
-        const deliveryCorrelation = correlateMessagingReply(routedMessage, replyText);
-        if (deliveryCorrelation.superseded) {
-          finalJournalStatus = 'superseded';
-          return;
-        }
         terminalReplyDurable = Boolean(routedMessage.boundUserId);
-        const replyMessageId = await transport.reply(routedMessage, deliveryCorrelation.text);
-        updateMessagingJournal(trackedMessage, {
-          status: 'replied',
-          replyText: deliveryCorrelation.text,
-          replyMessageId: String(replyMessageId || ''),
-        });
+        await deliverReply(routedMessage, replyText);
       });
     })().then(() => {
       completeMessageDelivery(trackedMessage.platform, trackedMessage.messageId);
@@ -1004,51 +933,21 @@ async function processWithPersonalityAdmitted(
   const flushTerminalReply = async (): Promise<void> => {
     if (isIdentityBound) await flushMessagingStateOrThrow('terminal_reply');
   };
-  let conversation = isIdentityBound ? conversationForMessagingTurn(msg) : null;
-  let acceptedTurnAdmission: AcceptedUserTurnAdmission<string> | null =
-    preacceptedAdmission?.persisted === msg.userMessageId ? preacceptedAdmission : null;
-  if (isIdentityBound && (!msg.userMessagePersisted || !msg.userMessageId)) {
-    const persistedUserMessage = persistBoundMessagingMessage(
-      msg,
-      'user',
-      getDisplayText(msg),
-      options?.onConversationUpdated,
-    );
-    msg = {
-      ...msg,
-      userMessagePersisted: Boolean(persistedUserMessage?.messageId),
-      userMessageId: persistedUserMessage?.messageId,
-    };
-    conversation = conversationForMessagingTurn(msg);
+  const conversation = isIdentityBound ? conversationForMessagingTurn(msg) : null;
+  // The public entry already persisted and flushed the accepted turn before queue admission.
+  const acceptedTurnAdmission = preacceptedAdmission;
+  if (isIdentityBound && (!conversation || !acceptedTurnAdmission || acceptedTurnAdmission.persisted !== msg.userMessageId)) {
+    throw new Error('The admitted remote turn lost its original conversation or durability token.');
   }
-  if (isIdentityBound && !conversation) throw new Error('Accepted remote conversation is no longer available in its original scope.');
-  if (isIdentityBound && !acceptedTurnAdmission) {
-    let admissionFailure: unknown;
-    acceptedTurnAdmission = await admitAcceptedUserTurnDurably({
-      persistAcceptedUserTurn: () => {
-        if (!msg.userMessagePersisted || !msg.userMessageId) {
-          throw new Error('Accepted remote user transcript was not persisted');
-        }
-        return msg.userMessageId;
-      },
-      flush: flushDBOrThrow,
-      onPersistenceUnknown: error => {
-        admissionFailure = error;
-      },
-    });
-    if (!acceptedTurnAdmission) {
-      console.error('[Messaging] Accepted remote turn is not durable:', admissionFailure);
-      throw new MessagingReplyDurabilityError('accepted_turn', admissionFailure);
-    }
-    try {
-      await ensurePendingConfirmationPersistenceInitialized();
-    } catch (error: any) {
-      console.error('[Messaging] Encrypted confirmation store is unavailable:', error);
-      if (isMessagingReplyDurabilityError(error)) throw error;
-      throw new MessagingReplyDurabilityError('accepted_turn', error);
-    }
-  }
-  assertMessagingAuthorization(msg);
+  const actionAbortController = new AbortController();
+  let organizationWorkExecution: OrganizationWorkExecution | null = null;
+  const actionWasCancelled = () => (
+    actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg) || !isMessagingAuthorizationCurrent(msg)
+    || Boolean(organizationWorkExecution && !organizationWorkExecution.isCurrent())
+  );
+  const commitReply = createMessagingReplyCommitter(msg, {
+    flush: flushTerminalReply, isCancelled: actionWasCancelled, onConversationUpdated: options?.onConversationUpdated,
+  });
   const pendingAssistantOfferContext = acceptedTurn
     ? acceptedTurn.pendingAssistantOfferContext : messagingPendingOffer(msg, conversation);
   const confirmationChannelScope = conversation
@@ -1086,13 +985,7 @@ async function processWithPersonalityAdmitted(
     const dismissalReply = /[\u3400-\u9fff]/u.test(requestText)
       ? '好，有需要再叫我。'
       : 'Okay. I\'m here when you need me.';
-    const correlated = correlateMessagingReply(msg, dismissalReply);
-    if (correlated.superseded) return '';
-    if (isIdentityBound) {
-      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-      await flushTerminalReply();
-    }
-    return correlated.text;
+    return await commitReply(dismissalReply);
   }
   const turnResolution = acceptedTurn?.resolution || resolveUserTurn({
     requestId, userText: requestText, state: conversation?.actionContinuationState,
@@ -1257,13 +1150,8 @@ async function processWithPersonalityAdmitted(
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy
       : CN_TASK_EXECUTION_MESSAGES.actionTurnStale;
-    const correlated = correlateMessagingReply(msg, staleText);
-    if (correlated.superseded) return '';
-    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-    await flushTerminalReply();
-    return correlated.text;
+    return await commitReply(staleText);
   }
-  const actionAbortController = new AbortController();
   const receiptObserver = conversation && actionTaskExecution.state?.taskId
     ? createConversationReceiptObserver({
         userId: effectiveUserId, conversationId: conversation.id,
@@ -1274,7 +1162,6 @@ async function processWithPersonalityAdmitted(
     : undefined;
   let desktopRelay: MessagingDesktopRelay | undefined;
   let personalDesktopRelay: MessagingDesktopRelay | undefined;
-  let organizationWorkExecution: OrganizationWorkExecution | null = null;
   const releaseActiveMessageRouteController = registerActiveMessageRouteController(
     msg,
     actionAbortController,
@@ -1289,10 +1176,6 @@ async function processWithPersonalityAdmitted(
       })
     : null;
   const actionLeaseWasLost = () => Boolean(actionLeaseHeartbeat?.isLeaseLost());
-  const actionWasCancelled = () => (
-    actionAbortController.signal.aborted || newerMessageSupersedesThisTurn(msg) || !isMessagingAuthorizationCurrent(msg)
-    || Boolean(organizationWorkExecution && !organizationWorkExecution.isCurrent())
-  );
   const throwIfActionLeaseWasLost = () => {
     assertMessagingAuthorization(msg);
     organizationWorkExecution?.assertCurrent();
@@ -1338,21 +1221,10 @@ async function processWithPersonalityAdmitted(
           requestText,
           conversation.actionContinuationState,
         );
-    const correlated = correlateMessagingReply(msg, statusText);
-    if (correlated.superseded) {
-      settleConversationActionExecutionRequest(
-        conversation.id,
-        effectiveUserId,
-        requestId,
-        'The remote status turn was superseded by a newer user message.',
-      );
-      await flushTerminalReply();
-      return '';
-    }
-    persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-    settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId);
-    await flushTerminalReply();
-    return correlated.text;
+    return await commitReply(statusText, { beforeFlush: superseded => {
+      settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId,
+        superseded ? 'The remote status turn was superseded by a newer user message.' : undefined);
+    } });
   }
   let organizationWorkRoute: RouteOrganizationWorkResult | null = null;
   const shouldRouteOrganizationWork = Boolean(
@@ -1417,10 +1289,7 @@ async function processWithPersonalityAdmitted(
       setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
       settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
       const response = `组织任务没有开始执行：${error?.message || '业务路由校验失败'}。请由组织管理员检查部门、岗位、成员或技能配置。`;
-      const correlated = correlateMessagingReply(msg, response);
-      if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-      await flushTerminalReply();
-      return correlated.text;
+      return await commitReply(response);
     }
   }
   if (organizationWorkRoute?.workItem.status === 'waiting_approval') {
@@ -1429,10 +1298,7 @@ async function processWithPersonalityAdmitted(
     setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
     settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
     const response = `任务已完成组织路由，但尚未执行。工作项 ${organizationWorkRoute.workItem.id} 正在等待组织管理员审批（审批单 ${approvalId}）。审批通过后，在当前会话说“继续”即可恢复原任务。`;
-    const correlated = correlateMessagingReply(msg, response);
-    if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-    await flushTerminalReply();
-    return correlated.text;
+    return await commitReply(response);
   }
   if (organizationWorkRoute?.workItem.status === 'waiting_human') {
     const owner = organizationWorkRoute.workItem.humanOwnerUserId || organizationWorkRoute.workItem.assignedMemberId || '指定成员';
@@ -1440,10 +1306,7 @@ async function processWithPersonalityAdmitted(
     setConversationActionExecutionStatus(conversation!.id, effectiveUserId, 'blocked', { blocker, requestId });
     settleConversationActionExecutionRequest(conversation!.id, effectiveUserId, requestId, blocker);
     const response = `任务已转交给组织成员 ${owner}，LumiCore 已停止自动执行。工作项：${organizationWorkRoute.workItem.id}。后续只有收到新的持久转派回执后才会恢复。`;
-    const correlated = correlateMessagingReply(msg, response);
-    if (!correlated.superseded) persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated);
-    await flushTerminalReply();
-    return correlated.text;
+    return await commitReply(response);
   }
   if (
     conversation
@@ -1539,21 +1402,15 @@ async function processWithPersonalityAdmitted(
     },
   });
   const settleRemoteTask = (fallbackBlocker?: string) => {
-    if (!conversation) return;
-    // Every accepted remote turn owns a durable request lease, including a
-    // conversation-only turn with no task id. Leaving that lease pending after
-    // an abort makes the next user message receive a false "still finishing"
-    // response even though the obsolete generation was already suppressed.
-    if (fallbackBlocker) {
-      settleConversationActionExecutionRequest(
-        conversation.id,
-        effectiveUserId,
-        requestId,
-        fallbackBlocker,
-      );
-    } else {
-      settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId);
-    }
+    // Every accepted turn owns a request lease, even without a task id.
+    if (conversation) settleConversationActionExecutionRequest(conversation.id, effectiveUserId, requestId, fallbackBlocker);
+  };
+  const settleSupersededRemoteTurn = (reason: string) => {
+    if (organizationWorkRoute) setOrganizationWorkItemExecutionStatus({
+      orgId, workItemId: organizationWorkRoute.workItem.id, status: 'cancelled',
+      actorUserId: effectiveUserId, execution: organizationWorkExecution, blocker: reason,
+    });
+    settleRemoteTask(reason);
   };
 
   const settleTransferredExecution = async (records: ToolExecutionRecord[]): Promise<boolean> => {
@@ -1577,6 +1434,32 @@ async function processWithPersonalityAdmitted(
   const observeToolRecord = (record: ToolExecutionRecord) => {
     receiptObserver?.onToolRecord(record);
     collectToolRecord(record);
+  };
+
+  const remoteToolContext = {
+    userId: effectiveUserId,
+    taskId: actionTaskExecution.state?.taskId,
+    conversationId: conversation?.id,
+    turnId: msg.messageId,
+    turnRowId: actionTaskExecution.turnRowId,
+    externalMessageId: msg.messageId,
+    resolutionId: executionPlan.resolution.id,
+    requestId,
+    domain,
+    orgId,
+    actionIntent: requestText,
+    routedTaskText: routingText,
+    supervisedExternalCommits: isIdentityBound,
+    toolPolicy: modelToolPolicy,
+    source,
+    llmGetters: llm as any,
+    desktopRelay,
+    personalDesktopRelay,
+    desktopExecutionTracker,
+    isCancelled: actionWasCancelled,
+    executionSignal: actionAbortController.signal,
+    onToolRecord: observeToolRecord,
+    requestConfirmation: requestToolConfirmation,
   };
 
   try {
@@ -1616,82 +1499,49 @@ async function processWithPersonalityAdmitted(
           // never from a model- or route-authored boolean argument.
           confirmed: false,
         },
-        context: {
-          userId: effectiveUserId,
-          taskId: actionTaskExecution.state?.taskId,
-          conversationId: conversation?.id,
-          turnId: msg.messageId,
-          turnRowId: actionTaskExecution.turnRowId,
-          externalMessageId: msg.messageId,
-          resolutionId: executionPlan.resolution.id,
-          requestId,
-          domain,
-          orgId,
-          actionIntent: requestText,
-          routedTaskText: routingText,
-          supervisedExternalCommits: true,
-          toolPolicy: modelToolPolicy,
-          source,
-          llmGetters: llm as any,
-          desktopRelay,
-          personalDesktopRelay,
-          desktopExecutionTracker,
-          isCancelled: actionWasCancelled,
-          executionSignal: actionAbortController.signal,
-          onToolRecord: observeToolRecord,
-          requestConfirmation: requestToolConfirmation,
-        },
+        context: remoteToolContext,
       });
       throwIfActionLeaseWasLost();
       collectToolRecord(modeRecord);
       const modeSynced = toolRecordSucceeded(modeRecord);
       if (modeSynced) saveStoredOperationMode(effectiveUserId, directlyAppliedMode);
 
-      if (isPureOperationModeSwitchRequest(requestText, requestedMode)) {
-        const candidate = pendingConfirmationCreatedThisTurn
-          ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
-          : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
-        const modeOutbound = await finalizeMessagingResponseForDelivery({
-          taskText: routingText,
-          responseText: candidate,
-          toolRecords: taskAwareRecords(toolRecords),
-          source,
-          flow: turnFlow,
-          taskId: actionTaskExecution.state?.taskId,
-          requestId,
-          pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
-          isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
-        });
-        const finalizedMode = modeOutbound.finalization;
-        toolRecords = withCurrentMessagingDesktopExecutionReceipt(
-          modeOutbound.toolRecords,
-          desktopExecutionTracker,
-          actionTaskExecution.state?.taskId,
-          requestId,
-        );
-        const correlated = correlateMessagingReply(msg, finalizedMode.text);
-        if (correlated.superseded) {
-          settleRemoteTask('The remote turn was superseded by a newer user message.');
-          await flushTerminalReply();
-          return '';
-        }
-        persistBoundMessagingMessage(
-          msg,
-          'assistant',
-          correlated.text,
-          options?.onConversationUpdated,
-          toolRecords,
-        );
-        if (pendingConfirmationCreatedThisTurn && conversation) {
-          setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-            assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-            requestId,
-          });
-        }
-        settleRemoteTask();
-        await flushTerminalReply();
-        return correlated.text;
-      }
+      const candidate = pendingConfirmationCreatedThisTurn
+        ? formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn)
+        : formatOperationModeSwitchResponse(directlyAppliedMode, modeSynced, requestText);
+      const modeOutbound = await finalizeMessagingResponseForDelivery({
+        taskText: routingText,
+        responseText: candidate,
+        toolRecords: taskAwareRecords(toolRecords),
+        source,
+        flow: turnFlow,
+        taskId: actionTaskExecution.state?.taskId,
+        requestId,
+        pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn),
+        isPendingConfirmation: () => Boolean(pendingConfirmationCreatedThisTurn),
+      });
+      const finalizedMode = modeOutbound.finalization;
+      toolRecords = withCurrentMessagingDesktopExecutionReceipt(
+        modeOutbound.toolRecords,
+        desktopExecutionTracker,
+        actionTaskExecution.state?.taskId,
+        requestId,
+      );
+      return await commitReply(finalizedMode.text, {
+        toolCalls: toolRecords,
+        beforeFlush: superseded => {
+          if (superseded) {
+            settleRemoteTask('The remote turn was superseded by a newer user message.');
+            return;
+          }
+          if (pendingConfirmationCreatedThisTurn && conversation) {
+            setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+              assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn), requestId,
+            });
+          }
+          settleRemoteTask();
+        },
+      });
     }
 
     if (!deterministicEntryReply && isOrganizationBound) {
@@ -1772,32 +1622,7 @@ async function processWithPersonalityAdmitted(
       config: userLLMPrefs,
       onToolCall: record => { collectToolRecord(record); onToolRecord?.(record); },
       maxIterations: modelToolPolicy.maxIterations || executionDecision.maxIterations,
-      context: {
-        userId: effectiveUserId,
-        taskId: actionTaskExecution.state?.taskId,
-        conversationId: conversation?.id,
-        turnId: msg.messageId,
-        turnRowId: actionTaskExecution.turnRowId,
-        externalMessageId: msg.messageId,
-          resolutionId: executionPlan.resolution.id,
-        requestId,
-        domain,
-        orgId,
-        actionIntent: requestText,
-        routedTaskText: routingText,
-        supervisedExternalCommits: isIdentityBound,
-        toolPolicy: modelToolPolicy,
-        modelToolProjection,
-        source: executionSource,
-        llmGetters: llm as any,
-        desktopRelay,
-        personalDesktopRelay,
-        desktopExecutionTracker,
-        isCancelled: actionWasCancelled,
-        executionSignal: actionAbortController.signal,
-        onToolRecord: observeToolRecord,
-        requestConfirmation: requestToolConfirmation,
-      },
+      context: { ...remoteToolContext, source: executionSource, modelToolProjection },
       getters: llm,
     });
 
@@ -1945,61 +1770,47 @@ async function processWithPersonalityAdmitted(
     }
     if (await settleTransferredExecution(toolRecords)) return '';
     organizationWorkExecution?.assertCurrent();
-    const correlated = correlateMessagingReply(msg, finalized.text);
-    if (correlated.superseded) {
-      if (organizationWorkRoute) {
-        setOrganizationWorkItemExecutionStatus({
-          orgId,
-          workItemId: organizationWorkRoute.workItem.id,
-          status: 'cancelled',
-          actorUserId: effectiveUserId,
-          execution: organizationWorkExecution,
-          blocker: 'The remote turn was superseded by a newer user message.',
-        });
-      }
-      settleRemoteTask('The remote turn was superseded by a newer user message.');
-      await flushTerminalReply();
-      return '';
-    }
-    const persistedTerminalReply = persistBoundMessagingMessage(msg, 'assistant', correlated.text, undefined, toolRecords);
-    if (pendingConfirmationCreatedThisTurn && conversation) {
-      setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
-        assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
-        requestId,
-      });
-    }
-    if (organizationWorkRoute) {
-      const organizationStatus = pendingConfirmationCreatedThisTurn || finalized.blocked || missingOrganizationExternalCommitReceipt
-        ? 'blocked'
-        : 'completed';
-      const organizationBlocker = pendingConfirmationCreatedThisTurn
-        ? 'The user action confirmation is still pending.'
-        : missingOrganizationExternalCommitReceipt
-          ? 'The external commit has no verified terminal receipt.'
-          : finalized.reason;
-      setOrganizationWorkItemExecutionStatus({
-        orgId,
-        workItemId: organizationWorkRoute.workItem.id,
-        status: organizationStatus,
-        actorUserId: effectiveUserId,
-        execution: organizationWorkExecution,
-        blocker: organizationBlocker,
-      });
-      if (organizationStatus === 'blocked' && conversation) {
-        setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', {
-          blocker: organizationBlocker,
-          requestId,
-        });
-      }
-    }
-    settleRemoteTask();
-    await flushTerminalReply();
-    if (actionWasCancelled()) {
-      removeSupersededAssistantMessage(persistedTerminalReply);
-      await flushTerminalReply();
-      return '';
-    }
-    notifyMessagingConversationUpdated(persistedTerminalReply, options?.onConversationUpdated);
+    const committedText = await commitReply(finalized.text, {
+      toolCalls: toolRecords,
+      beforeFlush: superseded => {
+        if (superseded) {
+          settleSupersededRemoteTurn('The remote turn was superseded by a newer user message.');
+          return;
+        }
+        if (pendingConfirmationCreatedThisTurn && conversation) {
+          setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'waiting_confirmation', {
+            assistantState: formatPendingConfirmationRequest(pendingConfirmationCreatedThisTurn),
+            requestId,
+          });
+        }
+        if (organizationWorkRoute) {
+          const organizationStatus = pendingConfirmationCreatedThisTurn || finalized.blocked || missingOrganizationExternalCommitReceipt
+            ? 'blocked'
+            : 'completed';
+          const organizationBlocker = pendingConfirmationCreatedThisTurn
+            ? 'The user action confirmation is still pending.'
+            : missingOrganizationExternalCommitReceipt
+              ? 'The external commit has no verified terminal receipt.'
+              : finalized.reason;
+          setOrganizationWorkItemExecutionStatus({
+            orgId,
+            workItemId: organizationWorkRoute.workItem.id,
+            status: organizationStatus,
+            actorUserId: effectiveUserId,
+            execution: organizationWorkExecution,
+            blocker: organizationBlocker,
+          });
+          if (organizationStatus === 'blocked' && conversation) {
+            setConversationActionExecutionStatus(conversation.id, effectiveUserId, 'blocked', {
+              blocker: organizationBlocker,
+              requestId,
+            });
+          }
+        }
+        settleRemoteTask();
+      },
+    });
+    if (!committedText) return '';
     // Native organization commands already have a deterministic server
     // transaction and a task-bound terminal receipt. Running the generic
     // post-turn extractor here would invoke a model after the command has
@@ -2010,7 +1821,7 @@ async function processWithPersonalityAdmitted(
       try {
         void persistRemotePostTurnLearning({
           message: msg,
-          responseText: correlated.text,
+          responseText: committedText,
           isCancelled: actionWasCancelled,
           llmGetters: llm,
           modelConfig: {
@@ -2022,7 +1833,7 @@ async function processWithPersonalityAdmitted(
         console.warn('[Messaging] Remote post-turn memory extraction could not be scheduled:', learningError?.message || learningError);
       }
     }
-    return correlated.text;
+    return committedText;
   } catch (err: any) {
     if (!isMessagingAuthorizationCurrent(msg)) {
       settleRemoteTask('The remote message authorization was revoked or replaced.');
@@ -2039,42 +1850,25 @@ async function processWithPersonalityAdmitted(
     const fallback = toolRecords.length
       ? '当前语言模型暂时不可用，后续处理没有完成。本次已有的执行记录已保留，请稍后继续。'
       : '当前语言模型暂时不可用，这次处理没有完成，请稍后再试。';
-    const correlated = correlateMessagingReply(msg, fallback);
-    if (correlated.superseded) {
-      if (organizationWorkRoute) {
-        setOrganizationWorkItemExecutionStatus({
-          orgId,
-          workItemId: organizationWorkRoute.workItem.id,
-          status: 'cancelled',
-          actorUserId: effectiveUserId,
-          execution: organizationWorkExecution,
-          blocker: 'The remote turn failed after it was superseded by a newer user message.',
-        });
-      }
-      settleRemoteTask('The remote turn failed after it was superseded by a newer user message.');
-      await flushTerminalReply();
-      return '';
-    }
-    if (isIdentityBound) {
-      persistBoundMessagingMessage(msg, 'assistant', correlated.text, options?.onConversationUpdated, toolRecords,
-        actionTaskExecution.state?.taskId ? {
-          outcome: 'blocked', taskId: actionTaskExecution.state.taskId, requestId, reason: fallback,
-        } : undefined);
-    }
-    if (organizationWorkRoute) {
-      setOrganizationWorkItemExecutionStatus({
-        orgId,
-        workItemId: organizationWorkRoute.workItem.id,
-        status: 'blocked',
-        actorUserId: effectiveUserId,
-        execution: organizationWorkExecution,
-        blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
-      });
-    }
     // The assistant write closes this request with an explicit blocked outcome;
-    // do not recompute completion from an earlier successful substep afterward.
-    await flushTerminalReply();
-    return correlated.text;
+    // never recompute completion from an earlier successful substep afterward.
+    return await commitReply(fallback, {
+      toolCalls: toolRecords,
+      terminalTaskDisposition: actionTaskExecution.state?.taskId ? {
+        outcome: 'blocked', taskId: actionTaskExecution.state.taskId, requestId, reason: fallback,
+      } : undefined,
+      beforeFlush: superseded => {
+        if (superseded) {
+          settleSupersededRemoteTurn('The remote turn failed after it was superseded by a newer user message.');
+          return;
+        }
+        if (organizationWorkRoute) setOrganizationWorkItemExecutionStatus({
+          orgId, workItemId: organizationWorkRoute.workItem.id, status: 'blocked',
+          actorUserId: effectiveUserId, execution: organizationWorkExecution,
+          blocker: err?.message || 'The remote model/tool pipeline failed before a terminal receipt was recorded.',
+        });
+      },
+    });
   }
   } finally {
     desktopRelay?.releaseControlLease?.();

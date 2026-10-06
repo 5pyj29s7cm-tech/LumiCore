@@ -1,3 +1,4 @@
+import { correlateMessagingReply } from './messaging_ingress_runtime';
 import type { IncomingMessage } from '../../../messaging/types';
 import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../../../db_layer';
 import { addMessageIdempotent, getConversationForScope, getOrCreateActiveConversation } from '../../../conversation/manager';
@@ -137,4 +138,34 @@ export async function admitBoundMessagingTurnDurably(
     throw new MessagingReplyDurabilityError('accepted_turn', admissionFailure);
   }
   return { message: acceptedMessage, admission };
+}
+
+/** All remote reply branches share the same durability and supersession fence. */
+export function createMessagingReplyCommitter(message: IncomingMessage, input: {
+  flush: () => Promise<void>;
+  /** Current turn fence, including authorization, newer messages and execution ownership. */
+  isCancelled: () => boolean;
+  onConversationUpdated?: MessagingRouteOptions['onConversationUpdated'];
+}) {
+  return async (text: string, options: {
+    toolCalls?: Parameters<typeof persistBoundMessagingMessage>[4];
+    terminalTaskDisposition?: Parameters<typeof persistBoundMessagingMessage>[5];
+    beforeFlush?: (superseded: boolean) => void;
+  } = {}): Promise<string> => {
+    const correlated = correlateMessagingReply(message, text);
+    const superseded = correlated.superseded || input.isCancelled();
+    const persisted = superseded ? null : persistBoundMessagingMessage(
+      message, 'assistant', correlated.text, undefined, options.toolCalls, options.terminalTaskDisposition,
+    );
+    options.beforeFlush?.(superseded);
+    await input.flush();
+    if (superseded) return '';
+    if (input.isCancelled()) {
+      removeSupersededAssistantMessage(persisted);
+      await input.flush();
+      return '';
+    }
+    notifyMessagingConversationUpdated(persisted, input.onConversationUpdated);
+    return correlated.text;
+  };
 }

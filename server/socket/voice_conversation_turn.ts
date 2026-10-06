@@ -232,6 +232,12 @@ export async function processVoiceInput(
     orgId: session.orgId,
     orgRole: String(socket.data?.authenticatedOrgRole || '') || undefined,
   };
+  const writeVoiceMessage = (message: Omit<Parameters<typeof addMessageIdempotent>[0],
+    'userId' | 'agentId' | 'personality' | 'mode' | 'channel' | 'domain' | 'orgId'>) => addMessageIdempotent({
+    ...message,
+    userId: session.userId, agentId: session.agentId, personality: session.personalityId,
+    mode: 'voice', channel: 'voice', domain: voiceScope.domain, orgId: voiceScope.orgId,
+  });
   const executionScope: ChatExecutionScope = {
     userId: session.userId,
     domain: voiceScope.domain,
@@ -338,22 +344,15 @@ export async function processVoiceInput(
   let voiceUserMessageId = '';
   const persistVoiceUserMessage = (cognitiveIntent = 'voice_received') => {
     if (voiceUserMessagePersisted) return voiceUserMessageId;
-    voiceUserMessageId = addMessageIdempotent({
-      userId: session.userId,
-      agentId: session.agentId,
+    voiceUserMessageId = writeVoiceMessage({
       conversationId: conversationTurn.conversation.id,
       role: 'user',
       content: userText,
-      personality: session.personalityId,
-      mode: 'voice',
       source: 'voice',
-      channel: 'voice',
       cognitiveIntent,
       llmWasCalled: false,
       receivedAt: userReceivedAt,
       timestamp: userReceivedAt,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
       requestId,
       ...(voiceTurnProvenance || {}),
       deferActionPreparation: true,
@@ -707,20 +706,13 @@ export async function processVoiceInput(
     });
     const bindingCommitted = await commitChatTerminalBoundary({
       persistTerminalState: () => undefined,
-      persistAssistantMessage: () => addMessageIdempotent({
-        userId: session.userId,
-        agentId: session.agentId,
+      persistAssistantMessage: () => writeVoiceMessage({
         conversationId: conversationTurn.conversation.id,
         role: 'assistant',
         content: staleText,
-        personality: session.personalityId,
-        mode: 'voice',
         source: 'voice_turn_binding',
-        channel: 'voice',
         cognitiveIntent: actionTaskExecution.diagnosticCode,
         llmWasCalled: false,
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
         requestId,
         ...(voiceTurnProvenance || {}),
         taskIntent: 'conversation',
@@ -1041,21 +1033,14 @@ export async function processVoiceInput(
     if (voiceAssistantMessagePersisted || !String(text || '').trim()) {
       return voiceAssistantMessageId;
     }
-    voiceAssistantMessageId = addMessageIdempotent({
-      userId: session.userId,
-      agentId: session.agentId,
+    voiceAssistantMessageId = writeVoiceMessage({
       conversationId,
       role: 'assistant',
       content: text,
-      personality: session.personalityId,
-      mode: 'voice',
       source: options.source || 'voice',
-      channel: 'voice',
       toolCalls: options.toolCalls?.length ? options.toolCalls : undefined,
       cognitiveIntent: options.cognitiveIntent || 'voice_response',
       llmWasCalled: options.llmWasCalled === true,
-      domain: voiceScope.domain,
-      orgId: voiceScope.orgId,
       requestId,
       ...(voiceTurnProvenance || {}),
       taskIntent: toolSessionActive ? 'task' : 'conversation',
@@ -1069,41 +1054,27 @@ export async function processVoiceInput(
     for (const [index, item] of history.entries()) {
       if (!item.persist) continue;
       const sidecarRequestId = `${requestId}:sidecar:${index}`;
-      addMessageIdempotent({
-        userId: session.userId,
-        agentId: session.agentId,
+      writeVoiceMessage({
         conversationId,
         role: 'user',
         content: item.userText,
-        personality: session.personalityId,
-        mode: 'voice',
         source: 'voice_sidecar',
-        channel: 'voice',
         cognitiveIntent: item.cognitiveIntent,
         llmWasCalled: false,
         receivedAt: item.userReceivedAt,
         timestamp: item.userReceivedAt,
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
         requestId: sidecarRequestId,
         skipActionContinuation: true,
       });
-      addMessageIdempotent({
-        userId: session.userId,
-        agentId: session.agentId,
+      writeVoiceMessage({
         conversationId,
         role: 'assistant',
         content: item.responseText,
-        personality: session.personalityId,
-        mode: 'voice',
         source: 'voice_sidecar',
-        channel: 'voice',
         cognitiveIntent: item.cognitiveIntent,
         llmWasCalled: item.llmWasCalled,
         receivedAt: item.responseAt,
         timestamp: item.responseAt,
-        domain: voiceScope.domain,
-        orgId: voiceScope.orgId,
         requestId: sidecarRequestId,
         skipActionContinuation: true,
       });
@@ -1865,7 +1836,7 @@ export async function processVoiceInput(
     if (transcriptExecutionGuard.action === 'clarify') {
       // Resolve uncertain STT before confirmation, meeting control, or tools.
       responseText = transcriptExecutionGuard.responseText;
-      await commitVoiceTerminal({
+      await finishVoiceTerminal({
         text: responseText,
         source: 'voice_transcript_guard',
         blocked: false,
@@ -1874,7 +1845,6 @@ export async function processVoiceInput(
         llmWasCalled: false,
         speechText: responseText,
       });
-      await Promise.allSettled(ttsPromises);
       return;
     }
 
@@ -1883,10 +1853,9 @@ export async function processVoiceInput(
           userText, channel: 'voice', source: 'voice', requestId, conversationId: conversationTurn.conversation.id,
           agentId: session.agentId, authorization: turnAuthorization, signal: pipelineAbort.signal, llmGetters });
         responseText = receipt.text;
-        await commitVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
+        await finishVoiceTerminal({ text: receipt.text, speechText: receipt.text, source: 'voice_memory',
           blocked: receipt.status === 'failed', reason: receipt.status === 'saved' ? 'memory_saved' : 'memory_not_saved',
           cognitiveIntent: 'memory', llmWasCalled: true, toolCalls: [] });
-        await Promise.allSettled(ttsPromises);
       return;
     }
 
@@ -1915,7 +1884,7 @@ export async function processVoiceInput(
     })();
     if (deterministicConversationResponse) {
       responseText = deterministicConversationResponse.text;
-      await commitVoiceTerminal({
+      await finishVoiceTerminal({
         text: responseText,
         source: deterministicConversationResponse.source,
         blocked: false,
@@ -1924,7 +1893,6 @@ export async function processVoiceInput(
         llmWasCalled: false,
         speechText: responseText,
       });
-      await Promise.allSettled(ttsPromises);
       return;
     }
 
@@ -1941,7 +1909,7 @@ export async function processVoiceInput(
         ...observedTask, status: 'completed', unfinished: false,
         latestBlocker: '', completionSource: 'user_observation',
       });
-      await commitVoiceTerminal({
+      await finishVoiceTerminal({
         text: responseText,
         source: 'voice_task_user_observation',
         blocked: false,
@@ -1958,7 +1926,6 @@ export async function processVoiceInput(
           return completed;
         },
       });
-      await Promise.allSettled(ttsPromises);
       return;
     }
 
@@ -1969,7 +1936,7 @@ export async function processVoiceInput(
         actionIntentText,
         conversationTurn.conversation.actionContinuationState,
       );
-      await commitVoiceTerminal({
+      await finishVoiceTerminal({
         text: responseText,
         source: 'voice_task_status',
         blocked: false,
@@ -1978,7 +1945,6 @@ export async function processVoiceInput(
         llmWasCalled: false,
         speechText: responseText,
       });
-      await Promise.allSettled(ttsPromises);
       return;
     }
 
@@ -2521,7 +2487,7 @@ export async function processVoiceInput(
     let mainTerminalCommitted = false;
     if (responseText) {
       logger.info(`[Audio] Response: "${responseText.slice(0, 80)}" (${toolResults.length} tool calls)`);
-      mainTerminalCommitted = await commitVoiceTerminal({
+      mainTerminalCommitted = await finishVoiceTerminal({
         text: responseText,
         source: "voice",
         blocked: finalResponse.blocked,
@@ -2545,11 +2511,12 @@ export async function processVoiceInput(
           });
         },
       });
+    } else {
+      await Promise.allSettled(ttsPromises);
     }
 
     // Candidate model text is never spoken before the strict
     // database and terminal-receipt fences have both committed.
-    await Promise.allSettled(ttsPromises);
     if (!isCurrentTurn()) return;
 
     const conv = getOrCreateActiveConversation(session.userId, session.agentId, voiceScope.domain, voiceScope.orgId);
@@ -2597,7 +2564,7 @@ export async function processVoiceInput(
         logger.warn('[Audio] Post-response persistence failed; suppressing a contradictory UI error');
       } else {
         const failureText = CN_VOICE_WORK_MESSAGES.processingFailed;
-        await commitVoiceTerminal({
+        await finishVoiceTerminal({
           text: failureText,
           source: 'voice_error',
           blocked: true,
@@ -2607,7 +2574,6 @@ export async function processVoiceInput(
           toolCalls: toolResults,
           speechText: failureText,
         });
-        await Promise.allSettled(ttsPromises);
       }
     }
   } finally {
