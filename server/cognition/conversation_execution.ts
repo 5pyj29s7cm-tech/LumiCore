@@ -57,6 +57,10 @@ export function cancelConversationExecution(scope: ConversationExecutionScope & 
         ? getConversationExecution(scope, requestId) ? queue.cancelRequest(key, requestId, scope.source) : Promise.resolve(false)
         : queue.cancelAll(key, scope.source);
 }
+/** Server-owned replacement scope captured at semantic acceptance, before admission awaits. */
+export function captureConversationExecutionCancellation(scope: ConversationExecutionScope & { source: string }) {
+    return queue.captureCancellation(conversationExecutionKey(scope), scope.source);
+}
 export type ConversationExecutionAdmission = ReturnType<typeof reserveConversationExecution>;
 export interface ConversationResourceLifetime {
     admission?: ConversationExecutionAdmission;

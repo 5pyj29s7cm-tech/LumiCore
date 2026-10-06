@@ -179,10 +179,17 @@ export class SerialExecutionQueue {
     return this.getActive(key, source) || this.getTail(key, source);
   }
 
-  cancelAll(key: string, source?: string): Promise<void> {
+  /** Capture existing owners; a later replacement cannot cancel newer arrivals. */
+  captureCancellation(key: string, source?: string): () => Promise<void> {
     const leases = [...(this.states.get(key)?.leases.values() || [])].filter(lease => source === undefined || lease.source === source);
-    for (const lease of leases) lease.cancel();
-    return Promise.all(leases.map(lease => lease.finished)).then(() => undefined);
+    return () => {
+      for (const lease of leases) lease.cancel();
+      return Promise.all(leases.map(lease => lease.finished)).then(() => undefined);
+    };
+  }
+
+  cancelAll(key: string, source?: string): Promise<void> {
+    return this.captureCancellation(key, source)();
   }
 
   /** Cancel only the request named by a durable control intent. */

@@ -1,6 +1,6 @@
 import { chatExecutionRoom } from "../connection_controls";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
-import { reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution } from "../../../cognition/conversation_execution";
+import { reserveConversationExecution, getConversationExecution, cancelConversationExecution } from "../../../cognition/conversation_execution";
 import { flushDBOrThrow } from "../../../../db_layer";
 import { runtimeShutdownCancellation } from "../../../runtime/shutdown_work";
 import { shouldForwardPreFinalizationProgress } from "../../../cognition/response_delivery";
@@ -12,7 +12,6 @@ import { isUserObservedTaskCompletion } from "../../../cognition/action_continua
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
 import { beginQueuedChatExecution, beginChatSidecarExecution, markChatExecutionCancelling, persistChatSidecarCancellationIntent } from "../../chat_execution_registry";
 import { sanitizeChatAgentErrorPayload } from "../../chat_public_error";
-import { resolveActiveTaskMessageRelation } from "../../../cognition/task_concurrency";
 import type { resolveChatControlTurn } from './resolve_chat_control_turn';
 import { chatDurabilityUnknownText } from './shared';
 
@@ -21,21 +20,7 @@ export async function admitChatForegroundTurn(context: NonNullable<Awaited<Retur
     // A new utterance does not destroy an active task. Continuations and
     // independent work wait behind the current foreground lease; only an
     // explicit replacement aborts it.
-    const previousSession = getCurrentConversationExecution(context.executionScope, 'tail');
-    if (previousSession && previousSession.requestId !== context.existingSession?.requestId) {
-      context.resolvedTaskRelation = resolveActiveTaskMessageRelation(
-        context.visibleUserText,
-        context.activeConversationForStatus?.actionContinuationState || context.selectedConversation.actionContinuationState,
-        {
-          acceptedFeedback: context.resolvedTaskRelation.feedback,
-          activeRequestId: previousSession.requestId,
-          controlTargetRequestId: context.controlTargetRequestId,
-          controlTargetTaskId: context.controlTargetTaskId,
-          controlTargetRevision: context.controlTargetRevision,
-          pendingAssistantOfferContext: context.pendingAssistantOfferContext,
-        },
-      );
-    }
+    const previousSession = context.existingSession;
     const activeMessageRelation = previousSession ? context.resolvedTaskRelation.relation : null;
     let acknowledged = false;
     if (previousSession && activeMessageRelation === 'cancel') {
@@ -247,7 +232,7 @@ export async function admitChatForegroundTurn(context: NonNullable<Awaited<Retur
     // allowing the later request to supersede the earlier queued request.
     const sessionLease = runAfterAcceptedUserTurnAdmission(chatAdmission, () => {
       if (previousSession && activeMessageRelation === 'replace' && context.turnAuthorization.isCurrent()) {
-        void cancelConversationExecution(context.executionScope);
+        void context.cancelAcceptedConversationExecutions?.();
       }
       beginQueuedChatExecution(context.executionScope, context.requestId);
       return reserveConversationExecution(context.executionScope, context.requestId);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { conversationExecutionKey, reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution } from '../server/cognition/conversation_execution';
+import { conversationExecutionKey, reserveConversationExecution, getConversationExecution, getCurrentConversationExecution, cancelConversationExecution, captureConversationExecutionCancellation } from '../server/cognition/conversation_execution';
 const scope = { userId: 'resource-fixture', domain: 'personal' as const, conversationId: 'conversation' };
 describe('conversation execution resource', () => {
     it('serializes sources using the same user/domain/organization/conversation resource', async () => {
@@ -74,4 +74,26 @@ describe('conversation execution resource', () => {
         expect(await waiting).toBe('cancelled');
         second.release();
     });
+});
+
+it('cancels only the source-fenced owners captured before newer requests arrive', async () => {
+  const resource = { ...scope, conversationId: 'accepted-replacement', source: 'chat' };
+  const first = reserveConversationExecution(resource, 'accepted-first');
+  const queued = reserveConversationExecution(resource, 'accepted-queued');
+  await first.waitForTurn();
+  const queuedResult = queued.waitForTurn().then(() => 'entered', () => 'cancelled');
+  const cancelAccepted = captureConversationExecutionCancellation(resource);
+  const newer = reserveConversationExecution(resource, 'newer-arrival');
+  const otherSource = reserveConversationExecution({ ...resource, source: 'voice' }, 'other-source');
+  const cancellation = cancelAccepted();
+  expect(first.controller.signal.aborted).toBe(true);
+  expect(queued.controller.signal.aborted).toBe(true);
+  expect(newer.controller.signal.aborted).toBe(false);
+  expect(otherSource.controller.signal.aborted).toBe(false);
+  first.release();
+  expect(await queuedResult).toBe('cancelled');
+  await cancellation;
+  await newer.waitForTurn(); newer.release();
+  await otherSource.waitForTurn(); otherSource.release();
+  queued.release();
 });

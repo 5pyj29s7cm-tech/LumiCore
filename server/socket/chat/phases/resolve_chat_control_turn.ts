@@ -1,7 +1,7 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { isNamedPersistentWorkTaskStatusQuery } from "../../../cognition/action_contract";
 import { readRuntimeWorkForTurn } from "../../../cognition/runtime_work_read";
-import { getConversationExecution, getCurrentConversationExecution } from "../../../cognition/conversation_execution";
+import { getConversationExecution, getCurrentConversationExecution, captureConversationExecutionCancellation } from "../../../cognition/conversation_execution";
 import { resolveUserTurn } from "../../../cognition/turn_resolution";
 import { flushDBOrThrow } from "../../../../db_layer";
 import { toolRegistry } from "../../../tools/registry";
@@ -419,9 +419,11 @@ export async function resolveChatControlTurn(context: NonNullable<Awaited<Return
       });
       { return { terminal: true as const, context: undefined }; }
     }
+  const cancelAcceptedConversationExecutions = context.resolvedTaskRelation.relation === 'replace'
+    ? captureConversationExecutionCancellation(context.executionScope) : undefined;
   return { terminal: false as const, context: extendTurnBindings(context, {
     existingSession,
-    activeConversationForStatus,
+    cancelAcceptedConversationExecutions,
     controlTargetRequestId,
     controlTargetTaskId,
     controlTargetRevision,
