@@ -16,6 +16,7 @@ import { getMessages, getMessagesForAgent, getOrCreateActiveConversation, startN
 import { reserveConversationExecution } from '../server/cognition/conversation_execution';
 import { getAudioSession, type VoiceInputResources } from '../server/socket/voice/session';
 import { prepareVoiceIdentityAndAdmission } from '../server/socket/voice/turn/prepare_voice_identity_and_admission';
+import { runLumiEntryTurn } from '../server/cognition/turn_execution';
 import { runVoiceInputPipeline } from '../server/socket/voice_input_pipeline';
 let sequence = 0;
 function createFixture() {
@@ -31,7 +32,21 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 async function admitThenFail(socket: any, session: any, text: string, getters: any, sensory: any, io: any, received: string, authorized: boolean, timing: any, resources: VoiceInputResources) {
   const result = await prepareVoiceIdentityAndAdmission(socket, session, text, getters, sensory, io, received, authorized, timing, resources);
   if (result.terminal) return;
-  throw new Error('synthetic failure before action lease');
+  const entry = result.entry!;
+  return runLumiEntryTurn<void>({
+    entry: { source: 'voice', channel: 'voice', historyLimit: 0, failureText: 'Voice preparation failed.', failureReason: 'voice_processing_failed' },
+    identity: { userId: entry.session.userId, agentId: entry.conversationTurn.conversation.agentId,
+      conversationId: entry.conversationTurn.conversation.id, requestId: entry.requestId, domain: entry.voiceScope.domain, orgId: entry.voiceScope.orgId },
+    userText: entry.userText, persistence: 'preaccepted', authorization: entry.turnAuthorization, controller: entry.pipelineAbort,
+    resource: { admission: resources.admission, ownedByDurableRelease: true },
+    planning: async () => {
+      const prepared = await result.resume!();
+      if (prepared.terminal) return { terminal: undefined };
+      throw new Error('synthetic failure before action lease');
+    },
+    assemble: () => { throw new Error('Failure injection must precede model assembly'); },
+    deliver: () => { throw new Error('Failure injection must precede delivery'); },
+  });
 }
 const runPipeline = (f: ReturnType<typeof createFixture>) => runVoiceInputPipeline(f.socket, f.session, 'An accepted voice question.', {} as any, () => ({}), {} as any, undefined, true);
 beforeAll(async () => { await initDatabase(); });

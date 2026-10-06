@@ -21,7 +21,7 @@ describe('chat and voice tool-call stability', () => {
       expect(source).toContain('supervisedExternalCommits');
     }
     expect(chat).toContain('await runLumiEntryTurn<void>({');
-    expect(voice).toContain('buildLumiExecutionPipeline');
+    expect(voice).toContain('await runLumiEntryTurn<void>({');
     expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('buildLumiExecutionPipeline({');
     expect(pipeline).toContain('buildLumiTurnDispatch');
     expect(pipeline).toContain('buildLumiExecutionDecision');

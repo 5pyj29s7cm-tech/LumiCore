@@ -1,7 +1,6 @@
-import { runPreparedLumiTurn } from "../../../cognition/prepared_turn";
+import type { AssembledLumiTurnData } from "../../../cognition/turn_execution";
 import { createTurnResponseFinalizer } from "../../../cognition/turn_response_finalizer";
 import { mergeToolExecutionRecords } from "../../../cognition/task_execution_ledger";
-import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { logger } from "../../../../logger";
 import { getMessagesByTokenBudget } from "../../../conversation/manager";
 import { markVoiceLatencyMilestone } from "../../../monitor/voice_latency_store";
@@ -14,7 +13,7 @@ import { normalizeVoiceHistory } from "../../voice_history";
 
 import type { executeVoiceModeAndMessagingTurn } from './execute_voice_mode_and_messaging_turn';
 
-export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>) {
+export async function prepareVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>) {
 
 
     // Reuse the configured model and the shared execution decision.
@@ -76,16 +75,17 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
     const projectRecords = (records: import('../../../tools/types').ToolExecutionRecord[]) => withDesktopExecutionReceipt(
       context.taskAwareRecords(mergeToolExecutionRecords(context.toolResults, records)), context.desktopExecutionTracker);
     const recoveryLifecycle = context.observeVoiceTools();
-    const completed = await runPreparedLumiTurn({
-      source: 'voice', taskText: context.routedUserText, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
-      toolRecords: context.taskAwareRecords(context.toolResults), projectRecords,
-      model: { execution: context.executionPipeline, assertCurrent: () => context.turnAuthorization.assertCurrent(),
+    return {
+      systemPrompt: context.voiceSystemPrompt, messages, taskText: context.routedUserText,
+      task: { taskId: context.actionTaskExecution.state?.taskId, turnRowId: context.actionTaskExecution.turnRowId },
+      model: { assertCurrent: () => context.turnAuthorization.assertCurrent(),
         isCancelled: () => !context.isCurrentTurn(), taskText: context.userText,
-        messages, registry: toolRegistry, config: modelConfig, onToolCall: toolLifecycle.onToolCall,
+        registry: toolRegistry, config: modelConfig, onToolCall: toolLifecycle.onToolCall,
         maxIterations: context.maxIterations, onStreamChunk: onChunk, getters: context.llmGetters,
         context: { ...context.toolContext,
           ...(context.runtimeOwnedDeterministicRecoveryCall ? { runtimeOwnedDeterministicRecoveryCall: context.runtimeOwnedDeterministicRecoveryCall } : {}),
           priorToolRecords: context.taskAwareRecords(context.toolResults), onToolStart: toolLifecycle.onToolStart } },
+      prepared: { projectRecords,
       recovery: { maxIterations: Math.max(2, Math.min(12, context.routedToolPolicy.maxIterations || context.maxIterations || 8)),
         onToolCall: recoveryLifecycle.onToolCall, context: { source: 'voice_guard_recovery', isCancelled: () => !context.isCurrentTurn(), onToolStart: recoveryLifecycle.onToolStart } },
       finalization: ({ responseText, result, toolRecords }) => ({
@@ -99,9 +99,6 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
       }),
       onRecoveryUsage: records => { recordTokenUsageBatch(context.session.userId, records, () => 'voice_guard_recovery_' + Date.now(), 'voice'); },
       onResult: result => { context.modelTextGate.finish(); recordTokenUsageBatch(context.session.userId, result.usageRecords, context.requestId, 'voice'); },
-    });
-    if (!context.isCurrentTurn()) return { terminal: true as const, context: undefined };
-    context.responseText = completed.finalized.text;
-    context.toolResults = completed.toolRecords;
-    return { terminal: false as const, context: extendTurnBindings(context, { finalResponse: completed.finalized }) };
+      },
+    } satisfies AssembledLumiTurnData;
 }

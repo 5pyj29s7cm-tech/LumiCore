@@ -17,7 +17,7 @@ import { getScopedPreferredLLM } from "../../../llm/user_preferences";
 import { buildVoiceReplyStyleOverlay } from "../../voice_turn_policy";
 import type { prepareVoiceContextAndRouting } from './prepare_voice_context_and_routing';
 
-export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceContextAndRouting>>["context"]>) {
+export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof prepareVoiceContextAndRouting>>["resume"]>>>["context"]>) {
 
   // Every accepted voice turn owns a durable request identity, including
   // conceptual/taskless turns. Without it, an exception in one of those paths

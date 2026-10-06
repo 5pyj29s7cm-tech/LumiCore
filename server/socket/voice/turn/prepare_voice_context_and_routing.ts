@@ -20,7 +20,7 @@ import { retrieveChunks } from "../../../agents/rag";
 import { searchKnowledgeBase } from "../../../org/kb";
 import { personalityRegistry } from "../../../personality";
 import { getStoredOperationMode } from "../../../cognition/operation_mode_store";
-import { buildLumiExecutionPipeline } from "../../../cognition/execution_pipeline";
+import type { LumiExecutionPipeline, BuildLumiExecutionPipelineInput } from "../../../cognition/execution_pipeline";
 import { toolRegistry } from "../../../tools/registry";
 import { TASK_TARGET_HISTORY_LIMIT } from "../../../conversation/task_target_anchor";
 import { resolveVoiceModelInputBudget } from "../../voice_runtime_policy";
@@ -33,7 +33,7 @@ import { addEchoText, voiceEchoScope } from "../echo";
 import { shouldAllowVoiceLocalFileWriteForTurn } from "../../voice_turn_policy";
 import type { prepareVoiceIdentityAndAdmission } from './prepare_voice_identity_and_admission';
 
-export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceIdentityAndAdmission>>["context"]>) {
+export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof prepareVoiceIdentityAndAdmission>>["resume"]>>>["context"]>) {
 
 
   context.turnAuthorization.assertCurrent();
@@ -189,7 +189,7 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     return 'assistant';
   })();
   const requestedMode = requestedModeHint;
-  const executionPipeline = buildLumiExecutionPipeline({
+  const planning: BuildLumiExecutionPipelineInput = {
     requestId: context.requestId, userText: context.userText, acceptedResolution:context.acceptedVoiceResolution,
     dispatch: {
       userId: context.session.userId,
@@ -215,7 +215,8 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     pendingAssistantOfferContext: context.pendingAssistantOfferContext,
     traceText: context.actionIntentText,
     source: 'voice',
-  });
+  };
+  return { terminal: false as const, context: undefined, planning, resume: async (executionPipeline: LumiExecutionPipeline) => {
   const turnDispatch = executionPipeline.turnIntent;
   const turnFlow = turnDispatch.flow;
   const effectiveOperationMode = turnFlow.effectiveOperationMode;
@@ -398,7 +399,7 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
         context.session.suppressedSpeechRequestIds.delete(context.requestId);
       }
     }
-    { return { terminal: true as const, context: undefined }; }
+    { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
   }
   return { terminal: false as const, context: extendTurnBindings(context, {
     actionTaskExecution,
@@ -433,4 +434,5 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
     voiceInputTokenBudget,
     requestedMode,
   }) };
+  } };
 }

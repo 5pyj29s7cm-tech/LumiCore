@@ -49,7 +49,7 @@ describe('cross-channel action turn ownership wiring', () => {
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
     expect(chat).toContain('await runLumiEntryTurn<void>({');
-    expect(voice).toContain('await runPreparedLumiTurn({');
+    expect(voice).toContain('await runLumiEntryTurn<void>({');
     expect(messaging).toContain('return runLumiEntryTurn({');
     expect(readFileSync('server/cognition/turn_execution.ts', 'utf8')).toContain('await runPreparedLumiTurn({');
     const driver = readFileSync('server/cognition/prepared_turn.ts', 'utf8');

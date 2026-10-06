@@ -4,11 +4,15 @@ import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMSt
 
 import { extractSentiment } from "../../../cognition/sentiment";
 import { himTick } from "../../../personality/him";
-import type { executeVoiceModelTurn } from './execute_voice_model_turn';
+import type { executeVoiceModeAndMessagingTurn } from './execute_voice_mode_and_messaging_turn';
+import type { ExecutedLumiTurn } from '../../../cognition/turn_execution';
 
-export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModelTurn>>["context"]>) {
+export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>, completed: ExecutedLumiTurn) {
 
-    const finalResponse = context.finalResponse;
+    if (!context.isCurrentTurn()) return { terminal: true as const, context: undefined };
+    context.responseText = completed.finalized.text;
+    context.toolResults = completed.toolRecords;
+    const finalResponse = completed.finalized;
     if (finalResponse.blocked) {
       logger.warn(`[Audio] Completion claim blocked: ${finalResponse.reason}`);
     }

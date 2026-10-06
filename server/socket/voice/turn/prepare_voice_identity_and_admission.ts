@@ -36,11 +36,11 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
 
   if (!voiceAuthorized && !isVoiceprintGateOpen(session)) {
     blockUnverifiedVoice(socket, session, 'Rejected voice command from unverified speaker');
-    { return { terminal: true as const, context: undefined }; }
+    { return { terminal: true as const, context: undefined, entry: undefined, resume: undefined }; }
   }
 
   const scopeAuthorization = session.authorization || captureChatAuthorization(session.userId, session);
-  if (!scopeAuthorization.isCurrent()) { return { terminal: true as const, context: undefined }; }
+  if (!scopeAuthorization.isCurrent()) { return { terminal: true as const, context: undefined, entry: undefined, resume: undefined }; }
   let transcriptExecutionGuard = assessVoiceTranscriptForExecution(userText);
   if (transcriptExecutionGuard.action === 'clarify') {
     logger.warn(
@@ -114,7 +114,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
   try {
     await ensurePendingConfirmationPersistenceInitialized();
   } catch (error) {
-    if (!(resources.owner?.isCurrent() ?? true)) return { terminal: true as const, context: undefined };
+    if (!(resources.owner?.isCurrent() ?? true)) return { terminal: true as const, context: undefined, entry: undefined, resume: undefined };
     logger.error('[Audio] Encrypted confirmation store is unavailable:', error);
     socket.emit('agent:response', {
       text: voiceDurabilityUnknownText(),
@@ -125,7 +125,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
       blocked: true,
       reason: 'persistence_unknown',
     });
-    { return { terminal: true as const, context: undefined }; }
+    { return { terminal: true as const, context: undefined, entry: undefined, resume: undefined }; }
   }
   turnAuthorization.assertCurrent();
   const userObservedCompletion = isUserObservedTaskCompletion(
@@ -316,12 +316,14 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     },
   });
   if (!voiceAdmission) {
-    { return { terminal: true as const, context: undefined }; }
+    { return { terminal: true as const, context: undefined, entry: undefined, resume: undefined }; }
   }
   turnAuthorization.assertCurrent();
   voiceUserMessageId = voiceAdmission.persisted;
   resources.admission = reserveConversationExecution({userId:session.userId,domain:voiceScope.domain,orgId:voiceScope.orgId,conversationId:conversationTurn.conversation.id,source:'voice'},requestId,pipelineAbort.signal,{authorization:turnAuthorization,abort:reason=>{if(!pipelineAbort.signal.aborted)pipelineAbort.abort(reason);}});
-  await resources.admission.waitForTurn();
+  return { terminal: false as const, context: undefined, entry: {
+    session, userText, requestId, voiceScope, conversationTurn, turnAuthorization, pipelineAbort, resources,
+  }, resume: async () => {
   turnAuthorization.assertCurrent();
   conversationTurn.conversation = getConversationForScope(conversationTurn.conversation.id,session.userId,voiceScope.domain,voiceScope.orgId)!;
   if (conversationTurn.rolledOver && conversationTurn.previousConversationId) {
@@ -365,7 +367,7 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     logger.error('[Audio] Voice execution reservation could not be durably established:', error);
     publishRecordedAgent('agent:response', executionUnknownPayload);
     if ((resources.owner?.isCurrent() ?? true) && session.isActive) socket.emit('audio:status', { status: 'listening', requestId });
-    { return { terminal: true as const, context: undefined }; }
+    { return { terminal: true as const, context: undefined, entry: undefined, resume: undefined }; }
   }
   turnAuthorization.assertCurrent();
   return { terminal: false as const, context: {
@@ -427,5 +429,6 @@ export async function prepareVoiceIdentityAndAdmission(socket: Socket, session: 
     userObservedCompletionTask,
     modelTurnState,
     interruptedActivityResponse,
+  } };
   } };
 }

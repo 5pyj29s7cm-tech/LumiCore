@@ -657,9 +657,9 @@ describe('voice foreground release convergence', () => {
     const turnSource = readFileSync('server/socket/voice_conversation_turn.ts', 'utf8');
     expect(countImplementationCalls(turnSource, 'releaseVoiceTurnResources')).toBe(1);
     const ownerStart = turnSource.indexOf('async function processAdmittedVoiceTurn(');
-    const ownerTry = turnSource.indexOf('  try {', ownerStart);
+    const ownerTry = turnSource.indexOf('await runLumiEntryTurn<void>({', ownerStart);
     const clarificationPhase = turnSource.indexOf('await executeVoiceConfirmedAndDeterministicTurn(', ownerTry);
-    const modelPhase = turnSource.indexOf('await executeVoiceModelTurn(', ownerTry);
+    const modelPhase = turnSource.indexOf('return prepareVoiceModelTurn(', ownerTry);
     const clarificationSource = readFileSync('server/socket/voice/turn/execute_voice_confirmed_and_deterministic_turn.ts', 'utf8');
     const phaseStart = clarificationSource.indexOf('async function executeVoiceConfirmedAndDeterministicTurn(');
     expect(ownerTry).toBeGreaterThan(ownerStart);

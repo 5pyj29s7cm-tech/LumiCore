@@ -371,7 +371,7 @@ describe('accepted action-turn durability fence', () => {
     expect(execute).toBeGreaterThan(durableConsume);
     expect(confirmedOwner).toContain('preflight: () => consumed');
     expect(confirmedOwner).toContain("executionOrigin: 'confirmed_action_resume'");
-    const routing = source.indexOf(fileName === 'chat.ts' ? 'await runLumiEntryTurn<void>({' : 'buildLumiExecutionPipeline({', flush);
+    const routing = source.indexOf('await runLumiEntryTurn<void>({', flush);
     const core = fs.readFileSync(path.resolve('server/cognition/turn_execution.ts'), 'utf8');
     expect(core.indexOf('await admission?.waitForTurn();')).toBeLessThan(core.indexOf('buildLumiExecutionPipeline({'));
     expect(core.indexOf('buildLumiExecutionPipeline({')).toBeLessThan(core.indexOf('await input.assemble(execution)'));

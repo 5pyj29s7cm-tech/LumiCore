@@ -22,7 +22,6 @@ it('keeps voice history on the admitted conversation after the user opens a new 
   const summary = vi.fn(getConversationSummary);
   const topics = vi.fn(getTopicContext);
   const activeLookup = vi.fn(getOrCreateActiveConversation);
-  const stopBeforeModelPlanning = new Error('stop before isolated model planning');
   const prepare = extractSourceExpression(
     'server/socket/voice/turn/prepare_voice_context_and_routing.ts',
     'prepareVoiceContextAndRouting', {
@@ -44,10 +43,9 @@ it('keeps voice history on the admitted conversation after the user opens a new 
       getOrCreateActiveConversation: activeLookup,
       getConversationSummary: summary,
       getTopicContext: topics,
-      buildLumiExecutionPipeline: () => { throw stopBeforeModelPlanning; },
     },
   );
-  await expect(prepare({
+  const prepared = await prepare({
     userText: 'Tell me about the earlier conversation.',
     actionIntentText: 'Tell me about the earlier conversation.',
     actionContinuationBridge: 'admitted history',
@@ -69,7 +67,11 @@ it('keeps voice history on the admitted conversation after the user opens a new 
     emitAgent: vi.fn(),
     socket: { emit: vi.fn() },
     sensoryFn: () => ({}),
-  })).rejects.toBe(stopBeforeModelPlanning);
+  });
+  expect(prepared.terminal).toBe(false);
+  expect(prepared.planning.requestId).toBe('voice-pinned-request');
+  expect(prepared.planning.persistedConversationHistory).toEqual(getMessages(admitted.id, TASK_TARGET_HISTORY_LIMIT));
+  expect(prepared.planning.dispatch).toMatchObject({ userId, channel: 'voice', source: 'voice', domain: 'personal' });
   expect(summary).toHaveBeenCalledExactlyOnceWith(admitted.id);
   expect(topics).toHaveBeenCalledExactlyOnceWith(admitted.id);
   expect(activeLookup).not.toHaveBeenCalled();

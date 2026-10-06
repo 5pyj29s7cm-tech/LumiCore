@@ -211,10 +211,11 @@ describe('finalized output paths', () => {
     const modelStart = driver.indexOf('await runResolvedLumiTurn(input.model)');
     const finalizerStart = driver.indexOf('await finalizeLumiResponseForDelivery({');
     expect(modelStart).toBeGreaterThan(0); expect(finalizerStart).toBeGreaterThan(modelStart);
-    expect(modelEntry).toContain('const completed = await runPreparedLumiTurn({');
-    expect(modelEntry).toContain('execution: context.executionPipeline');
-    expect(modelEntry).toContain('context.responseText = completed.finalized.text;');
-    expect(deliveryEntry).toContain('const finalResponse = context.finalResponse;');
+    expect(source('server/socket/voice_conversation_turn.ts')).toContain('await runLumiEntryTurn<void>({');
+    expect(modelEntry).toContain('systemPrompt: context.voiceSystemPrompt, messages, taskText: context.routedUserText');
+    expect(modelEntry).not.toContain('runPreparedLumiTurn(');
+    expect(deliveryEntry).toContain('context.responseText = completed.finalized.text;');
+    expect(deliveryEntry).toContain('const finalResponse = completed.finalized;');
     expect(deliveryEntry).toContain('mainTerminalCommitted = await context.finishVoiceTerminal({');
     expect(deliveryEntry).not.toContain('runResolvedLumiRecovery');
     expect(source('server/cognition/turn_model.ts')).toContain('if (!execution.executionRequested)');
@@ -267,7 +268,7 @@ describe('finalized output paths', () => {
       expect(entry).not.toContain('executeSkillWorkflowAdapter');
       expect(entry).not.toContain('preMatchedQuickResult');
       expect(entry).not.toContain('quickFinalized');
-      expect(entry).toContain(file.endsWith('/chat.ts') ? 'runLumiEntryTurn<void>({' : 'runPreparedLumiTurn({');
+      expect(entry).toContain('runLumiEntryTurn<void>({');
     }
   });
 

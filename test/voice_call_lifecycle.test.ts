@@ -349,7 +349,7 @@ describe('selected voice conversation identity', () => {
     try {
       const admitted = await prepareVoiceIdentityAndAdmission(socket as any, socket.data.audioSession, 'Tell me about the weather.', {} as any, () => ({}), io as any, undefined, true, {}, resources);
       expect(admitted.terminal).toBe(false);
-      expect(admitted.context?.conversationTurn.conversation.id).toBe(selected.id);
+      expect(admitted.entry?.conversationTurn.conversation.id).toBe(selected.id);
       expect(socket.data.audioSession.conversationId).toBe(selected.id);
       expect(getMessages(selected.id).some(row => row.message === 'Tell me about the weather.')).toBe(true);
       expect(getMessages(active.id).some(row => row.message === 'Tell me about the weather.')).toBe(false);
@@ -384,7 +384,22 @@ describe('selected voice conversation identity', () => {
     const foreground = reserveConversationExecution({ userId, domain: 'personal', orgId: '', conversationId: selected.id, source: 'chat' }, 'foreground-before-selected-voice');
     await foreground.waitForTurn();
     const resources = {} as import('../server/cognition/conversation_execution').ConversationResourceLifetime;
-    const pending = prepareVoiceIdentityAndAdmission(socket as any, socket.data.audioSession, 'A queued conversation question.', {} as any, () => ({}), io as any, undefined, true, {}, resources);
+    const pending = (async () => {
+      const admitted = await prepareVoiceIdentityAndAdmission(socket as any, socket.data.audioSession, 'A queued conversation question.', {} as any, () => ({}), io as any, undefined, true, {}, resources);
+      if (admitted.terminal) return;
+      const entry = admitted.entry!;
+      const { runLumiEntryTurn } = await import('../server/cognition/turn_execution');
+      return runLumiEntryTurn({
+        entry: { source: 'voice', channel: 'voice', historyLimit: 0, failureText: 'Voice preparation failed.', failureReason: 'voice_processing_failed' },
+        identity: { userId: entry.session.userId, agentId: entry.conversationTurn.conversation.agentId,
+          conversationId: selected.id, requestId: entry.requestId, domain: entry.voiceScope.domain, orgId: entry.voiceScope.orgId },
+        userText: entry.userText, persistence: 'preaccepted', authorization: entry.turnAuthorization, controller: entry.pipelineAbort,
+        resource: { admission: resources.admission },
+        planning: async () => ({ terminal: await admitted.resume!() }),
+        assemble: () => { throw new Error('Identity preparation must finish before model assembly'); },
+        deliver: () => { throw new Error('Identity preparation must finish before delivery'); },
+      });
+    })();
     const rejected = expect(pending).rejects.toThrow(/deleted|available|cancelled/);
     try {
       await vi.waitFor(() => expect(resources.admission?.waitingForRequestId).toBe('foreground-before-selected-voice'));

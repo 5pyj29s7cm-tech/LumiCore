@@ -29,7 +29,8 @@ describe('voice provider prompt contract', () => {
   });
 
   it('delegates tool projection to the shared adapter', () => {
-    expect(source).toContain('runPreparedLumiTurn({');
+    expect(source).toContain('await runLumiEntryTurn<void>({');
+    expect(fs.readFileSync(path.join(process.cwd(), 'server/cognition/turn_execution.ts'), 'utf8')).toContain('await runPreparedLumiTurn({');
     expect(source).toContain('modelToolProjection');
     expect(source).not.toContain('resolveRequiredToolNamesForModel(');
     expect(source).not.toContain('protectedToolNames: toolDeclarations.map');

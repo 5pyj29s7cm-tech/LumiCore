@@ -24,17 +24,28 @@ const calls = (root: ts.Node, name: string) => {
 };
 
 describe('single voice release owner and mode result truth', () => {
-  it('owns memory, confirmation, status and ordinary model exits in the same finally', () => {
-    const owners = turn.body!.statements.filter(node => ts.isTryStatement(node) && node.finallyBlock && calls(node.finallyBlock, 'releaseVoiceTurnResources').length) as ts.TryStatement[];
-    expect(owners).toHaveLength(1);
+  it('owns memory, confirmation, status and ordinary model exits in the shared finally', () => {
+    const entryCalls = calls(turn, 'runLumiEntryTurn');
+    expect(entryCalls).toHaveLength(1);
+    const input = entryCalls[0].arguments[0] as ts.ObjectLiteralExpression;
+    const property = (name: string) => input.properties.find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === name) as ts.PropertyAssignment;
+    const assembly = property('assemble').initializer;
+    const failure = property('onFailure').initializer;
+    const settlement = property('settle').initializer;
     expect(calls(turn, 'releaseVoiceTurnResources')).toHaveLength(1);
-    const owner = owners[0];
-    for (const name of ['persistTurnMemory', 'executeConfirmedToolStep', 'finishVoiceTerminal', 'runResolvedLumiTurn']) {
-      const owned = [...calls(owner.tryBlock, name), ...calls(owner.catchClause!, name)];
-      expect(owned.length, name + ' must be enclosed by the try/catch release owner').toBeGreaterThan(0);
-      for (const call of calls(turn, name).filter(call => call.getStart(ast) > owner.getStart(ast))) expect(owned).toContain(call);
+    expect(calls(settlement, 'releaseVoiceTurnResources')).toHaveLength(1);
+    for (const name of ['persistTurnMemory', 'executeConfirmedToolStep', 'finishVoiceTerminal', 'prepareVoiceModelTurn']) {
+      expect([...calls(assembly, name), ...calls(failure, name)].length, name + ' must be owned by entry assembly or failure').toBeGreaterThan(0);
     }
-    expect(calls(owner.finallyBlock!, 'releaseVoiceTurnResources')).toHaveLength(1);
+    expect(calls(turn, 'runPreparedLumiTurn')).toHaveLength(0);
+    const coreSource = readImplementationSource('server/cognition/turn_execution.ts', 'utf8');
+    const coreAst = ts.createSourceFile('turn_execution.ts', coreSource, ts.ScriptTarget.Latest, true);
+    const core = coreAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runLumiEntryTurn') as ts.FunctionDeclaration;
+    const owner = core.body!.statements.find(node => ts.isTryStatement(node) && node.finallyBlock) as ts.TryStatement;
+    expect(owner.tryBlock.getText(coreAst)).toContain('await runPreparedLumiTurn({');
+    const release = owner.finallyBlock!.getText(coreAst);
+    expect(release).toContain('await input.settle?.()');
+    expect(release.indexOf('await input.settle?.()')).toBeLessThan(release.indexOf('admission?.release()'));
   });
   const modeBranch = (() => {
     let found: ts.IfStatement | undefined;
