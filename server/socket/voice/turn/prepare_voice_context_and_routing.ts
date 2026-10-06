@@ -1,10 +1,11 @@
+import { preparePlannedConversationExecution } from "../../../conversation/planned_execution";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { logger } from "../../../../logger";
 import { synthesizeSpeech, getActiveProvider as getTTSProvider, isTtsCancellationError } from "../../../tts/adapter";
 import { isVoiceReferentialFollowup } from "../../voice_turn_state";
 import { CN_VOICE_WORK_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
-import { getMessages, getTopicContext, getConversationSummary, prepareConversationActionExecution } from "../../../conversation/manager";
+import { getMessages, getTopicContext, getConversationSummary } from "../../../conversation/manager";
 import { recordChatExecutionPersistenceUnknownDurably, recordChatExecutionTerminalEventDurably } from "../../chat_execution_registry";
 import { flushDBOrThrow } from "../../../../db_layer";
 import { isCapabilityMetaQuestion } from "../../../cognition/capability_meta";
@@ -269,29 +270,14 @@ export async function prepareVoiceContextAndRouting(context: NonNullable<Awaited
   const visibleToolRoute = executionDecision.toolRoute;
   const toolSessionActive = requestedToolSession;
   const actionFollowupIntent = executionPipeline.actionFollowupIntent;
-  const actionTaskExecution = turnFlow.conceptualCapabilityQuestion
-    || context.transcriptExecutionGuard.action === 'clarify'
-    ? { state: null, kind: 'conversation' as const }
-    : context.userObservedCompletion
-    ? {
-        state: null,
-        kind: 'conversation' as const,
-      }
-    : prepareConversationActionExecution({
-        conversationId: context.conversationTurn.conversation.id,
-        userId: context.session.userId,
-        userText: context.actionIntentText,
-        requestId: context.requestId,
-        userMessageId: context.voiceUserMessageId,
-        toolPolicy: routedToolPolicy,
-        followupIntent: actionFollowupIntent,
-        forceTask: toolSessionActive,
-        forceResume: Boolean(
-          context.pendingConfirmation
-          || context.interruptedMerge.usedInterruptedTurn
-          || executionPipeline.trustedActionContinuation
-        ),
-      });
+  const actionTaskExecution = preparePlannedConversationExecution({
+    execution: executionPipeline, conversationId: context.conversationTurn.conversation.id,
+    userId: context.session.userId, userText: context.actionIntentText, requestId: context.requestId, userMessageId: context.voiceUserMessageId,
+    pendingConfirmation: context.pendingConfirmation,
+    acceptedInterruptedTurn: context.interruptedMerge.usedInterruptedTurn,
+    observationOnly: turnFlow.conceptualCapabilityQuestion || context.transcriptExecutionGuard.action === 'clarify' || context.userObservedCompletion,
+    bindConversationTurn: true,
+  });
   if ('bindingFailure' in actionTaskExecution) {
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy

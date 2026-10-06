@@ -1,3 +1,4 @@
+import { preparePlannedConversationExecution } from "../../conversation/planned_execution";
 import { runResolvedLumiRecovery } from "../../cognition/turn_recovery";
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
 import { bindCapabilityExecutionPlanTask } from "../../cognition/capability_execution_plan";
@@ -10,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { flushDBOrThrow } from "../../../db_layer";
 import { buildLumiExecutionPipeline } from "../../cognition/execution_pipeline";
 import { createModelTurnState } from "../../llm/model_turn_state";
-import { getConversationForScope, getMessages, addMessageIdempotent, prepareConversationActionExecution, persistConversationExecutionPlan, startConversationActionExecutionHeartbeat } from "../../conversation/manager";
+import { getConversationForScope, getMessages, addMessageIdempotent, persistConversationExecutionPlan, startConversationActionExecutionHeartbeat } from "../../conversation/manager";
 import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from "../../conversation/lifecycle";
 import { captureChatAuthorization } from "../../socket/chat_authorization";
 import { isExplicitMemoryRequest, persistTurnMemory } from "../../memory/turn_memory";
@@ -250,8 +251,8 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           messages.push({ role: 'user', content: message });
 
           const userMessageId = addMessageIdempotent({ ...identity, role: 'user', content: message, deferActionPreparation: true });
-          const prepared = prepareConversationActionExecution({ ...identity, userText: message, userMessageId,
-            toolPolicy: pipeline.authorizationPolicy, forceTask: pipeline.executionRequested, followupIntent: pipeline.actionFollowupIntent, forceResume: pipeline.trustedActionContinuation, preserveExistingTask: pipeline.taskRelation.binding === 'active_task' });
+          const prepared = preparePlannedConversationExecution({ ...identity, userText: message, userMessageId,
+            execution: pipeline, bindConversationTurn: true });
           if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
           taskId = prepared.state?.taskId;
           turnRowId = prepared.turnRowId;

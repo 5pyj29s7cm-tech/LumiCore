@@ -9,7 +9,7 @@ describe('chat task feedback binding integration', () => {
   it('resolves and exposes a structured relation before queue control', () => {
     const exactReplayGuard = chat.indexOf('if (existingExecution)');
     const relation = chat.indexOf('acceptedTurnResolution = resolveUserTurn({', exactReplayGuard);
-    const queueControl = chat.indexOf("const previousSession = getCurrentConversationExecution(executionScope, 'tail')", relation);
+    const queueControl = chat.indexOf('const previousSession = existingSession;', relation);
 
     expect(exactReplayGuard).toBeGreaterThan(-1);
     expect(relation).toBeGreaterThan(exactReplayGuard);
@@ -62,17 +62,15 @@ describe('chat task feedback binding integration', () => {
 
   it('routes bound correction/retry/accept feedback through the existing task revision', () => {
     const plannerContext = chat.indexOf('formatActiveTaskRelationContext(');
-    const boundExecution = chat.indexOf('const bindsExistingAction = Boolean(', plannerContext);
-    const prepare = chat.indexOf('prepareConversationActionExecution({', boundExecution);
-
+    const prepare = chat.indexOf('preparePlannedConversationExecution({', plannerContext);
+    const owner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
     expect(plannerContext).toBeGreaterThan(-1);
-    expect(boundExecution).toBeGreaterThan(plannerContext);
     const acceptedRelation = chat.indexOf('resolvedTaskRelation = executionPipeline.taskRelation;');
     expect(acceptedRelation).toBeGreaterThan(plannerContext);
-    expect(boundExecution).toBeGreaterThan(acceptedRelation);
-    expect(prepare).toBeGreaterThan(boundExecution);
-    expect(chat.slice(boundExecution, prepare)).toContain("['continue', 'correction', 'accept', 'retry']");
-    expect(chat).toContain('forceResume: true');
+    expect(prepare).toBeGreaterThan(acceptedRelation);
+    expect(owner).toContain("['continue', 'correction', 'accept', 'retry']");
+    expect(owner).toContain('const relation = execution.taskRelation;');
+    expect(owner).toContain('forceTask, forceResume:');
     expect(chat).toContain('userMessageId: acceptedUserMessageId');
   });
 

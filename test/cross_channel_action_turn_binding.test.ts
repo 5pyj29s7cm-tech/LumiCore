@@ -13,7 +13,7 @@ describe('cross-channel action turn ownership wiring', () => {
     const admittedPersist = voice.indexOf('persistAcceptedUserTurn: () => { turnAuthorization.assertCurrent(); return persistVoiceUserMessage(); },', admission);
     const flushed = voice.indexOf('flush: flushDBOrThrow', admittedPersist);
     const accepted = voice.indexOf('voiceUserMessageId = voiceAdmission.persisted;', flushed);
-    const prepared = voice.indexOf('prepareConversationActionExecution({', accepted);
+    const prepared = voice.indexOf('preparePlannedConversationExecution({', accepted);
     const rejected = voice.indexOf("if ('bindingFailure' in actionTaskExecution)", prepared);
 
     expect(persisted).toBeGreaterThan(-1);
@@ -31,7 +31,7 @@ describe('cross-channel action turn ownership wiring', () => {
     const persisted = messaging.indexOf('const messageId = addMessageIdempotent({');
     const accepted = messaging.indexOf('const acceptedMessage: IncomingMessage = {', persisted);
     const routed = messaging.indexOf('const routeBaseMessage = accepted.message', accepted);
-    const prepared = messaging.indexOf('prepareConversationActionExecution({', routed);
+    const prepared = messaging.indexOf('preparePlannedConversationExecution({', routed);
     const rejected = messaging.indexOf("if ('bindingFailure' in actionTaskExecution)", prepared);
 
     expect(persisted).toBeGreaterThan(-1);
@@ -49,9 +49,12 @@ describe('cross-channel action turn ownership wiring', () => {
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
     for (const code of [chat, voice]) {
-      expect(code).toContain('attempt: async ({ instruction, priorToolRecords, recordTool })');
-      expect(code).toContain('priorToolRecords,');
+      expect(code).toContain('attempt: async attempt =>');
+      expect(code).toContain('recovery: attempt');
     }
+    const recoveryOwner = readFileSync('server/cognition/turn_recovery.ts', 'utf8');
+    expect(recoveryOwner).toContain('priorToolRecords: recovery.priorToolRecords');
+    expect(recoveryOwner).toContain('completionGuard: result.completionGuard');
     expect(messaging).toContain('toolRecords: preDeliveryRecords');
     expect(messaging).toContain('`${source}_guard_recovery`');
   });
@@ -61,7 +64,7 @@ describe('cross-channel action turn ownership wiring', () => {
       {
         name: 'chat',
         code: source('server/socket/chat.ts'),
-        prepare: 'const actionTaskExecution = preparation',
+        prepare: 'const actionTaskExecution = preparePlannedConversationExecution({',
         heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
         abort: 'abortController,',
         stop: 'actionLeaseHeartbeat?.stop();',
@@ -69,7 +72,7 @@ describe('cross-channel action turn ownership wiring', () => {
       {
         name: 'voice',
         code: source('server/socket/voice.ts'),
-        prepare: 'const actionTaskExecution = turnFlow.conceptualCapabilityQuestion',
+        prepare: 'const actionTaskExecution = preparePlannedConversationExecution({',
         heartbeat: 'actionLeaseHeartbeat = startConversationActionExecutionHeartbeat({',
         abort: 'abortController: pipelineAbort,',
         stop: 'actionLeaseHeartbeat?.stop();',
@@ -77,7 +80,7 @@ describe('cross-channel action turn ownership wiring', () => {
       {
         name: 'messaging',
         code: source('server/regions/packs/cn/messaging_routes.ts'),
-        prepare: 'const actionTaskExecution = isIdentityBound && conversation',
+        prepare: 'const actionTaskExecution = preparePlannedConversationExecution({',
         heartbeat: '? startConversationActionExecutionHeartbeat({',
         abort: 'abortController: actionAbortController,',
         stop: 'actionLeaseHeartbeat?.stop();',

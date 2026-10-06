@@ -37,7 +37,8 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('continuationContext: [actionContinuationBridge, pendingConfirmationPrompt]');
     expect(voice).toContain('currentTurnExecutionRequested: executionPipeline.executionRequested');
     expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
-    expect(voice).toContain('|| executionPipeline.trustedActionContinuation');
+    expect(voice).toContain('preparePlannedConversationExecution({');
+    expect(readFileSync(path.join(root, 'server/conversation/planned_execution.ts'), 'utf8')).toContain('input.acceptedInterruptedTurn || execution.trustedActionContinuation');
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
     const modelOwner = readFileSync(path.join(root, 'server/cognition/turn_model.ts'), 'utf8');
     expect(rest).toContain('execution: restExecutionPipeline');

@@ -8,8 +8,8 @@ const source = (relativePath: string) => readImplementationSource(path.join(proc
 describe('foreground task and request identity wiring', () => {
   it('prepares a durable Chat task before relay creation and preserves request identity separately', () => {
     const chat = source('server/socket/chat.ts');
-    const fresh = chat.indexOf('const preparation = acceptedRuntimeCleanupOffer');
-    const prepare = chat.indexOf('prepareConversationActionExecution({', fresh);
+    const fresh = chat.indexOf('const actionTaskExecution = preparePlannedConversationExecution({');
+    const prepare = fresh;
     const durable = chat.indexOf('const durableTaskId = actionTaskExecution.state?.taskId;', prepare);
     const relay = chat.indexOf('const desktopRelay = createDesktopRelay({', durable);
     const confirmation = chat.indexOf("source: 'chat_confirmation'", relay);
@@ -18,8 +18,10 @@ describe('foreground task and request identity wiring', () => {
     const admittedContext = chat.slice(contextStart, chat.indexOf('\n      };', contextStart));
 
     expect(fresh).toBeGreaterThan(-1);
-    expect(chat.slice(fresh, durable)).toContain('capabilitySelection.taskLedgerRequired');
-    expect(chat.slice(fresh, durable)).toContain('forceTask: true');
+    const taskOwner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
+    expect(chat.slice(fresh, durable)).toContain('execution: executionPipeline');
+    expect(taskOwner).toContain('execution.capabilityPlan.taskLedgerRequired');
+    expect(taskOwner).toContain('forceTask, forceResume:');
     expect(chat.slice(prepare, durable)).toContain("if ('bindingFailure' in actionTaskExecution)");
     expect(relay).toBeGreaterThan(durable);
     expect(chat.slice(relay, relay + 500)).toContain('taskId: durableTaskId');
@@ -48,11 +50,11 @@ describe('foreground task and request identity wiring', () => {
   it('binds Task and Voice desktop relays to their prepared durable task', () => {
     for (const relativePath of ['server/socket/voice.ts']) {
       const code = source(relativePath);
-      const prepare = code.indexOf('prepareConversationActionExecution({');
+      const prepare = code.indexOf('preparePlannedConversationExecution({');
       const relay = code.indexOf('const desktopRelay = createDesktopRelay({', prepare);
       expect(prepare, `${relativePath} preparation`).toBeGreaterThan(-1);
       expect(relay, `${relativePath} relay`).toBeGreaterThan(prepare);
-      expect(code.slice(prepare, relay), relativePath).toContain('forceTask:');
+      expect(code.slice(prepare, relay), relativePath).toContain('execution: executionPipeline');
       expect(code.slice(relay, relay + 500), relativePath).toContain(
         'taskId: actionTaskExecution.state?.taskId',
       );

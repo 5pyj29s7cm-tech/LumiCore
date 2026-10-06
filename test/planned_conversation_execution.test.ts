@@ -1,0 +1,109 @@
+import './helpers';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { recordPendingConfirmationDurably, clearAllPendingConfirmationsForTests, buildTransportNeutralConfirmationScope, getPendingConfirmationDurably } from '../server/tools/pending_confirmation';
+import { randomUUID } from 'node:crypto';
+import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
+import { getOrCreateActiveConversation, getConversationForScope, addMessageIdempotent } from '../server/conversation/manager';
+import { preparePlannedConversationExecution } from '../server/conversation/planned_execution';
+import { buildLumiExecutionPipeline } from '../server/cognition/execution_pipeline';
+import { ToolRegistry } from '../server/tools/registry';
+
+beforeAll(() => initDatabase());
+afterEach(() => clearAllPendingConfirmationsForTests());
+async function accepted(text: string, previous?: { userId: string; conversationId: string }) {
+  const userId = previous?.userId || 'planned-owner-' + randomUUID();
+  const conversationId = previous?.conversationId || getOrCreateActiveConversation(userId, 'lumi', 'personal', '').id;
+  const requestId = randomUUID();
+  const userMessageId = addMessageIdempotent({ userId, conversationId, agentId: 'lumi', requestId, source: 'planned-fixture', channel: 'chat', domain: 'personal', orgId: '', role: 'user', content: text, deferActionPreparation: true });
+  await flushDBOrThrow();
+  const registry = new ToolRegistry();
+  registry.register({ name: 'web_search', description: 'Public evidence fixture', permission: 'public', securityLevel: 'safe', parameters: { type: 'object', properties: { query: { type: 'string' } } }, handler: async () => 'Fixture evidence' });
+  const execution = buildLumiExecutionPipeline({ requestId, dispatch: { userId, text, channel: 'chat', source: 'planned-fixture', domain: 'personal', orgId: '' }, registry, isSanctuary: false,
+    personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 4 },
+    actionTaskState: getConversationForScope(conversationId, userId, 'personal', '')?.actionContinuationState,
+  });
+  return { userId, conversationId, requestId, userMessageId, userText: text, execution };
+}
+async function unfinished() {
+  const input = await accepted('Search the public web for synthetic cloud examples.');
+  const preparation = preparePlannedConversationExecution(input);
+  expect(preparation.state?.taskId).toBeTruthy();
+  addMessageIdempotent({ userId: input.userId, conversationId: input.conversationId, agentId: 'lumi', requestId: input.requestId, source: 'planned-fixture', channel: 'chat', domain: 'personal', orgId: '', role: 'assistant', content: 'The evidence is not available yet.',
+    terminalTaskDisposition: { outcome: 'blocked', taskId: preparation.state!.taskId, requestId: input.requestId, reason: 'Fixture source unavailable.' },
+  });
+  await flushDBOrThrow();
+  return { input, taskId: preparation.state!.taskId };
+}
+
+describe('planned conversation task ownership', () => {
+  it('binds a fresh executable request to its exact already durable transcript', async () => {
+    const input = await accepted('Search the public web for synthetic cloud examples.');
+    expect(input.execution.executionRequested).toBe(true);
+    const prepared = preparePlannedConversationExecution(input);
+    expect(prepared.kind).toBe('new');
+    expect(prepared.state?.activeRequestId).toBe(input.requestId);
+    expect(prepared.state?.latestInstructionRef).toBe(input.userMessageId);
+    expect(readDB().conversationActionTurns.find((row: any) => row.requestId === input.requestId)).toMatchObject({ taskId: prepared.state!.taskId, userMessageId: input.userMessageId });
+  });
+  it('keeps an accepted continuation on the exact unfinished task', async () => {
+    const previous = await unfinished(); const input = await accepted('Continue the unfinished task.', previous.input);
+    expect(input.execution.taskRelation.taskId).toBe(previous.taskId);
+    const prepared = preparePlannedConversationExecution(input);
+    expect(prepared.kind).toBe('resume'); expect(prepared.state?.taskId).toBe(previous.taskId);
+    expect(prepared.state?.activeRequestId).toBe(input.requestId);
+  });
+  it('gives an unrelated concrete action its own task and preserves the supersession edge', async () => {
+    const previous = await unfinished(); const input = await accepted('Start a separate task: Search the public web for synthetic ocean examples.', previous.input);
+    const prepared = preparePlannedConversationExecution(input);
+    expect(prepared.kind).toBe('new'); expect(prepared.state?.taskId).not.toBe(previous.taskId);
+    expect(prepared.state?.supersededTaskId).toBe(previous.taskId);
+  });
+  it('does not borrow an unfinished task for an ordinary conversational turn', async () => {
+    const previous = await unfinished(); const input = await accepted('Hello.', previous.input);
+    const before = JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === input.conversationId));
+    expect(preparePlannedConversationExecution(input)).toMatchObject({ kind: 'conversation', state: null });
+    expect(JSON.stringify(readDB().conversationActionTasks.filter((row: any) => row.conversationId === input.conversationId))).toBe(before);
+  });
+  it('creates a separate narrowly authorized task for a bound runtime cleanup offer', async () => {
+    const previous = await unfinished(); const input = await accepted('Continue the unfinished task.', previous.input);
+    const prepared = preparePlannedConversationExecution({ ...input, acceptedRuntimeCleanup: true });
+    expect(prepared.kind).toBe('new'); expect(prepared.state?.taskId).not.toBe(previous.taskId);
+    expect(prepared.state?.policySnapshot).toMatchObject({ allowedTools: ['runtime_work_cancel'], maxIterations: 1 });
+  });
+  it('prepares a taskless exact durable grant without borrowing a prior task', async () => {
+    const input = await accepted('Okay.');
+    expect(input.execution.capabilityPlan.taskLedgerRequired).toBe(false);
+    const scope = buildTransportNeutralConfirmationScope({ domain: 'personal', orgId: '', conversationId: input.conversationId });
+    const pending = await recordPendingConfirmationDurably(input.userId, 'web_search', { query: 'fixture' }, 'chat', scope);
+    expect((await getPendingConfirmationDurably(input.userId, scope))?.id).toBe(pending.id);
+    const prepared = preparePlannedConversationExecution({ ...input, pendingConfirmation: pending });
+    expect(prepared.kind).toBe('new'); expect(prepared.state?.activeRequestId).toBe(input.requestId);
+  });
+  it('resumes the task named by an accepted bound confirmation', async () => {
+    const previous = await unfinished(); const input = await accepted('Okay.', previous.input);
+    const scope = buildTransportNeutralConfirmationScope({ domain: 'personal', orgId: '', conversationId: input.conversationId, taskId: previous.taskId });
+    const pending = await recordPendingConfirmationDurably(input.userId, 'web_search', { query: 'fixture' }, 'chat', scope);
+    expect((await getPendingConfirmationDurably(input.userId, scope))?.id).toBe(pending.id);
+    const prepared = preparePlannedConversationExecution({ ...input, pendingConfirmation: pending });
+    expect(prepared.kind).toBe('resume'); expect(prepared.state?.taskId).toBe(previous.taskId);
+    expect(prepared.state?.activeRequestId).toBe(input.requestId);
+  });
+  it('cannot prepare fresh or cleanup work without the admitted conversation', async () => {
+    const input = await accepted('Search the public web for synthetic cloud examples.');
+    const before = JSON.stringify(readDB().conversationActionTasks);
+    for (const acceptedRuntimeCleanup of [false, true]) expect(preparePlannedConversationExecution({ ...input, conversationId: undefined, acceptedRuntimeCleanup })).toMatchObject({ kind: 'conversation', state: null });
+    expect(JSON.stringify(readDB().conversationActionTasks)).toBe(before);
+  });
+  it('does not acquire an action task for an entry-owned observational exit', async () => {
+    const input = await accepted('Search the public web for synthetic cloud examples.');
+    const before = JSON.stringify(readDB().conversationActionTasks);
+    expect(preparePlannedConversationExecution({ ...input, observationOnly: true, bindConversationTurn: true })).toMatchObject({ kind: 'conversation', state: null });
+    expect(JSON.stringify(readDB().conversationActionTasks)).toBe(before);
+  });
+  it('rejects a mismatched request identity before any task or turn is changed', async () => {
+    const input = await accepted('Search the public web for synthetic cloud examples.');
+    const before = JSON.stringify([readDB().conversationActionTasks, readDB().conversationActionTurns]);
+    expect(() => preparePlannedConversationExecution({ ...input, requestId: 'another-request' })).toThrow('accepted turn');
+    expect(JSON.stringify([readDB().conversationActionTasks, readDB().conversationActionTurns])).toBe(before);
+  });
+});

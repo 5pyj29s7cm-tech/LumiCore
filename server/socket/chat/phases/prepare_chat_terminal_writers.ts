@@ -1,3 +1,4 @@
+import { preparePlannedConversationExecution } from "../../../conversation/planned_execution";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { buildRecentFailureExplanation } from "../history";
 import { createTurnConfirmation } from "../../../tools/turn_confirmation";
@@ -12,7 +13,7 @@ import { createDesktopExecutionTracker } from "../../../desktop/execution_runtim
 import { persistLumiPostTurnLearning } from "../../../cognition/post_turn_learning";
 import { persistWorkTakeoverTurnExecution } from "../../../work_takeover/execution_writeback";
 import { buildTransportNeutralConfirmationScope, formatPendingConfirmationRequest, type recordPendingConfirmationDurably } from "../../../tools/pending_confirmation";
-import { updateAssistantMessageTerminalPresentation, getMessages, getConversationActionStatus, prepareConversationActionExecution, setConversationActionExecutionStatus } from "../../../conversation/manager";
+import { updateAssistantMessageTerminalPresentation, getMessages, getConversationActionStatus, setConversationActionExecutionStatus } from "../../../conversation/manager";
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../../conversation/execution_facts";
 import { resolveExactConversationCorrection } from "../../../conversation/exact_correction";
 import { recordChatExecutionPersistenceUnknownDurably } from "../../chat_execution_registry";
@@ -283,7 +284,7 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
         consumeScope: () => context.confirmationScope,
         proposalScope: () => {
           context.confirmationScope = buildTransportNeutralConfirmationScope({
-            domain: context.resolvedDomain, orgId: context.resolvedOrgId, conversationId: context.conversationId || context.selectedConversationId,
+            domain: context.resolvedDomain, orgId: context.resolvedOrgId, conversationId: context.conversationId || (context.conversation?.actionContinuationState?.taskId && context.pendingConfirmation ? context.selectedConversationId : undefined),
             taskId: actionTaskExecution.state?.taskId, originRequestId: context.requestId,
           });
           context.confirmationChannelScope = buildTransportNeutralConfirmationScope({
@@ -328,44 +329,13 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
       const toolRoute = executionDecision.toolRoute;
       const modelCapabilityPolicy = context.executionPipeline.authorizationPolicy;
       const modelToolProjection = context.executionPipeline.modelToolProjection;
-      const existingActionState = context.conversation?.actionContinuationState;
-      const toolSessionActive = !context.isMemoryAvatar && context.executionPipeline.executionRequested
-        && modelToolProjection.toolNames.length > 0;
-      // The semantic execution plan owns durable task creation. Main Chat may
-      // expose a tool manifest to the model for open-ended reasoning, but that
-      // alone does not make a greeting or ordinary conversation an executable
-      // task. Only turns whose flow requires completion evidence/tool work (or
-      // a pending confirmation) receive a durable task identity before relay.
-      const bindsExistingAction = Boolean(
-        existingActionState?.taskId
-        && ['active_task', 'previous_task'].includes(context.resolvedTaskRelation.binding)
-        && ['continue', 'correction', 'accept', 'retry'].includes(context.resolvedTaskRelation.feedback),
-      );
-      // Cleanup creates its own task; a bound continuation or pending grant resumes the existing task.
-      const resumesAction = Boolean(
-        (bindsExistingAction && context.conversationId) || (existingActionState?.taskId && context.pendingConfirmation),
-      );
-      const preparation = context.acceptedRuntimeCleanupOffer && context.conversationId
-        ? {
-            conversationId: context.conversationId,
-            toolPolicy: { allowedTools: ['runtime_work_cancel'], requireConfirmation: [], forbiddenTools: [], maxIterations: 1 },
-            forceTask: true, forceNewTask: true, preserveExistingTask: false,
-          }
-        : resumesAction
-          ? {
-              conversationId: context.conversationId || context.selectedConversationId,
-              toolPolicy: modelCapabilityPolicy, followupIntent: actionFollowupIntent,
-              forceResume: true, preserveExistingTask: true,
-            }
-          : context.conversationId && (capabilitySelection.taskLedgerRequired || context.pendingConfirmation || context.structuredMediaRequest)
-            ? { conversationId: context.conversationId, toolPolicy: modelCapabilityPolicy, followupIntent: actionFollowupIntent, forceTask: true }
-            : null;
-      const actionTaskExecution = preparation
-        ? prepareConversationActionExecution({
-            userId: context.uid, userText: context.visibleUserText, requestId: context.requestId, userMessageId: context.acceptedUserMessageId,
-            ...preparation,
-          })
-        : { state: null, kind: 'conversation' as const, turnRowId: undefined };
+      const toolSessionActive = !context.isMemoryAvatar && context.executionPipeline.executionRequested;
+      const actionTaskExecution = preparePlannedConversationExecution({
+        execution: context.executionPipeline, conversationId: context.conversationId || context.selectedConversationId,
+        userId: context.uid, userText: context.visibleUserText, requestId: context.requestId, userMessageId: context.acceptedUserMessageId,
+        pendingConfirmation: context.pendingConfirmation,
+        acceptedRuntimeCleanup: Boolean(context.acceptedRuntimeCleanupOffer && context.conversationId),
+      });
   return { terminal: false as const, context: extendTurnBindings(context, {
     actionTaskExecution,
     get runtimeOwnedDeterministicRecoveryCall(): typeof runtimeOwnedDeterministicRecoveryCall { return runtimeOwnedDeterministicRecoveryCall; },

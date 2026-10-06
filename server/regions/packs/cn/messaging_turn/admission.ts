@@ -1,3 +1,4 @@
+import { preparePlannedConversationExecution } from "../../../../conversation/planned_execution";
 import type { IncomingMessage } from "../../../../messaging/types";
 import { getMember } from "../../../../org/db";
 import { captureMessagingOrganization, isMessagingAuthorizationCurrent as isAcceptedMessagingAuthorizationCurrent } from "../../../../messaging/turn_authorization";
@@ -7,12 +8,12 @@ import { resolveUserTurn, type TurnResolution } from "../../../../cognition/turn
 import { isPureOperationModeSwitchRequest, type OperationMode } from "../../../../cognition/operation_modes";
 import type { PersonalityConfig } from "../../../../personality/types";
 import type { PendingAssistantOfferContext } from "../../../../cognition/pending_assistant_offer";
-import { cancelConversationActionExecution, getMessagesByTokenBudget, getMessagesThroughExternalMessage, prepareConversationActionExecution, startConversationActionExecutionHeartbeat } from "../../../../conversation/manager";
+import { cancelConversationActionExecution, getMessagesByTokenBudget, getMessagesThroughExternalMessage, startConversationActionExecutionHeartbeat } from "../../../../conversation/manager";
 import { resolveAcceptedTurnConfirmation, type AcceptedUserTurnAdmission } from "../../../../socket/action_turn_durability";
 import { flushDBOrThrow } from "../../../../../db_layer";
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably } from "../../../../tools/pending_confirmation";
 import { clearPendingLegalNotice } from "../../../../messaging/legal_notice_pending";
-import { revalidateAcceptedTaskRelation, taskRelationFollowupIntent } from "../../../../cognition/task_concurrency";
+import { revalidateAcceptedTaskRelation } from "../../../../cognition/task_concurrency";
 import { getStoredOperationMode } from "../../../../cognition/operation_mode_store";
 import { persistExplicitRemoteRelationshipMemories } from "../remote_memory";
 import { generateSystemPrompt } from "../../../../personality/engine";
@@ -243,20 +244,13 @@ export async function prepareMessagingTurn(msg: IncomingMessage, options?: Messa
   const modelToolPolicy = executionPlan.authorizationPolicy;
   const modelToolProjection = executionPlan.modelToolProjection;
   const toolSessionActive = executionPlan.executionRequested;
-  const actionFollowupIntent = taskRelationFollowupIntent(acceptedRelation);
-  const actionTaskExecution = isIdentityBound && conversation
-    ? prepareConversationActionExecution({
-        conversationId: conversation.id,
-        userId: effectiveUserId,
-        userText: requestText,
-        requestId,
-        userMessageId: msg.userMessageId || '',
-        toolPolicy: modelToolPolicy,
-        forceResume: Boolean(pendingConfirmation || actionFollowupIntent === 'execute'),
-        forceTask: executionPlan.capabilityPlan.taskLedgerRequired
-          || (isOrganizationBound && requestsOrganizationScope(requestText)),
-      })
-    : { state: null, kind: 'conversation' as const, turnRowId: undefined };
+  const actionFollowupIntent = executionPlan.actionFollowupIntent;
+  const actionTaskExecution = preparePlannedConversationExecution({
+    execution: executionPlan, conversationId: isIdentityBound ? conversation?.id : undefined,
+    userId: effectiveUserId, userText: requestText, requestId, userMessageId: msg.userMessageId || '',
+    pendingConfirmation, bindConversationTurn: true,
+    additionalLedgerRequired: isOrganizationBound && requestsOrganizationScope(requestText),
+  });
   if ('bindingFailure' in actionTaskExecution) {
     const staleText = actionTaskExecution.bindingFailure === 'busy'
       ? CN_TASK_EXECUTION_MESSAGES.actionTurnBusy

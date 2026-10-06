@@ -3,6 +3,7 @@ import './helpers';
 import { enCatalog } from '../src/i18n/locales/catalog_en';
 import { zhCatalog } from '../src/i18n/locales/catalog_zh';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase } from '../db_layer';
 import { buildLumiTurnDispatch } from '../server/cognition/turn_dispatch';
@@ -193,13 +194,13 @@ describe('model-owned main chat architecture', () => {
     // Natural-language dispatch remains model-owned. Tool-capable fresh turns
     // create only a durable task envelope before the model/tool relay so every
     // receipt has a stable taskId; preparation itself does not execute tools.
-    expect(chatSource).toContain('const bindsExistingAction = Boolean(');
-    expect(chatSource).toContain('const preparation = acceptedRuntimeCleanupOffer && conversationId');
-    expect(chatSource).toContain('capabilitySelection.taskLedgerRequired || pendingConfirmation || structuredMediaRequest');
-    expect(chatSource.slice(chatSource.indexOf('const preparation = acceptedRuntimeCleanupOffer')).match(/prepareConversationActionExecution\(\{/g)).toHaveLength(1);
-    expect(chatSource).toContain('prepareConversationActionExecution({');
+    const taskOwner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
+    expect(chatSource).toContain('preparePlannedConversationExecution({');
+    expect(chatSource).not.toContain('const bindsExistingAction =');
+    expect(chatSource).toContain('acceptedRuntimeCleanup: Boolean(acceptedRuntimeCleanupOffer && conversationId)');
+    expect(taskOwner).toContain('execution.capabilityPlan.taskLedgerRequired');
+    expect(taskOwner.match(/prepareConversationActionExecution\(\{/g)).toHaveLength(1);
     expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
-    expect(chatSource).toContain('forceTask: true');
     expect(chatSource).not.toContain('persistConversationExecutionPlan');
     expect(chatSource).not.toContain("setConversationActionExecutionStatus(conversationId, uid, 'executing'");
     // A cancellation is recorded as a terminal continuation boundary.  Normal
@@ -221,12 +222,13 @@ describe('model-owned main chat architecture', () => {
     expect(messaging).toContain('isPureOperationModeSwitchRequest(requestText, requestedMode)');
 
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(readFileSync('server/cognition/turn_model.ts', 'utf8')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).not.toContain('buildModelToolProjection');
     expect(rest).not.toMatch(/restExecutionDecision\.(?:baseToolPolicy|toolPolicy|maxIterations|toolRoute)\s*=/);
     expect(rest).toContain("'remote_restricted'");
-    expect(rest).toContain('toolPolicy: restModelToolPolicy');
+    expect(readFileSync('server/cognition/turn_model.ts', 'utf8')).toContain('toolPolicy: execution.authorizationPolicy');
     expect(rest).toContain('isSanctuary: !req.user');
 
     // misc_routes used to mount a second, less constrained /chat handler.

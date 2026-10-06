@@ -616,9 +616,12 @@ describe('voice foreground release convergence', () => {
     expect(identityAt).toBeGreaterThan(bindingFailureAt);
     expect(freezeAt).toBeGreaterThan(identityAt);
     expect(source.slice(identityAt, identityAt + 420)).toContain("? { expectedTaskId: actionTaskExecution.state.taskId }");
-    const prepareTaskAt = source.indexOf('prepareConversationActionExecution({');
-    expect(source.slice(prepareTaskAt, prepareTaskAt + 520))
-      .toContain('|| interruptedMerge.usedInterruptedTurn');
+    const prepareTaskAt = source.indexOf('preparePlannedConversationExecution({');
+    expect(prepareTaskAt).toBeGreaterThanOrEqual(0);
+    expect(source.slice(prepareTaskAt, prepareTaskAt + 700))
+      .toContain('acceptedInterruptedTurn: interruptedMerge.usedInterruptedTurn');
+    const bindingOwner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
+    expect(bindingOwner).toContain('input.acceptedInterruptedTurn || execution.trustedActionContinuation');
 
     const publicHelperStart = source.indexOf('export async function convergeVoiceForegroundRequestBeforeRelease');
     const settleBeforeFinalizeAt = source.indexOf('settleConversationActionExecutionRequest(', publicHelperStart);
