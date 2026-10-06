@@ -4,7 +4,7 @@ import { isExplicitMemoryRequest, persistTurnMemory } from "../../../memory/turn
 import { readDatabaseTables } from "../../../../db_layer";
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, isExplicitConfirmationReply } from "../../../tools/pending_confirmation";
 import { getMessages, getConversationForScope, completeConversationActionFromUserObservation } from "../../../conversation/manager";
-import { getConversationActionStateByTaskId, getConversationActionStateFromLedger } from "../../../conversation/action_ledger";
+import { getConversationActionStateByTaskId, getConversationActionStateFromLedger } from "../../../conversation/ledger/queries";
 import { findAdjacentVerifiedConfirmedAction } from "../../../conversation/duplicate_confirmation";
 import { findLatestRepeatableAssistantReply } from "../../../conversation/assistant_restatement";
 import { conversationActionRequiresFreshConfirmationReview, formatConversationActionTaskStatus, isUserObservedTaskCompletion, pendingRuntimeCancellationRecheck } from "../../../cognition/action_continuation";

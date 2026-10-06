@@ -2,7 +2,8 @@ import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../
 import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
 import { createToolReceiptObserver } from '../tools/receipt_observer';
 import type { ToolExecutionRecord } from '../tools/types';
-import { appendConversationActionReceipts, type ConversationActionTaskRow } from './action_ledger';
+import { appendConversationActionReceipts } from "./ledger/receipt_store";
+import { type ConversationActionTaskRow } from "./ledger/contracts";
 
 interface ReceiptOwner {
   userId: string;

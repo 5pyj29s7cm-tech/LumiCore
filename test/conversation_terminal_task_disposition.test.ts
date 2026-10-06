@@ -2,7 +2,7 @@ import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
 import { taskCompletionFromReceipts } from '../server/cognition/task_execution_ledger';
-import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
+import { getConversationActionStateByTaskId } from "../server/conversation/ledger/queries";
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import {
   addMessageIdempotent,

@@ -3,7 +3,7 @@ import { acquireConversationActionTurnLease, finalizeConversationActionTurn, get
 import { readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { type Conversation } from "./manager/contracts";
 import { normalizeConversationActionState, type ConversationActionContinuationState } from '../cognition/action_continuation';
-import { finalizeConversationActionTask } from './action_ledger';
+import { finalizeConversationActionTask } from "./ledger/task_lifecycle";
 import { conversationTaskStatusOwnsExecutionLease, taskCompletionFromReceipts } from '../cognition/task_execution_ledger';
 import { hydrateConversationActionState, compactRolloverText } from "./action_state_hydration";
 import { type FinalizeConversationActionRequestOptions, type ConvergeConversationActionRequestLeaseInput } from "./foreground_request_types";

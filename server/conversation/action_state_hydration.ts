@@ -2,7 +2,8 @@ import { buildTransportNeutralConfirmationScope, getPendingConfirmation } from '
 import { type Conversation } from "./manager/contracts";
 import { classifyConversationActionFollowupIntent, needsRecentActionContinuationContext, normalizeConversationActionState, type ConversationActionContinuationState } from '../cognition/action_continuation';
 import { conversationTaskStatusOwnsExecutionLease } from '../cognition/task_execution_ledger';
-import { getConversationActionStateByTaskId, getConversationActionStateFromLedger, syncConversationActionTaskLedger } from './action_ledger';
+import { getConversationActionStateByTaskId, getConversationActionStateFromLedger } from "./ledger/queries";
+import { syncConversationActionTaskLedger } from "./ledger/task_lifecycle";
 
 export function hasExactPendingConfirmationForTask(input: {
   id: string;

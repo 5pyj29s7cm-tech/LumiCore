@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildForegroundWeChatSendArgs } from '../server/regions/packs/cn/foreground_wechat_intent';
-import {
-  findConversationActionTask,
-  formatConversationActionLedgerStatus,
-  getConversationActionStateFromLedger,
-  repairContradictoryConversationActionReceipts,
-  syncConversationActionTaskLedger,
-} from '../server/conversation/action_ledger';
+import { findConversationActionTask, getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
+import { formatConversationActionLedgerStatus } from "../server/conversation/ledger/status";
+import { repairContradictoryConversationActionReceipts } from "../server/conversation/ledger/recovery";
+import { syncConversationActionTaskLedger } from "../server/conversation/ledger/task_lifecycle";
 import type { ConversationActionContinuationState } from '../server/cognition/action_continuation';
 import { ToolRegistry } from '../server/tools/registry';
 import { formatCnToolFailureDetail } from "../server/regions/messages/voice_fast_path_messages";

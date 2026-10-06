@@ -1,17 +1,12 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
-import {
-  archiveBoundConversationActionReceipts,
-  appendConversationActionReceipts,
-  conversationActionStateFromTask,
-  finalizeConversationActionTask,
-  repairContradictoryConversationActionReceipts,
-  repairTerminalConversationActionPointers,
-  repairTerminalConversationActionTaskLeases,
-  settleBackgroundConversationActionTask,
-  syncConversationActionTaskLedger,
-  type ConversationActionTaskRow,
-} from '../server/conversation/action_ledger';
+import { archiveBoundConversationActionReceipts } from "../server/conversation/ledger/receipt_archive";
+import { appendConversationActionReceipts } from "../server/conversation/ledger/receipt_store";
+import { conversationActionStateFromTask } from "../server/conversation/ledger/queries";
+import { finalizeConversationActionTask, syncConversationActionTaskLedger } from "../server/conversation/ledger/task_lifecycle";
+import { repairContradictoryConversationActionReceipts, repairTerminalConversationActionPointers, repairTerminalConversationActionTaskLeases } from "../server/conversation/ledger/recovery";
+import { settleBackgroundConversationActionTask } from "../server/conversation/ledger/background";
+import { type ConversationActionTaskRow } from "../server/conversation/ledger/contracts";
 import {
   buildConversationActionContinuationState,
   normalizeConversationActionState,

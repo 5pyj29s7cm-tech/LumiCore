@@ -7,7 +7,7 @@ import type { OrganizationMembershipAuthorization } from '../org/membership_auth
 import { isAutonomousTaskFinalizationPending, projectAutonomousTaskFinalization, resetAutonomousTaskFinalizationsForTests } from './task_finalization';
 export { setAutonomousTaskFinalizationPending } from './task_finalization';
 import { sanitizeDiagnosticValue } from '../client/diagnostic_sanitizer';
-import type { PersistedCapabilityExecutionPlan } from '../conversation/action_ledger';
+import type { PersistedCapabilityExecutionPlan } from "../conversation/ledger/contracts";
 import {
   diagnoseDurableTaskFailure,
   evaluateDurableResumeSafety,

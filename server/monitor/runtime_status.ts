@@ -2,11 +2,7 @@ import { parseStoredObject as parseObject } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 import { groupTaskReceipts, isDelegatedActionEvidenceArchive } from '../cognition/task_execution_ledger';
 import { projectAutonomousTaskFinalization } from '../autonomy/task_finalization';
-import type {
-  ConversationActionReceiptRow,
-  ConversationActionTaskRow,
-  PersistedCapabilityExecutionPlan,
-} from '../conversation/action_ledger';
+import type { ConversationActionReceiptRow, ConversationActionTaskRow, PersistedCapabilityExecutionPlan } from "../conversation/ledger/contracts";
 import { readConversationFocusThread, type ConversationFocusThread } from '../conversation/focus_threads';
 
 export type RuntimeAttentionLevel = 'ready' | 'working' | 'attention';

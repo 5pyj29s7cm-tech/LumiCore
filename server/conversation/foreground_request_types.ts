@@ -1,4 +1,4 @@
-import { type ConversationActionTerminalDisposition } from './action_ledger';
+import { type ConversationActionTerminalDisposition } from "./ledger/contracts";
 import { type ConversationActionTurn } from './action_turn_ledger';
 
 export interface FinalizeConversationActionRequestOptions {

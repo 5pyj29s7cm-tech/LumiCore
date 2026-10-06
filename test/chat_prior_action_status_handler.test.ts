@@ -15,7 +15,7 @@ import { registerChatHandler } from '../server/socket/chat';
 import { getChatExecution } from '../server/socket/chat_execution_registry';
 import { queryMemoriesVector } from '../server/memory';
 import { retrieveChunks } from '../server/agents/rag';
-import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
+import { getConversationActionStateByTaskId } from "../server/conversation/ledger/queries";
 
 vi.mock('../server/memory', async importOriginal => {
   const actual = await importOriginal<typeof import('../server/memory')>();

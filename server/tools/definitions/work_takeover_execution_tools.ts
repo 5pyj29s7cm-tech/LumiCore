@@ -1,7 +1,8 @@
 import { cnWorkTakeoverMessages } from "../../regions/messages/work_takeover_messages";
 import { randomUUID } from 'node:crypto';
 import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../db_layer';
-import { ensureBackgroundConversationActionTask, appendConversationActionReceipts } from '../../conversation/action_ledger';
+import { ensureBackgroundConversationActionTask } from "../../conversation/ledger/background";
+import { appendConversationActionReceipts } from "../../conversation/ledger/receipt_store";
 import type { ToolRegistry } from '../registry';
 import { executeToolCall } from '../execution_engine';
 import { capabilityEvidence } from '../capability_contracts';

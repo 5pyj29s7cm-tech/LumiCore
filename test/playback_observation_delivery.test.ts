@@ -40,7 +40,7 @@ vi.mock('../server/conversation/summary_scheduler', async original => ({
 import { initDatabase, readDB, flushDBOrThrow } from '../db_layer';
 import { registerVoiceHandlers } from '../server/socket/voice';
 import { registerChatHandler } from '../server/socket/chat';
-import { getConversationActionStateFromLedger } from '../server/conversation/action_ledger';
+import { getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
 import { addMessage, getMessages, getOrCreateActiveConversation } from '../server/conversation/manager';
 import { buildTransportNeutralConfirmationScope, recordPendingConfirmationDurably } from '../server/tools/pending_confirmation';
 import { getChatExecution, waitForChatExecutionPersistence } from '../server/socket/chat_execution_registry';

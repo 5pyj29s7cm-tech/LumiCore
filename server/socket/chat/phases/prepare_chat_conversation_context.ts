@@ -9,7 +9,7 @@ import { normalizeOperationMode } from "../../../cognition/operation_modes";
 import { getStoredOperationMode } from "../../../cognition/operation_mode_store";
 import { clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { getMessages, setConversationMode, getConversationForScope, bindConversationActionExecutionTurn, cancelConversationActionExecution } from "../../../conversation/manager";
-import { getConversationActionStateByTaskId, getLatestConversationActionState } from "../../../conversation/action_ledger";
+import { getConversationActionStateByTaskId, getLatestConversationActionState } from "../../../conversation/ledger/queries";
 import { buildRecentActionContinuationBridge } from "../../../cognition/action_continuation";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
 import { formatActiveTaskRelationContext } from "../../../cognition/task_concurrency";

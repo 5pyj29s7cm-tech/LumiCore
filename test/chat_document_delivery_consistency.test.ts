@@ -14,7 +14,7 @@ vi.mock('../server/agents/rag', async original => ({ ...await original<typeof im
 vi.mock('../server/conversation/summary_scheduler', async original => ({ ...await original<typeof import('../server/conversation/summary_scheduler')>(), scheduleConversationSummary:vi.fn() }));
 
 import { initDatabase, querySQL, readDB } from '../db_layer';
-import { findConversationActionTask, getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
+import { findConversationActionTask, getConversationActionStateByTaskId } from "../server/conversation/ledger/queries";
 import { startIsolatedConversation, getMessages, addMessage } from '../server/conversation/manager';
 import { registerChatHandler } from '../server/socket/chat';
 import { registerAllTools } from '../server/tools/definitions';

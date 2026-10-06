@@ -9,10 +9,8 @@ import {
   readDB,
   writeDB,
 } from '../db_layer';
-import {
-  appendConversationActionReceipts,
-  syncConversationActionTaskLedger,
-} from '../server/conversation/action_ledger';
+import { appendConversationActionReceipts } from "../server/conversation/ledger/receipt_store";
+import { syncConversationActionTaskLedger } from "../server/conversation/ledger/task_lifecycle";
 import {
   bindConversationActionTurnTask,
 } from '../server/conversation/action_turn_ledger';

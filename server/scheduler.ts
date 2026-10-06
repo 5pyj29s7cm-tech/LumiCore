@@ -30,7 +30,7 @@ import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../db_
 import { finalizeLumiResponse } from './cognition/result_finalizer';
 import { sanitizeExecutionResponseForDelivery } from './cognition/execution_guard_recovery';
 import { authorizeCapabilityPlanTool, buildScheduledCapabilityExecutionPlan, type CapabilityExecutionPlan } from './cognition/capability_execution_plan';
-import { getScheduledCapabilityExecutionStatus, persistScheduledCapabilityExecution } from './conversation/action_ledger';
+import { getScheduledCapabilityExecutionStatus, persistScheduledCapabilityExecution } from "./conversation/ledger/scheduler";
 import type {
   CapabilityLane,
   CapabilityOperation,

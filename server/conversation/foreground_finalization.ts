@@ -3,7 +3,9 @@ import { getConversationActionTurn, reconcileConversationActionTurnLease, type C
 import { normalizeConversationActionState, type ConversationActionContinuationState } from '../cognition/action_continuation';
 import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../db_layer';
 import { type Conversation } from "./manager/contracts";
-import { finalizeConversationActionTask, getConversationActionStateByTaskId, type ConversationActionLiveProjection } from './action_ledger';
+import { finalizeConversationActionTask } from "./ledger/task_lifecycle";
+import { getConversationActionStateByTaskId } from "./ledger/queries";
+import { type ConversationActionLiveProjection } from "./ledger/contracts";
 import { conversationTaskStatusOwnsExecutionLease, isTerminalConversationTaskStatus } from '../cognition/task_execution_ledger';
 import { type ConvergeConversationActionRequestLeaseInput, type FinalizeForegroundRequestInput, type ForegroundRequestFinalizationOutcome, type FinalizeForegroundRequestResult, type ConvergeConversationActionRequestLeaseResult, type ForegroundRequestReleaseInput, type ForegroundRequestDurabilityDependencies, type ForegroundRequestReleaseResult } from "./foreground_request_types";
 import { clearManagerActionRequestLeaseOwner } from "./action_execution_runtime";

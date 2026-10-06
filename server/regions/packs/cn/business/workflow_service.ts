@@ -4,12 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readDatabaseTables, commitDatabaseTables, flushDBOrThrow } from '../../../../../db_layer';
 import { getConversationForScope, getOrCreateActiveConversation } from '../../../../conversation/manager';
-import {
-  ensureBackgroundConversationActionTask,
-  settleBackgroundConversationActionTask,
-  appendConversationActionReceipts,
-  findConversationActionTask,
-} from '../../../../conversation/action_ledger';
+import { ensureBackgroundConversationActionTask, settleBackgroundConversationActionTask } from "../../../../conversation/ledger/background";
+import { appendConversationActionReceipts } from "../../../../conversation/ledger/receipt_store";
+import { findConversationActionTask } from "../../../../conversation/ledger/queries";
 import type { ToolExecutionRecord } from '../../../../tools/types';
 import { verifyWorkTakeoverResult, type WorkTakeoverResultVerification } from '../../../../work_takeover/result_verifier';
 import {

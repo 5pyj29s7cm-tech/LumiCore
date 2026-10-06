@@ -11,7 +11,7 @@ import {
   type EvidenceWorkflowVerificationStatus,
 } from '../../shared/evidence_workflow';
 import { readDatabaseTables } from '../../db_layer';
-import type { ConversationActionReceiptRow, ConversationActionTaskRow } from '../conversation/action_ledger';
+import type { ConversationActionReceiptRow, ConversationActionTaskRow } from "../conversation/ledger/contracts";
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { getWorkTakeoverTask, updateWorkTakeoverTask, type WorkTakeoverTask } from './tasks';
 

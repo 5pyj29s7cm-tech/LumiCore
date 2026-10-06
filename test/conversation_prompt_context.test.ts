@@ -8,10 +8,8 @@ import {
   prepareConversationActionTaskState,
   type ConversationActionContinuationState,
 } from '../server/cognition/action_continuation';
-import {
-  getConversationActionStateFromLedger,
-  syncConversationActionTaskLedger,
-} from '../server/conversation/action_ledger';
+import { getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
+import { syncConversationActionTaskLedger } from "../server/conversation/ledger/task_lifecycle";
 import {
   addMessage,
   compactRecordForPrompt,

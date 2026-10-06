@@ -2,7 +2,7 @@ import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
 import { getOrCreateActiveConversation, addMessageIdempotent, prepareConversationActionExecution } from '../server/conversation/manager';
-import { appendConversationActionReceipts } from '../server/conversation/action_ledger';
+import { appendConversationActionReceipts } from "../server/conversation/ledger/receipt_store";
 import { buildToolExecutionEnvelope } from '../server/tools/execution_envelope';
 import { inspectPersistedToolExecutionReceipt } from '../server/tools/persisted_execution_receipt';
 import { executeToolCall } from '../server/tools/execution_engine';

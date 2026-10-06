@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  attachConversationExecutionPlan,
-  persistScheduledCapabilityExecution,
-  type ConversationActionTaskRow,
-} from '../server/conversation/action_ledger';
+import { attachConversationExecutionPlan } from "../server/conversation/ledger/plans";
+import { persistScheduledCapabilityExecution } from "../server/conversation/ledger/scheduler";
+import { type ConversationActionTaskRow } from "../server/conversation/ledger/contracts";
 import {
   bindCapabilityExecutionPlanTask,
   type CapabilityExecutionPlan,

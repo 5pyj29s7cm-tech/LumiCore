@@ -36,7 +36,7 @@ vi.mock('../server/agents/rag', async importOriginal => {
 });
 
 import { initDatabase, readDB } from '../db_layer';
-import { getConversationActionStateByTaskId } from '../server/conversation/action_ledger';
+import { getConversationActionStateByTaskId } from "../server/conversation/ledger/queries";
 import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import { getOrCreateActiveConversation } from '../server/conversation/manager';
 import {

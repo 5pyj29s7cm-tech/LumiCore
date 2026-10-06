@@ -5,7 +5,7 @@ import {
   reconcileConversationFocusThread,
   updateConversationFocusThread,
 } from '../server/conversation/focus_threads';
-import { syncConversationActionTaskLedger } from '../server/conversation/action_ledger';
+import { syncConversationActionTaskLedger } from "../server/conversation/ledger/task_lifecycle";
 
 function task(overrides: Record<string, unknown> = {}) {
   return {

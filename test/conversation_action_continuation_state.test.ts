@@ -12,7 +12,7 @@ import {
   settleConversationActionExecutionRequest,
   setConversationActionExecutionStatus,
 } from '../server/conversation/manager';
-import { getConversationActionStateFromLedger } from '../server/conversation/action_ledger';
+import { getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 
 function durableActionState(conversationId: string, userId: string) {

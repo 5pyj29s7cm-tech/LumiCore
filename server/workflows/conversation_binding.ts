@@ -1,5 +1,5 @@
 import { readDatabaseTables } from '../../db_layer';
-import type { ConversationActionReceiptRow, ConversationActionTaskRow } from '../conversation/action_ledger';
+import type { ConversationActionReceiptRow, ConversationActionTaskRow } from "../conversation/ledger/contracts";
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { parseReceiptObject } from '../tools/receipt_payload';
 import type { ToolContext } from '../tools/types';

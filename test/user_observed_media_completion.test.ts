@@ -53,7 +53,7 @@ import {
   addMessage, addMessageIdempotent, completeConversationActionFromUserObservation,
   getOrCreateActiveConversation, prepareConversationActionExecution, settleConversationActionExecutionRequest,
 } from '../server/conversation/manager';
-import { getConversationActionStateFromLedger } from '../server/conversation/action_ledger';
+import { getConversationActionStateFromLedger } from "../server/conversation/ledger/queries";
 import { isUserObservedTaskCompletion } from '../server/cognition/action_continuation';
 import { recordsToTaskReceipts } from '../server/cognition/task_execution_ledger';
 import type { ToolExecutionRecord } from '../server/tools/types';

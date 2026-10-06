@@ -10,7 +10,7 @@ import { sanitizeExecutionResponseForDelivery, sanitizeExecutionNotificationForD
 import { buildTransportNeutralConfirmationScope, isConfirmationCancellation } from "../../../tools/pending_confirmation";
 import { buildPendingAssistantOfferContextFromTranscript, resolvePendingRuntimeCleanupOffer } from "../../../cognition/pending_assistant_offer";
 import { getMessages, type startConversationActionExecutionHeartbeat } from "../../../conversation/manager";
-import { getConversationActionStateByTaskId } from "../../../conversation/action_ledger";
+import { getConversationActionStateByTaskId } from "../../../conversation/ledger/queries";
 import { classifyRuntimeWorkIntent } from "../../../cognition/runtime_work_intent";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
 import { recordChatExecutionEvent, recordChatExecutionPersistenceUnknownDurably, type ChatExecutionScope } from "../../chat_execution_registry";

@@ -55,7 +55,7 @@ import {
   buildLumiExecutionPipeline,
   type LumiExecutionPipeline,
 } from '../cognition/execution_pipeline';
-import { sanitizeCapabilityExecutionPlan } from '../conversation/action_ledger';
+import { sanitizeCapabilityExecutionPlan } from "../conversation/ledger/plans";
 import { snapshotDurableToolRecords } from '../cognition/durable_task_recovery';
 import {
   buildTaskCompletionFeedback,

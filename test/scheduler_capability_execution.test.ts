@@ -11,11 +11,7 @@ import {
   buildScheduledTaskExecutionPlan,
   resolveScheduledUserIds,
 } from '../server/scheduler';
-import {
-  compactLegacyScheduledCapabilityExecutions,
-  getScheduledCapabilityExecutionStatus,
-  persistScheduledCapabilityExecution,
-} from '../server/conversation/action_ledger';
+import { compactLegacyScheduledCapabilityExecutions, getScheduledCapabilityExecutionStatus, persistScheduledCapabilityExecution } from "../server/conversation/ledger/scheduler";
 import { evaluateCapabilityRollout } from '../server/cognition/capability_rollout';
 import type { ToolExecutionRecord } from '../server/tools/types';
 import { extractSourceExpression } from './source_expression';
