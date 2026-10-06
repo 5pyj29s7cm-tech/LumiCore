@@ -373,7 +373,10 @@ describe('finalized output paths', () => {
     expect(source('server/cognition/prepared_turn.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(messaging).toContain('finalizeMessagingResponseForDelivery({');
     expect(messaging).toContain('finalizeLumiResponseForDelivery({ ...input, toolRecords: currentMessagingFinalizationRecords(input) });');
-    expect(messaging).toContain('`${source}_guard_recovery`');
+    const messagingModel = source('server/regions/packs/cn/messaging_turn/model_execution.ts');
+    expect(messagingModel).toContain('await runPreparedLumiTurn({');
+    expect(messagingModel).toContain('source: context.source, taskText: context.routingText');
+    expect(messagingModel).not.toContain('runResolvedLumiRecovery(');
     expect(delivery.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(1);
     expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard)');
     expect(delivery).toContain('input.refinalize || ((candidateText, records, completionGuard) => finalize(candidateText, records, `${input.source}_guard_recovery`, completionGuard))');

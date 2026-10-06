@@ -1,5 +1,4 @@
-import { runResolvedLumiRecovery } from "../../../../cognition/turn_recovery";
-import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../../cognition/turn_model";
+import { runPreparedLumiTurn } from "../../../../cognition/prepared_turn";
 import type { MessageHandler } from "../../../../messaging/types";
 import { MessagingAuthorizationRevokedError } from "../../../../messaging/turn_authorization";
 import { toolRegistry } from "../../../../tools/registry";
@@ -10,15 +9,12 @@ import { persistRemotePostTurnLearning } from "../remote_memory";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../messages/task_execution_messages";
 import { setOrganizationWorkItemExecutionStatus } from "../../../../org/work_routing";
 import { mergeToolExecutionRecords, toolRecordSucceeded } from "../../../../cognition/task_execution_ledger";
-import type { ToolExecutionRecord } from "../../../../tools/types";
-import type { NormalizedMessage } from "../../../../llm/providers";
 import { isRetiredOperationModeRequest } from "../../../../cognition/operation_modes";
 import { buildOperationModeMetaResponse } from "../../../../cognition/capability_meta";
 import { executeToolCall } from "../../../../tools/execution_engine";
 import { formatOperationModeSwitchResponse } from "../../../messages/operation_mode_messages";
 import { handleRemoteLegalNoticeIntake } from "../legal_notice_intake";
 
-import type { LLMResult } from "../../../../llm/adapter";
 import { recordTokenUsageBatch } from "../../../../llm/token_tracker";
 import { finalizeLumiResponse } from "../../../../cognition/result_finalizer";
 import { isMessagingReplyDurabilityError, finalizeMessagingResponseForDelivery, withCurrentMessagingDesktopExecutionReceipt, currentMessagingFinalizationRecords, type MessagingFinalization } from "../messaging_finalization";
@@ -178,145 +174,80 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
     }
     if (deterministicEntryReply && !responseText) responseText = deterministicEntryReply;
 
-    let completionGuard: LLMResult['completionGuard'];
     const entryHandled = Boolean(deterministicEntryReply);
-    const buildMessagingModelInput = (
-      turnMessages: NormalizedMessage[],
-      onToolRecord?: (record: ToolExecutionRecord) => void,
-      executionSource = context.source,
-    ): ResolvedTurnModelInput => ({
-      execution: context.executionPlan,
-      assertCurrent: () => assertMessagingAuthorization(context.msg),
-      isCancelled: context.actionWasCancelled,
-      taskText: context.routingText, streaming: false,
-      messages: turnMessages,
-      registry: toolRegistry,
-      config: context.userLLMPrefs,
-      onToolCall: record => { context.collectToolRecord(record); onToolRecord?.(record); },
-      maxIterations: context.modelToolPolicy.maxIterations || context.executionDecision.maxIterations,
-      context: { ...context.remoteToolContext, source: executionSource,  },
-      getters: context.llm,
-    });
-
-    if (!entryHandled) {
-      assertMessagingAuthorization(context.msg);
-      const result = await runResolvedLumiTurn(buildMessagingModelInput(context.messages));
-      responseText = result.text || '';
-      completionGuard = result.completionGuard;
-      context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
-      recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
-    }
-
-    context.toolRecords = withCurrentMessagingDesktopExecutionReceipt(
-      context.toolRecords,
-      context.desktopExecutionTracker,
-      context.actionTaskExecution.state?.taskId,
-      context.requestId,
-    );
-    if (context.pendingConfirmationCreatedThisTurn) {
-      responseText = formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn);
-    }
-    const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
-    const preDeliveryRecords = currentMessagingFinalizationRecords({
-      toolRecords: context.taskAwareRecords(context.toolRecords),
-      taskId: context.actionTaskExecution.state?.taskId,
-      requestId: context.requestId,
-    });
-    const organizationVerifiedTerminalReceipt = preDeliveryRecords.some(record => {
-      const verified = record.envelope?.status === 'verified_success'
-        || record.terminalVerification?.status === 'verified';
-      if (!verified) return false;
-      if (context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit') return true;
-      return Boolean(record.capability?.sideEffects?.some(effect => (
-        effect.type === 'external_communication' || effect.type === 'external_state_change'
-      ))) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
-    });
-    const missingOrganizationExternalCommitReceipt = context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
-      && !context.pendingConfirmationCreatedThisTurn
-      && !organizationVerifiedTerminalReceipt;
-    const initialFinalization: MessagingFinalization = callbackReply
-      && context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
-      ? { text: responseText || callbackReply.text, blocked: false }
-      : missingOrganizationExternalCommitReceipt
-        ? {
-        text: /[\u3400-\u9fff]/u.test(context.routingText)
-          ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
-          : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
-        blocked: true,
-        reason: 'The external commit has no verified terminal receipt.',
-          }
-        : finalizeLumiResponse({
-            taskText: context.routingText,
-            responseText: deliveryText,
-            completionGuard,
-            toolRecords: preDeliveryRecords,
-            source: context.source,
-            flow: context.turnFlow,
-            taskId: context.actionTaskExecution.state?.taskId,
-            requestId: context.requestId,
-          });
-    const outbound = await finalizeMessagingResponseForDelivery({
-      taskText: context.routingText,
-      responseText: deliveryText,
-      toolRecords: preDeliveryRecords,
-      source: context.source,
-      flow: context.turnFlow,
-      taskId: context.actionTaskExecution.state?.taskId,
-      requestId: context.requestId,
-      initialFinalization,
-      allowToolUse: context.toolSessionActive
-        && !callbackReply
-        && !entryHandled
-        && !missingOrganizationExternalCommitReceipt,
-      pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn),
-      aborted: context.actionWasCancelled(),
-      isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn),
-      isAborted: context.actionWasCancelled,
-      trustedConfirmationRequestText: () => context.pendingConfirmationCreatedThisTurn
-        ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn) : undefined,
-      attempt: async attempt => {
-        const recovery = await runResolvedLumiRecovery({
-          model: buildMessagingModelInput(context.messages, undefined, `${context.source}_guard_recovery`),
-          responseText: deliveryText, recovery: attempt,
-        });
-        recordTokenUsageBatch(context.effectiveUserId, recovery.usageRecords, usageInteractionId, 'chat');
-        return { ...recovery, toolRecords: withCurrentMessagingDesktopExecutionReceipt(
-          recovery.toolRecords || [], context.desktopExecutionTracker, context.actionTaskExecution.state?.taskId, context.requestId,
-        ) };
+    let missingOrganizationExternalCommitReceipt = false;
+    const completed = await runPreparedLumiTurn({
+      source: context.source, taskText: context.routingText,
+      taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      skipModel: entryHandled,
+      model: {
+        execution: context.executionPlan,
+        assertCurrent: () => { assertMessagingAuthorization(context.msg); context.organizationWorkExecution?.assertCurrent(); },
+        isCancelled: context.actionWasCancelled,
+        taskText: context.routingText, streaming: false, messages: context.messages,
+        registry: toolRegistry, config: context.userLLMPrefs,
+        onToolCall: context.collectToolRecord,
+        maxIterations: context.modelToolPolicy.maxIterations || context.executionDecision.maxIterations,
+        context: context.remoteToolContext, getters: context.llm,
       },
-      refinalize: (candidateText, records, recoveryCompletionGuard) => context.pendingConfirmationCreatedThisTurn
-        ? {
-            text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn),
-            blocked: false,
-            reason: 'waiting_confirmation',
-          }
-        : finalizeLumiResponse({
-            taskText: context.routingText,
-            responseText: candidateText,
-            completionGuard: recoveryCompletionGuard,
-            toolRecords: currentMessagingFinalizationRecords({
-              toolRecords: withCurrentMessagingDesktopExecutionReceipt(
-                records,
-                context.desktopExecutionTracker,
-                context.actionTaskExecution.state?.taskId,
-                context.requestId,
-              ),
-              taskId: context.actionTaskExecution.state?.taskId,
-              requestId: context.requestId,
-            }),
-            source: `${context.source}_guard_recovery`,
-            flow: context.turnFlow,
-            taskId: context.actionTaskExecution.state?.taskId,
-            requestId: context.requestId,
-          }),
+      onResult: result => {
+        if (entryHandled) return;
+        context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
+        recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
+      },
+      onRecoveryUsage: records => recordTokenUsageBatch(context.effectiveUserId, records || [], usageInteractionId, 'chat'),
+      projectRecords: records => currentMessagingFinalizationRecords({
+        toolRecords: withCurrentMessagingDesktopExecutionReceipt(
+          context.taskAwareRecords(mergeToolExecutionRecords(context.toolRecords, records)),
+          context.desktopExecutionTracker, context.actionTaskExecution.state?.taskId, context.requestId,
+        ),
+        taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      }),
+      finalization: ({ result, responseText: modelText, toolRecords }) => {
+        responseText = entryHandled ? responseText : modelText;
+        if (context.pendingConfirmationCreatedThisTurn) responseText = formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn);
+        const deliveryText = responseText || '这次没有生成可用回复，请稍后重试。';
+        const organizationVerifiedTerminalReceipt = toolRecords.some(record => {
+          const verified = record.envelope?.status === 'verified_success' || record.terminalVerification?.status === 'verified';
+          if (!verified) return false;
+          if (context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit') return true;
+          return Boolean(record.capability?.sideEffects?.some(effect => (
+            effect.type === 'external_communication' || effect.type === 'external_state_change'
+          ))) || /(?:send|submit|publish|post|comment|reply|payment|purchase|sign)/i.test(record.name);
+        });
+        missingOrganizationExternalCommitReceipt = context.organizationWorkRoute?.workItem.sideEffectClass === 'external_commit'
+          && !context.pendingConfirmationCreatedThisTurn && !organizationVerifiedTerminalReceipt;
+        const initialFinalization: MessagingFinalization = callbackReply
+          && context.organizationWorkRoute?.workItem.sideEffectClass !== 'external_commit'
+          ? { text: responseText || callbackReply.text, blocked: false }
+          : missingOrganizationExternalCommitReceipt
+            ? { text: /[\u3400-\u9fff]/u.test(context.routingText)
+              ? '这次外部提交还没有完成：没有收到可验证的终态回执，Lumi 已停止，且不会盲目重试。'
+              : 'The external commit is not complete: no verified terminal receipt was received, so Lumi stopped and will not retry blindly.',
+              blocked: true, reason: 'The external commit has no verified terminal receipt.' }
+            : finalizeLumiResponse({ taskText: context.routingText, responseText: deliveryText,
+              completionGuard: result.completionGuard, toolRecords, source: context.source,
+              flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId });
+        return {
+          initialFinalization,
+          allowToolUse: context.toolSessionActive && !callbackReply && !entryHandled && !missingOrganizationExternalCommitReceipt,
+          pendingConfirmation: Boolean(context.pendingConfirmationCreatedThisTurn), aborted: context.actionWasCancelled(),
+          isPendingConfirmation: () => Boolean(context.pendingConfirmationCreatedThisTurn), isAborted: context.actionWasCancelled,
+          trustedConfirmationRequestText: () => context.pendingConfirmationCreatedThisTurn
+            ? formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn) : undefined,
+          refinalize: (candidateText, records, completionGuard) => context.pendingConfirmationCreatedThisTurn
+            ? { text: formatPendingConfirmationRequest(context.pendingConfirmationCreatedThisTurn), blocked: false, reason: 'waiting_confirmation' }
+            : finalizeLumiResponse({ taskText: context.routingText, responseText: candidateText, completionGuard,
+              toolRecords: currentMessagingFinalizationRecords({
+                toolRecords: withCurrentMessagingDesktopExecutionReceipt(records, context.desktopExecutionTracker, context.actionTaskExecution.state?.taskId, context.requestId),
+                taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+              }), source: context.source + '_guard_recovery', flow: context.turnFlow,
+              taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId }),
+        };
+      },
     });
-    context.toolRecords = withCurrentMessagingDesktopExecutionReceipt(
-      outbound.toolRecords,
-      context.desktopExecutionTracker,
-      context.actionTaskExecution.state?.taskId,
-      context.requestId,
-    );
-    const finalized = outbound.finalization;
+    context.toolRecords = completed.toolRecords;
+    const finalized = completed.finalized;
     if (context.actionLeaseWasLost()) {
       await context.actionLeaseHeartbeat!.leaseLoss;
       return CN_TASK_EXECUTION_MESSAGES.persistenceUnknown;
@@ -374,7 +305,7 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
     // completed, making a model outage look like part of the task and
     // needlessly competing with receipt persistence. Learned state for these
     // commands comes from the authoritative organization transaction instead.
-    if (!entryHandled && !outbound.finalization.blocked) {
+    if (!entryHandled && !finalized.blocked) {
       try {
         void persistRemotePostTurnLearning({
           message: context.msg,

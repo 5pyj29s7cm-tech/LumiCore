@@ -48,7 +48,7 @@ describe('cross-channel action turn ownership wiring', () => {
     const voice = source('server/socket/voice.ts');
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
-    for (const code of [chat, voice]) {
+    for (const code of [chat, voice, messaging]) {
       expect(code).toContain('await runPreparedLumiTurn({');
     }
     const driver = readFileSync('server/cognition/prepared_turn.ts', 'utf8');
@@ -57,8 +57,10 @@ describe('cross-channel action turn ownership wiring', () => {
     const recoveryOwner = readFileSync('server/cognition/turn_recovery.ts', 'utf8');
     expect(recoveryOwner).toContain('priorToolRecords: recovery.priorToolRecords');
     expect(recoveryOwner).toContain('completionGuard: result.completionGuard');
-    expect(messaging).toContain('toolRecords: preDeliveryRecords');
-    expect(messaging).toContain('`${source}_guard_recovery`');
+    const messagingModel = readFileSync('server/regions/packs/cn/messaging_turn/model_execution.ts', 'utf8');
+    expect(messagingModel).toContain('projectRecords: records => currentMessagingFinalizationRecords({');
+    expect(messagingModel).toContain('context.taskAwareRecords(mergeToolExecutionRecords(context.toolRecords, records))');
+    expect(messagingModel).not.toContain('runResolvedLumiRecovery(');
   });
 
   it('starts a fail-closed lease heartbeat after preparation in every foreground channel', () => {
