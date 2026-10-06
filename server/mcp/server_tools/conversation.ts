@@ -1,7 +1,6 @@
 import { preparePlannedConversationExecution } from "../../conversation/planned_execution";
 import { runResolvedLumiRecovery } from "../../cognition/turn_recovery";
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
-import { bindCapabilityExecutionPlanTask } from "../../cognition/capability_execution_plan";
 import { TASK_TARGET_HISTORY_LIMIT } from "../../conversation/task_target_anchor";
 import { resolveConversationForEntry } from "../../conversation/entry_conversation";
 
@@ -11,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { flushDBOrThrow } from "../../../db_layer";
 import { buildLumiExecutionPipeline } from "../../cognition/execution_pipeline";
 import { createModelTurnState } from "../../llm/model_turn_state";
-import { getConversationForScope, getMessages, addMessageIdempotent, persistConversationExecutionPlan, startConversationActionExecutionHeartbeat } from "../../conversation/manager";
+import { getConversationForScope, getMessages, addMessageIdempotent, startConversationActionExecutionHeartbeat } from "../../conversation/manager";
 import { captureConversationAuthorization, combineRequestAuthorizations, runAuthorizedEnrichment } from "../../conversation/lifecycle";
 import { captureChatAuthorization } from "../../socket/chat_authorization";
 import { isExplicitMemoryRequest, persistTurnMemory } from "../../memory/turn_memory";
@@ -135,6 +134,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
             taskText: message,
             responseText: candidateText,
             completionGuard: response.completionGuard,
+            taskId, requestId, flow: pipeline.turnIntent.flow,
             toolRecords,
             source: background ? entry.source + '_background' : entry.source,
             allowToolUse: pipeline.executionRequested && !explicitMemory,
@@ -155,7 +155,10 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
             } else lifecycle?.track(extraction);
           }
           authorization.assertCurrent();
-          addMessageIdempotent({ ...identity, role: 'assistant', content: finalized.text, toolCalls: toolRecords, cognitiveIntent: finalized.reason || entry.source });
+          addMessageIdempotent({ ...identity, role: 'assistant', content: finalized.text, toolCalls: toolRecords, cognitiveIntent: finalized.reason || entry.source,
+            ...(finalized.blocked && taskId ? { terminalTaskDisposition: { outcome: 'blocked' as const, taskId, requestId,
+              reason: finalized.reason || 'The MCP response did not pass final verification.' } } : {}),
+          });
           await flushDBOrThrow();
           authorization.assertCurrent();
 
@@ -256,10 +259,6 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           if ('bindingFailure' in prepared) throw new Error('Conversation turn cannot be admitted');
           taskId = prepared.state?.taskId;
           turnRowId = prepared.turnRowId;
-          if (taskId) {
-            pipeline.executionPlan = bindCapabilityExecutionPlanTask(pipeline.executionPlan, taskId);
-            persistConversationExecutionPlan({ conversationId, userId: scope.userId, plan: pipeline.executionPlan });
-          }
           receiptObserver = createConversationReceiptObserver({ ...identity, taskId, turnRowId }, authorization.isCurrent);
           await flushDBOrThrow();
           const heartbeat = startConversationActionExecutionHeartbeat({ ...identity, abortController: controller });
@@ -269,7 +268,9 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
             return await deliverFinalizedChatResponse(response, background);
           } catch (error) {
             if (authorization.isCurrent()) {
-              addMessageIdempotent({ ...identity, role: 'assistant', content: publicMcpToolFailure(), toolCalls: mcpToolRecords, cognitiveIntent: 'mcp_operation_failed' });
+              addMessageIdempotent({ ...identity, role: 'assistant', content: publicMcpToolFailure(), toolCalls: mcpToolRecords, cognitiveIntent: 'mcp_operation_failed',
+                ...(taskId ? { terminalTaskDisposition: { outcome: 'blocked' as const, taskId, requestId, reason: 'The MCP operation failed before verified delivery.' } } : {}),
+              });
               await flushDBOrThrow();
             }
             throw error;

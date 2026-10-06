@@ -1,6 +1,7 @@
 import type { LumiExecutionPipeline } from '../cognition/execution_pipeline';
 import type { PendingToolConfirmation } from '../tools/pending_confirmation';
-import { prepareConversationActionExecution } from './manager/execution_preparation';
+import { prepareConversationActionExecution, persistConversationExecutionPlan } from './manager/execution_preparation';
+import { bindCapabilityExecutionPlanTask } from '../cognition/capability_execution_plan';
 
 export interface PlannedConversationExecutionInput {
   execution: LumiExecutionPipeline;
@@ -39,7 +40,7 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
   const forceResume = Boolean(boundFeedback || input.pendingConfirmation || input.acceptedInterruptedTurn || execution.trustedActionContinuation);
   const forceTask = Boolean(execution.capabilityPlan.taskLedgerRequired || input.pendingConfirmation || input.additionalLedgerRequired || input.acceptedRuntimeCleanup);
   if (!input.bindConversationTurn && !forceResume && !forceTask) return conversation;
-  return prepareConversationActionExecution({
+  const prepared = prepareConversationActionExecution({
     conversationId: input.conversationId, userId: input.userId, requestId: input.requestId,
     userText: input.userText, userMessageId: input.userMessageId,
     toolPolicy: input.acceptedRuntimeCleanup
@@ -51,4 +52,11 @@ export function preparePlannedConversationExecution(input: PlannedConversationEx
     forceNewTask: input.acceptedRuntimeCleanup || tasklessGrant,
     preserveExistingTask: input.acceptedRuntimeCleanup ? false : forceResume || forceTask,
   });
+  if (prepared.state?.taskId) {
+    execution.executionPlan = bindCapabilityExecutionPlanTask(execution.executionPlan, prepared.state.taskId);
+    if (!persistConversationExecutionPlan({ conversationId: input.conversationId, userId: input.userId, plan: execution.executionPlan })) {
+      throw new Error('The accepted capability plan could not be attached to its exact task');
+    }
+  }
+  return prepared;
 }

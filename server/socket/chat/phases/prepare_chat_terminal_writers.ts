@@ -284,7 +284,7 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
         consumeScope: () => context.confirmationScope,
         proposalScope: () => {
           context.confirmationScope = buildTransportNeutralConfirmationScope({
-            domain: context.resolvedDomain, orgId: context.resolvedOrgId, conversationId: context.conversationId || (context.conversation?.actionContinuationState?.taskId && context.pendingConfirmation ? context.selectedConversationId : undefined),
+            domain: context.resolvedDomain, orgId: context.resolvedOrgId, conversationId: context.conversationId || context.selectedConversationId,
             taskId: actionTaskExecution.state?.taskId, originRequestId: context.requestId,
           });
           context.confirmationChannelScope = buildTransportNeutralConfirmationScope({
@@ -331,7 +331,8 @@ export async function prepareChatTerminalWriters(context: NonNullable<Awaited<Re
       const modelToolProjection = context.executionPipeline.modelToolProjection;
       const toolSessionActive = !context.isMemoryAvatar && context.executionPipeline.executionRequested;
       const actionTaskExecution = preparePlannedConversationExecution({
-        execution: context.executionPipeline, conversationId: context.conversationId || context.selectedConversationId,
+        execution: context.executionPipeline, conversationId: context.conversationId,
+        bindConversationTurn: true,
         userId: context.uid, userText: context.visibleUserText, requestId: context.requestId, userMessageId: context.acceptedUserMessageId,
         pendingConfirmation: context.pendingConfirmation,
         acceptedRuntimeCleanup: Boolean(context.acceptedRuntimeCleanupOffer && context.conversationId),

@@ -1,11 +1,10 @@
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { logger } from "../../../../logger";
-import { persistConversationExecutionPlan, setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, updateConversationActionFocus, type ForegroundRequestIdentity as VoiceForegroundRequestIdentity } from "../../../conversation/manager";
+import { setConversationActionExecutionStatus, startConversationActionExecutionHeartbeat, updateConversationActionFocus, type ForegroundRequestIdentity as VoiceForegroundRequestIdentity } from "../../../conversation/manager";
 import { recordChatExecutionPersistenceUnknownDurably } from "../../chat_execution_registry";
 import { clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { isCapabilityMetaQuestion } from "../../../cognition/capability_meta";
 import { toolRegistry } from "../../../tools/registry";
-import { bindCapabilityExecutionPlanTask } from "../../../cognition/capability_execution_plan";
 import { coalesceToolExecutionRecords, taskReceiptsToRecords } from "../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../tools/types";
 import { executionBoundaryPromptOverlay, restrictSystemPromptForExecutionBoundary, restrictVisibleToolNamesForExecutionBoundary } from "../../../tools/remote_policy";
@@ -47,17 +46,6 @@ export async function prepareVoiceExecutionAndPrompt(context: NonNullable<Awaite
       if (recorded) context.publishRecordedAgent('agent:response', context.executionUnknownPayload);
     },
   });
-  if (context.actionTaskExecution.state?.taskId) {
-    context.executionPipeline.executionPlan = bindCapabilityExecutionPlanTask(
-      context.executionPipeline.executionPlan,
-      context.actionTaskExecution.state.taskId,
-    );
-    persistConversationExecutionPlan({
-      conversationId: context.conversationTurn.conversation.id,
-      userId: context.session.userId,
-      plan: context.executionPipeline.executionPlan,
-    });
-  }
   if (context.actionTaskExecution.kind === 'new') {
     // A concrete replacement task invalidates an older confirmation boundary
     // on this exact voice channel.

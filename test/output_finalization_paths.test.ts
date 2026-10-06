@@ -66,10 +66,11 @@ describe('finalized output paths', () => {
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
     expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('const restModelToolProjection = restExecutionPipeline.modelToolProjection');
+    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(source('server/cognition/turn_model.ts')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).toContain("'remote_restricted'");
-    expect(rest).toContain('toolPolicy: restModelToolPolicy');
+    expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
     expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
     expect(rest).toContain('finalizeLumiResponseForDelivery as finalizeRestChatResponse');
     expect(source('server/cognition/response_delivery.ts')).toContain('finalizeExecutionForOutboundDelivery');
@@ -285,7 +286,8 @@ describe('finalized output paths', () => {
     expect(chat).toContain('const restTurnDispatch = restExecutionPipeline.turnIntent;');
     expect(chat).toContain('buildLumiExecutionPipeline({');
     expect(chat).toContain('restExecutionPipeline.authorizationPolicy');
-    expect(chat).toContain('toolPolicy: restModelToolPolicy');
+    expect(chat).toContain('execution: restExecutionPipeline');
+    expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
     expect(chat).toContain('finalizeRestChatResponse({');
     expect(chat).toContain("source: 'rest_chat'");
     expect(chat).toContain('blocked: finalized.blocked');

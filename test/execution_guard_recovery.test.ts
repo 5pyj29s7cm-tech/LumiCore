@@ -1146,7 +1146,7 @@ describe('execution guard recovery', () => {
     })).rejects.toMatchObject({ name: 'AbortError', message: 'Request cancelled' });
   });
 
-  it('wires the shared one-shot recovery into chat, task and voice terminal paths', () => {
+  it('wires the shared one-shot recovery into chat and voice terminal paths', () => {
     const root = process.cwd();
     const chatSource = readImplementationSource(path.join(root, 'server/socket/chat.ts'), 'utf8');
     const voiceSource = readVoiceImplementationSource();
@@ -1155,11 +1155,17 @@ describe('execution guard recovery', () => {
       expect(source).toContain('await finalizeLumiResponseForDelivery({');
       expect(source).toContain('pendingConfirmation: Boolean(pendingConfirmationCreatedThisTurn)');
       expect(source).toContain('requiresFreshConfirmation: correctionRequiresFreshConfirmation');
-      expect(source).toContain('priorToolRecords,');
+      expect(source).toContain('recovery: attempt');
     }
-    expect(chatSource).toContain('...normalTurnMessages');
+    const recoveryOwner = readImplementationSource(path.join(root, 'server/cognition/turn_recovery.ts'), 'utf8');
+    expect(recoveryOwner).toContain('...model.messages');
+    expect(recoveryOwner).toContain('priorToolRecords: recovery.priorToolRecords');
+    expect(recoveryOwner).toContain('await model.onToolCall?.(record);');
+    expect(recoveryOwner).toContain('recovery.recordTool({');
+    expect(recoveryOwner.indexOf('await model.onToolCall?.(record);')).toBeLessThan(recoveryOwner.indexOf('recovery.recordTool({'));
+    expect(chatSource).toContain('messages: normalTurnMessages');
     expect(chatSource).toContain('normalTurnMessages = messages;');
-    expect(chatSource).toContain('recordTool(record);');
+    expect(chatSource).toContain('runAuthorizedRecovery({');
     expect(chatSource).toContain('...toolSecurityContext,');
     expect(chatSource).toContain('executionBoundary');
     expect(chatSource).not.toContain('const guardRecovery = decideExecutionGuardRecovery');

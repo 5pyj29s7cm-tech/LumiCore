@@ -43,6 +43,10 @@ describe('planned conversation task ownership', () => {
     expect(prepared.kind).toBe('new');
     expect(prepared.state?.activeRequestId).toBe(input.requestId);
     expect(prepared.state?.latestInstructionRef).toBe(input.userMessageId);
+    expect(input.execution.executionPlan.taskId).toBe(prepared.state!.taskId);
+    const persistedPlan = JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === prepared.state!.taskId).context).executionPlan;
+    expect(persistedPlan).toMatchObject({ taskId: prepared.state!.taskId, planId: input.execution.executionPlan.planId });
+    expect(persistedPlan.intent.payload).toBe('');
     expect(readDB().conversationActionTurns.find((row: any) => row.requestId === input.requestId)).toMatchObject({ taskId: prepared.state!.taskId, userMessageId: input.userMessageId });
   });
   it('keeps an accepted continuation on the exact unfinished task', async () => {
@@ -51,6 +55,8 @@ describe('planned conversation task ownership', () => {
     const prepared = preparePlannedConversationExecution(input);
     expect(prepared.kind).toBe('resume'); expect(prepared.state?.taskId).toBe(previous.taskId);
     expect(prepared.state?.activeRequestId).toBe(input.requestId);
+    expect(input.execution.executionPlan.taskId).toBe(previous.taskId);
+    expect(JSON.parse(readDB().conversationActionTasks.find((row: any) => row.id === previous.taskId).context).executionPlan.planId).toBe(input.execution.executionPlan.planId);
   });
   it('gives an unrelated concrete action its own task and preserves the supersession edge', async () => {
     const previous = await unfinished(); const input = await accepted('Start a separate task: Search the public web for synthetic ocean examples.', previous.input);

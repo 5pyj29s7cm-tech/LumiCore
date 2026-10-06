@@ -49,7 +49,7 @@ describe('chat task feedback binding integration', () => {
 
   it('settles a repeated confirmation as a no-op before binding a new task', () => {
     const duplicateConfirmation = chat.indexOf('const adjacentConfirmedAction = !pendingConfirmation');
-    const bindTurn = chat.indexOf('const boundTurn = bindConversationActionExecutionTurn({', duplicateConfirmation);
+    const bindTurn = chat.indexOf('preparePlannedConversationExecution({', duplicateConfirmation);
 
     expect(duplicateConfirmation).toBeGreaterThan(-1);
     expect(chat.slice(duplicateConfirmation, duplicateConfirmation + 900)).toContain('findAdjacentVerifiedConfirmedAction({');
@@ -82,7 +82,7 @@ describe('chat task feedback binding integration', () => {
     const wait = chat.indexOf('await sessionLease.waitForTurn()', accepted);
     const refresh = chat.indexOf('const refreshedConversation = getConversationForScope(', wait);
     const stale = chat.indexOf("resolvedTaskRelation.binding === 'stale'", refresh);
-    const bind = chat.indexOf('const boundTurn = bindConversationActionExecutionTurn({', stale);
+    const bind = chat.indexOf('preparePlannedConversationExecution({', stale);
 
     expect(admission).toBeGreaterThan(-1);
     expect(persistUser).toBeGreaterThan(admission);
@@ -93,7 +93,11 @@ describe('chat task feedback binding integration', () => {
     expect(refresh).toBeGreaterThan(wait);
     expect(stale).toBeGreaterThan(refresh);
     expect(bind).toBeGreaterThan(stale);
-    expect(chat.slice(bind, bind + 500)).toContain('userMessageId: acceptedUserMessageId');
+    expect(chat.slice(bind, bind + 650)).toContain('userMessageId: acceptedUserMessageId');
+    expect(chat.slice(bind, bind + 650)).toContain('bindConversationTurn: true');
+    expect(chat).not.toContain('bindConversationActionExecutionTurn({');
+    const owner = readFileSync('server/conversation/planned_execution.ts', 'utf8');
+    expect(owner).toContain('prepareConversationActionExecution({');
   });
 
   it('revalidates the accepted task binding after waiting through the shared identity/version guard', () => {

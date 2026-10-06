@@ -8,7 +8,7 @@ import { readDatabaseTables } from "../../../../db_layer";
 import { normalizeOperationMode } from "../../../cognition/operation_modes";
 import { getStoredOperationMode } from "../../../cognition/operation_mode_store";
 import { clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
-import { getMessages, setConversationMode, getConversationForScope, bindConversationActionExecutionTurn, cancelConversationActionExecution } from "../../../conversation/manager";
+import { getMessages, setConversationMode, cancelConversationActionExecution } from "../../../conversation/manager";
 import { getConversationActionStateByTaskId, getLatestConversationActionState } from "../../../conversation/ledger/queries";
 import { buildRecentActionContinuationBridge } from "../../../cognition/action_continuation";
 import { CN_TASK_EXECUTION_MESSAGES } from "../../../regions/messages/task_execution_messages";
@@ -19,44 +19,6 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
 
       if (await answerPriorTaskStatus(context)) { return { terminal: true as const, context: undefined }; }
 
-      // `deferActionPreparation` persisted only the transcript while this
-      // request waited. Now that this request owns the serial lease, bind its
-      // exact user row. A different pending request is an integrity failure,
-      // not permission to overwrite the pointer and mis-attribute receipts.
-      if (context.resolvedTaskRelation.feedback !== 'status') {
-        const preserveExistingTask = (
-          ['active_task', 'previous_task'].includes(context.resolvedTaskRelation.binding)
-          && ['continue', 'correction', 'accept', 'retry', 'repeat'].includes(
-            context.resolvedTaskRelation.feedback,
-          )
-        );
-        const boundTurn = bindConversationActionExecutionTurn({
-          conversationId: context.conversation.id,
-          userId: context.uid,
-          userText: context.visibleUserText,
-          requestId: context.requestId,
-          userMessageId: context.acceptedUserMessageId,
-          preserveExistingTask,
-        });
-        if (!boundTurn) {
-          await context.commitDeterministicTerminal({
-            event: 'agent:error',
-            payload: {
-              message: 'Unable to bind this queued message to the action pipeline',
-              code: 'CHAT_ACTION_TURN_BIND_FAILED',
-            },
-            errorContext: 'Action turn binding failure terminal',
-          });
-          await context.releaseChatSession();
-          { return { terminal: true as const, context: undefined }; }
-        }
-        context.conversation = getConversationForScope(
-          context.conversation.id,
-          context.uid,
-          context.resolvedDomain,
-          context.resolvedOrgId,
-        ) || context.conversation;
-      }
       let { relevantMemories, ragChunks, emotionalState, personalityConfig, kbContext, isNovel, himState, emotionKey } = await retrieveChatContext(context);
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──

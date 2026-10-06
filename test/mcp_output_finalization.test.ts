@@ -702,3 +702,32 @@ it.each(['', 'I have completed the nonexistent write.'])('blocks incomplete MCP 
   expect(mocks.extractMemories).not.toHaveBeenCalled();
   expect(mocks.model.mock.calls[0][2].modelTurnState).toBe(mocks.model.mock.calls[1][2].modelTurnState);
 });
+
+
+it.each(['lumi_chat', 'lumi_route_task'] as const)('keeps %s blocked after a successful recovery step when the final model guard failed', async name => {
+  const registry = new ToolRegistry();
+  registry.register({ name: 'web_search', description: 'Synthetic public evidence', permission: 'public', securityLevel: 'safe',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    handler: async () => JSON.stringify({ ok: true, results: [{ title: 'Synthetic source', url: 'https://example.invalid/source' }] }),
+  });
+  let identity: any;
+  mocks.model.mockResolvedValueOnce({ text: 'I have completed the search.', toolCalls: [], usageRecords: [] });
+  mocks.model.mockImplementationOnce(async (...args: any[]) => {
+    identity = args[11];
+    const record = await executeToolCall({ registry, id: identity.requestId + ':recovery', name: 'web_search', arguments: { query: 'synthetic' }, context: identity });
+    expect(record.error).toBeUndefined(); await args[3]?.(record);
+    return { text: 'A synthetic source was found.', toolCalls: [record], usageRecords: [],
+      completionGuard: { text: 'The model response could not be completed.', blocked: true, reason: 'conversation_response_incomplete' } };
+  });
+  mocks.autoExtract = true; const broadcast = vi.fn();
+  const server = createLumiMcpServer(undefined, registry, broadcast, { userId: 'mcp-blocked-' + name, username: 'fixture', role: 'user', domain: 'personal', orgId: '', authenticated: true });
+  const input = 'Search the public web for synthetic examples.';
+  const raw = await getHandler(server, name)(name === 'lumi_chat' ? { message: input } : { task: input });
+  const result = name === 'lumi_chat' ? raw : JSON.parse(raw.content[0].text);
+  expect(result, JSON.stringify(result)).toMatchObject({ finalized: true, blocked: true });
+  expect(mocks.model).toHaveBeenCalledTimes(2); expect(mocks.extractMemories).not.toHaveBeenCalled();
+  const task = readDB().conversationActionTasks.find((row: any) => row.id === identity.taskId);
+  expect(task.status).toBe('blocked');
+  expect(readDB().conversationActionReceipts.filter((row: any) => row.requestId === identity.requestId)).toHaveLength(1);
+  expect(broadcast).toHaveBeenCalledWith('agent:response', expect.objectContaining({ blocked: true, requestId: identity.requestId, conversationId: identity.conversationId }));
+});

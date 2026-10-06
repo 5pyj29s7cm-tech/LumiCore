@@ -1,10 +1,9 @@
 import { extendTurnBindings } from "../../../../cognition/turn_bindings";
 import { requestsOrganizationScope } from "../../../../messaging/personal_org_scope";
 import { toolRegistry } from "../../../../tools/registry";
-import { getConversationActionStatus, persistConversationExecutionPlan, settleConversationActionExecutionRequest, setConversationActionExecutionStatus } from "../../../../conversation/manager";
+import { getConversationActionStatus, settleConversationActionExecutionRequest, setConversationActionExecutionStatus } from "../../../../conversation/manager";
 import { formatPendingConfirmationRequest, type recordPendingConfirmationDurably } from "../../../../tools/pending_confirmation";
 import { bindOrganizationWorkItemTask, registerOrganizationWorkExecution, routeOrganizationWork, setOrganizationWorkItemExecutionStatus, type RouteOrganizationWorkResult } from "../../../../org/work_routing";
-import { bindCapabilityExecutionPlanTask } from "../../../../cognition/capability_execution_plan";
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../../../conversation/execution_facts";
 import { coalesceToolExecutionRecords, mergeToolExecutionRecords, taskReceiptsToRecords } from "../../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../../tools/types";
@@ -34,17 +33,6 @@ export async function prepareMessagingExecution(context: MessagingTurnContext) {
     };
     context.desktopRelay = context.options?.createScopedDesktopRelay?.(context.effectiveUserId, context.source, context.domain, context.orgId, lifecycle);
     context.personalDesktopRelay = context.options?.createPersonalDesktopRelay?.(context.effectiveUserId, context.source, lifecycle);
-  }
-  if (context.conversation && context.actionTaskExecution.state?.taskId) {
-    context.executionPlan.executionPlan = bindCapabilityExecutionPlanTask(
-      context.executionPlan.executionPlan,
-      context.actionTaskExecution.state.taskId,
-    );
-    persistConversationExecutionPlan({
-      conversationId: context.conversation.id,
-      userId: context.effectiveUserId,
-      plan: context.executionPlan.executionPlan,
-    });
   }
   if (context.isIdentityBound && context.conversation && context.actionFollowupIntent === 'status') {
     const executionFactQuestion = isConversationExecutionFactQuestion(context.requestText);
