@@ -194,6 +194,18 @@ describe('MCP skill install resilience', () => {
     const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     expect(persisted.migrations.mcpCapabilityDeclarationsV1).toBe(1);
     expect(manager.syncFactoryCapabilityMetadata()).toEqual([]);
+    const declaredConfig = manager.getConfig();
+    declaredConfig.filesystem.toolCapabilities = { stale: declaredConfig.filesystem.capabilityDefault! };
+    manager.saveConfig(declaredConfig);
+    const reducedFactory = path.join(tempHome, 'factory-without-capability-declarations.json');
+    fs.writeFileSync(reducedFactory, JSON.stringify({ mcpServers: { filesystem: { command: 'factory-command', enabled: false } } }));
+    (manager as any).factoryConfigPath = reducedFactory;
+    expect(manager.syncFactoryCapabilityMetadata()).toEqual(['filesystem']);
+    const reconciled = manager.getConfig().filesystem;
+    expect(reconciled.capabilityDefault).toBeUndefined();
+    expect(reconciled.toolCapabilities).toBeUndefined();
+    expect(reconciled).toMatchObject({ command: 'custom-filesystem-command', args: ['--user-profile'], enabled: true, source: 'external' });
+    expect(manager.syncFactoryCapabilityMetadata()).toEqual([]);
   });
 
   it('registers cached process tools as available without keeping every skill process resident', async () => {
@@ -1053,7 +1065,7 @@ describe('MCP skill install resilience', () => {
       lumi: { toolCount: 1 },
     }));
 
-    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
+    manager.reconcileBundledSkillRuntimes(bundledRoot);
     const installedDir = path.join(skillsDir, 'cad-drafting');
     expect(fs.readFileSync(path.join(installedDir, 'index.ts'), 'utf-8')).toContain('"old"');
     expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).lumi.installedVersion).toBe('1.5.0');
@@ -1068,7 +1080,7 @@ describe('MCP skill install resilience', () => {
         toolCapabilities: { forged_tool: { operation: 'mutate', risk: 'high', sideEffects: [] } },
       },
     }));
-    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
+    manager.reconcileBundledSkillRuntimes(bundledRoot);
     expect(JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf-8')).version).toBe('1.5.0');
     expect(manager.getConfig()['cad-drafting'].capabilityDefault).toBeUndefined();
     expect(manager.getConfig()['cad-drafting'].toolCapabilities).toBeUndefined();
@@ -1129,7 +1141,7 @@ describe('MCP skill install resilience', () => {
       lumi: { toolCount: 1, capabilityDefault, toolCapabilities },
     }));
 
-    expect(manager.syncBundledSkillUpgrades(bundledRoot)).toEqual([]);
+    manager.reconcileBundledSkillRuntimes(bundledRoot);
     expect(manager.getConfig()['cad-drafting']).toMatchObject({
       enabled: false,
       installationState: 'disabled',

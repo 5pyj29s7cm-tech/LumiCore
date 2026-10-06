@@ -80,10 +80,11 @@ export function buildConversationActionContinuationState(
   // "确认" itself as the contract makes one confirmed sub-step look like the
   // whole task completed. Only a concrete action-bearing extension replaces
   // the completion target for this turn.
+  const preparationContinuation = isTaskPreparationContinuation(userText, previous, undefined, analysis);
   const completionGoal = inheritsPrevious
     && followupIntent === 'execute'
     && isActionBearingGoal(userText, analysis)
-    && !isTaskPreparationContinuation(userText, previous, undefined, analysis)
+    && !preparationContinuation
     ? userText
     : goal;
   const taskId = inheritsPrevious && previous?.taskId ? previous.taskId : `task_${randomUUID()}`;
@@ -112,7 +113,7 @@ export function buildConversationActionContinuationState(
     version: 2,
     taskId,
     status,
-    policySnapshot: isTaskPreparationContinuation(userText, previous, undefined, analysis) && previous?.policySnapshot
+    policySnapshot: preparationContinuation && previous?.policySnapshot
       ? previous.policySnapshot : snapshotTaskPolicy(input.toolPolicy) || (inheritsPrevious ? previous?.policySnapshot : undefined),
     receipts,
     activeRequestId: input.requestId || (inheritsPrevious ? previous?.activeRequestId : undefined),

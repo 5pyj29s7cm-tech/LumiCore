@@ -1,3 +1,4 @@
+import { reconcileMCPDeclaredCapabilities } from './client/capability_metadata';
 import { WebSocket } from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -174,16 +175,7 @@ export class MCPClientManager {
     for (const [name, factoryServer] of Object.entries(factory.mcpServers || {})) {
       const runtimeServer = runtime.mcpServers?.[name];
       if (!runtimeServer) continue;
-      const nextDefault = factoryServer.capabilityDefault;
-      const nextTools = factoryServer.toolCapabilities;
-      if (
-        JSON.stringify(runtimeServer.capabilityDefault || null) === JSON.stringify(nextDefault || null)
-        && JSON.stringify(runtimeServer.toolCapabilities || null) === JSON.stringify(nextTools || null)
-      ) continue;
-      if (nextDefault) runtimeServer.capabilityDefault = JSON.parse(JSON.stringify(nextDefault));
-      else delete runtimeServer.capabilityDefault;
-      if (nextTools) runtimeServer.toolCapabilities = JSON.parse(JSON.stringify(nextTools));
-      else delete runtimeServer.toolCapabilities;
+      if (!reconcileMCPDeclaredCapabilities(runtimeServer, factoryServer)) continue;
       updated.push(name);
     }
     const migrations = runtime.migrations || {};
@@ -301,16 +293,7 @@ export class MCPClientManager {
     const config = this.getConfig();
     const server = config[name];
     if (!server) return;
-    const nextDefault = lumi.capabilityDefault;
-    const nextTools = lumi.toolCapabilities;
-    if (
-      JSON.stringify(server.capabilityDefault || null) === JSON.stringify(nextDefault || null)
-      && JSON.stringify(server.toolCapabilities || null) === JSON.stringify(nextTools || null)
-    ) return;
-    if (nextDefault) server.capabilityDefault = nextDefault;
-    else delete server.capabilityDefault;
-    if (nextTools) server.toolCapabilities = nextTools;
-    else delete server.toolCapabilities;
+    if (!reconcileMCPDeclaredCapabilities(server, lumi)) return;
     this.saveConfig(config);
   }
 
@@ -496,12 +479,11 @@ export class MCPClientManager {
     }
   }
 
-  syncBundledSkillUpgrades(
+  reconcileBundledSkillRuntimes(
     bundledRoot = path.join(process.cwd(), 'server', 'skills', 'bundled'),
-  ): Array<{ name: string; fromVersion: string; toVersion: string }> {
+  ): void {
     ensureSkillsDir();
-    if (!fs.existsSync(bundledRoot) || !fs.statSync(bundledRoot).isDirectory()) return [];
-    const upgrades: Array<{ name: string; fromVersion: string; toVersion: string }> = [];
+    if (!fs.existsSync(bundledRoot) || !fs.statSync(bundledRoot).isDirectory()) return;
     for (const entry of fs.readdirSync(bundledRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const name = normalizeSkillInstallName(entry.name);
@@ -621,7 +603,6 @@ export class MCPClientManager {
         + 'automatic non-transactional replacement is disabled. Reinstall the official Skill Hall entry explicitly.',
       );
     }
-    return upgrades;
   }
 
   /** Install a local skill as one transaction: stage, prepare, then atomically publish. */
