@@ -176,3 +176,33 @@ describe('conversation transition send barrier', () => {
     unmount();
   });
 });
+
+describe('scope detachment ownership', () => {
+  function scopeHarness(founder: boolean) {
+    const h = switchingHarness(); h.send();
+    Object.assign(h.deps, {
+      isFounder: founder, lastConversationScopeRef: { current: h.deps.user.username + ':scope' },
+      initialLoadDoneRef: { current: true }, buildChatConversationScopeKey: (id: string) => id === 'founder' ? 'founder-scope' : 'scope',
+      attachmentContextStoragePrefix: '', terminalReceiptsRef: { current: new Set() },
+      localStorage: { removeItem: noop }, setIsTyping: vi.fn(),
+      fetch: vi.fn(async () => ({ json: async () => ({}) })),
+    });
+    return h;
+  }
+  it('a changed uid detaches the old view even when the username stays the same', () => {
+    const h = scopeHarness(false); h.deps.user = { ...h.deps.user, uid: 'second-owner' };
+    initialHistoryEffect(h.deps);
+    expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
+    expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0);
+    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, needsEvidence: false, finalization: null });
+    expect(h.deps.setIsTyping).toHaveBeenCalledWith(false);
+    expect(h.deps.clearPersistedExecution).not.toHaveBeenCalled();
+  });
+  it('a founder surface switch detaches text watches before skipping history loading', () => {
+    const h = scopeHarness(true); h.deps.agentId = 'founder';
+    initialHistoryEffect(h.deps);
+    expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
+    expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0);
+    expect(h.deps.fetch).not.toHaveBeenCalled();
+  });
+});

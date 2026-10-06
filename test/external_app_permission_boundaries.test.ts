@@ -272,7 +272,8 @@ describe('external app permission boundaries', () => {
           }
           if (name === 'desktop_ui_snapshot') {
             snapshotCount++;
-            return snapshotCount > 1 ? `new outgoing file ${path.basename(filePath)}` : 'existing chat content';
+            if (snapshotCount === 1) return JSON.stringify({ root: { name: '微信', bounds: { y: 0, height: 800 }, children: [{ name: '文件传输助手', controlType: 'Text' }, { name: '消息输入', controlType: 'Edit', bounds: { y: 650, width: 700 } }] } });
+            return snapshotCount > 2 ? `new outgoing file ${path.basename(filePath)}` : 'existing chat content';
           }
           return JSON.stringify({ ok: true });
         },

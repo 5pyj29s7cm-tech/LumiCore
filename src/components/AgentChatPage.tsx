@@ -1,3 +1,4 @@
+import { ChatExecutionWatch } from '@/lib/chatExecutionWatch';
 import { useConversationTransitions } from "./agent_chat/useConversationTransitions";
 import { AgentChatView } from "./agent_chat/AgentChatView";
 import { type GeneratedFileLink, type AgentChatVoiceSession, type ChatAttachment, type ConversationHistoryItem, type ConversationHistoryContextMenu, type WorkflowStatus, type ChatTurnUiMeta, type KnowledgeUpdateDetail, type ChatFilePanelItem, type ChatExecutionSnapshot, type ChatSendOptions } from "./agent_chat/contracts";
@@ -122,7 +123,7 @@ export function AgentChatPage({
     messagesRef.current = next;
     setMessageState(next);
   }, []);
-  useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); }, []);
+  useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); for (const detach of activeChatViewDetachersRef.current.values()) detach(); activeChatViewDetachersRef.current.clear(); }, []);
   const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
   const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
@@ -466,7 +467,7 @@ export function AgentChatPage({
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The foreground view points to the request's metadata instead of copying its fields.
   const currentTurnUiMetaRef = useRef<ChatTurnUiMeta>({ hadTool: false, needsEvidence: false, finalization: null });
-  const activeChatViewDetachersRef = useRef(new Set<() => void>());
+  const activeChatViewDetachersRef = useRef(new Map<string, () => void>());
   const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   const chatRequestLedgerRef = useRef(new ChatRequestLedger());
   const taskRelationLedgerRef = useRef(new ChatTaskRelationLedger());
@@ -1063,103 +1064,6 @@ export function AgentChatPage({
   }, [isZh, user?.displayName, user?.username, t.chatUserFallback]);
 
   useEffect(() => {
-    if (!agentId || isFounder) return;
-
-    // On agent/domain switch, reset and reload
-    const conversationScopeKey = `${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
-    if (conversationScopeKey !== lastConversationScopeRef.current) {
-      invalidateChatViewWork();
-      setIsCreatingConversation(false);
-      setRestoringConversationId('');
-      lastConversationScopeRef.current = conversationScopeKey;
-      initialLoadDoneRef.current = false;
-      chatTurnTimerGuardRef.current.invalidate();
-      terminalReceiptsRef.current.clear();
-      chatRequestLedgerRef.current.clear();
-      chatTurnUiMetaRef.current.clear();
-      currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
-      streamingMsgIdsRef.current.clear();
-      streamingRawTextRef.current.clear();
-      for (const detach of activeChatViewDetachersRef.current) detach();
-      activeChatViewDetachersRef.current.clear();
-      activeChatRequestIdRef.current = null;
-      textChatActiveRef.current = false;
-      resetMediaGenerationSurface();
-      try {
-        // Remove the pre-fix scope-only key, which could contain plaintext and
-        // could incorrectly survive into a different conversation.
-        localStorage.removeItem(attachmentContextStoragePrefix);
-      } catch {}
-      setMessages([]);
-      setPendingAttachments([]);
-      pendingAttachmentsRef.current = [];
-      bindAttachmentContextToConversation('');
-    }
-
-    // Only load once; do not overwrite live conversation.
-    if (initialLoadDoneRef.current) return;
-    initialLoadDoneRef.current = true;
-
-    const initialConversationId = attachmentConversationIdRef.current;
-    const initialMessageCount = messagesRef.current.length;
-    const transition = Symbol('initial-conversation');
-    conversationTransitionRef.current = transition;
-    setConversationTransitionPending(true);
-    let cancelled = false;
-
-    // Load the single active conversation messages. The request may resolve
-    // after the user has already started a live turn or switched transcripts;
-    // in that case the persisted snapshot must not replace the visible chat.
-    void (async () => {
-      try {
-        const activeResponse = await fetch(scopedConversationUrl('/api/conversations/active'));
-        const data = await activeResponse.json();
-        const conversationId = String(data.activeConversation?.id || '').trim();
-        if (!conversationId) return;
-        if (
-          cancelled
-          || lastConversationScopeRef.current !== conversationScopeKey
-          || activeChatRequestIdRef.current
-          || textChatActiveRef.current
-          || attachmentConversationIdRef.current !== initialConversationId
-          || messagesRef.current.length !== initialMessageCount
-        ) return;
-
-        bindAttachmentContextToConversation(conversationId);
-        const msgRes = await fetch(scopedConversationUrl(`/api/conversations/${conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`));
-        const msgData = await msgRes.json();
-        if (!Array.isArray(msgData.messages)) return;
-        if (!shouldApplyInitialConversationMessages({
-          cancelled,
-          expectedScopeKey: conversationScopeKey,
-          currentScopeKey: lastConversationScopeRef.current,
-          loadedConversationId: conversationId,
-          currentConversationId: attachmentConversationIdRef.current,
-          activeRequestId: activeChatRequestIdRef.current,
-          textChatActive: textChatActiveRef.current,
-          messageCountAtStart: initialMessageCount,
-          currentMessageCount: messagesRef.current.length,
-        })) return;
-        const persistedMessages = normalizePersistedMessages(msgData.messages);
-        setMessages(persistedMessages);
-      } catch {} finally {
-        if (conversationTransitionRef.current === transition) {
-          conversationTransitionRef.current = null;
-          setConversationTransitionPending(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (conversationTransitionRef.current === transition) {
-        conversationTransitionRef.current = null;
-        setConversationTransitionPending(false);
-      }
-    };
-  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, resetMediaGenerationSurface, scopedConversationUrl, setMessages, user?.id, user?.username]);
-
-  useEffect(() => {
     const query = searchQuery.trim();
     if (!query || !agentId || isFounder) {
       setSearchResults([]);
@@ -1244,17 +1148,54 @@ export function AgentChatPage({
       else localStorage.removeItem(activeExecutionStorageKey);
     } catch {}
   }, [activeExecutionStorageKey]);
+  const detachPreviousExecution = useCallback((clearStored = true, clearReceipts = false) => {
+    for (const detach of activeChatViewDetachersRef.current.values()) detach();
+    activeChatViewDetachersRef.current.clear();
+    if (clearStored) clearPersistedExecution();
+    if (clearReceipts) terminalReceiptsRef.current.clear();
+    chatRequestLedgerRef.current.clear();
+    chatTurnUiMetaRef.current.clear();
+    activeChatRequestIdRef.current = null;
+    textChatActiveRef.current = false;
+    lastResumedRequestIdsRef.current.clear();
+    streamingMsgIdsRef.current.clear();
+    streamingRawTextRef.current.clear();
+    chatTurnTimerGuardRef.current.invalidate();
+    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
+    resetMediaGenerationSurface();
+    setIsTyping(false);
+    setWorkflowStatus('idle');
+    clearChatProgress();
+    seenWorkflowToolEvents.current.clear();
+  }, [clearPersistedExecution, clearChatProgress, resetMediaGenerationSurface]);
+
+  const dropRequestStream = useCallback((requestId?: string) => {
+    const id = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
+    if (id) setMessages(prev => prev.filter(message => message.id !== id));
+  }, [setMessages]);
+  const resumeForegroundRequest = useCallback((requestId: string) => {
+    const nextMeta = chatTurnUiMetaRef.current.get(requestId);
+    currentTurnUiMetaRef.current = nextMeta || { hadTool: false, needsEvidence: false, finalization: null };
+    setWorkflowStatus('thinking');
+  }, []);
+
+
   const settleTrackedChatRequest = useCallback((requestId?: string) => {
     const normalizedRequestId = String(requestId || '').trim();
+    activeChatViewDetachersRef.current.get(normalizedRequestId)?.();
+    activeChatViewDetachersRef.current.delete(normalizedRequestId);
+    const previousForeground = chatRequestLedgerRef.current.foreground;
+    chatTurnUiMetaRef.current.delete(normalizedRequestId);
     const result = chatRequestLedgerRef.current.settle(normalizedRequestId);
     activeChatRequestIdRef.current = result.foregroundRequestId || null;
     textChatActiveRef.current = result.remaining > 0;
     clearPersistedExecution(normalizedRequestId || undefined);
-    if (result.foregroundRequestId) {
+    if (result.foregroundRequestId && result.foregroundRequestId !== previousForeground) {
       chatTurnTimerGuardRef.current.begin(result.foregroundRequestId);
+      resumeForegroundRequest(result.foregroundRequestId);
     }
     return result;
-  }, [clearPersistedExecution]);
+  }, [clearPersistedExecution, resumeForegroundRequest]);
   const acceptChatExecutionEvent = useCallback((
     data?: { requestId?: string; source?: string; conversationId?: string },
     expectedRequestId?: string | null,
@@ -1283,21 +1224,97 @@ export function AgentChatPage({
   }, [attachmentConversationIdRef, bindAttachmentContextToConversation, chatExecutionSource, persistActiveExecution]);
 
   useEffect(() => {
+    if (!agentId) return;
+
+    // On user/agent/domain switch, reset and reload
+    const conversationScopeKey = `${user?.uid || user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
+    if (conversationScopeKey !== lastConversationScopeRef.current) {
+      invalidateChatViewWork();
+      setIsCreatingConversation(false);
+      setRestoringConversationId('');
+      lastConversationScopeRef.current = conversationScopeKey;
+      initialLoadDoneRef.current = false;
+      detachPreviousExecution(false, true);
+      try {
+        // Remove the pre-fix scope-only key, which could contain plaintext and
+        // could incorrectly survive into a different conversation.
+        localStorage.removeItem(attachmentContextStoragePrefix);
+      } catch {}
+      setMessages([]);
+      setPendingAttachments([]);
+      pendingAttachmentsRef.current = [];
+      bindAttachmentContextToConversation('');
+    }
+
+    // Only load once; do not overwrite live conversation.
+    if (isFounder || initialLoadDoneRef.current) return;
+    initialLoadDoneRef.current = true;
+
+    const initialConversationId = attachmentConversationIdRef.current;
+    const initialMessageCount = messagesRef.current.length;
+    const transition = Symbol('initial-conversation');
+    conversationTransitionRef.current = transition;
+    setConversationTransitionPending(true);
+    let cancelled = false;
+
+    // Load the single active conversation messages. The request may resolve
+    // after the user has already started a live turn or switched transcripts;
+    // in that case the persisted snapshot must not replace the visible chat.
+    void (async () => {
+      try {
+        const activeResponse = await fetch(scopedConversationUrl('/api/conversations/active'));
+        const data = await activeResponse.json();
+        const conversationId = String(data.activeConversation?.id || '').trim();
+        if (!conversationId) return;
+        if (
+          cancelled
+          || lastConversationScopeRef.current !== conversationScopeKey
+          || activeChatRequestIdRef.current
+          || textChatActiveRef.current
+          || attachmentConversationIdRef.current !== initialConversationId
+          || messagesRef.current.length !== initialMessageCount
+        ) return;
+
+        bindAttachmentContextToConversation(conversationId);
+        const msgRes = await fetch(scopedConversationUrl(`/api/conversations/${conversationId}/messages?limit=${CHAT_HISTORY_LIMIT}`));
+        const msgData = await msgRes.json();
+        if (!Array.isArray(msgData.messages)) return;
+        if (!shouldApplyInitialConversationMessages({
+          cancelled,
+          expectedScopeKey: conversationScopeKey,
+          currentScopeKey: lastConversationScopeRef.current,
+          loadedConversationId: conversationId,
+          currentConversationId: attachmentConversationIdRef.current,
+          activeRequestId: activeChatRequestIdRef.current,
+          textChatActive: textChatActiveRef.current,
+          messageCountAtStart: initialMessageCount,
+          currentMessageCount: messagesRef.current.length,
+        })) return;
+        const persistedMessages = normalizePersistedMessages(msgData.messages);
+        setMessages(persistedMessages);
+      } catch {} finally {
+        if (conversationTransitionRef.current === transition) {
+          conversationTransitionRef.current = null;
+          setConversationTransitionPending(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (conversationTransitionRef.current === transition) {
+        conversationTransitionRef.current = null;
+        setConversationTransitionPending(false);
+      }
+    };
+  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, detachPreviousExecution, scopedConversationUrl, setMessages, user?.uid, user?.id, user?.username]);
+
+  useEffect(() => {
     if (isFounder || !socket) return;
 
     const isCurrentChatEvent = (data?: { requestId?: string; source?: string; conversationId?: string }) => (
       acceptChatExecutionEvent(data)
     );
-
-    const dropRequestStream = (requestId?: string) => {
-      const id = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
-      if (id) setMessages(prev => prev.filter(message => message.id !== id));
-    };
-    const resumeForegroundRequest = (requestId: string) => {
-      const nextMeta = chatTurnUiMetaRef.current.get(requestId);
-      currentTurnUiMetaRef.current = nextMeta || { hadTool: false, needsEvidence: false, finalization: null };
-      setWorkflowStatus('thinking');
-    };
 
     const recordTaskRelation = (data?: ServerTaskRelationEvent) => {
       if (!data) return;
@@ -1442,12 +1459,13 @@ export function AgentChatPage({
         }
       }
 
-      setWorkflowStatus('executing');
       const turnMeta = chatTurnUiMetaRef.current.get(requestId);
       if (turnMeta) turnMeta.hadTool = true;
       if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
         currentTurnUiMetaRef.current.hadTool = true;
       }
+      if (requestId && chatRequestLedgerRef.current.foreground !== requestId) return;
+      setWorkflowStatus('executing');
       const customerToolText = sanitizeAgentResponseTextForDisplay(
         data.publicText || describeToolProgress(data.name, phase, isZh),
         isZh ? 'zh' : 'en',
@@ -1457,11 +1475,10 @@ export function AgentChatPage({
 
     const onProgress = (data: { text?: string; publicText?: string; tone?: ChatProgressTone; requestId?: string; source?: string; conversationId?: string }) => {
       if (!isCurrentChatEvent(data)) return;
-      pushChatProgress(
-        sanitizeAgentResponseTextForDisplay(data.publicText || data.text || '', isZh ? 'zh' : 'en'),
-        data.tone || 'tool',
-      );
       const requestId = String(data.requestId || '').trim();
+      if (!requestId || chatRequestLedgerRef.current.foreground === requestId) {
+        pushChatProgress(sanitizeAgentResponseTextForDisplay(data.publicText || data.text || '', isZh ? 'zh' : 'en'), data.tone || 'tool');
+      }
       if (activeMediaGenerationRef.current?.requestId === requestId && data.text?.trim()) {
         setMediaGeneration({ status: 'generating', detail: data.text.trim() });
       }
@@ -1594,9 +1611,7 @@ export function AgentChatPage({
         activeMediaGenerationRef.current = null;
       }
 
-      chatTurnUiMetaRef.current.delete(requestId);
       if (hasRemainingRequests) {
-        resumeForegroundRequest(tracked.foregroundRequestId);
         // Every terminal owns only its own UI bucket. This applies to an
         // ordinary FIFO predecessor as well as a sidecar.
         return;
@@ -1648,13 +1663,17 @@ export function AgentChatPage({
         ? settleTrackedChatRequest(data.requestId)
         : null;
       setIsTyping(activeStatus || chatRequestLedgerRef.current.size > 0 || Boolean(terminalTracking?.remaining));
-      const turnMeta = chatTurnUiMetaRef.current.get(String(data.requestId || ''));
+      const requestId = String(data.requestId || '').trim();
+      if (data.status === 'cancelling' && activeMediaGenerationRef.current?.requestId === requestId) {
+        setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
+      }
+      if (!terminalStatus && requestId && requestId !== chatRequestLedgerRef.current.foreground) return;
+      const turnMeta = chatTurnUiMetaRef.current.get(requestId);
       const activity = projectAgentActivity(data.status, {
         executionAccepted: data.executionAccepted,
         hasToolEvidence: turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
       });
       if (activity === 'thinking') {
-        if (String(data.requestId || '') !== chatRequestLedgerRef.current.foreground) return;
         setWorkflowStatus('thinking');
         pushChatProgress(uiMessage('agent-chat-page.i-am-figuring-out-how.017a8f967e', (isZh) ? 'zh' : 'en'), 'thinking');
       } else if (activity === 'executing') {
@@ -1663,9 +1682,6 @@ export function AgentChatPage({
         setWorkflowStatus('waiting_confirmation');
       } else if (activity === 'cancelling') {
         setWorkflowStatus('cancelling');
-        if (activeMediaGenerationRef.current?.requestId === String(data.requestId || '').trim()) {
-          setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
-        }
       } else if (data.status === 'idle') {
         if (!terminalTracking?.remaining) {
           setIsTyping(false);
@@ -1711,10 +1727,6 @@ export function AgentChatPage({
       const tracked = settleTrackedChatRequest(data.requestId);
       const hasRemainingRequests = tracked.remaining > 0;
       setIsTyping(hasRemainingRequests);
-      chatTurnUiMetaRef.current.delete(String(data.requestId || '').trim());
-      if (hasRemainingRequests) {
-        resumeForegroundRequest(tracked.foregroundRequestId);
-      }
       if (!hasRemainingRequests) {
         setWorkflowStatus('error');
         finishChatProgress(
@@ -1850,6 +1862,7 @@ export function AgentChatPage({
     chatExecutionSource,
     clearChatProgress,
     clearPersistedExecution,
+    dropRequestStream,
     finishChatProgress,
     isFounder,
     isZh,
@@ -1980,7 +1993,7 @@ export function AgentChatPage({
               referenceImage: request.referenceImage || '', referenceArtifactId: request.referenceArtifactId || '',
             });
           }
-          if (snapshot.terminal) return; // The server replays the terminal event.
+          if (snapshot.terminal || execution.requestId !== chatRequestLedgerRef.current.foreground) return;
           if (snapshot.status === 'waiting_confirmation') setWorkflowStatus('waiting_confirmation');
           else if (snapshot.status === 'cancelling') setWorkflowStatus('cancelling');
           else if (snapshot.status === 'executing') setWorkflowStatus('executing');
@@ -1994,7 +2007,7 @@ export function AgentChatPage({
     if (socket.connected) resumeActiveExecution();
     return () => { disposed = true; socket.off('connect', resumeActiveExecution); };
   }, [attachmentConversationIdRef, activeDomain, activeExecutionStorageKey, activeOrgId, agentId, bindAttachmentContextToConversation, chatExecutionSource, clearPersistedExecution, isFounder, isOfficeCommandCenter, isZh, mediaGenerationText.statusGenerating, pushChatProgress, recoveryOwner, resetMediaGenerationSurface, scopedConversationUrl, settleTrackedChatRequest, socket]);
-  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId });
+  const { handleConversationHistorySelectorBlur, startNewTextConversation, handleConversationHistoryScroll, orderedConversationHistory, restoreTextConversation, toggleConversationHistory, deleteConversationFromHistory } = useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId });
 
   useEffect(() => {
     // Scroll to bottom when messages change (new messages, initial load)
@@ -2022,7 +2035,6 @@ export function AgentChatPage({
     if (isOpen) return;
     setWorkflowStatus('idle');
     clearChatProgress();
-    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
     seenWorkflowToolEvents.current.clear();
   }, [clearChatProgress, isOpen]);
 
@@ -2124,133 +2136,46 @@ export function AgentChatPage({
     textChatActiveRef.current = true;
     persistActiveExecution(requestId);
 
-    let resolved = false;
-    let safetyTimer: ReturnType<typeof setTimeout>;
-    let resumeProbeTimer: ReturnType<typeof setTimeout> | null = null;
-    let socketAckTimer: ReturnType<typeof setTimeout> | null = null;
-    let socketAcknowledged = false;
-    let lastProbeStatus = '';
-    const detachThisChatView = () => {
-      resolved = true;
-      clearTimeout(safetyTimer);
-      if (resumeProbeTimer) clearTimeout(resumeProbeTimer);
-      if (socketAckTimer) clearTimeout(socketAckTimer);
-      cleanupSocketWaiters();
-    };
-    activeChatViewDetachersRef.current.add(detachThisChatView);
-    const isCurrentResponse = (data?: { requestId?: string; source?: string; conversationId?: string }) => {
-      return acceptChatExecutionEvent(data, requestId);
-    };
-    const cleanupSocketWaiters = () => {
-      socket.off('agent:response', onResponse);
-      socket.off('agent:error', onError);
-      socket.off('agent:status', onStatus);
-    };
-    const resolve = () => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(safetyTimer);
-      if (resumeProbeTimer) clearTimeout(resumeProbeTimer);
-      if (socketAckTimer) clearTimeout(socketAckTimer);
-      cleanupSocketWaiters();
-      activeChatViewDetachersRef.current.delete(detachThisChatView);
-      const tracked = settleTrackedChatRequest(requestId);
-      setIsTyping(tracked.remaining > 0);
-    };
-    const onResponse = (data?: {
-      text?: string;
-      agentName?: string;
-      requestId?: string;
-      source?: string;
-      conversationId?: string;
-      finalized?: boolean;
-      blocked?: boolean;
-      reason?: string;
-    }) => {
-      if (!isCurrentResponse(data)) return;
-      // The persistent socket listener is the sole owner of terminal UI
-      // delivery. This request-local listener only settles ack/probe timers.
-      // Having both append the same terminal produced the native duplicate.
-      resolve();
-    };
-    const onError = (data?: { requestId?: string; source?: string; conversationId?: string }) => { if (isCurrentResponse(data)) resolve(); };
-    const onStatus = (data: { status: string; requestId?: string; source?: string; conversationId?: string }) => {
-      if (!isCurrentResponse(data)) return;
-      if (data.status === 'idle' || data.status === 'error') resolve();
-    };
-    const scheduleExecutionProbe = (delayMs: number) => {
-      clearTimeout(safetyTimer);
-      safetyTimer = setTimeout(() => {
-        if (resolved) return;
-        if (!socketAcknowledged) {
-          streamingMsgIdsRef.current.delete(requestId);
-          streamingRawTextRef.current.delete(requestId);
-          if (activeMediaGenerationRef.current?.requestId === requestId) {
-            setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendNoAck });
-            activeMediaGenerationRef.current = null;
-          }
-          resolve();
-          return;
+    const watcher = new ChatExecutionWatch({
+      requestId, source: chatExecutionSource, firstProbeMs: outgoingAttachments.length > 0 ? 180000 : 120000,
+      probe: reply => socket.emit('agent:execution_resume', {
+        requestId, source: chatExecutionSource, domain: activeDomain, orgId: activeOrgId || null,
+        conversationId: attachmentConversationIdRef.current || undefined,
+      }, reply),
+      onEvent: (event, error) => {
+        const terminal = event === 'rejected' || event === 'no_ack' || event === 'lost';
+        const foreground = chatRequestLedgerRef.current.foreground === requestId;
+        const detail = error || ({
+          rejected: uiMessage('agent-chat-page.the-backend-did-not-accept.44d78fa21a', isZh ? 'zh' : 'en'),
+          no_ack: uiMessage('agent-chat-page.the-backend-has-not-acknowledged.4a6f380020', isZh ? 'zh' : 'en'),
+          ack_timeout: uiMessage('agent-chat-page.the-backend-has-not-acknowledged.4a6f380020', isZh ? 'zh' : 'en'),
+          lost: uiMessage('agent-chat-page.backend-lost-task.8bbc4d5800', isZh ? 'zh' : 'en'),
+          acknowledged: uiMessage('agent-chat-page.the-backend-has-received-this.859b50e7ed', isZh ? 'zh' : 'en'),
+          working: uiMessage('agent-chat-page.the-backend-has-accepted-this.aa53249e15', isZh ? 'zh' : 'en'),
+          probe_timeout: socket.connected
+            ? uiMessage('agent-chat-page.rechecking-task-state.7d8729d39f', isZh ? 'zh' : 'en')
+            : uiMessage('agent-chat-page.connection-lost-task-will-resume.52cd95319f', isZh ? 'zh' : 'en'),
+        }[event]);
+        if (foreground) {
+          if (terminal || event === 'ack_timeout') setWorkflowStatus('error');
+          pushChatProgress(detail, terminal || event === 'ack_timeout' ? 'error' : 'thinking');
         }
-
-        let probeSettled = false;
-        resumeProbeTimer = setTimeout(() => {
-          if (probeSettled || resolved) return;
-          probeSettled = true;
-          pushChatProgress(
-            socket.connected
-              ? uiMessage('agent-chat-page.rechecking-task-state.7d8729d39f', isZh ? 'zh' : 'en')
-              : uiMessage('agent-chat-page.connection-lost-task-will-resume.52cd95319f', isZh ? 'zh' : 'en'),
-            'thinking',
-          );
-          scheduleExecutionProbe(30000);
-        }, 10000);
-
-        socket.emit('agent:execution_resume', {
-          requestId,
-          source: chatExecutionSource,
-          domain: activeDomain,
-          orgId: activeOrgId || null,
-          conversationId: attachmentConversationIdRef.current || undefined,
-        }, (result?: { ok?: boolean; snapshot?: ChatExecutionSnapshot; error?: string }) => {
-          if (probeSettled || resolved) return;
-          probeSettled = true;
-          if (resumeProbeTimer) {
-            clearTimeout(resumeProbeTimer);
-            resumeProbeTimer = null;
+        if (activeMediaGenerationRef.current?.requestId === requestId) {
+          if (event === 'acknowledged') setMediaGeneration({ status: 'submitting', detail: '' });
+          else if (terminal || event === 'ack_timeout') {
+            setMediaGeneration({ status: 'error', detail: error || (event === 'lost' ? mediaGenerationText.backendLostTask
+              : event === 'rejected' ? mediaGenerationText.backendRejected : mediaGenerationText.backendNoAck) });
+            if (terminal) activeMediaGenerationRef.current = null;
           }
-          if (!result?.ok || !result.snapshot) {
-            setWorkflowStatus('error');
-            pushChatProgress(
-              result?.error || uiMessage('agent-chat-page.backend-lost-task.8bbc4d5800', isZh ? 'zh' : 'en'),
-              'error',
-            );
-            streamingMsgIdsRef.current.delete(requestId);
-            streamingRawTextRef.current.delete(requestId);
-            if (activeMediaGenerationRef.current?.requestId === requestId) {
-              setMediaGeneration({ status: 'error', detail: result?.error || mediaGenerationText.backendLostTask });
-              activeMediaGenerationRef.current = null;
-            }
-            resolve();
-            return;
-          }
-          if (result.snapshot.terminal) return; // Terminal event is replayed by the server.
-          if (result.snapshot.status !== lastProbeStatus) {
-            lastProbeStatus = result.snapshot.status;
-            pushChatProgress(
-              uiMessage('agent-chat-page.the-backend-has-accepted-this.aa53249e15', (isZh) ? 'zh' : 'en'),
-              'thinking',
-            );
-          }
-          scheduleExecutionProbe(30000);
-        });
-      }, delayMs);
-    };
-    scheduleExecutionProbe(outgoingAttachments.length > 0 ? 180000 : 120000);
-
-    socket.on('agent:response', onResponse);
-    socket.on('agent:error', onError);
-    socket.on('agent:status', onStatus);
+        }
+        if (terminal) {
+          dropRequestStream(requestId);
+          const tracked = settleTrackedChatRequest(requestId);
+          setIsTyping(tracked.remaining > 0);
+        }
+      },
+    });
+    activeChatViewDetachersRef.current.set(requestId, () => watcher.dispose());
 
     const chatPayload = {
       text: outgoingText,
@@ -2271,52 +2196,13 @@ export function AgentChatPage({
       conversationId: attachmentConversationIdRef.current || undefined,
     };
 
-    socketAckTimer = setTimeout(() => {
-      if (resolved || socketAcknowledged) return;
-      setWorkflowStatus('error');
-      pushChatProgress(
-        uiMessage('agent-chat-page.the-backend-has-not-acknowledged.4a6f380020', (isZh) ? 'zh' : 'en'),
-        'error'
-      );
-      if (activeMediaGenerationRef.current?.requestId === requestId) {
-        setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendNoAck });
-      }
-    }, 5000);
-
-    // Always try socket first. The ack lets the UI distinguish "received and working"
-    // from "message only exists optimistically in the frontend".
-    socket.emit("agent:chat", chatPayload, (ack?: { ok?: boolean; error?: string }) => {
-      socketAcknowledged = Boolean(ack?.ok);
-      if (socketAckTimer) {
-        clearTimeout(socketAckTimer);
-        socketAckTimer = null;
-      }
-      if (resolved) return;
-      if (ack?.ok) {
-        pushChatProgress(uiMessage('agent-chat-page.the-backend-has-received-this.859b50e7ed', (isZh) ? 'zh' : 'en'), 'thinking');
-        if (activeMediaGenerationRef.current?.requestId === requestId) {
-          setMediaGeneration({ status: 'submitting', detail: '' });
-        }
-      } else {
-        setWorkflowStatus('error');
-        pushChatProgress(
-          ack?.error || (uiMessage('agent-chat-page.the-backend-did-not-accept.44d78fa21a', (isZh) ? 'zh' : 'en')),
-          'error'
-        );
-        if (activeMediaGenerationRef.current?.requestId === requestId) {
-          setMediaGeneration({ status: 'error', detail: ack?.error || mediaGenerationText.backendRejected });
-          activeMediaGenerationRef.current = null;
-        }
-        resolve();
-      }
-    });
+    socket.emit("agent:chat", chatPayload, (ack?: { ok?: boolean; error?: string }) => watcher.acknowledge(ack));
 
     // No frontend AI fallback here. If the realtime backend is down, show the
     // connection problem instead of generating a second, inconsistent answer.
     return requestId;
   }, [
     attachmentConversationIdRef, conversationAttachmentsRef,
-    acceptChatExecutionEvent,
     attachmentUploadText,
     activeDomain,
     activeOrgId,
@@ -2324,6 +2210,7 @@ export function AgentChatPage({
     agentId,
     chatExecutionSource,
     clearChatProgress,
+    dropRequestStream,
     isZh,
     mediaGenerationText,
     messages,

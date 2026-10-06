@@ -1259,6 +1259,139 @@ function resolveAutocadOperationPaths(args: Record<string, any>, title: string):
   };
 }
 
+function cadGeometryParameters() {
+  return {
+    title: { type: 'string', description: 'Drawing title / output filename.' },
+    width: { type: 'number', description: 'Outer width in chosen units.' },
+    height: { type: 'number', description: 'Outer height in chosen units.' },
+    unit: { type: 'string', description: 'Unit label, e.g. mm, cm, inch.' },
+    wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
+    precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
+    inferredScale: { type: 'boolean', description: 'True when scale or coordinates were inferred rather than confirmed from source dimensions.' },
+    confidence: { type: 'number', description: 'Optional geometry extraction confidence from 0 to 1.' },
+    assumptions: { type: 'array', description: 'Assumptions inherited from image/folder geometry extraction.', items: { type: 'string' } },
+    missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
+    precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
+    northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
+    titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
+    walls: {
+      type: 'array',
+      description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
+      items: { type: 'object' },
+    },
+    rooms: {
+      type: 'array',
+      description: 'Optional rooms: rectangles {name,x,y,width,height} or polygons {name,points:[{x,y}],labelX,labelY}.',
+      items: { type: 'object' },
+    },
+    doors: {
+      type: 'array',
+      description: 'Optional doors: {x,y,width,angle,swing,label} or {hingeX,hingeY,width,angle,openAngle}. Draws leaf and swing arc.',
+      items: { type: 'object' },
+    },
+    windows: {
+      type: 'array',
+      description: 'Optional windows: {x1,y1,x2,y2,width,label} or {x,y,length,angle,width}.',
+      items: { type: 'object' },
+    },
+    dimensions: {
+      type: 'array',
+      description: 'Optional dimension lines: {x1,y1,x2,y2,text,offset}.',
+      items: { type: 'object' },
+    },
+    furniture: {
+      type: 'array',
+      description: 'Optional furniture symbols: {type,label,x,y,width,height} or circular {x,y,r,label}.',
+      items: { type: 'object' },
+    },
+    columns: {
+      type: 'array',
+      description: 'Optional structural columns: {x,y,width,height} or {x,y,r}.',
+      items: { type: 'object' },
+    },
+    labels: {
+      type: 'array',
+      description: 'Optional text labels: {text,x,y,height,layer}.',
+      items: { type: 'object' },
+    },
+    holes: {
+      type: 'array',
+      description: 'Optional holes as objects with x, y, and r/radius.',
+      items: { type: 'object' },
+    },
+  };
+}
+
+async function prepareWeChatConversation(
+  args: Record<string, any>,
+  context: ToolContext | undefined,
+  desktopRelay: NonNullable<ToolContext['desktopRelay']>,
+  readOnly = false,
+) {
+  const progress = (step: string) => context?.onProgress?.(step);
+  const contact = String(args.contact || '').trim();
+  if (/^(?:\u4ed6|\u5979|\u5b83|\u5bf9\u65b9|\u90a3\u4e2a\u4eba|\u8fd9\u4e2a\u4eba)$/u.test(contact)) {
+    throw new Error('Recipient pronoun could not be resolved to a concrete WeChat contact. No search or send was attempted.');
+  }
+  const useSearch = args.useSearch !== false && Boolean(contact);
+  progress('正在复用已运行的微信窗口。');
+  const openResult = await desktopRelay('desktop_open', { target: String(args.applicationTarget || 'wechat').trim() || 'wechat' });
+  await sleep(450);
+  let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+  if (!isWeChatActiveWindow(activeWindow)) {
+    await sleep(600);
+    activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+  }
+  if (!isWeChatActiveWindow(activeWindow)) {
+    throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+  }
+  if (useSearch) {
+    progress(`正在微信里定位聊天: ${contact}`);
+    await desktopRelay('desktop_clipboard_write', { text: contact });
+    await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
+    await sleep(250);
+    await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
+    await sleep(450);
+    await desktopRelay('desktop_keyboard_press', { key: 'enter' });
+    await sleep(readOnly ? 750 : 650);
+    activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
+    if (!isWeChatActiveWindow(activeWindow)) {
+      throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
+    }
+  }
+  if (!readOnly && contact) {
+    // Search success and a foreground process are not proof of the intended recipient.
+    let snapshot = '';
+    try { snapshot = await captureDesktopUiEvidence(desktopRelay, 240); } catch {}
+    let ready = uiSnapshotShowsWeChatConversation(snapshot, contact);
+    let reason = ready ? 'The UI snapshot contains the requested contact and a conversation composer.'
+      : 'The UI snapshot did not prove that the requested conversation was open.';
+    const vision = hasVisionProvider(context);
+    if (vision) {
+      try {
+        const verification = parseWeChatConversationReadyVerification(await analyzeScreen(
+          await desktopRelay('desktop_capture_screen', { quality: 75 }),
+          [
+            'Verify the current foreground WeChat state before any message is entered.',
+            `Expected exact recipient/group: ${JSON.stringify(contact)}.`,
+            'Set ready=true only when that exact conversation is visibly open and its message composer is available.',
+            'A contact search box, search-result list, a different conversation, or an ambiguous header must return ready=false.',
+            'Return only JSON: {"ready":boolean,"confidence":number,"reason":"short visible evidence"}.',
+          ].join('\n'),
+          vision, ...providerGetterArguments(context?.llmGetters),
+        ));
+        ready = verification.ready;
+        reason = verification.reason || reason;
+      } catch (err: any) {
+        ready = false;
+        reason = err?.message || String(err);
+      }
+    }
+    if (!ready) throw new Error(`The requested WeChat conversation was not verified after contact search. ${reason}`);
+  }
+  return { contact, useSearch, openResult, activeWindow };
+}
+
 export function registerExternalAppTools(registry: ToolRegistry): void {
   registry.register({
     name: 'external_app_list_adapters',
@@ -1553,41 +1686,8 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     handler: async (args, context) => {
       const desktopRelay = requireDesktopRelay(context);
       const progress = (step: string) => context?.onProgress?.(step);
-      const contact = String(args.contact || '').trim();
-      if (/^(?:\u4ed6|\u5979|\u5b83|\u5bf9\u65b9|\u90a3\u4e2a\u4eba|\u8fd9\u4e2a\u4eba)$/u.test(contact)) {
-        throw new Error('Recipient pronoun could not be resolved to a concrete WeChat contact. No search or send was attempted.');
-      }
-      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
-      const useSearch = args.useSearch !== false && Boolean(contact);
+      const { contact, useSearch, openResult, activeWindow } = await prepareWeChatConversation(args, context, desktopRelay, true);
       const maxMessages = Math.max(3, Math.min(Number(args.maxMessages || 8), 20));
-
-      progress('\u6b63\u5728\u590d\u7528\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u7a97\u53e3\u3002');
-      const openResult = await desktopRelay('desktop_open', { target: appTarget });
-      await sleep(450);
-
-      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      if (!isWeChatActiveWindow(activeWindow)) {
-        await sleep(600);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      }
-      if (!isWeChatActiveWindow(activeWindow)) {
-        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-      }
-
-      if (useSearch) {
-        progress(`\u6b63\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d\u804a\u5929: ${contact}`);
-        await desktopRelay('desktop_clipboard_write', { text: contact });
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
-        await sleep(250);
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
-        await sleep(450);
-        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
-        await sleep(750);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-        if (!isWeChatActiveWindow(activeWindow)) {
-          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-        }
-      }
 
       progress('\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u804a\u5929\u53ef\u89c1\u5185\u5bb9\u3002');
       let uiSnapshot = '';
@@ -1671,80 +1771,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
 
       const desktopRelay = requireDesktopRelay(context);
       const progress = (step: string) => context?.onProgress?.(step);
-      const contact = String(args.contact || '').trim();
-      if (/^(?:\u4ed6|\u5979|\u5b83|\u5bf9\u65b9|\u90a3\u4e2a\u4eba|\u8fd9\u4e2a\u4eba)$/u.test(contact)) {
-        throw new Error('Recipient pronoun could not be resolved to a concrete WeChat contact. No search or send was attempted.');
-      }
-      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
-      const useSearch = args.useSearch !== false && Boolean(contact);
       const sendShortcut = String(args.sendShortcut || 'enter').trim() || 'enter';
       const useVirtualCursor = args.useVirtualCursor !== false;
-
-      progress('\u6b63\u5728\u590d\u7528\u5df2\u8fd0\u884c\u7684\u5fae\u4fe1\u7a97\u53e3\u3002');
-      const openResult = await desktopRelay('desktop_open', { target: appTarget });
-      await sleep(450);
-
-      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      if (!isWeChatActiveWindow(activeWindow)) {
-        await sleep(600);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      }
-      if (!isWeChatActiveWindow(activeWindow)) {
-        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-      }
-
-      if (useSearch) {
-        progress(`\u6b63\u5728\u5fae\u4fe1\u91cc\u5b9a\u4f4d\u8054\u7cfb\u4eba: ${contact}`);
-        await desktopRelay('desktop_clipboard_write', { text: contact });
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
-        await sleep(250);
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
-        await sleep(450);
-        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
-        await sleep(650);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-        if (!isWeChatActiveWindow(activeWindow)) {
-          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-        }
-
-        // Selecting a search result is not the same as proving that the
-        // intended chat is open. Never paste or press Enter until the exact
-        // recipient and a real message composer are visibly verified.
-        let selectionSnapshot = '';
-        try { selectionSnapshot = await captureDesktopUiEvidence(desktopRelay, 240); } catch {}
-        let conversationReady = uiSnapshotShowsWeChatConversation(selectionSnapshot, contact);
-        let selectionReason = conversationReady
-          ? 'The UI snapshot contains the requested contact and a conversation composer.'
-          : 'The UI snapshot did not prove that the requested conversation was open.';
-        const selectionVisionConfig = hasVisionProvider(context);
-        if (selectionVisionConfig) {
-          try {
-            const screenCapture = await desktopRelay('desktop_capture_screen', { quality: 75 });
-            const getters = context?.llmGetters;
-            const verificationText = await analyzeScreen(
-              screenCapture,
-              [
-                'Verify the current foreground WeChat state before any message is entered.',
-                `Expected exact recipient/group: ${JSON.stringify(contact)}.`,
-                'Set ready=true only when that exact conversation is visibly open and its message composer is available.',
-                'A contact search box, search-result list, a different conversation, or an ambiguous header must return ready=false.',
-                'Return only JSON: {"ready":boolean,"confidence":number,"reason":"short visible evidence"}.',
-              ].join('\n'),
-              selectionVisionConfig,
-              ...providerGetterArguments(getters),
-            );
-            const verifiedSelection = parseWeChatConversationReadyVerification(verificationText);
-            conversationReady = verifiedSelection.ready;
-            selectionReason = verifiedSelection.reason || selectionReason;
-          } catch (err: any) {
-            conversationReady = false;
-            selectionReason = err?.message || String(err);
-          }
-        }
-        if (!conversationReady) {
-          throw new Error(`The requested WeChat conversation was not verified after contact search. ${selectionReason}`);
-        }
-      }
+      const { contact, useSearch, openResult, activeWindow } = await prepareWeChatConversation(args, context, desktopRelay);
 
       const point = virtualInputPoint(activeWindow);
       if (useVirtualCursor) {
@@ -1959,37 +1988,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
         throw new Error(`Sending a file to personal WeChat requires either a recent bound bot conversation or the member's personal Lumi desktop client online.${suffix}`);
       }
 
-      const appTarget = String(args.applicationTarget || 'wechat').trim() || 'wechat';
-      const useSearch = args.useSearch !== false && Boolean(contact);
       const sendShortcut = String(args.sendShortcut || 'enter').trim() || 'enter';
       const fileName = path.basename(filePath);
-
-      progress('正在复用个人桌面的微信窗口。');
-      const openResult = await desktopRelay('desktop_open', { target: appTarget });
-      await sleep(450);
-      let activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      if (!isWeChatActiveWindow(activeWindow)) {
-        await sleep(600);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-      }
-      if (!isWeChatActiveWindow(activeWindow)) {
-        throw new Error(`WeChat is not the foreground window after opening. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-      }
-
-      if (useSearch) {
-        progress(`正在微信里定位联系人: ${contact}`);
-        await desktopRelay('desktop_clipboard_write', { text: contact });
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+f' });
-        await sleep(250);
-        await desktopRelay('desktop_keyboard_press', { key: 'ctrl+v' });
-        await sleep(450);
-        await desktopRelay('desktop_keyboard_press', { key: 'enter' });
-        await sleep(650);
-        activeWindow = parseDesktopJson(await desktopRelay('desktop_active_window', {}));
-        if (!isWeChatActiveWindow(activeWindow)) {
-          throw new Error(`Contact search did not leave WeChat in the foreground. Active window: ${JSON.stringify(activeWindow).slice(0, 300)}`);
-        }
-      }
+      const { openResult, activeWindow } = await prepareWeChatConversation(args, context, desktopRelay);
 
       const point = virtualInputPoint(activeWindow);
       await desktopRelay('desktop_cursor_glow_show', { source: 'wechat_send_file', timeoutMs: 12000 }).catch(() => '');
@@ -2113,18 +2114,8 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'Drawing title / output filename.' },
-        width: { type: 'number', description: 'Outer width in chosen units.' },
-        height: { type: 'number', description: 'Outer height in chosen units.' },
-        unit: { type: 'string', description: 'Unit label, e.g. mm, cm, inch.' },
+        ...cadGeometryParameters(),
         cornerRadius: { type: 'number', description: 'Reserved for geometry compatibility; AutoCAD operations use explicit entities.' },
-        wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
-        precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
-        inferredScale: { type: 'boolean', description: 'True when scale or coordinates were inferred rather than confirmed from source dimensions.' },
-        confidence: { type: 'number', description: 'Optional geometry extraction confidence from 0 to 1.' },
-        assumptions: { type: 'array', description: 'Assumptions inherited from image/folder geometry extraction.', items: { type: 'string' } },
-        missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
-        precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
         sourcePath: { type: 'string', description: 'Optional source image/drawing path used for traceability.' },
         geometryReceiptPath: { type: 'string', description: 'Required for image-grounded CAD. Use the receipt path returned by successful floorplan_extract_geometry verification.' },
         geometryHash: { type: 'string', description: 'Geometry hash returned with the verified extraction. It is checked against the receipt.' },
@@ -2135,59 +2126,12 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           items: { type: 'object' },
         },
         rectangularOutline: { type: 'boolean', description: 'For manually specified CAD only. Set false to avoid an automatic rectangular envelope when no outerBoundary is supplied.' },
-        northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
-        titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory for the operations JSON, manifest, and completion marker.' },
         outputPath: { type: 'string', description: 'Optional output base path. The tool writes _operations.json and _manifest.json beside it.' },
         strokeDelayMs: { type: 'number', description: 'Requested delay in milliseconds between visible MCP operations. Defaults to 450, minimum 100, maximum 5000.' },
-        walls: {
-          type: 'array',
-          description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
-          items: { type: 'object' },
-        },
         polylines: {
           type: 'array',
           description: 'Optional open/closed polylines: {points:[{x,y}],closed,layer}. MCP playback draws each segment one by one.',
-          items: { type: 'object' },
-        },
-        rooms: {
-          type: 'array',
-          description: 'Optional rooms: rectangles {name,x,y,width,height} or polygons {name,points:[{x,y}],labelX,labelY}.',
-          items: { type: 'object' },
-        },
-        doors: {
-          type: 'array',
-          description: 'Optional doors: {x,y,width,angle,swing,label} or {hingeX,hingeY,width,angle,openAngle}. Draws leaf and swing arc.',
-          items: { type: 'object' },
-        },
-        windows: {
-          type: 'array',
-          description: 'Optional windows: {x1,y1,x2,y2,width,label} or {x,y,length,angle,width}.',
-          items: { type: 'object' },
-        },
-        dimensions: {
-          type: 'array',
-          description: 'Optional dimension lines: {x1,y1,x2,y2,text,offset}.',
-          items: { type: 'object' },
-        },
-        furniture: {
-          type: 'array',
-          description: 'Optional furniture symbols: {type,label,x,y,width,height} or circular {x,y,r,label}.',
-          items: { type: 'object' },
-        },
-        columns: {
-          type: 'array',
-          description: 'Optional structural columns: {x,y,width,height} or {x,y,r}.',
-          items: { type: 'object' },
-        },
-        labels: {
-          type: 'array',
-          description: 'Optional text labels: {text,x,y,height,layer}.',
-          items: { type: 'object' },
-        },
-        holes: {
-          type: 'array',
-          description: 'Optional holes as objects with x, y, and r/radius.',
           items: { type: 'object' },
         },
       },
@@ -2327,20 +2271,8 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
     parameters: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'Drawing title / output filename.' },
-        width: { type: 'number', description: 'Outer width in chosen units.' },
-        height: { type: 'number', description: 'Outer height in chosen units.' },
-        unit: { type: 'string', description: 'Unit label, e.g. mm, cm, inch.' },
+        ...cadGeometryParameters(),
         cornerRadius: { type: 'number', description: 'Optional rounded corner radius.' },
-        wallThickness: { type: 'number', description: 'Default wall thickness for wall segments when individual wall.thickness is omitted.' },
-        precisionNote: { type: 'string', description: 'Short note about source accuracy, scale assumptions, or missing dimensions.' },
-        inferredScale: { type: 'boolean', description: 'True when scale or coordinates were inferred rather than confirmed from source dimensions.' },
-        confidence: { type: 'number', description: 'Optional geometry extraction confidence from 0 to 1.' },
-        assumptions: { type: 'array', description: 'Assumptions inherited from image/folder geometry extraction.', items: { type: 'string' } },
-        missingForPrecision: { type: 'array', description: 'Inputs still needed before the drawing can be treated as dimensionally precise.', items: { type: 'string' } },
-        precisionStatus: { type: 'string', description: 'Traceable precision state from geometry extraction.' },
-        northArrow: { type: 'object', description: 'Optional north arrow position, e.g. {x,y}. Set true/object when orientation is known.' },
-        titleBlock: { type: 'boolean', description: 'Whether to include a title block. Defaults to true.' },
         outputDirectory: { type: 'string', description: 'Optional directory to save the DXF, e.g. C:\\Users\\name\\Desktop. Use when the user asks to put the file somewhere visible.' },
         outputPath: { type: 'string', description: 'Optional exact DXF output path. Relative paths are resolved under outputDirectory or Lumi CAD data directory.' },
         sourcePath: { type: 'string', description: 'Optional source drawing/image path used for traceability.' },
@@ -2353,54 +2285,9 @@ export function registerExternalAppTools(registry: ToolRegistry): void {
           items: { type: 'object' },
         },
         rectangularOutline: { type: 'boolean', description: 'For manual geometry only. Controls automatic rectangular outline when outerBoundary is absent.' },
-        walls: {
-          type: 'array',
-          description: 'Optional CAD wall/line segments: {x1,y1,x2,y2,thickness,layer}. Use floor plan units such as mm.',
-          items: { type: 'object' },
-        },
         polylines: {
           type: 'array',
           description: 'Optional open/closed polylines: {points:[{x,y}],closed,layer}. Useful for irregular boundaries.',
-          items: { type: 'object' },
-        },
-        rooms: {
-          type: 'array',
-          description: 'Optional rooms: rectangles {name,x,y,width,height} or polygons {name,points:[{x,y}],labelX,labelY}.',
-          items: { type: 'object' },
-        },
-        doors: {
-          type: 'array',
-          description: 'Optional doors: {x,y,width,angle,swing,label} or {hingeX,hingeY,width,angle,openAngle}. Draws leaf and swing arc.',
-          items: { type: 'object' },
-        },
-        windows: {
-          type: 'array',
-          description: 'Optional windows: {x1,y1,x2,y2,width,label} or {x,y,length,angle,width}.',
-          items: { type: 'object' },
-        },
-        dimensions: {
-          type: 'array',
-          description: 'Optional dimension lines: {x1,y1,x2,y2,text,offset}.',
-          items: { type: 'object' },
-        },
-        furniture: {
-          type: 'array',
-          description: 'Optional furniture symbols: {type,label,x,y,width,height} or circular {x,y,r,label}.',
-          items: { type: 'object' },
-        },
-        columns: {
-          type: 'array',
-          description: 'Optional structural columns: {x,y,width,height} or {x,y,r}.',
-          items: { type: 'object' },
-        },
-        labels: {
-          type: 'array',
-          description: 'Optional text labels: {text,x,y,height,layer}.',
-          items: { type: 'object' },
-        },
-        holes: {
-          type: 'array',
-          description: 'Optional holes as objects with x, y, and r/radius.',
           items: { type: 'object' },
         },
         openPreview: { type: 'boolean', description: 'Open the generated DXF with the system default app. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },

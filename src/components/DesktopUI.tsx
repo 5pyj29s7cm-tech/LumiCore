@@ -1,3 +1,4 @@
+import { useDesktopWindows } from './desktop/useDesktopWindows';
 import { useClientSurfaceActions, normalizeDesktopSurfaceTarget as normalizeTarget } from './desktop/useClientSurfaceActions';
 
 import { DesktopShellView } from "./desktop/DesktopShellView";
@@ -120,9 +121,7 @@ export function DesktopUI({
 
   const initialCommandCenterOpen = activeTab === 'chat' || activeTab === 'command-center';
   const initialWindowId = activeTab !== 'home' && activeTab !== 'knowledge' && !initialCommandCenterOpen ? activeTab : null;
-  const [openWindows, setOpenWindows] = useState<string[]>(initialWindowId ? [initialWindowId] : []);
-  const [minimizedWindows, setMinimizedWindows] = useState<string[]>([]);
-  const [focusedWindow, setFocusedWindow] = useState<string | null>(initialWindowId);
+  const { openWindows, minimizedWindows, focusedWindow, command: windowCommand } = useDesktopWindows(initialWindowId);
   const [knowledgeOpen, setKnowledgeOpen] = useState(activeTab === 'knowledge');
   const [knowledgeLoaded, setKnowledgeLoaded] = useState(activeTab === 'knowledge');
   const [organizationWorkspaceView, setOrganizationWorkspaceView] = useState<OrganizationWorkspaceView>('dashboard');
@@ -415,9 +414,7 @@ export function DesktopUI({
     setIsSearchOpen(false);
     setViewMode('personal');
     setCommandCenterView(view);
-    setOpenWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
-    setMinimizedWindows(previous => previous.filter(windowId => !['chat', 'command-center'].includes(windowId)));
-    setFocusedWindow(previous => ['chat', 'command-center'].includes(previous || '') ? null : previous);
+    windowCommand('remove', 'chat', 'command-center');
     setChatLoaded(true);
     setChatOpen(true);
     setActiveTab('command-center');
@@ -434,7 +431,7 @@ export function DesktopUI({
         window.dispatchEvent(new CustomEvent('lumi:focus-command-input'));
       })();
     }, 80);
-  }, [dismissUtilitySurfaces, isTauri, setActiveTab]);
+  }, [dismissUtilitySurfaces, isTauri, setActiveTab, windowCommand]);
 
   const inferSurfaceReturnTarget = useCallback((): SurfaceReturnTarget => {
     if (chatOpen || activeTab === 'command-center') return 'command-center';
@@ -1194,14 +1191,8 @@ export function DesktopUI({
       const detail = (e as CustomEvent).detail;
       if (detail?.tab === 'home') {
         surfaceReturnTargetRef.current = 'home';
-        setOpenWindows([]);
-        setMinimizedWindows([]);
-        setFocusedWindow(null);
-        setKnowledgeOpen(false);
-        setChatOpen(false);
-        setMemoryLabOpen(false);
-        setSanctuaryOpen(false);
-        setSanctuaryAgent(null);
+        windowCommand('reset');
+        dismissUtilitySurfaces();
         setActiveTab('home');
         return;
       }
@@ -1219,7 +1210,7 @@ export function DesktopUI({
     };
     window.addEventListener('lumi:navigate', handler);
     return () => window.removeEventListener('lumi:navigate', handler);
-  }, [openCommandCenter, setActiveTab]);
+  }, [dismissUtilitySurfaces, openCommandCenter, setActiveTab, windowCommand]);
 
   // Read system volume for voice output and proactive greetings.
   useEffect(() => {
@@ -1919,10 +1910,8 @@ export function DesktopUI({
 
   const setNotificationSurface = useCallback((open?: boolean) => {
     setIsNotificationPanelOpen(previous => open ?? !previous);
-    setOpenWindows(previous => previous.filter(id => id !== 'notifications'));
-    setMinimizedWindows(previous => previous.filter(id => id !== 'notifications'));
-    setFocusedWindow(previous => previous === 'notifications' ? null : previous);
-  }, []);
+    windowCommand('remove', 'notifications');
+  }, [windowCommand]);
 
   const openSurface = useCallback((value: string, returnTarget?: SurfaceReturnTarget) => {
     if (value === 'avatar-studio') setPersonalizationSection('appearance');
@@ -1939,9 +1928,7 @@ export function DesktopUI({
     setIsSearchOpen(windowId === 'app-launcher');
     setViewMode(windowId === 'nexus' ? 'world' : 'personal');
     if (windowId === 'home') {
-      setOpenWindows([]);
-      setMinimizedWindows([]);
-      setFocusedWindow(null);
+      windowCommand('reset');
       setIsNotificationPanelOpen(false);
       setActiveTab('home');
       return;
@@ -1950,11 +1937,9 @@ export function DesktopUI({
     if (windowId === 'app-launcher') return;
     if (windowId === 'org') { setActiveTab('org'); return; }
     if (windowId === 'notifications') { setNotificationSurface(true); return; }
-    setOpenWindows(previous => [...previous.filter(id => id !== windowId), windowId]);
-    setMinimizedWindows(previous => previous.filter(id => id !== windowId));
-    setFocusedWindow(windowId);
+    windowCommand('open', windowId);
     setActiveTab(windowId);
-  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab, setNotificationSurface]);
+  }, [dismissUtilitySurfaces, inferSurfaceReturnTarget, openCommandCenter, openKnowledgeBase, openMemoryAvatar, setActiveTab, setNotificationSurface, windowCommand]);
 
   const toggleWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
@@ -1965,15 +1950,10 @@ export function DesktopUI({
 
   const closeWindow = useCallback((tab: string) => {
     try { sounds.playClick(); } catch {}
-    const remainingOrder = openWindows.filter(w => w !== tab && !minimizedWindows.includes(w));
-    const nextFocusedWindow = remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null;
-    setOpenWindows(prev => prev.filter(w => w !== tab));
-    setMinimizedWindows(prev => prev.filter(w => w !== tab));
-    if (focusedWindow === tab) {
-      setFocusedWindow(nextFocusedWindow);
-      if (!nextFocusedWindow) setActiveTab('home');
-    }
-  }, [focusedWindow, minimizedWindows, openWindows, setActiveTab]);
+    if (windowCommand('close', tab)) setActiveTab('home');
+  }, [setActiveTab, windowCommand]);
+
+  const focusOsWindow = useCallback((tab: string) => { windowCommand('focus', tab); }, [windowCommand]);
 
   const closeSurface = useCallback((value: string) => {
     const windowId = normalizeTarget(value);
@@ -2016,13 +1996,7 @@ export function DesktopUI({
     closeWindow(windowId);
   }, [activeTab, closeKnowledgeBase, closeMemoryAvatar, closeWindow, dismissUtilitySurfaces, nexusReturnTarget, openCommandCenter, setActiveTab]);
 
-  const minimizeOsWindow = (tab: string) => {
-    const remainingOrder = openWindows.filter(w => w !== tab && !minimizedWindows.includes(w));
-    setMinimizedWindows(prev => prev.includes(tab) ? prev : [...prev, tab]);
-    if (focusedWindow === tab) {
-      setFocusedWindow(remainingOrder.length > 0 ? remainingOrder[remainingOrder.length - 1] : null);
-    }
-  };
+  const minimizeOsWindow = useCallback((tab: string) => { windowCommand('minimize', tab); }, [windowCommand]);
 
   const applyDesktopWidgetFallback = useCallback(async () => {
     const windowApi = await import('@tauri-apps/api/window');
@@ -2117,14 +2091,8 @@ export function DesktopUI({
     surfaceReturnTargetRef.current = 'home';
     setIsNotificationPanelOpen(false);
     setIsSearchOpen(false);
-    setChatOpen(false);
-    setKnowledgeOpen(false);
-    setMemoryLabOpen(false);
-    setSanctuaryOpen(false);
-    setSanctuaryAgent(null);
-    setOpenWindows([]);
-    setMinimizedWindows([]);
-    setFocusedWindow(null);
+    dismissUtilitySurfaces();
+    windowCommand('reset');
     setActiveTab('home');
     setIsDesktopWidgetMode(true);
     if (isTauri) {
@@ -2148,7 +2116,7 @@ export function DesktopUI({
         );
       }
     }
-  }, [applyDesktopWidgetFallback, isTauri, lang, setActiveTab]);
+  }, [applyDesktopWidgetFallback, dismissUtilitySurfaces, isTauri, lang, setActiveTab, windowCommand]);
 
   const exitDesktopWidgetMode = useCallback(async (nextSurface?: string) => {
     try { sounds.playClick(); } catch {}
@@ -2458,6 +2426,6 @@ export function DesktopUI({
       />
     );
   }
-  return <DesktopShellView {...{ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, setFocusedWindow, setOpenWindows, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }} />;
+  return <DesktopShellView {...{ resolvedAppearanceMode, viewMode, desktopChrome, isCompactDesktopLayout, isWallpaperMode, wallpaperPresentation, wallpaperWorkspace, handleShellContextMenu, isWallpaperDesktopControl, wallpaper, wallpaperUrl, wallpaperInputRef, handleWallpaperUpload, isWallpaperWorkbench, applyWallpaperMode, lang, personalScale, personalOpacity, syncRate, t, nexusReturnTarget, openCommandCenter, setSyncRate, handleTopbarPointerDown, toggleWindow, openSurface, closeSurface, setShowOnboarding, tutorialLabel, workDomain, switchDomain, orgConnection, activeTab, setActiveTab, setMemoryLabOpen, setSanctuaryOpen, setSanctuaryAgent, setChatPrefill, chatOpen, knowledgeOpen, memoryLabOpen, sanctuaryOpen, setIsSearchOpen, setIsNotificationPanelOpen, isNotificationPanelOpen, unreadCount, socket, toggleMute, isMuted, toggleWallpaperMode, time, enterDesktopWidgetMode, handleWindowMinimize, handleWindowMaximize, isCompactWindowMode, handleWindowClose, openProactiveChat, isSearchOpen, allAppEntries, dockPositionClassName, dockApps, openWindows, focusedWindow, minimizedWindows, user, onLogin, selectedPet, setPersonalizationSection, callState, petReaction, equippedAccessories, audioLevel, startStandardVoiceCall, endVoiceCallFromUI, operationMode, openMeetingModeWithConfirm, canCustomizeLumiAppearance, setSelectedPet, savePetPrefsToServer, facePresenceRequested, faceRecognition, presence, voiceprint, sphereSentiment, isTauri, interrupt, wakeEnabled, wakeWord, transcript, desktopIconAreaHeight, desktopIcons, getDefaultDesktopIconPosition, launchExternalCapability, notifications, meetingNotesOpen, meetingPaused, legalMeetingCaseTitle, copyMeetingNotes, downloadMeetingNotes, setMeetingNotesOpen, meetingNotes, meetingSpeakerCount, meetingStartedAt, meetingReportGenerating, meetingReport, formatMeetingTime, meetingNoteHasSpeakerInfo, meetingSpeakerLabel, toggleMeetingCapturePaused, endMeetingAndReport, clearMeetingNotes, pendingOperationModeOption, setPendingOperationMode, pendingOperationMode, confirmOperationModeChange, wallpaperWorkPromptVisible, enterWallpaperFromWorkPrompt, dismissWallpaperWorkPrompt, sensorPrimerSeen, finishSensorPrimer, showOnboarding, askComputerProfileQuestion, isTrainingOpen, setIsTrainingOpen, getWindowSize, getWindowMeta, focusOsWindow, minimizeOsWindow, closeWindow, openKnowledgeBase, setCreationRequestId, openMemoryAvatar, setLang, settingsSection, setSettingsSection, canUseExternalCapabilities, personalizationSection, petPreferenceScopeKey, handleSelectPet, setEquippedAccessories, renderTabContent, knowledgeLoaded, closeKnowledgeBase, chatLoaded, commandCenterView, setCommandCenterView, callError, chatPrefill, creationRequestId, chatAttachmentRequest, setChatAttachmentRequest, sanctuaryLoaded, sanctuaryAgent, closeMemoryAvatar, memoryAvatars, openMemoryAvatarLab, setMemoryAvatars, enterCreatedMemoryAvatar }} />;
 
 }

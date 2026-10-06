@@ -1,3 +1,4 @@
+import { desktopWindowCommand } from './desktop_window_harness';
 import { expect, it, vi } from 'vitest';
 import { extractSourceExpression } from './source_expression';
 
@@ -9,6 +10,7 @@ function desktop(initial: Record<string, any> = {}) {
     openWindows: [], minimizedWindows: [], focusedWindow: null, viewMode: 'personal',
     isSearchOpen: false, isNotificationPanelOpen: false, isDesktopWidgetMode: false, nexusReturnTarget: 'home', ...initial,
   };
+  const windowCommand = desktopWindowCommand(state);
   const scope = { userId: 'owner-a' };
   const refs = { surfaceReturnTargetRef: { current: 'home' }, memoryAvatarOpenGenerationRef: { current: 4 },
     memoryAvatarOwnerScope: scope, memoryAvatarOwnerRef: { current: scope }, memoryAvatarSurfaceGeneration: 4 };
@@ -26,7 +28,7 @@ function desktop(initial: Record<string, any> = {}) {
   const callbacks: Record<string, any> = Object.fromEntries(names.map(name => [name, (...args: any[]) => invoke(name, ...args)]));
   function invoke(name: string, ...args: any[]) {
     return extractSourceExpression(source, name, {
-      ...state, ...refs, ...setters, ...callbacks, loadMemoryAvatars: load,
+      ...state, ...refs, ...setters, ...callbacks, windowCommand, loadMemoryAvatars: load,
       normalizeTarget: (value: string) => ({ memory: 'knowledge', files: 'knowledge', sync: 'devices',
         chat: 'command-center', sanctuary: 'memory-avatar', sound: 'personalization', 'avatar-studio': 'personalization',
         world: 'nexus', 'nexus-view': 'nexus', 'cloud-canvas': 'nexus', 'memory-avatars': 'memory-avatar' }[value] || value),

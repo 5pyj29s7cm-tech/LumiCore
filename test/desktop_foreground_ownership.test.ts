@@ -1,3 +1,4 @@
+import { desktopWindowCommand } from './desktop_window_harness';
 import { extractSourceExpression, readSourceAst } from './source_expression';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -52,10 +53,11 @@ describe('desktop foreground event ownership', () => {
 
 it('keeps one window order across reopen, minimize, close, and returning home', () => {
   const state = { openWindows: [] as string[], minimizedWindows: [] as string[], focusedWindow: null as string | null, activeTab: 'home' };
+  const windowCommand = desktopWindowCommand(state);
   const set = (key: keyof typeof state) => (value: any) => { (state as any)[key] = typeof value === 'function' ? value(state[key]) : value; };
   const noop = () => {};
   const invoke = (name: string, tab: string) => extractSourceExpression('src/components/DesktopUI.tsx', name, {
-    ...state, setOpenWindows: set('openWindows'), setMinimizedWindows: set('minimizedWindows'), setFocusedWindow: set('focusedWindow'),
+    ...state, windowCommand, setOpenWindows: set('openWindows'), setMinimizedWindows: set('minimizedWindows'), setFocusedWindow: set('focusedWindow'),
     setActiveTab: set('activeTab'), sounds: { playClick: noop }, surfaceReturnTargetRef: { current: 'home' },
     setKnowledgeOpen: noop, setMemoryLabOpen: noop, setSanctuaryOpen: noop, setSanctuaryAgent: noop,
     setChatOpen: noop, setChatPrefill: noop, setViewMode: noop, setIsSearchOpen: noop, setIsNotificationPanelOpen: noop,

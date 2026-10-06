@@ -1,5 +1,5 @@
 
-import { type ConversationHistoryItem, type ConversationHistoryContextMenu, type WorkflowStatus, type ChatTurnUiMeta } from "./contracts";
+import { type ConversationHistoryItem, type ConversationHistoryContextMenu } from "./contracts";
 
 import type { ChatAttachmentReference } from "@/lib/chatAttachmentReferences";
 import React, { useCallback, useEffect, useMemo } from 'react';
@@ -12,7 +12,6 @@ import { useAppConfirm } from '@/lib/appConfirm';
 
 import { uiMessage } from "../../i18n/uiMessages";
 
-import { ChatRequestLedger, ChatTurnTimerGuard } from '@/lib/chatEventReceipts';
 
 const CONVERSATION_HISTORY_PAGE_SIZE = 40;
 const CHAT_HISTORY_LIMIT = 300;
@@ -26,18 +25,7 @@ invalidateChatViewWork: () => void;
 chatViewWorkRef: React.RefObject<ChatViewWorkRegistry>;
 scopedConversationUrl: (path: string) => string;
 activeDomain: "personal" | "work";
-activeChatViewDetachersRef: React.RefObject<Set<() => void>>;
-clearPersistedExecution: (requestId?: string) => void;
-chatRequestLedgerRef: React.RefObject<ChatRequestLedger>;
-chatTurnUiMetaRef: React.RefObject<Map<string, ChatTurnUiMeta>>;
-activeChatRequestIdRef: React.RefObject<string>;
-textChatActiveRef: React.RefObject<boolean>;
-lastResumedRequestIdsRef: React.RefObject<Set<string>>;
-streamingMsgIdsRef: React.RefObject<Map<string, string>>;
-streamingRawTextRef: React.RefObject<Map<string, string>>;
-chatTurnTimerGuardRef: React.RefObject<ChatTurnTimerGuard>;
-currentTurnUiMetaRef: React.RefObject<ChatTurnUiMeta>;
-resetMediaGenerationSurface: () => void;
+detachPreviousExecution: () => void;
 bindAttachmentContextToConversation: (conversationId: string, options?: { carryCurrent?: boolean; }) => void;
 setConversationHistory: React.Dispatch<React.SetStateAction<ConversationHistoryItem[]>>;
 setMessages: (update: React.SetStateAction<any[]>) => void;
@@ -46,10 +34,6 @@ pendingAttachmentsRef: React.RefObject<ChatAttachmentReference[]>;
 setSearchQuery: React.Dispatch<React.SetStateAction<string>>;
 setSearchResults: React.Dispatch<React.SetStateAction<any[]>>;
 setSearchError: React.Dispatch<React.SetStateAction<string>>;
-setIsTyping: React.Dispatch<React.SetStateAction<boolean>>;
-setWorkflowStatus: React.Dispatch<React.SetStateAction<WorkflowStatus>>;
-clearChatProgress: () => void;
-seenWorkflowToolEvents: React.RefObject<Set<string>>;
 messageInputRef: React.RefObject<HTMLInputElement>;
 agentId: any;
 isOpen: boolean;
@@ -79,23 +63,7 @@ setConversationContextMenu: React.Dispatch<React.SetStateAction<ConversationHist
 appConfirm: ReturnType<typeof useAppConfirm>;
 setDeletingConversationId: React.Dispatch<React.SetStateAction<string>>;
 };
-export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, activeChatViewDetachersRef, clearPersistedExecution, chatRequestLedgerRef, chatTurnUiMetaRef, activeChatRequestIdRef, textChatActiveRef, lastResumedRequestIdsRef, streamingMsgIdsRef, streamingRawTextRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
-
-  const detachPreviousExecution = useCallback(() => {
-    for (const detach of activeChatViewDetachersRef.current) detach();
-    activeChatViewDetachersRef.current.clear();
-    clearPersistedExecution();
-    chatRequestLedgerRef.current.clear();
-    chatTurnUiMetaRef.current.clear();
-    activeChatRequestIdRef.current = null;
-    textChatActiveRef.current = false;
-    lastResumedRequestIdsRef.current.clear();
-    streamingMsgIdsRef.current.clear();
-    streamingRawTextRef.current.clear();
-    chatTurnTimerGuardRef.current.invalidate();
-    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
-    resetMediaGenerationSurface();
-  }, [activeChatRequestIdRef, activeChatViewDetachersRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, currentTurnUiMetaRef, lastResumedRequestIdsRef, resetMediaGenerationSurface, streamingMsgIdsRef, streamingRawTextRef, textChatActiveRef]);
+export function useConversationTransitions({ conversationTransitionRef, isCreatingConversation, restoringConversationId, setConversationTransitionPending, setIsCreatingConversation, invalidateChatViewWork, chatViewWorkRef, scopedConversationUrl, activeDomain, detachPreviousExecution, bindAttachmentContextToConversation, setConversationHistory, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, messageInputRef, agentId, isOpen, conversationHistoryLoadingRef, conversationHistoryHasMoreRef, conversationHistoryRequestRef, conversationHistoryOffsetRef, setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore, setConversationHistorySelectorExpanded, activeOrgId, conversationHistoryOpen, isOfficeCommandCenter, conversationHistory, conversationHistorySelectorExpanded, conversationHistoryHasMore, conversationHistoryListRef, setConversationHistoryOpen, attachmentConversationIdRef, setRestoringConversationId, normalizePersistedMessages, deletingConversationId, t, isZh, setConversationContextMenu, appConfirm, setDeletingConversationId }: useConversationTransitionsInput) {
 
   const activateTranscript = useCallback((conversationId: string, messages: any[]) => {
     detachPreviousExecution();
@@ -106,11 +74,7 @@ export function useConversationTransitions({ conversationTransitionRef, isCreati
     setSearchQuery('');
     setSearchResults([]);
     setSearchError('');
-    setIsTyping(false);
-    setWorkflowStatus('idle');
-    clearChatProgress();
-    seenWorkflowToolEvents.current.clear();
-  }, [detachPreviousExecution, bindAttachmentContextToConversation, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents]);
+  }, [detachPreviousExecution, bindAttachmentContextToConversation, setMessages, setPendingAttachments, pendingAttachmentsRef, setSearchQuery, setSearchResults, setSearchError]);
 
   const startNewTextConversation = useCallback(async () => {
     if (conversationTransitionRef.current || isCreatingConversation || restoringConversationId) return;

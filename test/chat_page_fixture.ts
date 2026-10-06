@@ -1,3 +1,5 @@
+import { ChatExecutionWatch } from '../src/lib/chatExecutionWatch';
+import { takeChatStreamBucket } from '../src/lib/chatEventReceipts';
 import { extractSourceExpression as extract, readSourceAst } from './source_expression';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -72,11 +74,12 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     chatTurnTimerGuardRef: { current: { begin: noop } },
     taskRelationLedgerRef: { current: { controlTarget: () => ({}) } },
     activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false },
-    attachmentConversationIdRef: { current: 'synthetic-conversation' }, activeChatViewDetachersRef: { current: new Set() },
+    attachmentConversationIdRef: { current: 'synthetic-conversation' }, activeChatViewDetachersRef: { current: new Map() },
     activeMediaGenerationRef: { current: null }, mediaGenerationText: {},
     setIsTyping: noop, needsVisibleToolEvidence: () => false, clearChatProgress: noop, pushChatProgress: noop,
     setWorkflowStatus: noop, setWorkflowSteps: noop, persistActiveExecution: noop,
-    setTimeout: () => 1, clearTimeout: noop, buildChatHistoryPayload: (rows: any[]) => rows,
+    clearPersistedExecution: noop, streamingMsgIdsRef: { current: new Map() }, streamingRawTextRef: { current: new Map() },
+    takeChatStreamBucket, setTimeout: () => 1, clearTimeout: noop, buildChatHistoryPayload: (rows: any[]) => rows,
     makeChatMessageId: (prefix: string) => `${prefix}-${Math.random()}`,
     socket: { connected: true, on: noop, off: noop, emit: (event: string, payload: any) => { emitted.push({ event, payload }); } },
   };
@@ -95,7 +98,10 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
   deps.attachmentContextStorageKey = '';
   deps.rememberConversationAttachments = extract('src/hooks/useConversationAttachments.ts', 'rememberConversationAttachments', deps);
   Object.assign(deps, { mergePendingChatAttachments, mapImportedChatAttachments, serializeChatAttachment });
-  for (const name of ['appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
+  deps.ChatExecutionWatch = class extends ChatExecutionWatch {
+    constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout }); }
+  };
+  for (const name of ['dropRequestStream', 'resumeForegroundRequest', 'settleTrackedChatRequest', 'appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
     'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
     deps[name] = extract(pagePath, name, deps);
   }

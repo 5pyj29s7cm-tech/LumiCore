@@ -128,7 +128,6 @@ function findInstalledSkillForMarket(skill: MarketplaceSkill, installedSkills: I
   const candidates = new Set([
     normalizeSkillKey(skill.id),
     normalizeSkillKey(skill.name),
-    normalizeSkillKey(skill.id.replace(/^skill-/, '')),
   ]);
   return installedSkills.find(installed => candidates.has(normalizeSkillKey(installed.name)));
 }
@@ -179,38 +178,7 @@ function getDisplayAvailability(
     };
   }
   const installedSkill = findInstalledSkillForMarket(skill, installedSkills);
-  if (installedSkill?.broken) {
-    return {
-      label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.local-package-is-incomplete-and.071c55d928', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'red',
-      installedSkill,
-    };
-  }
-  if (installedSkill?.startupError || (installedSkill?.enabled && !installedSkill.usable)) {
-    return {
-      label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
-      detail: installedSkill.startupError || (uiMessage('skill-center.installed-but-its-local-service.0372816817', (lang === 'zh') ? 'zh' : 'en')),
-      tone: 'amber',
-      installedSkill,
-    };
-  }
-  if (installedSkill?.usable) {
-    return {
-      label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.connected-to-lumi-and-available.e7eedbc8db', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'green',
-      installedSkill,
-    };
-  }
-  if (installedSkill && !installedSkill.enabled) {
-    return {
-      label: uiMessage('skill-center.installed-disabled.46156ea2d0', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.the-skill-exists-locally-but.197bdb9ca7', (lang === 'zh') ? 'zh' : 'en'),
-      tone: 'white',
-      installedSkill,
-    };
-  }
+  if (installedSkill) return getInstalledSkillAvailability(installedSkill, lang, true);
   if (skill.installed) {
     return {
       label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
@@ -234,7 +202,7 @@ function getDisplayAvailability(
   };
 }
 
-function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh'): SkillAvailability {
+function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh', catalog = false): SkillAvailability {
   if (skill.broken) {
     return {
       label: uiMessage('skill-center.needs-repair.53833da009', (lang === 'zh') ? 'zh' : 'en'),
@@ -246,7 +214,7 @@ function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh')
   if (skill.startupError || (skill.enabled && !skill.usable)) {
     return {
       label: uiMessage('skill-center.installed-not-connected.7f99bc5091', (lang === 'zh') ? 'zh' : 'en'),
-      detail: skill.startupError || (uiMessage('skill-center.the-local-service-is-not.9ec540d4f3', (lang === 'zh') ? 'zh' : 'en')),
+      detail: skill.startupError || uiMessage(catalog ? 'skill-center.installed-but-its-local-service.0372816817' : 'skill-center.the-local-service-is-not.9ec540d4f3', lang),
       tone: 'amber',
       installedSkill: skill,
     };
@@ -254,7 +222,7 @@ function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh')
   if (skill.usable) {
     return {
       label: uiMessage('skill-center.callable.b5f5a3c5c6', (lang === 'zh') ? 'zh' : 'en'),
-      detail: uiMessage('skill-center.connected-to-lumi-and-available.e8472f7e6b', (lang === 'zh') ? 'zh' : 'en'),
+      detail: uiMessage(catalog ? 'skill-center.connected-to-lumi-and-available.e7eedbc8db' : 'skill-center.connected-to-lumi-and-available.e8472f7e6b', lang),
       tone: 'green',
       installedSkill: skill,
     };
@@ -267,9 +235,49 @@ function getInstalledSkillAvailability(skill: InstalledSkill, lang: 'en' | 'zh')
   };
 }
 
-function getInstallActionText(skill: Partial<MarketplaceSkill | ExternalResult>, installed: boolean, lang: 'en' | 'zh', t: any): string {
+function getInstallActionText(installed: boolean, lang: 'en' | 'zh', t: any): string {
   if (installed) return t.installedStatus || uiMessage('skill-center.installed.7730eadf9a', lang);
   return t.installBtn || uiMessage('skill-center.install.8a47f50b4d', lang);
+}
+
+function SkillInstallButton({
+  skill, installed, installing, variant, lang, t, onInstall,
+}: {
+  skill: MarketplaceSkill; installed: boolean; installing: string | null;
+  variant: 'recommended' | 'marketplace' | 'detail'; lang: 'en' | 'zh'; t: any;
+  onInstall: () => void;
+}) {
+  const state = installed ? 'installed'
+    : skill.officialIdentityStatus === 'conflict' ? 'conflict'
+    : skill.installSource !== 'bundled' || skill.runtimeInstallable === false ? 'review'
+    : installing === skill.id ? 'installing' : 'available';
+  const available = state === 'available';
+  const size = variant === 'detail' ? 14 : 12;
+  const Icon = { installed: CheckCircle, conflict: AlertTriangle, review: ShieldCheck, installing: RefreshCw, available: Download }[state];
+  const label = state === 'installed' ? getInstallActionText(true, lang, t)
+    : state === 'conflict' ? 'Review conflict'
+    : state === 'review' ? (variant === 'marketplace' ? uiMessage('skill-center.review-required.20260901', lang) : 'External MCP review')
+    : state === 'installing' ? (t.installingStatus || 'Installing...') : getInstallActionText(false, lang, t);
+  const style = variant === 'recommended'
+    ? (installed ? 'bg-green-500/20 text-green-300' : 'bg-white/10 text-white/70 hover:bg-white/18')
+    : installed ? 'bg-green-500/20 text-green-400 cursor-default'
+    : variant === 'marketplace' && (state === 'review' || state === 'conflict') ? 'bg-amber-500/10 text-amber-300/70 cursor-not-allowed'
+    : variant === 'marketplace' && state === 'installing' ? 'bg-celestial-saturn/50 text-black cursor-wait'
+    : 'bg-celestial-saturn text-black hover:scale-105';
+  const spacing = variant === 'recommended' ? 'px-3 py-2' : variant === 'detail' ? 'px-5 py-2.5' : 'px-3 py-1.5';
+  return (
+    <Button disabled={!available} className={`text-xs font-bold h-auto rounded-xl transition-all ${spacing} ${style}`}
+      onClick={event => { event.stopPropagation(); if (available) onInstall(); }}>
+      <Icon size={size} className={`${variant === 'recommended' ? '' : 'mr-1'} ${state === 'installing' ? 'animate-spin' : ''}`} />
+      {label}
+    </Button>
+  );
+}
+
+function hasSkillRuntimeIssue(skill: InstalledSkill): boolean {
+  return !!skill.broken || !!skill.startupError
+    || (!!skill.healthStatus && ['crashed', 'failed', 'restarting'].includes(skill.healthStatus))
+    || (skill.enabled && !skill.connected);
 }
 
 function SkillStatusCallout({ availability, compact = false }: { availability: SkillAvailability; compact?: boolean }) {
@@ -752,15 +760,8 @@ export function SkillCenter({
 
   const SAMPLE_PROMPTS = [
     t.skillGeneratePlaceholder || 'e.g. Check if a website is down, generate QR codes...',
-    '', '', '', '',
   ];
   const brokenSkillCount = installedSkills.filter(skill => skill.broken).length;
-  const hasSkillRuntimeIssue = (skill: InstalledSkill) =>
-    !!skill.broken ||
-    !!skill.startupError ||
-    (!!skill.healthStatus && ['crashed', 'failed', 'restarting'].includes(skill.healthStatus)) ||
-    (skill.enabled && !skill.connected);
-  const shouldOfferRepair = (skill: InstalledSkill) => hasSkillRuntimeIssue(skill);
   const recommendationCopy = {
     title: uiMessage('skill-center.recommended-for-your-work.be5baee372', (lang === 'zh') ? 'zh' : 'en'),
     subtitle: uiMessage('skill-center.lumi-uses-the-work-profile.f505fa1fb5', (lang === 'zh') ? 'zh' : 'en'),
@@ -920,9 +921,6 @@ export function SkillCenter({
                   {recommendedSkills.map(({ skill, reasons }) => {
                     const availability = getDisplayAvailability(skill, installedSkills, savedKeys, lang);
                     const isInstalled = skill.installed || !!availability.installedSkill;
-                    const identityConflict = skill.officialIdentityStatus === 'conflict';
-                    const runtimeUnavailable = skill.runtimeInstallable === false;
-                    const isInstalling = installing === skill.id;
                     return (
                       <motion.div
                         key={skill.id}
@@ -943,7 +941,7 @@ export function SkillCenter({
                           </div>
                           {isInstalled && (
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-500/10 px-2 py-1 text-[12px] font-bold text-green-300">
-                              <CheckCircle size={10} /> {getInstallActionText(skill, true, lang, t)}
+                              <CheckCircle size={10} /> {getInstallActionText(true, lang, t)}
                             </span>
                           )}
                         </div>
@@ -960,18 +958,7 @@ export function SkillCenter({
                           ))}
                         </div>
                         <div className="mt-4 flex justify-end">
-                          <Button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!isInstalled && !identityConflict && !runtimeUnavailable) handleInstall(skill);
-                            }}
-                            disabled={isInstalled || isInstalling || identityConflict || runtimeUnavailable}
-                            className={`h-auto rounded-xl px-3 py-2 text-xs font-bold transition-all ${
-                              isInstalled ? 'bg-green-500/20 text-green-300' : 'bg-white/10 text-white/70 hover:bg-white/18'
-                            }`}
-                          >
-                            {isInstalled ? <><CheckCircle size={12} /> {getInstallActionText(skill, true, lang, t)}</> : identityConflict ? <><AlertTriangle size={12} /> Review conflict</> : runtimeUnavailable ? <><ShieldCheck size={12} /> External MCP review</> : isInstalling ? <><RefreshCw size={12} className="animate-spin" /> {t.installingStatus || 'Installing...'}</> : <><Download size={12} /> {getInstallActionText(skill, false, lang, t)}</>}
-                          </Button>
+                          <SkillInstallButton skill={skill} installed={isInstalled} installing={installing} variant="recommended" lang={lang} t={t} onInstall={() => handleInstall(skill)} />
                         </div>
                       </motion.div>
                     );
@@ -1114,9 +1101,6 @@ export function SkillCenter({
                    const runtimeInstalled = !!availability.installedSkill;
                    const isInstalled = skill.installed || runtimeInstalled;
                    const identityConflict = skill.officialIdentityStatus === 'conflict';
-                   const canInstall = skill.installSource === 'bundled'
-                     && skill.runtimeInstallable !== false
-                     && !identityConflict;
                   return (
                   <motion.div
                     key={skill.id}
@@ -1150,7 +1134,7 @@ export function SkillCenter({
                         )}
                         {isInstalled && (
                           <span className="flex items-center gap-1 px-2 py-1 bg-green-500/10 rounded-full text-[12px] font-bold uppercase text-green-400">
-                            <CheckCircle size={10} /> {getInstallActionText(skill, true, lang, t)}
+                            <CheckCircle size={10} /> {getInstallActionText(true, lang, t)}
                           </span>
                         )}
                         {identityConflict && (
@@ -1204,31 +1188,7 @@ export function SkillCenter({
                           <Star size={10} className="text-amber-400" fill="currentColor" /> {skill.rating > 0 ? skill.rating.toFixed(1) : '--'}
                         </span>
                       </div>
-                      <Button
-                        onClick={(e) => { e.stopPropagation(); handleInstall(skill); }}
-                        disabled={isInstalled || installing === skill.id || !canInstall}
-                        className={`text-xs font-bold px-3 py-1.5 h-auto rounded-xl transition-all ${
-                          isInstalled
-                            ? 'bg-green-500/20 text-green-400 cursor-default'
-                            : !canInstall
-                              ? 'bg-amber-500/10 text-amber-300/70 cursor-not-allowed'
-                            : installing === skill.id
-                              ? 'bg-celestial-saturn/50 text-black cursor-wait'
-                              : 'bg-celestial-saturn text-black hover:scale-105'
-                        }`}
-                      >
-                        {isInstalled ? (
-                          <><CheckCircle size={12} className="mr-1" /> {getInstallActionText(skill, true, lang, t)}</>
-                        ) : identityConflict ? (
-                          <><AlertTriangle size={12} className="mr-1" /> Review conflict</>
-                        ) : !canInstall ? (
-                          <><ShieldCheck size={12} className="mr-1" /> {uiMessage('skill-center.review-required.20260901', lang)}</>
-                        ) : installing === skill.id ? (
-                          <><RefreshCw size={12} className="mr-1 animate-spin" /> {t.installingStatus || 'Installing...'}</>
-                        ) : (
-                          <><Download size={12} className="mr-1" /> {getInstallActionText(skill, false, lang, t)}</>
-                        )}
-                      </Button>
+                      <SkillInstallButton skill={skill} installed={isInstalled} installing={installing} variant="marketplace" lang={lang} t={t} onInstall={() => handleInstall(skill)} />
                     </div>
                   </motion.div>
                 );})}
@@ -1403,7 +1363,7 @@ export function SkillCenter({
                           <span className="text-xs text-white/55 font-mono">{skill.toolCount} {t.toolsCount || 'tools'}{skill.installedAt ? ` · ${new Date(skill.installedAt).toLocaleDateString()}` : ''}</span>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          {shouldOfferRepair(skill) && (
+                          {hasSkillRuntimeIssue(skill) && (
                             <button onClick={(e) => { e.stopPropagation(); handleRepair(skill.name); }}
                               disabled={repairing === skill.name}
                               className="p-2 rounded-lg text-amber-300 transition-colors hover:bg-amber-500/10 disabled:opacity-40"
@@ -1643,14 +1603,7 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
     : undefined;
   const resolvedInstalledSkill = marketAvailability?.installedSkill;
   const marketInstalled = Boolean(mSkill?.installed || resolvedInstalledSkill);
-  const marketIdentityConflict = mSkill?.officialIdentityStatus === 'conflict';
-  const marketRuntimeUnavailable = mSkill?.runtimeInstallable === false;
-  const detailRuntimeIssue = !isMarketSkill && (
-    !!detailSkill.broken ||
-    !!detailSkill.startupError ||
-    (!!detailSkill.healthStatus && ['crashed', 'failed', 'restarting'].includes(detailSkill.healthStatus)) ||
-    (!!detailSkill.enabled && !detailSkill.connected)
-  );
+  const detailRuntimeIssue = !isMarketSkill && hasSkillRuntimeIssue(detailSkill);
   return (
     <motion.div
       key="skill-detail-overlay"
@@ -1825,27 +1778,8 @@ function SkillDetailPane({ detailSkill, setDetailSkill, t, lang, marketSkills, i
 
       <div className="flex items-center gap-3 pt-2 border-t border-white/5">
         {mSkill && isMarketSkill ? (
-          <Button
-            onClick={() => { if (!marketIdentityConflict && !marketRuntimeUnavailable) handleInstall(mSkill); setDetailSkill(null); }}
-            disabled={marketInstalled || marketIdentityConflict || marketRuntimeUnavailable || installing === mSkill.id}
-            className={`text-xs font-bold px-5 py-2.5 h-auto rounded-xl ${
-              marketInstalled
-                ? 'bg-green-500/20 text-green-400 cursor-default'
-                : 'bg-celestial-saturn text-black hover:scale-105'
-            }`}
-          >
-            {marketInstalled ? (
-              <><CheckCircle size={14} className="mr-1" /> {getInstallActionText(mSkill, true, lang, t)}</>
-            ) : marketIdentityConflict ? (
-              <><AlertTriangle size={14} className="mr-1" /> Review conflict</>
-            ) : marketRuntimeUnavailable ? (
-              <><ShieldCheck size={14} className="mr-1" /> External MCP review</>
-            ) : installing === mSkill.id ? (
-              <><RefreshCw size={14} className="mr-1 animate-spin" /> {t.installingStatus || 'Installing...'}</>
-            ) : (
-              <><Download size={14} className="mr-1" /> {getInstallActionText(mSkill, false, lang, t)}</>
-            )}
-          </Button>
+          <SkillInstallButton skill={mSkill} installed={marketInstalled} installing={installing} variant="detail" lang={lang} t={t}
+            onInstall={() => { handleInstall(mSkill); setDetailSkill(null); }} />
         ) : detailSkill ? (
           <>
             {detailRuntimeIssue && (
