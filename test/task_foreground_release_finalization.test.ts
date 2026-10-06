@@ -295,7 +295,10 @@ describe('task foreground release manager convergence', () => {
     const ordinaryFailureEnd = source.indexOf('} finally {', ordinaryFailureStart);
     const ordinaryFailure = source.slice(ordinaryFailureStart, ordinaryFailureEnd);
     expect(ordinaryFailure).toContain('CN_VOICE_WORK_MESSAGES.processingFailed');
-    expect(ordinaryFailure).toContain("role: 'assistant'");
+    expect(ordinaryFailure).toContain('await commitChatReply({');
+    const replyBoundary = readImplementationSource('server/socket/chat/terminal_reply.ts', 'utf8');
+    expect(replyBoundary).toContain("role: 'assistant'");
+    expect(replyBoundary).toContain('persistAssistantMessage: () => input.write({');
     expect(ordinaryFailure).toContain('requestId,');
     expect(ordinaryFailure).not.toContain("event: 'agent:error'");
 

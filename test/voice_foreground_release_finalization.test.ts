@@ -666,7 +666,8 @@ describe('voice foreground release convergence', () => {
     const mainFailureStart = source.indexOf('logger.error("[Audio Error]:", err);');
     const mainFailureEnd = source.indexOf('} finally {', mainFailureStart);
     const mainFailure = source.slice(mainFailureStart, mainFailureEnd);
-    expect(mainFailure).toContain('await commitVoiceTerminal({');
+    expect(mainFailure).toContain('await finishVoiceTerminal({');
+    expect(source).toContain('commit: commitVoiceTerminal');
     expect(mainFailure).toContain('CN_VOICE_WORK_MESSAGES.processingFailed');
     expect(mainFailure).not.toContain("emitAgent('agent:error'");
     const voiceTerminalStart = source.indexOf('const commitVoiceTerminal = async');

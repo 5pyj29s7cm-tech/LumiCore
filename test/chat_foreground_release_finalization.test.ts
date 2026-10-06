@@ -243,8 +243,11 @@ describe('chat foreground release convergence', () => {
     const ordinaryFailureStart = source.indexOf('console.error("[Socket Agent Error]:", error);');
     const ordinaryFailureEnd = source.indexOf('} finally {', ordinaryFailureStart);
     const ordinaryFailure = source.slice(ordinaryFailureStart, ordinaryFailureEnd);
-    expect(ordinaryFailure).toContain('persistAssistantMessage: () => addMessageIdempotent({');
-    expect(ordinaryFailure).toContain("role: 'assistant'");
+    expect(ordinaryFailure).toContain('await commitChatReply({');
+    expect(ordinaryFailure).toContain('message: () => ({');
+    const replyBoundary = readImplementationSource('server/socket/chat/terminal_reply.ts', 'utf8');
+    expect(replyBoundary).toContain("role: 'assistant'");
+    expect(replyBoundary).toContain('persistAssistantMessage: () => input.write({');
     expect(ordinaryFailure).toContain('CN_VOICE_WORK_MESSAGES.processingFailed');
     expect(ordinaryFailure).not.toContain("event: 'agent:error'");
   });

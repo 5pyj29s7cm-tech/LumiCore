@@ -1,3 +1,4 @@
+import { ensurePendingConfirmationPersistenceInitialized } from '../../../tools/pending_confirmation_repository';
 import { correlateMessagingReply } from './messaging_ingress_runtime';
 import type { IncomingMessage } from '../../../messaging/types';
 import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from '../../../../db_layer';
@@ -136,6 +137,12 @@ export async function admitBoundMessagingTurnDurably(
   if (!admission) {
     console.error('[Messaging] Accepted remote turn is not durable:', admissionFailure);
     throw new MessagingReplyDurabilityError('accepted_turn', admissionFailure);
+  }
+  try {
+    await ensurePendingConfirmationPersistenceInitialized();
+  } catch (error) {
+    console.error('[Messaging] Encrypted confirmation store is unavailable:', error);
+    throw new MessagingReplyDurabilityError('accepted_turn', error);
   }
   return { message: acceptedMessage, admission };
 }

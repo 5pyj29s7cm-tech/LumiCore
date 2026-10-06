@@ -8,7 +8,7 @@ const source = (relativePath: string) => readImplementationSource(path.join(proc
 describe('cross-channel action turn ownership wiring', () => {
   it('persists and binds the exact voice transcript before action preparation', () => {
     const voice = source('server/socket/voice.ts');
-    const persisted = voice.indexOf('voiceUserMessageId = addMessageIdempotent({');
+    const persisted = voice.indexOf('voiceUserMessageId = writeVoiceMessage({');
     const admission = voice.indexOf('const voiceAdmission = await admitAcceptedUserTurnDurably({', persisted);
     const admittedPersist = voice.indexOf('persistAcceptedUserTurn: () => persistVoiceUserMessage()', admission);
     const flushed = voice.indexOf('flush: flushDBOrThrow', admittedPersist);

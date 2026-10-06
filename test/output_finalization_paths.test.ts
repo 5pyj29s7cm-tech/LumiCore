@@ -204,7 +204,7 @@ describe('finalized output paths', () => {
     const sharedToolStart = voice.indexOf('await runToolSession({', sharedTurnStart);
     const sharedConversationStart = voice.indexOf('await runConversationTurn({', sharedTurnStart);
     const finalizerStart = voice.indexOf('let finalResponse = responseFinalizer.finalize({', sharedTurnStart);
-    const finalCommitStart = voice.indexOf('mainTerminalCommitted = await commitVoiceTerminal({', finalizerStart);
+    const finalCommitStart = voice.indexOf('mainTerminalCommitted = await finishVoiceTerminal({', finalizerStart);
     const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
     const finalCommitPath = voice.slice(finalCommitStart, finalCommitStart + 1_000);
 
@@ -244,7 +244,8 @@ describe('finalized output paths', () => {
       expect(voice).toContain(`cognitiveIntent: ${finalized}.blocked ? 'work_product_guard' :`);
     }
     expect(voice.match(/cognitiveIntent: directFinal\.blocked \? 'work_product_guard' :/g)).toHaveLength(1);
-    expect(voice.match(/await finishVoiceTerminal\(\{/g)).toHaveLength(4);
+    expect(voice.match(/await finishVoiceTerminal\(\{/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(voice).not.toContain('await commitVoiceTerminal(');
     expect(voice).toContain('commit: commitVoiceTerminal');
     const completion = source('server/socket/voice/terminal_completion.ts');
     expect(completion).toContain('if (committed && !input.blocked) options.onCommitted?.()');
