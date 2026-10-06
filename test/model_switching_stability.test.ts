@@ -637,7 +637,7 @@ describe('reasoning model switching stability', () => {
       fs.readFile('server/mcp/lumi_server.ts', 'utf8'),
       fs.readFile('server/memory/narrative.ts', 'utf8'),
       fs.readFile('server/skills/generator.ts', 'utf8'),
-      fs.readFile('src/components/Settings.tsx', 'utf8'),
+      Promise.resolve(readImplementationSource('src/components/Settings.tsx', 'utf8')),
     ]);
     expect(mcp).not.toMatch(/model:\s*['"]deepseek-v4-(?:flash|pro)['"]/);
     expect(narrative).not.toMatch(/provider:\s*['"]deepseek['"]/);

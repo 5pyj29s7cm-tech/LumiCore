@@ -1,3 +1,4 @@
+import { readImplementationSource } from './implementation_source';
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -46,7 +47,7 @@ describe('skill model-service settings classification', () => {
   });
 
   it('groups data-source fields by provider instead of rendering duplicate provider rows', () => {
-    const settings = fs.readFileSync(path.join(process.cwd(), 'src/components/Settings.tsx'), 'utf8');
+    const settings = readImplementationSource(path.join(process.cwd(), 'src/components/Settings.tsx'), 'utf8');
     const sources = fs.readFileSync(path.join(process.cwd(), 'src/components/org/LegalDataSourcesSettings.tsx'), 'utf8');
     expect(settings).toContain('<LegalDataSourcesSettings />');
     expect(settings).not.toContain('function DataSourceConnections');

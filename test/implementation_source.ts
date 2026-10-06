@@ -11,6 +11,8 @@ const modules: Record<string, string[]> = {
   'src-tauri/src/lib.rs': ['src-tauri/src/lib.rs', ...['native_files', 'native_shell', 'native_apps', 'native_window_modes', 'native_processes', 'native_activity', 'native_display', 'native_input'].map(name => 'src-tauri/src/' + name + '.rs')],
 };
 const phaseOwners: Record<string, string[]> = {
+  "server/llm/adapter.ts": ["server/llm/tool_loop/contracts.ts","server/llm/tool_loop/projection.ts","server/llm/tool_loop/receipts.ts","server/llm/tool_loop/recovery.ts","server/llm/tool_loop/runtime_activation.ts","server/llm/tool_loop/invocation_budget.ts","server/llm/tool_loop/lifecycle.ts","server/llm/tool_loop/artifacts.ts","server/llm/tool_loop/context_budget.ts","server/llm/tool_loop/summaries.ts","server/llm/tool_loop/model_budget.ts","server/llm/tool_loop/checkpoints.ts","server/llm/tool_loop/loop_dispatch.ts","server/llm/tool_loop/loop_setup.ts","server/llm/tool_loop/model_response.ts","server/llm/tool_loop/tool_batch.ts","server/llm/tool_loop/iteration.ts","server/llm/tool_loop/workflow.ts","server/llm/tool_loop/vision.ts"],
+  "src/components/Settings.tsx": ["src/components/settings/voice_services.tsx","src/components/settings/official_models.tsx","src/components/settings/navigation.tsx","src/components/settings/hardware.tsx","src/components/settings/components.tsx","src/components/settings/model_operations.tsx","src/components/settings/provider_editor.tsx","src/components/settings/vision_voice_preferences.tsx","src/components/settings/model_preferences.tsx","src/components/settings/generation.tsx","src/components/settings/world_models.tsx","src/components/settings/retrieval.tsx","src/components/settings/connections.tsx","src/components/settings/provider_navigation.tsx","src/components/settings/reasoning.tsx","src/components/settings/official_provider.tsx","src/components/settings/local_provider.tsx","src/components/settings/provider_access.tsx","src/components/settings/autonomy.tsx"],
   "server/socket/chat.ts": [
     "server/socket/chat/phases/shared.ts",
     "server/socket/chat/phases/prepare_chat_request.ts",
@@ -97,7 +99,7 @@ export function normalizeTurnBindings(source: string): string {
 export function readImplementationSource(file: fs.PathOrFileDescriptor, options?: any): any {
   const input = file instanceof URL ? fileURLToPath(file) : String(file);
   const normalized = path.resolve(input).replace(/\\/g, '/');
-  const entry = [...Object.keys(modules), 'server/socket/voice_conversation_turn.ts'].find(name => normalized === name || normalized.endsWith('/' + name));
+  const entry = [...Object.keys(modules), ...Object.keys(phaseOwners)].filter(name => name !== 'server/socket/chat.ts').find(name => normalized === name || normalized.endsWith('/' + name));
   if (entry) {
     const source = readSourceModule(entry);
     return entry.startsWith('server/') ? normalizeTurnBindings(source) : source;
