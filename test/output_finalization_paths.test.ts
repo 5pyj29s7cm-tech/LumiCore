@@ -61,20 +61,21 @@ describe('finalized output paths', () => {
   it('keeps ordinary REST streaming but buffers action output until the final SSE event', () => {
     const rest = source('server/routes/chat_routes.ts');
 
-    expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
+    expect(rest).toContain('const deferRestStream = execution.executionRequested');
     expect(rest).toContain('shouldDeferModelOutputUntilFinalized');
     expect(rest).toContain('createPreFinalizationTextGate');
     expect(rest).toContain('restTextGate.push(chunk)');
-    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(rest).toContain('return await runLumiEntryTurn({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('...assembled.model, execution, messages, assertCurrent');
     expect(source('server/cognition/turn_model.ts')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).toContain("'remote_restricted'");
     expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
-    expect(rest).toContain('restModelToolPolicy.maxIterations || 3');
-    expect(rest).toContain('finalizeLumiResponseForDelivery as finalizeRestChatResponse');
+    expect(rest).toContain('execution.authorizationPolicy.maxIterations || 3');
+    expect(rest).toContain('runLumiEntryTurn({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(source('server/cognition/response_delivery.ts')).toContain('finalizeExecutionForOutboundDelivery');
-    expect(rest).toContain("'rest_chat_guard_recovery'");
+    expect(source('server/cognition/turn_execution.ts')).toContain("source: entry.source + '_guard_recovery'");
     expect(rest).toContain('finalized: true');
     expect(rest).toContain('blocked: finalized.blocked');
   });
@@ -283,12 +284,13 @@ describe('finalized output paths', () => {
     const chat = source('server/routes/chat_routes.ts');
     const misc = source('server/routes/misc_routes.ts');
 
-    expect(chat).toContain('const restTurnDispatch = restExecutionPipeline.turnIntent;');
-    expect(chat).toContain('buildLumiExecutionPipeline({');
-    expect(chat).toContain('restExecutionPipeline.authorizationPolicy');
-    expect(chat).toContain('execution: restExecutionPipeline');
+    expect(chat).toContain('runLumiEntryTurn({');
+    const driver = source('server/cognition/turn_execution.ts');
+    expect(driver).toContain('buildLumiExecutionPipeline({');
+    expect(chat).toContain('execution.authorizationPolicy.maxIterations || 3');
+    expect(driver).toContain('...assembled.model, execution, messages, assertCurrent');
     expect(source('server/cognition/turn_model.ts')).toContain('toolPolicy: execution.authorizationPolicy');
-    expect(chat).toContain('finalizeRestChatResponse({');
+    expect(driver).toContain('await finalizeLumiResponseForDelivery({');
     expect(chat).toContain("source: 'rest_chat'");
     expect(chat).toContain('blocked: finalized.blocked');
     expect(chat).toContain('reason: finalized.reason');
@@ -370,7 +372,8 @@ describe('finalized output paths', () => {
     const messaging = source('server/regions/packs/cn/messaging_routes.ts');
 
     const delivery = source('server/cognition/response_delivery.ts');
-    expect(rest).toContain('finalizeLumiResponseForDelivery as finalizeRestChatResponse');
+    expect(rest).toContain('runLumiEntryTurn({');
+    expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');
     expect(delivery).toContain('finalizeExecutionForOutboundDelivery({');
     expect(mcp).toContain('runLumiEntryTurn({');
     expect(source('server/cognition/turn_execution.ts')).toContain('await finalizeLumiResponseForDelivery({');

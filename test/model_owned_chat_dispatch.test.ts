@@ -221,8 +221,9 @@ describe('model-owned main chat architecture', () => {
     expect(messaging).toContain('modelToolPolicy.maxIterations || executionDecision.maxIterations');
     expect(messaging).toContain('isPureOperationModeSwitchRequest(requestText, requestedMode)');
 
-    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
-    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(rest).toContain('return await runLumiEntryTurn({');
+    expect(rest).toContain('maxIterations: execution.authorizationPolicy.maxIterations || 3');
+    expect(readFileSync('server/cognition/turn_execution.ts', 'utf8')).toContain('...assembled.model, execution, messages, assertCurrent');
     expect(readFileSync('server/cognition/turn_model.ts', 'utf8')).toContain('modelToolProjection: execution.modelToolProjection');
     expect(rest).toContain('executionBoundary,');
     expect(rest).not.toContain('buildModelToolProjection');

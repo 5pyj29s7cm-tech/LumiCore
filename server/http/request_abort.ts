@@ -9,6 +9,7 @@ export function createRequestAbortController(req: Request, res: Response) {
   res.once('close', close);
   if (req.aborted || (res.destroyed && !res.writableEnded)) abort();
   return {
+    controller,
     signal: controller.signal,
     abort,
     dispose() { req.off('aborted', abort); res.off('close', close); },

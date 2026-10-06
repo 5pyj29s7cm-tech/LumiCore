@@ -39,12 +39,13 @@ describe('chat and voice tool-call stability', () => {
     expect(voice).toContain('trustedActionContinuation: executionPipeline.trustedActionContinuation');
     expect(voice).toContain('preparePlannedConversationExecution({');
     expect(readFileSync(path.join(root, 'server/conversation/planned_execution.ts'), 'utf8')).toContain('input.acceptedInterruptedTurn || execution.trustedActionContinuation');
-    expect(rest).toContain('const restModelToolPolicy = restExecutionPipeline.authorizationPolicy');
+    expect(rest).toContain('return await runLumiEntryTurn({');
+    expect(rest).toContain('maxIterations: execution.authorizationPolicy.maxIterations || 3');
     const modelOwner = readFileSync(path.join(root, 'server/cognition/turn_model.ts'), 'utf8');
-    expect(rest).toContain('execution: restExecutionPipeline');
+    expect(readFileSync(path.join(root, 'server/cognition/turn_execution.ts'), 'utf8')).toContain('...assembled.model, execution, messages, assertCurrent');
     expect(modelOwner).toContain('toolPolicy: execution.authorizationPolicy');
     expect(modelOwner).toContain('modelToolProjection: execution.modelToolProjection');
-    expect(rest).toContain('const restToolSessionActive = restExecutionPipeline.executionRequested');
+    expect(rest).toContain('const deferRestStream = execution.executionRequested');
     expect(modelOwner).toContain('currentTurnExecutionRequested: true');
     expect(modelOwner).toContain('trustedActionContinuation: execution.trustedActionContinuation');
     expect(rest).not.toContain('const restModelToolProjection =');
@@ -91,8 +92,8 @@ describe('chat and voice tool-call stability', () => {
     expect(restChat).toContain('buildRestChatSystemInstruction');
     expect(restChat).toContain('buildRestProviderMessages');
     expect(restChat).toContain('buildRestConversationMessages');
-    expect(restChat).toContain('finalizeRestChatResponse');
-    expect(restChat).toContain('finalizeLumiResponse');
+    expect(restChat).toContain('runLumiEntryTurn({');
+    expect(readFileSync(path.join(process.cwd(), 'server/cognition/turn_execution.ts'), 'utf8')).toContain('await finalizeLumiResponseForDelivery({');
     expect(restChat).toContain("source: 'rest_chat'");
     expect(restChat).toContain('blocked: finalized.blocked');
   });

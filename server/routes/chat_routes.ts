@@ -1,10 +1,9 @@
-import { runResolvedLumiRecovery } from "../cognition/turn_recovery";
-import { runLumiTurn } from "../llm/lumi_turn";
-import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../cognition/turn_model";
+import { runLumiEntryTurn } from "../cognition/turn_execution";
+import { captureRequestAuthorization, captureConversationAuthorization, combineRequestAuthorizations } from "../conversation/lifecycle";
+import { resolveConversationForEntry } from "../conversation/entry_conversation";
 
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
-import { reserveAnchoredEntryExecution } from '../conversation/entry_execution';
 import { getConversationActionTurn } from '../conversation/action_turn_ledger';
 import { getIndustryWorkflowTask, interruptIndustryWorkflow, observeIndustryWorkflowTool, recordIndustryWorkflowExecution, validateIndustryWorkflowSourceInput } from '../industry/workflow_service';
 import { Router } from "express";
@@ -13,7 +12,7 @@ import { createCallerKeyProvider } from '../llm/caller_key_provider';
 
 import { createRequestAbortController } from '../http/request_abort';
 import { makeLLMCall } from "../llm/providers";
-import { toolRegistry } from "../tools/registry";
+import { ToolRegistry, toolRegistry } from "../tools/registry";
 import { executeToolCallOrThrow } from "../tools/execution_engine";
 import { createToolReceiptObserver } from '../tools/receipt_observer';
 import { flushDBOrThrow } from '../../db_layer';
@@ -23,13 +22,10 @@ import { optionalAuth, requireAuth, resolveDomain } from "../middleware/auth";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
 import { recordTokenUsage } from "../llm/token_tracker";
 import { buildUnifiedLegalEntryPrompt } from "../cognition/legal_entry";
-import { buildLumiExecutionPipeline } from "../cognition/execution_pipeline";
 import {
-  finalizeLumiResponseForDelivery as finalizeRestChatResponse,
   createPreFinalizationTextGate,
   shouldDeferModelOutputUntilFinalized,
 } from "../cognition/response_delivery";
-import type { ToolExecutionRecord } from "../tools/types";
 import { isLoopbackAddress } from "../config/local_identity";
 import {
   DESKTOP_SESSION_HEADER,
@@ -284,222 +280,81 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
     const membershipWatcher = businessAuthority
       ? watchOrganizationMembershipAuthorization(businessAuthority, orgId, userId, request.abort)
       : undefined;
-    const isBusinessAuthorized = () => (!membershipWatcher || membershipWatcher.isAuthorized()) && (!admission || admission.isCurrent());
-    const assertRequestActive = () => {
-      request.signal.throwIfAborted();
-      if (!isBusinessAuthorized()) throw new Error('Business execution authorization was revoked');
-    };
+    const businessAuthorization = captureRequestAuthorization(() => !membershipWatcher || membershipWatcher.isAuthorized(), 'Business execution authorization was revoked');
+    const conversationAuthorization = businessMetadata?.conversationId ? captureConversationAuthorization({ userId, domain, orgId }, () => businessMetadata.conversationId) : undefined;
+    const authorization = conversationAuthorization ? combineRequestAuthorizations(businessAuthorization, conversationAuthorization) : businessAuthorization;
+    const isBusinessAuthorized = authorization.isCurrent;
     const receiptObserver = businessTask ? createToolReceiptObserver(async record => {
       if (isBusinessAuthorized()) await observeIndustryWorkflowTool({ userId, domain, orgId }, businessTask.id, record);
     }) : undefined;
-    let admission: ReturnType<typeof reserveAnchoredEntryExecution>;
     try {
-      admission = reserveAnchoredEntryExecution({
-        userId, scope: { domain, orgId }, entry: { kind: 'rest' },
-        conversationId: businessMetadata?.conversationId, requestId, signal: request.signal, abort: request.abort,
-      });
-      await admission?.waitForTurn();
-      assertRequestActive();
-      const restExecutionPipeline = buildLumiExecutionPipeline({
-        requestId,
-        dispatch: {
-          userId,
-          text: routeText,
-          channel: 'chat',
-          source: 'rest_chat',
-          category: 'command',
-          domain,
-          orgId,
-          operationMode: 'assistant',
-          targetIsLumi: true,
+      const anchored = businessMetadata?.conversationId ? resolveConversationForEntry(userId, { domain, orgId }, { kind: 'rest' }, businessMetadata.conversationId) : null;
+      if (businessMetadata?.conversationId && !anchored) throw Object.assign(new Error('The bound business conversation is unavailable'), { code: 'CONVERSATION_ENTRY_UNAVAILABLE' });
+      if (isBYOK) requireNotStrict('Chat with a supplied cloud API key');
+      const caller = isBYOK ? createCallerKeyProvider(provider, model, userKey) : undefined;
+      const llmStart = Date.now();
+      const stream = !isBYOK && req.query.stream === 'true';
+      const restTextGate = createPreFinalizationTextGate();
+      let industryWorkflow: ReturnType<typeof recordIndustryWorkflowExecution> | undefined;
+      const executionSource = trustedLocalExecution ? 'rest_chat_local' : 'rest_chat';
+      return await runLumiEntryTurn({
+        entry: { source: executionSource, queueSource: 'rest', channel: 'chat', historyLimit: 0,
+          failureText: 'The request could not finish.', failureReason: 'rest_chat_failed' },
+        identity: { userId, domain, orgId, agentId: anchored?.agentId || 'lumi', conversationId: anchored?.id || '', requestId },
+        userText: routeText, persistence: 'external', authorization, controller: request.controller,
+        externalTask: { taskId: businessMetadata?.conversationTaskId,
+          turnRowId: persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId && persistedTurn.taskId === businessMetadata?.conversationTaskId ? persistedTurn.id : undefined },
+        planning: { dispatch: { userId, text: routeText, channel: 'chat', source: 'rest_chat', category: 'command', domain, orgId, operationMode: 'assistant', targetIsLumi: true },
+          registry: caller ? new ToolRegistry() : toolRegistry,
+          personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
+          executionBoundary, isSanctuary: !req.user, taskId: businessMetadata?.conversationTaskId },
+        assemble: execution => {
+          const systemInstruction = buildRestChatSystemInstruction({ routeText, domain, orgId, source: 'rest_chat' });
+          if (caller) return { systemPrompt: systemInstruction,
+            messages: caller.provider === 'gemini' || caller.provider === 'anthropic'
+              ? [{ role: 'system', content: systemInstruction }, ...conversationMessages]
+              : buildRestProviderMessages(messages, prompt, systemInstruction),
+            model: { config: { provider: caller.provider, model: caller.model, selectionMode: 'pinned', noImplicitFailover: true, allowCloudFallback: false,
+              fallbackCandidates: [], source: 'rest_chat', requestId, ...(caller.provider === 'anthropic' ? { maxTokens: 1024 } : {}) },
+              getters: caller.getters, streaming: false, taskText: routeText } };
+          const deferRestStream = execution.executionRequested || shouldDeferModelOutputUntilFinalized({ taskText: routeText, flow: execution.turnIntent.flow });
+          if (stream) res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+          return { systemPrompt: systemInstruction, messages: [{ role: 'system', content: systemInstruction }, ...conversationMessages],
+            model: { registry: toolRegistry, config: { provider, model, userId, domain, orgId, source: executionSource, workflowSource: businessTask?.source || executionSource }, streaming: stream,
+              maxIterations: execution.authorizationPolicy.maxIterations || 3,
+              onToolCall: async record => { authorization.assertCurrent(); await receiptObserver?.persist(record); },
+              onStreamChunk: stream ? chunk => {
+                if (request.signal.aborted || deferRestStream) return;
+                const safeText = restTextGate.push(chunk);
+                if (safeText) res.write('data: ' + JSON.stringify({ chunk: safeText }) + '\n\n');
+              } : undefined,
+              context: { userId, authenticated: Boolean(req.user), authRole: req.user?.role, orgRole: req.user?.orgRole, localExecution: trustedLocalExecution,
+                executionBoundary, domain, orgId, llmGetters: llm, actionIntent: routeText, routedTaskText: execution.turnIntent.flow.routeText,
+                ...(businessTask ? { industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId,
+                  industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
+                onToolRecord: receiptObserver?.onToolRecord }, getters: llm } };
         },
-        registry: toolRegistry,
-        personalityToolPolicy: { allowedTools: ['*'], requireConfirmation: [], forbiddenTools: [], maxIterations: 80 },
-        executionBoundary,
-        isSanctuary: !req.user,
+        beforeCommit: ({ finalized, toolRecords }) => {
+          restTextGate.finish();
+          if (businessTask) industryWorkflow = recordIndustryWorkflowExecution({ userId, domain, orgId, taskId: businessTask.id,
+            resultText: finalized.text, toolRecords, source: stream ? 'rest_chat_stream' : 'rest_chat' });
+        },
+        deliverySource: () => stream ? 'rest_chat_stream' : 'rest_chat',
+        deliver: ({ finalized, toolRecords, usageRecords }) => {
+          if (caller) {
+            recordLatency('llm', Date.now() - llmStart);
+            return res.json({ text: finalized.text, finalized: true, blocked: finalized.blocked, reason: finalized.reason, notification: finalized.notification });
+          }
+          for (const usage of usageRecords) recordTokenUsage(userId, usage.provider, usage.model, {
+            promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens,
+          }, 'rest_chat_' + Date.now(), 'chat');
+          const payload = { text: finalized.text, usage: { totalTokens: usageRecords.reduce((sum, item) => sum + item.totalTokens, 0), records: usageRecords.length },
+            toolCalls: toolRecords.length, industryWorkflow: industryWorkflow ? { taskId: businessTask!.id, status: industryWorkflow.task.status, verification: industryWorkflow.verification } : undefined,
+            finalized: true, blocked: finalized.blocked, reason: finalized.reason, notification: finalized.notification };
+          if (stream) { res.write('data: ' + JSON.stringify({ ...payload, done: true }) + '\n\n'); return res.end(); }
+          return res.json(payload);
+        },
       });
-      const restTurnDispatch = restExecutionPipeline.turnIntent;
-      const restModelToolPolicy = restExecutionPipeline.authorizationPolicy;
-      const restToolSessionActive = restExecutionPipeline.executionRequested;
-      const deferRestStream =
-        restToolSessionActive
-        || shouldDeferModelOutputUntilFinalized({
-          taskText: routeText,
-          flow: restTurnDispatch.flow,
-        });
-      const toolContext = {
-        requestId, ...(persistedTurn && persistedTurn.domain === domain && persistedTurn.orgId === orgId
-          && persistedTurn.taskId === businessMetadata?.conversationTaskId ? { turnRowId: persistedTurn.id } : {}),
-        ...(businessTask ? { taskId: businessMetadata.conversationTaskId, conversationId: businessMetadata.conversationId, requestId: businessMetadata.requestId, industryWorkflowTaskId: businessTask.id, industryWorkflowEntryId: businessMetadata.entryId, industryWorkflowProductLine: businessMetadata.productLine, industryWorkflowSourceInput: businessSource } : {}),
-        userId,
-        authenticated: Boolean(req.user),
-        authRole: req.user?.role,
-        orgRole: req.user?.orgRole,
-        localExecution: trustedLocalExecution,
-        executionBoundary,
-        domain,
-        orgId,
-        llmGetters: llm,
-        source: trustedLocalExecution ? 'rest_chat_local' : 'rest_chat',
-        actionIntent: routeText,
-        routedTaskText: restTurnDispatch.flow.routeText,
-      };
-      const systemInstruction = buildRestChatSystemInstruction({
-        routeText,
-        domain,
-        orgId,
-        source: 'rest_chat',
-      });
-
-      let responseText = '';
-
-      if (isBYOK) {
-        requireNotStrict('Chat with a supplied cloud API key');
-        const llmStart = Date.now();
-        const caller = createCallerKeyProvider(provider, model, userKey);
-        const result = await runLumiTurn({
-          messages: caller.provider === 'gemini' || caller.provider === 'anthropic'
-            ? [{ role: 'system', content: systemInstruction }, ...conversationMessages]
-            : buildRestProviderMessages(messages, prompt, systemInstruction),
-          config: { provider: caller.provider, model: caller.model,
-            selectionMode: 'pinned', noImplicitFailover: true, allowCloudFallback: false,
-            fallbackCandidates: [], signal: request.signal, source: 'rest_chat', requestId,
-            ...(caller.provider === 'anthropic' ? { maxTokens: 1024 } : {}),
-          },
-          getters: caller.getters, streaming: false, taskText: routeText,
-          assertCurrent: assertRequestActive,
-        });
-        responseText = result.text;
-        request.signal.throwIfAborted();
-        const outbound = await finalizeRestChatResponse({
-          taskText: routeText,
-          responseText,
-          completionGuard: result.completionGuard,
-          source: 'rest_chat',
-          flow: restTurnDispatch.flow,
-        });
-        request.signal.throwIfAborted();
-        const finalized = outbound.finalization;
-        responseText = finalized.text;
-        recordLatency('llm', Date.now() - llmStart);
-        return res.json({
-          text: responseText,
-          finalized: true,
-          blocked: finalized.blocked,
-          reason: finalized.reason,
-          notification: finalized.notification,
-        });
-      } else {
-        const normalizedMessages: any[] = [
-          { role: 'system', content: systemInstruction },
-          ...conversationMessages,
-        ];
-
-        const buildRestModelInput = (
-          turnMessages: any[],
-          onToolRecord?: (record: ToolExecutionRecord) => void,
-          onChunk?: (chunk: string) => void,
-          source = toolContext.source,
-        ): ResolvedTurnModelInput => ({
-      execution: restExecutionPipeline,
-          assertCurrent: assertRequestActive,
-          streaming: Boolean(onChunk),
-          messages: turnMessages,
-          registry: toolRegistry,
-          config: { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
-          onToolCall: async record => {
-            assertRequestActive();
-            await receiptObserver?.persist(record);
-            await onToolRecord?.(record);
-          },
-          maxIterations: restModelToolPolicy.maxIterations || 3,
-          onStreamChunk: onChunk,
-          context: { ...toolContext, source, executionSignal: request.signal,
-            isCancelled: () => request.signal.aborted || !isBusinessAuthorized(), onToolRecord: receiptObserver?.onToolRecord },
-          getters: llm,
-        });
-
-        const finalizeRestToolResult = async (
-          candidateText: string,
-          result: Awaited<ReturnType<typeof runResolvedLumiTurn>>,
-          source: string,
-        ) => {
-          assertRequestActive();
-          const usageRecords = [...(result.usageRecords || [])];
-          const outbound = await finalizeRestChatResponse({
-            taskText: routeText,
-            responseText: candidateText,
-            completionGuard: result.completionGuard,
-            toolRecords: result.toolCalls,
-            source,
-            flow: restTurnDispatch.flow,
-            taskId: toolContext.taskId,
-            requestId: toolContext.requestId,
-            allowToolUse: restToolSessionActive,
-            attempt: async attempt => {
-              const recovery = await runResolvedLumiRecovery({
-                model: buildRestModelInput(normalizedMessages, undefined, undefined, 'rest_chat_guard_recovery'),
-                responseText: candidateText, recovery: attempt,
-              });
-              usageRecords.push(...recovery.usageRecords);
-              return recovery;
-            },
-          });
-          assertRequestActive();
-          const industryWorkflow = businessTask ? recordIndustryWorkflowExecution({
-            userId, domain, orgId, taskId: businessTask.id, resultText: outbound.finalization.text, toolRecords: outbound.toolRecords, source,
-          }) : undefined;
-          if (industryWorkflow) await flushDBOrThrow();
-          assertRequestActive();
-          return { outbound, usageRecords, industryWorkflow };
-        };
-
-        const stream = req.query.stream === 'true';
-
-        if (stream) {
-          res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          });
-        }
-        const restTextGate = createPreFinalizationTextGate();
-        const result = await runResolvedLumiTurn(buildRestModelInput(normalizedMessages, undefined, stream ? chunk => {
-          if (request.signal.aborted || deferRestStream) return;
-          const safeText = restTextGate.push(chunk);
-          if (safeText) res.write(`data: ${JSON.stringify({ chunk: safeText })}\n\n`);
-        } : undefined));
-        restTextGate.finish();
-        const delivery = await finalizeRestToolResult(result.text || '', result, stream ? 'rest_chat_stream' : 'rest_chat');
-        const finalized = delivery.outbound.finalization;
-        responseText = finalized.text;
-        for (const u of delivery.usageRecords) {
-          recordTokenUsage(userId, u.provider, u.model, {
-            promptTokens: u.promptTokens,
-            completionTokens: u.completionTokens,
-            totalTokens: u.totalTokens,
-          }, `rest_chat_${Date.now()}`, 'chat');
-        }
-        const usage = {
-          totalTokens: delivery.usageRecords.reduce((sum, item) => sum + item.totalTokens, 0),
-          records: delivery.usageRecords.length,
-        };
-        const payload = {
-          text: responseText,
-          usage,
-          toolCalls: delivery.outbound.toolRecords.length,
-          industryWorkflow: delivery.industryWorkflow ? { taskId: businessTask!.id, status: delivery.industryWorkflow.task.status, verification: delivery.industryWorkflow.verification } : undefined,
-          finalized: true,
-          blocked: finalized.blocked,
-          reason: finalized.reason,
-          notification: finalized.notification,
-        };
-        if (stream) {
-          res.write(`data: ${JSON.stringify({ ...payload, done: true })}\n\n`);
-          return res.end();
-        }
-        return res.json(payload);
-      }
     } catch (error: any) {
       if (businessTask) {
         interruptIndustryWorkflow({ userId, domain, orgId }, businessTask.id, request.signal.aborted, request.signal.aborted ? 'Business execution was cancelled; previous receipts retained.' : 'Business execution stopped before verified delivery.');
@@ -524,7 +379,6 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
         code: publicError.code,
       });
     } finally {
-      admission?.release();
       membershipWatcher?.dispose();
       request.dispose();
     }
