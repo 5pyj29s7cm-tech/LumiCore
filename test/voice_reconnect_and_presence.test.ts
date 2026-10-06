@@ -163,7 +163,7 @@ describe('voice reconnect and perception continuity', () => {
     expect(server).toContain("socket.emit('audio:sidecar_response'");
     expect(server).toContain('requestId: workRequestId');
     expect(server).toContain('workContinues: true, requestId: workRequestId');
-    expect(server).toContain('cancelActiveVoiceTurn(session, false, true)');
+    expect(server).toContain('if (!await cancelActiveVoiceTurn(session, false, true, false, owner) || !owner.isCurrent()) return;');
     expect(server).toContain('interruptVoiceSpeech(session)');
     expect(client).toContain("socket.on('audio:sidecar_response'");
     expect(client).toContain('workRequestId !== activeVoiceRequestIdRef.current');

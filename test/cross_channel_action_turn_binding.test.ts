@@ -10,7 +10,7 @@ describe('cross-channel action turn ownership wiring', () => {
     const voice = source('server/socket/voice.ts');
     const persisted = voice.indexOf('voiceUserMessageId = writeVoiceMessage({');
     const admission = voice.indexOf('const voiceAdmission = await admitAcceptedUserTurnDurably({', persisted);
-    const admittedPersist = voice.indexOf('persistAcceptedUserTurn: () => persistVoiceUserMessage()', admission);
+    const admittedPersist = voice.indexOf('persistAcceptedUserTurn: () => { turnAuthorization.assertCurrent(); return persistVoiceUserMessage(); },', admission);
     const flushed = voice.indexOf('flush: flushDBOrThrow', admittedPersist);
     const accepted = voice.indexOf('voiceUserMessageId = voiceAdmission.persisted;', flushed);
     const prepared = voice.indexOf('prepareConversationActionExecution({', accepted);
