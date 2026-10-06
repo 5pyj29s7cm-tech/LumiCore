@@ -153,7 +153,9 @@ describe('complete personal-client surface contract', () => {
     expect(desktop).toContain('onOpenMemoryAvatar={() => { void openMemoryAvatar(); }}');
     expect(desktop).toContain('onCreateAnother={openMemoryAvatarLab}');
     expect(desktop).toContain('setMemoryAvatars(previous =>');
-    const dock = sourceBlock(desktop, '{/* Bottom Taskbar / Dock */}', '{/* Main OS Content Layer (Personal Desktop Surface) */}');
+    const chrome = source('src/components/desktop/shell_chrome_view.tsx');
+    const dock = chrome.slice(chrome.indexOf('{/* Bottom Taskbar / Dock */}'));
+    expect(chrome.indexOf('{/* Bottom Taskbar / Dock */}')).toBeGreaterThan(-1);
     expect(dock).not.toContain('data-lumi-target="knowledge"');
     expect(sourceBlock(desktop, 'const dockApps = [', 'const operationModeOptions')).toContain('...appIcons');
     expect(dock).toContain('dockApps.map');

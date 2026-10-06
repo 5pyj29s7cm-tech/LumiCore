@@ -87,8 +87,11 @@ describe('customer-facing assistant output projection', () => {
     for (const relativePath of surfaces) {
       expect(source(relativePath), relativePath).toContain('sanitizeAgentResponseTextForDisplay');
     }
+    expect(source('src/components/agent_chat/chat_stream_receivers.ts')).toMatch(
+      /onChunk[\s\S]*streamingRawTextRef[\s\S]*sanitizeAgentStreamingTextForDisplay\(rawText/,
+    );
     expect(source('src/components/AgentChatPage.tsx')).toMatch(
-      /onChunk[\s\S]*streamingRawTextRef[\s\S]*sanitizeAgentStreamingTextForDisplay\(rawText[\s\S]*onError[\s\S]*sanitizeAgentResponseTextForDisplay/,
+      /onError[\s\S]*sanitizeAgentResponseTextForDisplay/,
     );
     const territoryConversation = code('src/hooks/useMemoryAvatarConversation.ts');
     expect(territoryConversation).toMatch(

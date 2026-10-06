@@ -467,7 +467,7 @@ function useVoiceCaptureRuntime(previousBindings: ReturnType<typeof useVoiceSess
       window.removeEventListener('lumi:setting-changed', onSetting);
       unsubscribe();
     };
-  }, [disabled, privateCapture, socket, proactive.userId, proactive.domain, proactive.orgId, proactive.voiceId, proactive.outputMuted, isMuted, proactivePlaybackGenerationRef, proactiveStateTimerRef, proactiveSource, proactiveContext, isTtsPlaying, isConversationTtsPlaying, isCallActive, setCallState, isMutedRef, proactiveContextRef]);
+  }, [disabled, privateCapture, socket, proactive?.userId, proactive?.domain, proactive?.orgId, proactive?.voiceId, proactive?.outputMuted, isMuted, proactivePlaybackGenerationRef, proactiveStateTimerRef, proactiveSource, proactiveContext, isTtsPlaying, isConversationTtsPlaying, isCallActive, setCallState, isMutedRef, proactiveContextRef]);
 
   const cleanupCapture = useCallback(() => {
     if (typeof window !== 'undefined' && !privateCaptureRef.current) {

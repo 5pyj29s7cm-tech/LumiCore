@@ -302,10 +302,7 @@ describe('task foreground release manager convergence', () => {
     expect(ordinaryFailure).toContain('requestId,');
     expect(ordinaryFailure).not.toContain("event: 'agent:error'");
 
-    const cancellationHandler = source.slice(
-      source.indexOf('socket.on("agent:abort_chat"'),
-      source.indexOf('socket.on("agent:chat"'),
-    );
+    const cancellationHandler = readFileSync('server/socket/chat/connection_controls.ts', 'utf8');
     expect(cancellationHandler).toContain("status: 'cancelling'");
     expect(cancellationHandler).not.toContain('cancelConversationActionExecution(');
   });

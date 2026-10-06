@@ -1230,7 +1230,7 @@ function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typeof use
 
   useEffect(() => {
     setOrganizationWorkspaceView('dashboard');
-  }, [orgConnection.orgId, setOrganizationWorkspaceView]);
+  }, [orgConnection?.orgId, setOrganizationWorkspaceView]);
 
   useEffect(() => {
     const handler = (event: Event) => {
