@@ -4,7 +4,6 @@ import type { IncomingMessage } from '../server/messaging/types';
 
 const durability = vi.hoisted(() => ({
   flush: vi.fn<() => Promise<void>>(),
-  confirmationError: null as Error | null,
 }));
 
 vi.mock('../db_layer', async importOriginal => {
@@ -13,14 +12,6 @@ vi.mock('../db_layer', async importOriginal => {
     ...actual,
     flushDBOrThrow: durability.flush,
   };
-});
-
-vi.mock('../server/tools/pending_confirmation_repository', async importOriginal => {
-  const actual = await importOriginal<typeof import('../server/tools/pending_confirmation_repository')>();
-  return { ...actual, ensurePendingConfirmationPersistenceInitialized: async () => {
-    if (durability.confirmationError) throw durability.confirmationError;
-    await actual.ensurePendingConfirmationPersistenceInitialized();
-  } };
 });
 
 let cleanup = () => {};
@@ -68,14 +59,15 @@ describe('remote reply durability boundary', () => {
   beforeAll(async () => {
     const app = await makeApp();
     cleanup = app.cleanup;
-    [routes, conversations, delivery, journal, scopes, confirmations, confirmationRepository, bindings, orgDb, ingress, dbLayer] = await Promise.all([
+    // Use the same actual repository instance for fault injection and route admission.
+    confirmationRepository = await import('../server/tools/pending_confirmation_repository');
+    [routes, conversations, delivery, journal, scopes, confirmations, bindings, orgDb, ingress, dbLayer] = await Promise.all([
       import('../server/regions/packs/cn/messaging_routes'),
       import('../server/conversation/manager'),
       import('../server/messaging/delivery_ledger'),
       import('../server/messaging/message_journal'),
       import('../server/messaging/personal_org_scope'),
       import('../server/tools/pending_confirmation'),
-      import('../server/tools/pending_confirmation_repository'),
       import('../server/messaging/bindings'),
       import('../server/org/db'),
       import('../server/regions/packs/cn/messaging_ingress_runtime'),
@@ -84,7 +76,6 @@ describe('remote reply durability boundary', () => {
   });
 
   beforeEach(() => {
-    durability.confirmationError = null;
     durability.flush.mockReset();
     durability.flush.mockResolvedValue(undefined);
     delivery.resetDeliveryLedgerForTest();
@@ -108,9 +99,13 @@ describe('remote reply durability boundary', () => {
   it('requires confirmation store readiness after accepted flush and before execution', async () => {
     const userId = `confirmation-ready-${Date.now()}-${Math.random()}`;
     const onMessage = vi.fn(async (message: IncomingMessage) => ({ platform: message.platform, text: 'must not execute' }));
-    durability.confirmationError = new Error('encrypted confirmation store unavailable');
-    await expect(routes.processWithPersonality(incoming(userId, 'Hello', userId), { onMessage }))
-      .rejects.toMatchObject({ name: 'MessagingReplyDurabilityError', stage: 'accepted_turn' });
+    const initialize = vi.spyOn(confirmationRepository.PendingConfirmationRepository.prototype, 'initializeAndHydrate')
+      .mockRejectedValueOnce(new Error('encrypted confirmation store unavailable'));
+    try {
+      await expect(routes.processWithPersonality(incoming(userId, 'Hello', userId), { onMessage }))
+        .rejects.toMatchObject({ name: 'MessagingReplyDurabilityError', stage: 'accepted_turn' });
+      expect(initialize).toHaveBeenCalledOnce();
+    } finally { initialize.mockRestore(); }
     expect(durability.flush).toHaveBeenCalledOnce();
     expect(onMessage).not.toHaveBeenCalled();
     const rows = dbLayer.readDatabaseTables(['interactions']).interactions.filter((row: any) => row.userId === userId);
