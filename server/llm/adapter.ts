@@ -1,4 +1,4 @@
-import { providerGetterArguments } from './provider_getters';
+import { providerGetterArguments, type ProviderGetters } from './provider_getters';
 import { promptBlockMessage, replacePromptBlock } from './prompt_blocks';
 import fs from 'fs';
 import { createModelTurnState, type ModelTurnState } from './model_turn_state';
@@ -1781,22 +1781,12 @@ export async function runWithTools(
       }
     : { isCancelled: () => isCallerCancellation(config.signal, undefined) };
 
-  const operation = runWithToolsInternal(
-    messages,
-    toolRegistry,
-    {
-      ...config,
-      attemptTimeouts: configuredAttemptTimeouts,
-    },
-    guardedToolCall,
-    maxIterations,
+  const providerGetters: Partial<ProviderGetters> = {
     getDeepSeek,
     getGemini,
     getOpenAI,
     getAnthropic,
     getQwen,
-    guardedChunk,
-    guardedContext,
     getOllama,
     getLmStudio,
     getArk,
@@ -1804,10 +1794,12 @@ export async function runWithTools(
     getKimi,
     getGlm,
     getRelay,
-    supervisor,
-    observedUsageRecords,
-    toolInvocationBudget,
-  );
+  };
+  const runLoop = (loopMessages: NormalizedMessage[], iterations = maxIterations, loopContext = guardedContext) =>
+    runWithToolsInternal(loopMessages, toolRegistry, { ...config, attemptTimeouts: configuredAttemptTimeouts },
+      providerGetters, guardedToolCall, iterations, guardedChunk, loopContext, supervisor,
+      observedUsageRecords, toolInvocationBudget);
+  const operation = runLoop(messages);
 
   try {
     return await operation;
@@ -1862,7 +1854,7 @@ export async function runWithTools(
           withoutRuntimeOwnedRecoveryCall(context),
         );
         if (missingVerification) {
-          return await runWithToolsInternal(
+          return await runLoop(
             [
               ...messages,
               {
@@ -1874,27 +1866,8 @@ export async function runWithTools(
                 ].join('\n'),
               },
             ],
-            toolRegistry,
-            { ...config, attemptTimeouts: configuredAttemptTimeouts },
-            guardedToolCall,
             Math.max(maxIterations, 3),
-            getDeepSeek,
-            getGemini,
-            getOpenAI,
-            getAnthropic,
-            getQwen,
-            guardedChunk,
             { ...(guardedContext || {}), priorToolRecords: checkpointRecords },
-            getOllama,
-            getLmStudio,
-            getArk,
-            getXiaomi,
-            getKimi,
-            getGlm,
-            getRelay,
-            supervisor,
-            observedUsageRecords,
-            toolInvocationBudget,
           );
         }
       } catch (continuationError) {
@@ -1925,22 +1898,11 @@ async function runWithToolsInternal(
   messages: NormalizedMessage[],
   toolRegistry: ToolRegistry,
   config: LLMConfig,
+  providerGetters: Partial<ProviderGetters>,
   onToolCall?: (record: ToolExecutionRecord) => unknown,
   maxIterations: number = 5,
-  getDeepSeek?: () => any,
-  getGemini?: () => any,
-  getOpenAI?: () => any,
-  getAnthropic?: () => any,
-  getQwen?: () => any,
   onStreamChunk?: StreamCallback,
   context?: ToolContext,
-  getOllama?: () => any,
-  getLmStudio?: () => any,
-  getArk?: () => any,
-  getXiaomi?: () => any,
-  getKimi?: () => any,
-  getGlm?: () => any,
-  getRelay?: () => any,
   modelBudget?: ToolLoopModelBudget,
   usageRecordSink?: LLMUsageRecord[],
   invocationBudgetState?: ToolInvocationBudgetState,
@@ -1984,20 +1946,6 @@ async function runWithToolsInternal(
     boundary, rawPlannedCalls, normalizedPlannedCalls, invocableCalls, budget: invocationBudget,
     executionLog, messages, config, usageRecords, context: toolExecutionContext, onToolCall,
   });
-  const providerGetters = {
-    getDeepSeek,
-    getGemini,
-    getOpenAI,
-    getAnthropic,
-    getQwen,
-    getOllama,
-    getLmStudio,
-    getArk,
-    getXiaomi,
-    getKimi,
-    getGlm,
-    getRelay,
-  };
   invocationBudget.lastTouchedAt = Date.now();
   const explicitProjection = context?.modelToolProjection?.toolNames;
   const toolSessionActive = maxIterations > 0
@@ -2019,6 +1967,8 @@ async function runWithToolsInternal(
   ];
   const primaryTask = String(context?.routedTaskText || '').trim()
     || getPrimaryUserText(messages);
+  const requestedArtifact = requestedSingleArtifact(primaryTask);
+  const compoundExecutionTask = executionBeforeWorkflowSave(primaryTask);
 
   config = resolveInteractiveToolConfig(config, context?.actionIntent || primaryTask);
 
@@ -2079,7 +2029,6 @@ async function runWithToolsInternal(
         visibleToolNames: resolveModelVisibleToolNames(toolExecutionContext, executionLog, toolRegistry),
       },
     );
-    const requestedArtifact = requestedSingleArtifact(primaryTask);
     if (requestedArtifact) {
       toolDeclarations = toolDeclarations.filter(tool =>
         !/^(?:create_docx|create_xlsx|create_ppt|create_pdf)$/.test(tool.function.name)
@@ -2089,7 +2038,6 @@ async function runWithToolsInternal(
       toolDeclarations.sort((a, b) => Number(b.function.name === requestedArtifact.producer)
         - Number(a.function.name === requestedArtifact.producer));
     }
-    const compoundExecutionTask = executionBeforeWorkflowSave(primaryTask);
     const workflowSavePhase = Boolean(compoundExecutionTask
       && hasCompletedCoreAction(compoundExecutionTask, executionLog, toolExecutionContext));
     if (compoundExecutionTask) {

@@ -75,7 +75,7 @@ function recoveryHarness(user: any, data = new Map<string, string>()) {
     recoveryAttempt: 0, disposed: false, chatViewWorkRef: { current: new ChatViewWorkRegistry() },
     ACTIVE_CHAT_EXECUTION_TTL_MS: 86400000, clearPersistedExecution: noop,
     isOfficeCommandCenter: true, chatRequestLedgerRef: { current: new ChatRequestLedger() },
-    activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false },
+
     chatTurnTimerGuardRef: { current: { begin: noop } }, setIsTyping: noop,
     lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: noop,
     uiMessage: (key: string) => key, isZh: true, socket,

@@ -2,6 +2,7 @@ import { extractSourceExpression } from './source_expression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shouldReloadPersistedConversation } from '../src/lib/conversationSync';
 import { ChatViewWorkRegistry } from '../src/lib/chatViewWork';
+import { ChatRequestLedger } from '../src/lib/chatEventReceipts';
 import { ChatAttachmentUploads, listenForNativeChatFileDrop } from '../src/lib/chatAttachmentUploads';
 import { chatAttachmentCopy } from '../src/i18n/locales/chatAttachments';
 import { createChatAttachmentReference, mergeChatAttachmentReferences, mergePendingChatAttachments, MAX_CHAT_ATTACHMENTS } from '../src/lib/chatAttachmentReferences';
@@ -65,19 +66,20 @@ function historyHarness() {
   const messagesRef = { current: [{ id: 'old-visible' }] as any[] };
   const messagesRevisionRef = { current: 0 };
   const work = new ChatViewWorkRegistry();
+  const ledger = new ChatRequestLedger();
   const setMessages = callback('setMessages', { messagesRef, messagesRevisionRef, setMessageState: noop });
   const handler = callback('onConversationUpdated', {
     agentId: 'lumi', attachmentConversationIdRef: current,
     bindAttachmentContextToConversation: (id: string) => { current.current = id; work.invalidate(); },
     shouldReloadPersistedConversation, socket: { id: 'current-client' },
-    activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false },
+    chatRequestLedgerRef: { current: ledger },
     streamingMsgIdsRef: { current: new Map() }, streamingRawTextRef: { current: new Map() },
     chatViewWorkRef: { current: work }, messagesRevisionRef, historyRefreshRevisionRef: { current: 0 },
     scopedConversationUrl: (url: string) => url, CHAT_HISTORY_LIMIT: 60,
     fetch: () => { const response = deferred<any>(); requests.push(response); return response.promise; },
     normalizePersistedMessages: (rows: any[]) => rows, setMessages,
   });
-  return { handler, current, requests, work, setMessages, messages: () => messagesRef.current };
+  return { handler, current, requests, work, ledger, setMessages, messages: () => messagesRef.current };
 }
 const event = { agentId: 'lumi', conversationId: 'conversation-a', source: 'voice' };
 const reply = (id: string) => ({ json: async () => ({ messages: [{ id }] }) });
@@ -118,6 +120,20 @@ describe('chat view asynchronous history ownership', () => {
     h.requests[0].resolve(reply('old-visible'));
     await settle();
     expect(h.messages().map(row => row.id)).toEqual(['old-visible', 'new-user-turn', 'stream']);
+  });
+
+  it('reads the canonical request ledger when a live request begins during a history fetch', async () => {
+    const h = historyHarness();
+    h.handler(event);
+    h.ledger.begin('live-request');
+    h.requests[0].resolve(reply('stale-history'));
+    await settle();
+    expect(h.messages()).toEqual([{ id: 'old-visible' }]);
+    h.ledger.settle('live-request');
+    h.handler(event);
+    h.requests[1].resolve(reply('settled-history'));
+    await settle();
+    expect(h.messages()).toEqual([{ id: 'settled-history' }]);
   });
 
   it('keeps the latest history response when two refreshes finish out of order', async () => {

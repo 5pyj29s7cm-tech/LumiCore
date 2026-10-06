@@ -73,7 +73,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     currentTurnUiMetaRef: { current: { hadTool: false, needsEvidence: false, finalization: null } },
     chatTurnTimerGuardRef: { current: { begin: noop } },
     taskRelationLedgerRef: { current: { controlTarget: () => ({}) } },
-    activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false },
+
     attachmentConversationIdRef: { current: 'synthetic-conversation' }, activeChatViewDetachersRef: { current: new Map() },
     activeMediaGenerationRef: { current: null }, mediaGenerationText: {},
     setIsTyping: noop, needsVisibleToolEvidence: () => false, clearChatProgress: noop, pushChatProgress: noop,

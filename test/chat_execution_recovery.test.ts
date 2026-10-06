@@ -45,7 +45,7 @@ function harness(currentOwner = owner('owner-a')) {
     setMediaGenerationArtifacts: noop, setMediaGeneration: noop,
     setMediaStudioMode: noop, setMediaSources: vi.fn(value => { setReference(value.primaryImage); }),
     mediaGenerationText: { statusGenerating: 'generating' }, chatRequestLedgerRef: { current: ledger },
-    activeChatRequestIdRef: { current: null }, textChatActiveRef: { current: false }, chatTurnTimerGuardRef: { current: { begin: noop } },
+    chatTurnTimerGuardRef: { current: { begin: noop } },
     setIsTyping: vi.fn(), lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: vi.fn(),
     uiMessage: (value: string) => value, isZh: false, attachmentConversationIdRef: { current: 'current-conversation' },
     chatExecutionSource: currentOwner.source, socket: { emit }, setWorkflowStatus: vi.fn(), resetMediaGenerationSurface: resetMedia,

@@ -1104,8 +1104,6 @@ export function AgentChatPage({
 
   const streamingMsgIdsRef = useRef(new Map<string, string>());
   const streamingRawTextRef = useRef(new Map<string, string>());
-  const textChatActiveRef = useRef(false);
-  const activeChatRequestIdRef = useRef<string | null>(null);
   const lastResumedRequestIdsRef = useRef(new Set<string>());
   const initialLoadDoneRef = useRef(false);
   const lastConversationScopeRef = useRef<string>('');
@@ -1155,8 +1153,6 @@ export function AgentChatPage({
     if (clearReceipts) terminalReceiptsRef.current.clear();
     chatRequestLedgerRef.current.clear();
     chatTurnUiMetaRef.current.clear();
-    activeChatRequestIdRef.current = null;
-    textChatActiveRef.current = false;
     lastResumedRequestIdsRef.current.clear();
     streamingMsgIdsRef.current.clear();
     streamingRawTextRef.current.clear();
@@ -1187,8 +1183,6 @@ export function AgentChatPage({
     const previousForeground = chatRequestLedgerRef.current.foreground;
     chatTurnUiMetaRef.current.delete(normalizedRequestId);
     const result = chatRequestLedgerRef.current.settle(normalizedRequestId);
-    activeChatRequestIdRef.current = result.foregroundRequestId || null;
-    textChatActiveRef.current = result.remaining > 0;
     clearPersistedExecution(normalizedRequestId || undefined);
     if (result.foregroundRequestId && result.foregroundRequestId !== previousForeground) {
       chatTurnTimerGuardRef.current.begin(result.foregroundRequestId);
@@ -1205,13 +1199,13 @@ export function AgentChatPage({
       ? expectedRequestId
       : eventRequestId && chatRequestLedgerRef.current.has(eventRequestId)
         ? eventRequestId
-        : activeChatRequestIdRef.current;
+        : chatRequestLedgerRef.current.foreground;
     const resolution = resolveChatExecutionEvent({
       event: data,
       currentConversationId: attachmentConversationIdRef.current,
       expectedRequestId: resolvedExpectedRequestId,
       expectedSource: chatExecutionSource,
-      textChatActive: textChatActiveRef.current,
+      textChatActive: chatRequestLedgerRef.current.size > 0,
     });
     if (!resolution.accepted) return false;
     if (resolution.adoptedConversationId) {
@@ -1269,8 +1263,7 @@ export function AgentChatPage({
         if (
           cancelled
           || lastConversationScopeRef.current !== conversationScopeKey
-          || activeChatRequestIdRef.current
-          || textChatActiveRef.current
+          || chatRequestLedgerRef.current.size > 0
           || attachmentConversationIdRef.current !== initialConversationId
           || messagesRef.current.length !== initialMessageCount
         ) return;
@@ -1285,8 +1278,8 @@ export function AgentChatPage({
           currentScopeKey: lastConversationScopeRef.current,
           loadedConversationId: conversationId,
           currentConversationId: attachmentConversationIdRef.current,
-          activeRequestId: activeChatRequestIdRef.current,
-          textChatActive: textChatActiveRef.current,
+          activeRequestId: chatRequestLedgerRef.current.foreground,
+          textChatActive: chatRequestLedgerRef.current.size > 0,
           messageCountAtStart: initialMessageCount,
           currentMessageCount: messagesRef.current.length,
         })) return;
@@ -1789,7 +1782,7 @@ export function AgentChatPage({
         event: data,
         currentConversationId,
         currentSocketId: socket.id,
-        activeRequestId: activeChatRequestIdRef.current,
+        activeRequestId: chatRequestLedgerRef.current.foreground,
       })) return;
       const work = chatViewWorkRef.current.begin();
       const messageRevision = messagesRevisionRef.current;
@@ -1801,7 +1794,7 @@ export function AgentChatPage({
             || data.conversationId !== attachmentConversationIdRef.current
             || refreshRevision !== historyRefreshRevisionRef.current
             || messageRevision !== messagesRevisionRef.current
-            || textChatActiveRef.current) return;
+            || chatRequestLedgerRef.current.size > 0) return;
           if (result.messages && Array.isArray(result.messages)) {
             streamingMsgIdsRef.current.clear();
             streamingRawTextRef.current.clear();
@@ -1918,9 +1911,7 @@ export function AgentChatPage({
           chatRequestLedgerRef.current.begin(execution.requestId);
         }
       }
-      activeChatRequestIdRef.current = chatRequestLedgerRef.current.foreground || pending[0].requestId;
-      textChatActiveRef.current = chatRequestLedgerRef.current.size > 0;
-      chatTurnTimerGuardRef.current.begin(activeChatRequestIdRef.current);
+      chatTurnTimerGuardRef.current.begin(chatRequestLedgerRef.current.foreground);
       setIsTyping(true);
       if (pending.some(execution => !lastResumedRequestIdsRef.current.has(execution.requestId))) {
         pending.forEach(execution => lastResumedRequestIdsRef.current.add(execution.requestId));
@@ -2132,8 +2123,6 @@ export function AgentChatPage({
       foregroundRequestId: controlTargetRequestId,
     });
     if (wasIdle) chatTurnTimerGuardRef.current.begin(requestId);
-    activeChatRequestIdRef.current = chatRequestLedgerRef.current.foreground || requestId;
-    textChatActiveRef.current = true;
     persistActiveExecution(requestId);
 
     const watcher = new ChatExecutionWatch({
@@ -2388,18 +2377,20 @@ export function AgentChatPage({
   }, [openChatFile]);
 
   const cancelActiveChat = () => {
-    const requestId = activeChatRequestIdRef.current;
+    const requestId = chatRequestLedgerRef.current.foreground;
     if (!socket || !requestId) {
       if (activeMediaGenerationRef.current) {
         setMediaGeneration({ status: 'error', detail: mediaGenerationText.backendLostTask });
       }
       return;
     }
+    const ownsView = chatViewWorkRef.current.capture();
+    const ownsRequest = () => ownsView() && chatRequestLedgerRef.current.foreground === requestId;
     setWorkflowStatus('cancelling');
     pushChatProgress(uiMessage('agent-chat-page.cancelling-task.18c33c6327', isZh ? 'zh' : 'en'), 'thinking');
     let acknowledged = false;
-    const ackTimer = window.setTimeout(() => {
-      if (acknowledged || activeChatRequestIdRef.current !== requestId) return;
+    chatTurnTimerGuardRef.current.schedule(requestId, 8000, () => {
+      if (acknowledged || !ownsRequest()) return;
       setWorkflowStatus('error');
       if (activeMediaGenerationRef.current?.requestId === requestId) {
         setMediaGeneration({ status: 'error', detail: mediaGenerationText.taskFailed });
@@ -2410,7 +2401,7 @@ export function AgentChatPage({
           : uiMessage('agent-chat-page.connection-lost-recheck-task.6c0952c278', isZh ? 'zh' : 'en'),
         'error',
       );
-    }, 8000);
+    });
     socket.emit('agent:abort_chat', {
       requestId,
       source: chatExecutionSource,
@@ -2419,8 +2410,7 @@ export function AgentChatPage({
       conversationId: attachmentConversationIdRef.current || undefined,
     }, (result?: { ok?: boolean; error?: string }) => {
       acknowledged = true;
-      window.clearTimeout(ackTimer);
-      if (activeChatRequestIdRef.current !== requestId) return;
+      if (!ownsRequest()) return;
       if (!result?.ok) {
         setWorkflowStatus('error');
         if (activeMediaGenerationRef.current?.requestId === requestId) {
