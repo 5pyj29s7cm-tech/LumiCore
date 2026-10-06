@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import * as surfaces from '../shared/client_surfaces';
+import * as surfaceTargets from '../shared/client_surface_target';
 import * as organizations from '../shared/org_workspace';
 import { loadSourceModule } from './source_expression';
 
@@ -28,6 +29,7 @@ function client(overrides: Record<string, unknown> = {}) {
       '../../lib/legalCaseStore': { getLegalConsultationCaseId: () => '', setLegalConsultationCaseId: vi.fn() },
       '../../../shared/org_workspace': organizations,
       '../../../shared/client_surfaces': surfaces,
+      '../../../shared/client_surface_target': surfaceTargets,
       '../../lib/orgWorkspaceNavigation': { queueOrganizationWorkspaceRoute: route },
       '../../lib/clientSurfaceCommit': { isClientSurfaceRendered: () => false, waitForClientSurfaceRendered: commit },
     },
