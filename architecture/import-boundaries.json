@@ -10,12 +10,6 @@
       ],
       "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
     },
-    "server/mcp/lumi_server.ts": {
-      "allowedExports": [
-        "flushDBOrThrow"
-      ],
-      "reason": "Durability fence only. This module may neither read/replace the database nor execute SQL."
-    },
     "server/regions/packs/cn/business/finance_delivery.ts": {
       "allowedExports": [
         "flushDBOrThrow"
@@ -171,6 +165,12 @@
         "flushDBOrThrow"
       ],
       "reason": "Durability fence only, transferred to the actual state/maintenance owner; no database reads, writes or SQL."
+    },
+    "server/mcp/server_tools/conversation.ts": {
+      "allowedExports": [
+        "flushDBOrThrow"
+      ],
+      "reason": "Durability-only fence transferred to the actual scoped MCP conversation owner; no database root/table or SQL access."
     }
   },
   "approvedTableImporters": {

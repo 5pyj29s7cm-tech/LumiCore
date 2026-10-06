@@ -551,12 +551,12 @@ describe('MCP finalized output delivery', () => {
       blocked: true,
       toolCalls: 1,
     });
-    expect(payload.reason).toBe('execution_recovery_incomplete');
+    expect(payload.reason).toBe('execution_capability_unavailable');
     expect(payload.result).not.toBe('\u5df2\u5b8c\u6210\uff0c\u6587\u6863\u5df2\u5199\u597d\u3002');
     expect(JSON.stringify(payload)).not.toMatch(
       /No successful current-turn tool execution|Missing in-app UI mutation evidence/u,
     );
-    expect(mocks.runWithTools).toHaveBeenCalledTimes(2);
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
     const context = mocks.runWithTools.mock.calls[0][11] as any;
     expect(context).toMatchObject({
       authenticated: false,
@@ -565,7 +565,12 @@ describe('MCP finalized output delivery', () => {
       executionBoundary: 'remote_restricted',
       source: 'mcp_route_task',
     });
-    expect(context.toolPolicy.allowedTools).toEqual(['web_search']);
+    expect(context.toolPolicy.allowedTools).toEqual([]);
+    expect(context.currentTurnExecutionRequested).toBe(false);
+    expect(payload).toMatchObject({ requestId: context.requestId, conversationId: context.conversationId });
+    expect(readDB().conversationActionTurns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: context.turnRowId, requestId: context.requestId, conversationId: context.conversationId }),
+    ]));
   });
 
 });
@@ -593,4 +598,119 @@ it('shares its conversation lease with socket and messaging writers', async () =
   expect(context.turnRowId).toEqual(expect.any(String));
   const next = reserveConversationExecution({ userId, conversationId: conversation.id }, 'socket-next-request');
   try { await next.waitForTurn(); } finally { next.release(); }
+});
+
+
+it('serializes task and chat through one durable MCP conversation with exact tool receipt identity', async () => {
+  const registry = new ToolRegistry();
+  registry.register({ name: 'web_search', description: 'Search public web fixtures', permission: 'public', securityLevel: 'safe',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    handler: async () => JSON.stringify({ ok: true, results: [{ title: 'Synthetic result', url: 'https://example.com' }] }),
+  });
+  let finish!: () => void; let context: any; let recorded = false;
+  const final = new Promise<void>(resolve => { finish = resolve; });
+  mocks.runWithTools.mockImplementationOnce(async (...args) => {
+    context = args[11];
+    const record = await executeToolCall({ registry, id: 'mcp-task-step-receipt', name: 'web_search', arguments: { query: 'synthetic' }, context });
+    expect(record.error).toBeUndefined();
+    await flushDBOrThrow(); recorded = true; await final;
+    return { text: 'The search returned a synthetic result.', toolCalls: [record], usageRecords: [] };
+  }).mockResolvedValue({ text: 'We discussed a synthetic search result.', toolCalls: [], usageRecords: [] });
+  const broadcast = vi.fn(); const userId = 'mcp-cross-entry-receipt-owner';
+  const server = createLumiMcpServer(undefined, registry, broadcast, {
+    userId, username: 'fixture', role: 'user', domain: 'personal', orgId: '', authenticated: true,
+  });
+  const task = getHandler(server, 'lumi_route_task')({ task: 'Search the public web for synthetic examples.' });
+  let chat: Promise<any> | undefined;
+  try {
+    await vi.waitFor(() => expect(recorded).toBe(true));
+    expect(context).toMatchObject({ source: 'mcp_route_task', turnId: context.requestId, taskId: expect.any(String), turnRowId: expect.any(String), resolutionId: 'resolution:' + context.requestId });
+    expect(readDB().conversationActionReceipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: context.requestId, taskId: context.taskId, conversationId: context.conversationId, toolName: 'web_search' }),
+    ]));
+    expect(readDB().conversationActionTasks.find((row: any) => row.id === context.taskId)?.status).not.toBe('completed');
+    chat = getHandler(server, 'lumi_chat')({ message: 'What did we discuss?', conversationId: context.conversationId });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+  } finally { finish(); }
+  const taskResponse = JSON.parse((await task).content[0].text); const chatResponse = await chat!;
+  expect(taskResponse).toMatchObject({ requestId: context.requestId, conversationId: context.conversationId, toolCalls: 1, finalized: true, blocked: false });
+  expect(chatResponse.conversationId).toBe(context.conversationId);
+  expect(chatResponse.requestId).not.toBe(context.requestId);
+  expect(mocks.runWithTools.mock.calls[1][0]).toEqual(expect.arrayContaining([
+    { role: 'user', content: 'Search the public web for synthetic examples.' }, { role: 'assistant', content: taskResponse.result },
+  ]));
+  expect(mocks.synthesizeSpeech).toHaveBeenCalledTimes(1);
+  expect(broadcast.mock.calls.filter(([event]) => event === 'agent:response').map(([, data]) => [data.requestId, data.conversationId, data.source])).toEqual([
+    [taskResponse.requestId, taskResponse.conversationId, 'mcp_route_task'], [chatResponse.requestId, chatResponse.conversationId, 'mcp_chat'],
+  ]);
+});
+
+it('keeps task calls out of speech and memory extraction while persisting their transcript', async () => {
+  mocks.autoExtract = true;
+  mocks.runWithTools.mockResolvedValue({ text: 'A neutral explanation.', toolCalls: [], usageRecords: [] });
+  const server = createLumiMcpServer(undefined, new ToolRegistry(), undefined, {
+    userId: 'mcp-task-transcript-owner', username: 'fixture', role: 'user', domain: 'personal', orgId: '', authenticated: true,
+  });
+  const result = JSON.parse((await getHandler(server, 'lumi_route_task')({ task: 'Explain a synthetic example.' })).content[0].text);
+  const { getMessages } = await import('../server/conversation/manager');
+  expect(result).toMatchObject({ handledBy: 'LumiCore', finalized: true, blocked: false, requestId: expect.any(String), conversationId: expect.any(String) });
+  expect(getMessages(result.conversationId, 10).map(row => [row.role, row.message])).toEqual([
+    ['user', 'Explain a synthetic example.'], ['assistant', 'A neutral explanation.'],
+  ]);
+  expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+  expect(mocks.extractMemories).not.toHaveBeenCalled();
+});
+
+it('aborts a queued task when original organization access is revoked despite mutation of the caller scope', async () => {
+  const { createOrg, addMember, removeMember } = await import('../server/org/db');
+  const { reserveConversationExecution, getConversationExecution } = await import('../server/cognition/conversation_execution');
+  const userId = 'mcp-task-revocation-owner';
+  const org = createOrg('MCP task scope fixture', 'mcp-task-revocation-org', 'mcp-task-revocation-org-owner');
+  addMember(org.id, userId, 'member');
+  const caller: any = { userId, username: 'fixture', role: 'user', domain: 'work', orgId: org.id, orgRole: 'member', authenticated: true };
+  mocks.runWithTools.mockResolvedValue({ text: 'A neutral explanation.', toolCalls: [], usageRecords: [] });
+  const broadcast = vi.fn(); const server = createLumiMcpServer(undefined, new ToolRegistry(), broadcast, caller);
+  const task = getHandler(server, 'lumi_route_task');
+  const first = JSON.parse((await task({ task: 'Explain a synthetic example.' })).content[0].text);
+  const scope = { userId, domain: 'work' as const, orgId: org.id, conversationId: first.conversationId };
+  const prior = reserveConversationExecution(scope, 'mcp-task-original-work-owner'); await prior.waitForTurn();
+  const second = task({ task: 'Explain another synthetic example.' });
+  const requestId = broadcast.mock.calls.filter(([event]) => event === 'agent:status').at(-1)![1].requestId;
+  const admission = getConversationExecution({ ...scope, source: 'mcp_route_task' }, requestId)!;
+  try {
+    expect(admission.state).toBe('queued');
+    caller.domain = 'personal'; caller.orgId = ''; removeMember(org.id, userId);
+    await vi.waitFor(() => expect(admission.signal.aborted).toBe(true));
+    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+    expect(readDB().conversationActionTurns.some((row: any) => row.requestId === requestId)).toBe(false);
+  } finally { prior.release(); }
+  expect(await second).toMatchObject({ isError: true, blocked: true, reason: 'mcp_operation_failed' });
+  expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+  expect(getConversationExecution({ ...scope, source: 'mcp_route_task' }, requestId)).toBeUndefined();
+});
+
+it('drains a timed-out task through durable finalization without replaying its model or speaking', async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (value: any) => void;
+    mocks.runWithTools.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const lifecycle = new McpCallLifecycle(); const broadcast = vi.fn();
+    const server = createLumiMcpServer(undefined, new ToolRegistry(), broadcast, undefined, lifecycle);
+    const pending = getHandler(server, 'lumi_route_task')({ task: 'Explain a synthetic example.' });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.advanceTimersByTimeAsync(25_000);
+    const partial = JSON.parse((await pending).content[0].text);
+    expect(partial).toMatchObject({ finalized: false, reason: 'background_processing', requestId: expect.any(String), conversationId: expect.any(String) });
+    lifecycle.stopAdmission(); let drained = false;
+    const drain = lifecycle.drain().then(() => { drained = true; });
+    await Promise.resolve(); expect(drained).toBe(false);
+    finish({ text: 'A neutral explanation.', toolCalls: [], usageRecords: [] }); await drain;
+    expect(drained).toBe(true); expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
+    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith('mcp:proactive', expect.objectContaining({ text: 'A neutral explanation.', finalized: true, requestId: partial.requestId, conversationId: partial.conversationId, source: 'mcp_route_task' }));
+    const { getMessages } = await import('../server/conversation/manager');
+    expect(getMessages(partial.conversationId, 10).at(-1)?.message).toBe('A neutral explanation.');
+  } finally { vi.useRealTimers(); }
 });

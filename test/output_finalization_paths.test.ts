@@ -142,8 +142,9 @@ describe('finalized output paths', () => {
     expect(mcp).not.toContain("(chunk) => bc('mcp:chunk'");
     expect(mcp).toContain('finalizeLumiResponseForDelivery({');
     expect(mcp).not.toContain('finalizeMcpResponseForDelivery(');
-    expect(mcp).toContain("'mcp_chat_guard_recovery'");
-    expect(mcp).toContain("source: background ? 'mcp_chat_background' : 'mcp_chat'");
+    expect(mcp).toContain("entry.source + '_guard_recovery'");
+    expect(mcp).toContain("source: 'mcp_chat', action: 'chat'");
+    expect(mcp).toContain("source: background ? entry.source + '_background' : entry.source");
     expect(mcp).toContain("emit('agent:response', {");
     expect(mcp).toContain('finalized: true');
     expect(mcp).toContain('blocked: finalized.blocked');
@@ -170,8 +171,11 @@ describe('finalized output paths', () => {
     const mcp = source('server/mcp/lumi_server.ts');
 
     expect(mcp).toContain("source: 'mcp_route_task'");
-    expect(mcp).toContain('toolRecords: result.toolCalls');
-    expect(mcp).toContain('result: finalized.text');
+    expect(mcp).toContain("runMcpConversationTurn(runtime, { message: task, personalityId: 'lumi' }, MCP_TASK_ENTRY)");
+    expect(mcp).toContain('const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || [])');
+    expect(mcp).toContain('toolRecords,');
+    expect(mcp).toContain('result: response.content[0].text');
+    expect(mcp).toContain('text: delivered.finalized.text');
     expect(mcp).not.toContain("action: 'route_task', status: 'completed'");
   });
 
