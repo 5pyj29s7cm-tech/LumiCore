@@ -23,7 +23,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
       let { relevantMemories, ragChunks, emotionalState, personalityConfig, kbContext, isNovel, himState, emotionKey } = await retrieveChatContext(context);
 
       // ── Conversation mode: get/create conversation, apply mode from payload ──
-      const conversationId = context.conversation?.id;
+      const conversationId = context.selectedConversationId;
       if (context.conversationTurn.rolledOver) {
         console.log(
           '[ChatHandler] rolled over oversized conversation:',
@@ -110,8 +110,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
         { return { terminal: true as const, context: undefined, planning: undefined, resume: undefined }; }
       }
 
-      const persistedConversationHistory = conversationId
-        ? getMessages(conversationId, TASK_TARGET_HISTORY_LIMIT).filter(record => !(
+      const persistedConversationHistory = getMessages(conversationId, TASK_TARGET_HISTORY_LIMIT).filter(record => !(
             record.role === 'user'
             && (
               record.requestId === context.requestId
@@ -121,8 +120,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
                 && record.channel === 'chat'
               )
             )
-          ))
-        : [];
+          ));
       if (!context.chatContextBridge && conversationId && isShortClientContinuation(context.visibleUserText)) {
         const dbHistoryItems = persistedConversationHistory.slice(-12)
           .map(record => ({ role: record.role, message: record.message, response: record.response }));
@@ -132,9 +130,7 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
         ? ''
         : buildRecentActionContinuationBridge(
             context.visibleUserText,
-            context.conversationTurn.rolledOver
-              ? persistedConversationHistory
-              : [...context.historyItems, ...persistedConversationHistory],
+            persistedConversationHistory,
             context.conversation?.actionContinuationState,
           );
       const taskRelationContext = formatActiveTaskRelationContext(

@@ -27,34 +27,14 @@ export async function prepareChatModelTurn(context: executeChatModelTurnInput) {
 
   // LumiCore owns every normal and complex task through this single model/tool path.
 
-  // Load conversation history from persistence (survives page reload / reconnect)
-  let persistedHistory: NormalizedMessage[] = [];
-  if (context.conversationId) {
-    // Keep seven persisted rows because the current user row is removed
-    // below, leaving three complete historical user/assistant turns.
-    const msgs = getMessagesByTokenBudget(context.conversationId, 6_000, 7).filter((m: any) => !(
-      m.role === 'user'
-      && (
-        m.requestId === context.requestId
-        || (
-          m.externalMessageId === context.requestId
-          && m.source === context.eventSource
-          && m.channel === 'chat'
-        )
-      )
-    ));
-    persistedHistory = msgs
-      .filter((m: any) => m.message || m.content || m.response)
-      .flatMap((m: any) => normalizeChatHistoryRecord(m, { serverOwned: true }));
-  }
-
-  // Once a server conversation exists, persistence is authoritative even
-  // when the new segment is intentionally empty. Falling back to the
-  // client's pre-rollover transcript would immediately restore the very
-  // stale context this boundary is meant to remove.
-  const conversationHistory = context.conversationId
-    ? persistedHistory
-    : (context.history ? context.history.flatMap((m: any) => normalizeChatHistoryRecord(m)) : []);
+  // The accepted server conversation is authoritative, including empty rollover segments.
+  const conversationHistory = getMessagesByTokenBudget(context.conversationId, 6_000, 7)
+    .filter((m: any) => !(
+      m.role === 'user' && (m.requestId === context.requestId || (
+        m.externalMessageId === context.requestId && m.source === context.eventSource && m.channel === 'chat'
+      ))
+    ))
+    .flatMap((m: any) => normalizeChatHistoryRecord(m, { serverOwned: true }));
 
   // Tell Lumi which model is currently active without hiding routed vision capacity.
   const selfAwareness = buildModelSelfAwareness(context.activeProvider, context.activeModel, context.uid, { visionAware: context.visionIntent && context.effectiveOperationMode !== 'meeting' });

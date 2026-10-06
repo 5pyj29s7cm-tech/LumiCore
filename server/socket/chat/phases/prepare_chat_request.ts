@@ -36,13 +36,12 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
         ? String((data.mediaRequest as Record<string, unknown>).operation || '').slice(0, 40)
         : '',
     }));
-    const { history, personalityId = "lumi", category, agentId, mode: payloadMode, source } = data;
+    const { personalityId = "lumi", category, agentId, mode: payloadMode, source } = data;
     const attachments = normalizeIncomingAttachments(data.attachments);
     const rawUserText = typeof data.text === 'string' ? data.text.trim() : '';
     const visibleUserText = rawUserText || (attachments.length > 0 ? 'Please review the attached file(s).' : '');
     const attachmentContext = buildChatAttachmentContext(attachments);
-    const historyItems = Array.isArray(history) ? history : [];
-    let chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, historyItems);
+    let chatContextBridge = buildClientSurfaceContinuationBridge(visibleUserText, []);
     let actionContinuationBridge = '';
     const text = [visibleUserText, attachmentContext].filter(Boolean).join('\n\n');
     const storedUserContent = buildStoredAttachmentSummary(visibleUserText, attachments);
@@ -218,7 +217,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     payloadMode,
     get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
     set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },
-    historyItems,
     sensoryFn,
     mediaRoutingEnvelope,
     structuredMediaRequest,
@@ -235,7 +233,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     formatMediaArtifactReceiptForUi,
     runAuthorizedTools,
     modelTurnState,
-    history,
     allowAdaptiveLearning,
     buildNaturalReplyStyleOverlay,
     chatDurabilityUnknownText,
