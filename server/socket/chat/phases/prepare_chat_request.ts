@@ -1,7 +1,8 @@
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../cognition/turn_model";
 import { createChatMessageWriter } from "../message_writer";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "../attachments";
 import { buildClientSurfaceContinuationBridge } from "../client_surface";
-import { runLumiTurn, type ToolSessionOptions } from "../../../llm/lumi_turn";
+
 import type { ProviderGetters as SharedProviderGetters } from "../../../llm/provider_getters";
 import type { Server, Socket } from "socket.io";
 import type { ToolExecutionRecord } from "../../../tools/types";
@@ -144,11 +145,11 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     );
     const turnAuthorization = combineRequestAuthorizations(ownerAuthorization, conversationAuthorization);
     const modelTurnState = createModelTurnState();
-    const runAuthorizedTools = (input: ToolSessionOptions) => {
+    const runAuthorizedTools = (input: ResolvedTurnModelInput) => {
       turnAuthorization.assertCurrent();
       // Preserve the accepted conversation and transport provenance through
       // every execution/recovery path, including reusable workflow traces.
-      return runLumiTurn({ ...input, getters: llmGetters, config: { ...input.config, modelTurnState, conversationId: selectedConversationId || input.config.conversationId, workflowSource: eventSource } });
+      return runResolvedLumiTurn({ ...input, assertCurrent: () => turnAuthorization.assertCurrent(), getters: llmGetters, config: { ...input.config, modelTurnState, conversationId: selectedConversationId || input.config.conversationId, workflowSource: eventSource } });
     };
     const rejectRevokedRequest = () => {
       if (turnAuthorization.isCurrent()) return false;

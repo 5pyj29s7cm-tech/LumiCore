@@ -198,6 +198,6 @@ export function finalizeLumiResponseForDelivery(input: LumiResponseDeliveryInput
     isAborted: input.isAborted,
     toolRecords,
     attempt: input.attempt,
-    finalize: input.refinalize || ((candidateText, records) => finalize(candidateText, records, `${input.source}_guard_recovery`)),
+    finalize: input.refinalize || ((candidateText, records, completionGuard) => finalize(candidateText, records, `${input.source}_guard_recovery`, completionGuard)),
   });
 }

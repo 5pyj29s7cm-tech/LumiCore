@@ -1,3 +1,4 @@
+import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { logger } from "../../../../logger";
 import { getMessagesByTokenBudget } from "../../../conversation/manager";
@@ -8,7 +9,7 @@ import type { LLMConfig } from "../../../llm/adapter";
 import { recordTokenUsageBatch } from "../../../llm/token_tracker";
 import type { NormalizedMessage } from "../../../llm/providers";
 import { normalizeVoiceHistory } from "../../voice_history";
-import { runLumiTurn } from "../../../llm/lumi_turn";
+
 import type { executeVoiceModeAndMessagingTurn } from './execute_voice_mode_and_messaging_turn';
 
 export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnType<typeof executeVoiceModeAndMessagingTurn>>["context"]>) {
@@ -66,8 +67,11 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
     // decide to repeat a tool, end an unfinished task or discard a receipt.
     markVoiceLatencyMilestone(context.requestId, 'firstModelRequestAt');
     const toolLifecycle = context.observeVoiceTools(record => context.toolResults.push(record));
-    const result = context.toolSessionActive
-      ? await runLumiTurn({
+    const result = await runResolvedLumiTurn({
+      execution: context.executionPipeline,
+        assertCurrent: () => context.turnAuthorization.assertCurrent(),
+        isCancelled: () => !context.isCurrentTurn(),
+        taskText: context.userText,
         messages: messages,
         registry: toolRegistry,
         config: modelConfig,
@@ -81,16 +85,7 @@ export async function executeVoiceModelTurn(context: NonNullable<Awaited<ReturnT
             onToolStart: toolLifecycle.onToolStart,
           },
         getters: context.llmGetters,
-      })
-      : await runLumiTurn({
-          messages,
-          config: modelConfig,
-          onChunk,
-          getters: context.llmGetters,
-          isCancelled: () => !context.isCurrentTurn(),
-          assertCurrent: () => context.turnAuthorization.assertCurrent(),
-          taskText: context.userText,
-        });
+      });
     if (!context.isCurrentTurn()) { return { terminal: true as const, context: undefined }; }
     context.responseText = result.text || '';
     context.completionGuard = result.completionGuard;

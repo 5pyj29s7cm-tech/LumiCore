@@ -1,9 +1,10 @@
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 import type { ToolContext } from "../../tools/types";
 import type { ChatMessageWriter } from "./message_writer";
 
 
-import { type ToolSessionOptions } from "../../llm/lumi_turn";
+
 
 import { Socket } from "socket.io";
 
@@ -36,6 +37,7 @@ import { isDirectDesktopTool } from "../desktop_relay";
 import { type ActiveTaskMessageResolution } from "../../cognition/task_concurrency";
 
 type executeConfirmedChatTurnInput = {
+executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
 toolContext: ToolContext;
 pendingConfirmation: import("../../tools/pending_confirmation").PendingToolConfirmation;
 visibleUserText: string;
@@ -56,7 +58,7 @@ rememberRequestToolRecord: (record: ToolExecutionRecord) => void;
 formatToolResultForUi: (value?: string) => string;
 formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
 taskAwareRecords: (records: ToolExecutionRecord[]) => ToolExecutionRecord[];
-runAuthorizedTools: (input: ToolSessionOptions) => Promise<LLMResult>;
+runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
 effectiveSystemPrompt: string;
 acceptedUserMessageId: string;
 activeProvider: import("../../llm/user_preferences").UserLLMProvider;
@@ -168,6 +170,7 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
         ) {
           confirmationLlmWasCalled = true;
           const continuation = await context.runAuthorizedTools({
+            execution: context.executionPipeline,
             messages: [
               { role: 'system', content: context.effectiveSystemPrompt },
               ...buildConfirmedStepContinuationMessages(confirmedTask, confirmedRecord, {

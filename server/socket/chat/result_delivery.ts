@@ -1,8 +1,9 @@
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
 import type { ToolContext } from "../../tools/types";
 import type { ChatMessageWriter } from "./message_writer";
 
 
-import { type ToolSessionOptions } from "../../llm/lumi_turn";
+
 import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
 
 import { scheduleTurnMemory } from "../../memory/turn_memory";
@@ -64,7 +65,7 @@ correctionRequiresFreshConfirmation: boolean;
 abortController: AbortController;
 isChatCancelled: () => boolean;
 llmWasCalled: boolean;
-runAuthorizedTools: (input: ToolSessionOptions) => Promise<LLMResult>;
+runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
 normalTurnMessages: NormalizedMessage[];
 activeProvider: import("../../llm/user_preferences").UserLLMProvider;
 activeModel: string;
@@ -151,6 +152,7 @@ export async function completeChatTurn(context: completeChatTurnInput) {
             artifactReceipt: record => context.formatMediaArtifactReceiptForUi(record.name, record.arguments, record.result, record.error),
           });
           const recovery = await context.runAuthorizedTools({
+            execution: context.executionPipeline,
             messages: [
               ...context.normalTurnMessages,
               ...(String(context.responseText || '').trim()

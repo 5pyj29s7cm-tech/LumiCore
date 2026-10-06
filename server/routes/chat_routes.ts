@@ -1,4 +1,6 @@
 import { runLumiTurn } from "../llm/lumi_turn";
+import { runResolvedLumiTurn } from "../cognition/turn_model";
+
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments } from "../llm/provider_getters";
 import { randomUUID } from 'node:crypto';
 import { reserveAnchoredEntryExecution } from '../conversation/entry_execution';
@@ -402,7 +404,10 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           onToolRecord?: (record: ToolExecutionRecord) => void,
           onChunk?: (chunk: string) => void,
           source = toolContext.source,
-        ) => runLumiTurn({
+        ) => runResolvedLumiTurn({
+      execution: restExecutionPipeline,
+          assertCurrent: assertRequestActive,
+          streaming: Boolean(onChunk),
           messages: turnMessages,
           registry: toolRegistry,
           config: { provider, model, userId, domain, orgId, signal: request.signal, source, workflowSource: businessTask?.source || source, conversationId: toolContext.conversationId, requestId: toolContext.requestId },
@@ -428,6 +433,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
           const outbound = await finalizeRestChatResponse({
             taskText: routeText,
             responseText: candidateText,
+            completionGuard: result.completionGuard,
             toolRecords: result.toolCalls,
             source,
             flow: restTurnDispatch.flow,
@@ -450,6 +456,7 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
               usageRecords.push(...(recovery.usageRecords || []));
               return {
                 text: recovery.text,
+                completionGuard: recovery.completionGuard,
                 toolRecords: recovery.toolCalls,
               };
             },

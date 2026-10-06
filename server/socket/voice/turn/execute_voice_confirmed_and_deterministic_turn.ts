@@ -1,3 +1,4 @@
+import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
 import { formatConversationActionTaskStatus } from "../../../cognition/action_continuation";
@@ -15,7 +16,7 @@ import { executeToolCall } from "../../../tools/execution_engine";
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../../../cognition/result_finalizer";
 import { recordTokenUsageBatch } from "../../../llm/token_tracker";
 import { collectRecentActionToolRecords, describeRecentActionsFromHistory } from "../../voice_action_history";
-import { runLumiTurn } from "../../../llm/lumi_turn";
+
 import type { prepareVoiceRelease } from './prepare_voice_release';
 
 export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNullable<Awaited<ReturnType<typeof prepareVoiceRelease>>["context"]>) {
@@ -227,7 +228,8 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
         // task. Continue the remaining plan immediately with the exact confirmed
         // receipt in context; a later hard boundary will stop once again.
         context.turnAuthorization.assertCurrent();
-        const continuation = await runLumiTurn({
+        const continuation = await runResolvedLumiTurn({
+      execution: context.executionPipeline,
           messages: [
             { role: 'system', content: context.voiceSystemPrompt },
             ...buildConfirmedStepContinuationMessages(confirmedTask, confirmationRecord, {

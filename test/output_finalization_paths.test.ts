@@ -204,9 +204,9 @@ describe('finalized output paths', () => {
     // Include the stream callback as well as both shared entry points. Starting
     // at only the runWithTools call would miss speech queued from onChunk.
     const modelCandidateStart = voice.indexOf('const modelConfig: LLMConfig = {');
-    const sharedTurnStart = voice.indexOf('const result = toolSessionActive', modelCandidateStart);
-    const sharedToolStart = voice.indexOf('await runLumiTurn({', sharedTurnStart);
-    const sharedConversationStart = voice.indexOf('await runLumiTurn({', sharedToolStart + 1);
+    const sharedTurnStart = voice.indexOf('const result = await runResolvedLumiTurn({', modelCandidateStart);
+    const sharedPlanStart = voice.indexOf('execution: executionPipeline', sharedTurnStart);
+    const modelOwner = source('server/cognition/turn_model.ts');
     const finalizerStart = voice.indexOf('let finalResponse = responseFinalizer.finalize({', sharedTurnStart);
     const finalCommitStart = voice.indexOf('mainTerminalCommitted = await finishVoiceTerminal({', finalizerStart);
     const modelCandidatePath = voice.slice(modelCandidateStart, finalizerStart);
@@ -215,9 +215,10 @@ describe('finalized output paths', () => {
     expect(terminalBoundaryStart).toBeGreaterThan(0);
     expect(modelCandidateStart).toBeGreaterThan(0);
     expect(sharedTurnStart).toBeGreaterThan(modelCandidateStart);
-    expect(sharedToolStart).toBeGreaterThan(sharedTurnStart);
-    expect(sharedConversationStart).toBeGreaterThan(sharedToolStart);
-    expect(finalizerStart).toBeGreaterThan(sharedConversationStart);
+    expect(sharedPlanStart).toBeGreaterThan(sharedTurnStart);
+    expect(modelOwner).toContain('if (!execution.executionRequested)');
+    expect(modelOwner).toContain('return runLumiTurn({');
+    expect(finalizerStart).toBeGreaterThan(sharedPlanStart);
     expect(finalCommitStart).toBeGreaterThan(finalizerStart);
     expect(terminalBoundary.indexOf('persistAuthorizedTerminalReceipt(')).toBeGreaterThan(0);
     expect(terminalBoundary.indexOf('publishCommitted:')).toBeGreaterThan(
@@ -273,7 +274,7 @@ describe('finalized output paths', () => {
       expect(entry).not.toContain('executeSkillWorkflowAdapter');
       expect(entry).not.toContain('preMatchedQuickResult');
       expect(entry).not.toContain('quickFinalized');
-      expect(entry).toContain('runLumiTurn({');
+      expect(entry).toContain('runResolvedLumiTurn({');
     }
   });
 
@@ -375,7 +376,7 @@ describe('finalized output paths', () => {
     expect(messaging).toContain('`${source}_guard_recovery`');
     expect(delivery.match(/\bfinalizeLumiResponse\(\{/g)).toHaveLength(1);
     expect(delivery).toContain('input.initialFinalization || finalize(input.responseText, toolRecords, input.source, input.completionGuard)');
-    expect(delivery).toContain('input.refinalize || ((candidateText, records) => finalize(candidateText, records, `${input.source}_guard_recovery`))');
+    expect(delivery).toContain('input.refinalize || ((candidateText, records, completionGuard) => finalize(candidateText, records, `${input.source}_guard_recovery`, completionGuard))');
     expect(rest).not.toMatch(/\bfinalizeLumiResponse\(\{/);
     expect(mcp).not.toMatch(/\bfinalizeLumiResponse\(\{/);
     expect(mcp).not.toContain('async function finalizeMcpResponseForDelivery');

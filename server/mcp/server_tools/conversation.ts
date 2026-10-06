@@ -1,7 +1,8 @@
+import { runResolvedLumiTurn } from "../../cognition/turn_model";
 import { bindCapabilityExecutionPlanTask } from "../../cognition/capability_execution_plan";
 import { TASK_TARGET_HISTORY_LIMIT } from "../../conversation/task_target_anchor";
 import { resolveConversationForEntry } from "../../conversation/entry_conversation";
-import { runLumiTurn } from "../../llm/lumi_turn";
+
 import { createConversationReceiptObserver } from "../../conversation/execution_receipt_archive";
 import { mergeToolExecutionRecords } from "../../cognition/task_execution_ledger";
 import { randomUUID } from "node:crypto";
@@ -92,7 +93,10 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           onToolRecord?: (record: ToolRecordEvent) => void,
           onChunk?: (chunk: string) => void,
           source: string = entry.source,
-        ) => runLumiTurn({
+        ) => runResolvedLumiTurn({
+      execution: pipeline,
+          assertCurrent: () => authorization.assertCurrent(),
+          streaming: false,
           messages: turnMessages,
           registry: tr,
           config: {
@@ -126,7 +130,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           getters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null), getOpenAI: g.getOpenAI || (() => null), getAnthropic: g.getAnthropic || (() => null), getQwen: g.getQwen || (() => null) },
         });
         const deliverFinalizedChatResponse = async (
-          response: Awaited<ReturnType<typeof runLumiTurn>>,
+          response: Awaited<ReturnType<typeof runResolvedLumiTurn>>,
           background: boolean,
         ) => {
           const toolRecords = mergeToolExecutionRecords(mcpToolRecords, response.toolCalls || []);
@@ -134,6 +138,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           const outbound = await finalizeLumiResponseForDelivery({
             taskText: message,
             responseText: candidateText,
+            completionGuard: response.completionGuard,
             toolRecords,
             source: background ? entry.source + '_background' : entry.source,
             allowToolUse: pipeline.executionRequested && !explicitMemory,
@@ -163,6 +168,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
               );
               return {
                 text: recovery.text,
+                completionGuard: recovery.completionGuard,
                 toolRecords: recovery.toolCalls,
               };
             },
@@ -170,7 +176,7 @@ export async function runMcpConversationTurn({ mcp, bc, chatConversations, scope
           let finalized = outbound.finalization;
           toolRecords.splice(0, toolRecords.length, ...outbound.toolRecords);
           authorization.assertCurrent();
-          if (entry.turnMemory && (explicitMemory || personality.memoryPolicy.autoExtract) && !isWorkViewer) {
+          if (entry.turnMemory && (explicitMemory || personality.memoryPolicy.autoExtract && !finalized.blocked) && !isWorkViewer) {
             const extraction = runAuthorizedEnrichment(authorization, signal => persistTurnMemory({ ...identity, channel: 'chat', userText: message, authorization, signal,
               llmGetters: { ...g, getDeepSeek: g.getDeepSeek || (() => null), getGemini: g.getGemini || (() => null) } }));
             if (explicitMemory) {

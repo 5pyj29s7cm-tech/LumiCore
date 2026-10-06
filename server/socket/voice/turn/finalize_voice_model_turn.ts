@@ -1,3 +1,4 @@
+import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { logger } from "../../../../logger";
 import { extractTopics, trackTopic } from "../../../conversation/manager";
 import { recoverBlockedExecutionOnce } from "../../../cognition/execution_guard_recovery";
@@ -5,7 +6,7 @@ import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { loadEmotionalState, updateEmotionalState, saveEmotionalState, loadHIMState, saveHIMState } from "../../../personality/state";
 import { recordTokenUsageBatch } from "../../../llm/token_tracker";
-import { runLumiTurn } from "../../../llm/lumi_turn";
+
 import { createTurnResponseFinalizer } from "../../../cognition/turn_response_finalizer";
 import { extractSentiment } from "../../../cognition/sentiment";
 import { himTick } from "../../../personality/him";
@@ -39,7 +40,8 @@ export async function finalizeVoiceModelTurn(context: NonNullable<Awaited<Return
         logger.warn('[Audio] Recovering blocked execution internally.');
           context.turnAuthorization.assertCurrent();
       const recoveryLifecycle = context.observeVoiceTools(recordTool);
-      const recovery = await runLumiTurn({
+      const recovery = await runResolvedLumiTurn({
+      execution: context.executionPipeline,
         messages: [
               ...context.recoveryConversationMessages,
               { role: 'assistant', content: context.responseText },

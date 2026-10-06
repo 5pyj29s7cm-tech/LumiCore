@@ -1,3 +1,4 @@
+import { runResolvedLumiTurn } from "../../../../cognition/turn_model";
 import type { MessageHandler } from "../../../../messaging/types";
 import { MessagingAuthorizationRevokedError } from "../../../../messaging/turn_authorization";
 import { toolRegistry } from "../../../../tools/registry";
@@ -15,7 +16,7 @@ import { buildOperationModeMetaResponse } from "../../../../cognition/capability
 import { executeToolCall } from "../../../../tools/execution_engine";
 import { formatOperationModeSwitchResponse } from "../../../messages/operation_mode_messages";
 import { handleRemoteLegalNoticeIntake } from "../legal_notice_intake";
-import { runLumiTurn } from "../../../../llm/lumi_turn";
+
 import type { LLMResult } from "../../../../llm/adapter";
 import { recordTokenUsageBatch } from "../../../../llm/token_tracker";
 import { finalizeLumiResponse } from "../../../../cognition/result_finalizer";
@@ -182,7 +183,11 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
       turnMessages: NormalizedMessage[],
       onToolRecord?: (record: ToolExecutionRecord) => void,
       executionSource = context.source,
-    ) => runLumiTurn({
+    ) => runResolvedLumiTurn({
+      execution: context.executionPlan,
+      assertCurrent: () => assertMessagingAuthorization(context.msg),
+      isCancelled: context.actionWasCancelled,
+      taskText: context.routingText, streaming: false,
       messages: turnMessages,
       registry: toolRegistry,
       config: context.userLLMPrefs,
@@ -192,20 +197,11 @@ export async function executeMessagingModelTurn(context: MessagingModelContext):
       getters: context.llm,
     });
 
-    if (!entryHandled && !context.toolSessionActive) {
+    if (!entryHandled) {
       assertMessagingAuthorization(context.msg);
-      const result = await runLumiTurn({
-        messages: context.messages, config: context.userLLMPrefs,
-        getters: context.llm ?? {}, streaming: false, taskText: context.routingText,
-        assertCurrent: () => assertMessagingAuthorization(context.msg),
-        isCancelled: context.actionWasCancelled,
-      });
-      responseText = result.text;
-      completionGuard = result.completionGuard;
-      recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
-    } else if (!entryHandled) {
       const result = await runMessagingToolTurn(context.messages);
       responseText = result.text || '';
+      completionGuard = result.completionGuard;
       context.toolRecords = mergeToolExecutionRecords(context.toolRecords, result.toolCalls || []);
       recordTokenUsageBatch(context.effectiveUserId, result.usageRecords || [], usageInteractionId, 'chat');
     }

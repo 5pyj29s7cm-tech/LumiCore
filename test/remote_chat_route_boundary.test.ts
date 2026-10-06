@@ -1,11 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  runWithTools: vi.fn(),
+  model: vi.fn(), tools: vi.fn(), conversation: vi.fn(),
 }));
 
 vi.mock('../server/llm/adapter', () => ({
-  runWithTools: mocks.runWithTools,
+  runWithTools: (...args: any[]) => { mocks.tools(...args); return mocks.model(...args); },
+}));
+
+vi.mock('../server/llm/providers', async original => ({
+  ...await original<typeof import('../server/llm/providers')>(),
+  makeLLMCall: (...args: any[]) => { mocks.conversation(...args); return mocks.model(...args); },
+  makeLLMCallStreaming: (...args: any[]) => { mocks.conversation(...args); return mocks.model(...args); },
 }));
 
 import jwt from 'jsonwebtoken';
@@ -56,7 +62,7 @@ describe('REST chat remote execution boundary', () => {
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ code: 'CHAT_PRIVACY_RESTRICTED' });
       expect(transport).toHaveBeenCalledOnce();
-      expect(mocks.runWithTools).not.toHaveBeenCalled();
+      expect(mocks.model).not.toHaveBeenCalled();
     } finally { transport.mockRestore(); vi.unstubAllEnvs(); }
   });
   beforeAll(async () => {
@@ -76,8 +82,9 @@ describe('REST chat remote execution boundary', () => {
   afterAll(() => cleanup?.());
 
   beforeEach(() => {
-    mocks.runWithTools.mockReset();
-    mocks.runWithTools.mockResolvedValue({
+    vi.clearAllMocks();
+    mocks.model.mockReset();
+    mocks.model.mockResolvedValue({
       text: 'remote answer',
       toolCalls: [],
       usageRecords: [],
@@ -86,10 +93,9 @@ describe('REST chat remote execution boundary', () => {
 
   it('cancels the model and tool context when the HTTP client leaves', async () => {
     let executionSignal: AbortSignal | undefined;
-    mocks.runWithTools.mockImplementationOnce((_messages, _registry, config, ...rest) => new Promise((_resolve, reject) => {
+    mocks.model.mockImplementationOnce((_messages, _registry, config, ...rest) => new Promise((_resolve, reject) => {
       executionSignal = config.signal;
-      const context = rest[8];
-      expect(context.executionSignal).toBe(executionSignal);
+      expect(mocks.tools).not.toHaveBeenCalled();
       executionSignal!.addEventListener('abort', () => reject(executionSignal!.reason), { once: true });
     }));
     const controller = new AbortController();
@@ -103,11 +109,11 @@ describe('REST chat remote execution boundary', () => {
     controller.abort();
     await rejected;
     await vi.waitFor(() => expect(executionSignal!.aborted).toBe(true));
-    expect(mocks.runWithTools).toHaveBeenCalledOnce();
+    expect(mocks.model).toHaveBeenCalledOnce();
   });
 
   it('terminates an already-started SSE response with an error frame', async () => {
-    mocks.runWithTools.mockRejectedValueOnce(new Error('Synthetic upstream failure'));
+    mocks.model.mockRejectedValueOnce(new Error('Synthetic upstream failure'));
     const response = await fetch(`${baseUrl}/api/chat?stream=true`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({ message: 'hello' }),
@@ -124,78 +130,26 @@ describe('REST chat remote execution boundary', () => {
       body: JSON.stringify({ message: 'hello' }),
     });
     expect(response.status).toBe(401);
-    expect(mocks.runWithTools).not.toHaveBeenCalled();
+    expect(mocks.model).not.toHaveBeenCalled();
   });
 
-  it('marks authenticated REST chat remote and narrows the model policy before dispatch', async () => {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${userToken}`,
-      },
-      body: JSON.stringify({ message: '读取 D:\\work\\brief.txt 并告诉我唯一风险，但不要修改文件' }),
+  it('uses a pure model call when a remote request has no admitted local capability', async () => {
+    const response = await fetch(baseUrl + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + userToken },
+      body: JSON.stringify({ message: '读取 D:\work\brief.txt 并告诉我唯一风险，但不要修改文件' }),
     });
-    expect(response.status).toBe(200);
-    expect(mocks.runWithTools).toHaveBeenCalledTimes(1);
-    const context = mocks.runWithTools.mock.calls[0][11] as any;
-    expect(context).toMatchObject({
-      userId: 'remote-chat-user',
-      authenticated: true,
-      authRole: 'user',
-      localExecution: false,
-      executionBoundary: 'remote_restricted',
-      source: 'rest_chat',
-      currentTurnExecutionRequested: false,
-      trustedActionContinuation: false,
-    });
-    expect(context.toolPolicy.allowedTools.every((name: string) => name === 'web_search')).toBe(true);
-    expect(context.toolPolicy.allowedTools).not.toEqual(expect.arrayContaining([
-      'read_file',
-      'list_directory',
-      'search_files',
-      'desktop_capture_screen',
-      'desktop_running_processes',
-      'run_command',
-      'credential_get',
-    ]));
-    expect(context.toolPolicy.maxIterations).toBeLessThanOrEqual(4);
-    expect(context.modelToolProjection.toolNames.every(
-      (name: string) => context.toolPolicy.allowedTools.includes(name),
-    )).toBe(true);
-    expect(context.modelToolProjection.toolNames).not.toEqual(expect.arrayContaining([
-      'read_file',
-      'list_directory',
-      'search_files',
-      'desktop_capture_screen',
-      'desktop_running_processes',
-      'run_command',
-      'credential_get',
-    ]));
+    expect(response.status).toBe(200); expect(mocks.tools).not.toHaveBeenCalled(); expect(mocks.conversation).toHaveBeenCalledTimes(1);
+    expect(mocks.model.mock.calls[0][1]).toEqual([]);
+    expect(mocks.model.mock.calls[0][2]).toMatchObject({ userId: 'remote-chat-user', source: 'rest_chat' });
   });
 
-  it('accepts the backend-issued native proof on loopback without weakening ordinary REST chat', async () => {
-    const desktopSession = issueDesktopSessionProof('remote-chat-user', nativeClientIdentity);
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${userToken}`,
-        [DESKTOP_SESSION_HEADER]: desktopSession.proof,
-      },
-      body: JSON.stringify({ message: '读取 D:\\work\\brief.txt 并告诉我唯一风险，但不要修改文件' }),
+  it('retains accepted native provenance without inventing available tools', async () => {
+    const proof = issueDesktopSessionProof('remote-chat-user', nativeClientIdentity);
+    const response = await fetch(baseUrl + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + userToken, [DESKTOP_SESSION_HEADER]: proof.proof },
+      body: JSON.stringify({ message: '读取 D:\work\brief.txt 并告诉我唯一风险，但不要修改文件' }),
     });
-    expect(response.status).toBe(200);
-    const context = mocks.runWithTools.mock.calls[0][11] as any;
-    expect(context).toMatchObject({
-      userId: 'remote-chat-user',
-      authenticated: true,
-      localExecution: true,
-      executionBoundary: 'trusted_local',
-      source: 'rest_chat_local',
-      currentTurnExecutionRequested: false,
-      trustedActionContinuation: false,
-    });
+    expect(response.status).toBe(200); expect(mocks.tools).not.toHaveBeenCalled();
+    expect(mocks.model.mock.calls[0][1]).toEqual([]);
+    expect(mocks.model.mock.calls[0][2]).toMatchObject({ userId: 'remote-chat-user', source: 'rest_chat_local' });
   });
 
   it('fails closed when a caller presents an invalid native proof', async () => {
@@ -210,13 +164,14 @@ describe('REST chat remote execution boundary', () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
-    expect(mocks.runWithTools).not.toHaveBeenCalled();
+    expect(mocks.model).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('streams ordinary text but withholds unverified action claims (action=%s)', async action => {
     const candidate = action ? '已经创建并保存了报告。' : 'Hello from Lumi.';
-    mocks.runWithTools.mockImplementationOnce(async (...args: any[]) => {
-      args[10]?.(candidate);
+    mocks.model.mockImplementationOnce(async (...args: any[]) => {
+      const stream = Array.isArray(args[1]) ? args[3] : args[10];
+      stream?.(candidate);
       return { text: candidate, toolCalls: [], usageRecords: [] };
     });
     const proof = issueDesktopSessionProof('remote-chat-user', nativeClientIdentity);
@@ -242,9 +197,9 @@ describe('REST chat remote execution boundary', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({ messages }),
     });
-    const [modelMessages, , , , , , , , , , , context] = mocks.runWithTools.mock.calls[0];
-    expect(context.actionIntent).toBe(messages.at(-1)!.content);
-    expect(context.currentTurnExecutionRequested).toBe(false);
+    const [modelMessages, declarations] = mocks.model.mock.calls[0];
+    expect(mocks.tools).not.toHaveBeenCalled();
+    expect(declarations).toEqual([]);
     expect(modelMessages.slice(1)).toEqual([messages[0], messages[1], messages[4]]);
   });
 
@@ -253,8 +208,9 @@ describe('REST chat remote execution boundary', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({ messages: [], message: '你好，今天怎么样？' }),
     });
-    const args = mocks.runWithTools.mock.calls[0];
-    expect(args[11].actionIntent).toBe('你好，今天怎么样？');
+    const args = mocks.model.mock.calls[0];
+    expect(mocks.tools).not.toHaveBeenCalled();
+    expect(args[1]).toEqual([]);
     expect(args[0].at(-1)).toEqual({ role: 'user', content: '你好，今天怎么样？' });
   });
 
@@ -270,7 +226,7 @@ describe('REST chat remote execution boundary', () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'DESKTOP_SESSION_PROOF_REQUIRED' });
-    expect(mocks.runWithTools).not.toHaveBeenCalled();
+    expect(mocks.model).not.toHaveBeenCalled();
   });
 
   it('uses only the supplied request key through the pinned shared model executor', async () => {
@@ -303,4 +259,17 @@ describe('REST chat remote execution boundary', () => {
       expect(model).toHaveBeenCalledTimes(2);
     } finally { model.mockRestore(); }
   });
+it('keeps an empty host model response blocked after its bounded conversation repair', async () => {
+  mocks.model.mockResolvedValue({ text: '', toolCalls: [], usageRecords: [] });
+  const response = await fetch(baseUrl + '/api/chat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + userToken },
+    body: JSON.stringify({ message: 'Hello.' }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ finalized: true, blocked: true, reason: 'conversation_response_incomplete' });
+  expect(mocks.conversation).toHaveBeenCalledTimes(2);
+  expect(mocks.tools).not.toHaveBeenCalled();
+  expect(mocks.model.mock.calls[0][2].modelTurnState).toBe(mocks.model.mock.calls[1][2].modelTurnState);
+});
+
 });

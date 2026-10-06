@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createPreFinalizationTextGate,
+  finalizeLumiResponseForDelivery,
   shouldDeferModelOutputUntilFinalized,
   shouldForwardPreFinalizationProgress,
 } from '../server/cognition/response_delivery';
+import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import type { LumiTurnFlow } from '../server/cognition/turn_flow';
 import { hasImmediateExecutionPromise } from '../server/cognition/execution_claims';
 
@@ -180,4 +182,25 @@ describe('finalized output delivery gate', () => {
     expect(snapshot.emittedText).toBe('');
     expect(snapshot.withheldText).toBe('\u6211\u5df2\u7ecf\u6253\u5f00\u5fae\u4fe1\u4e86');
   });
+});
+
+it('retains a blocked completion guard when a recovery returns otherwise valid search evidence', async () => {
+  const records = [{ name: 'web_search', arguments: { query: 'synthetic' }, result: JSON.stringify({ results: [{ title: 'Synthetic result', url: 'https://example.com' }] }) }];
+  expect(finalizeLumiResponse({ taskText: 'Search the public web for synthetic examples.',
+    responseText: 'The search returned a synthetic result.', toolRecords: records, source: 'recovery_guard_control' }).blocked).toBe(false);
+  let attempts = 0;
+  const delivered = await finalizeLumiResponseForDelivery({
+    taskText: 'Search the public web for synthetic examples.', responseText: 'I searched.',
+    source: 'recovery_guard_fixture', allowToolUse: true, toolRecords: [],
+    initialFinalization: { text: 'I searched.', blocked: true, reason: 'No successful current-turn tool execution was recorded.' },
+    attempt: async () => {
+      attempts += 1;
+      return { text: 'The search returned a synthetic result.', toolRecords: records,
+        completionGuard: { text: 'The provider response is incomplete.', blocked: true, reason: 'conversation_response_incomplete' } };
+    },
+  });
+  expect(attempts).toBe(1);
+  expect(delivered.finalization).toMatchObject({ blocked: true, reason: 'execution_recovery_incomplete' });
+  expect(delivered.recoveryFailed).toBe(true);
+  expect(delivered.toolRecords).toEqual(records);
 });

@@ -1,5 +1,6 @@
+import { runResolvedLumiTurn } from "../cognition/turn_model";
 import { reserveAnchoredEntryExecution } from "../conversation/entry_execution";
-import { runLumiTurn } from "../llm/lumi_turn";
+
 import { attachAutonomousExecutionPlan, checkpointAutonomousTask, cancelTask, dequeue, markRunning, markCompleted, markCancelled, getRunningTask, heartbeatAutonomousTask, isTaskCancellationRequested, isTaskPauseRequested, markPaused, requestPauseAutonomousTask, recordAutonomousTaskFailure, getAutonomousTaskPriorRecords, persistAutonomousTaskQueue, prepareAutonomousTaskAction, reconcileExpiredAutonomousTasks, registerAutonomousTaskExecutor, releaseAutonomousTaskExecutor, settleAutonomousTaskAction, startAutonomousTaskAction } from "./task_queue";
 import { toolExecutionInputDigests } from "../tools/execution_engine";
 import { getGateConfig, isAutonomousWorkAllowed, recordAutonomousTokens } from "./safety_gate";
@@ -274,7 +275,9 @@ export async function executeNextAutonomousTask(
       { role: 'user' as const, content: task.description },
     ];
 
-    const result = await runLumiTurn({
+    const result = await runResolvedLumiTurn({
+      execution: executionPipeline,
+      assertCurrent: assertAuthorized, streaming: false,
       messages: messages,
       registry: toolRegistry,
       config: { ...getUserPreferredLLMConfig(task.userId, { maxTokens: 2000, ...taskScope }), requestId, conversationId: conversationExecution?.conversation.id, signal: executionAbort.signal },

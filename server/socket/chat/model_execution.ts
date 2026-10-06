@@ -1,9 +1,10 @@
+import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../cognition/turn_model";
 import type { ToolContext } from "../../tools/types";
 
 
 import { normalizeChatHistoryRecord } from "./history";
 
-import { runLumiTurn, type ToolSessionOptions } from "../../llm/lumi_turn";
+
 import { type ProviderGetters as SharedProviderGetters } from "../../llm/provider_getters";
 
 import { isExplicitMemoryRequest } from "../../memory/turn_memory";
@@ -30,6 +31,7 @@ import { buildModelSelfAwareness } from "../../cognition/vision_routing";
 import { createToolLifecycleCallbacks } from "../tool_lifecycle";
 
 type executeChatModelTurnInput = {
+executionPipeline: import("../../cognition/execution_pipeline").LumiExecutionPipeline;
 toolContext: ToolContext;
 responseText: string;
 conversationId: string;
@@ -63,7 +65,7 @@ llmWasCalled: boolean;
 interactionId: `${string}-${string}-${string}-${string}-${string}`;
 socket: Socket;
 modelCapabilityPolicy: import("../../personality/types").ToolPolicy;
-runAuthorizedTools: (input: ToolSessionOptions) => Promise<LLMResult>;
+runAuthorizedTools: (input: ResolvedTurnModelInput) => Promise<LLMResult>;
 allToolRecords: ToolExecutionRecord[];
 formatToolResultForUi: (value?: string) => string;
 formatMediaArtifactReceiptForUi: (name: string, args?: Record<string, any>, result?: string, error?: string) => MediaArtifactReceipt;
@@ -144,8 +146,8 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
     domain: context.resolvedDomain, orgId: context.resolvedOrgId,
     signal: context.abortController.signal, ...context.reasoningRoutePolicy,
   };
-  const result = context.toolSessionActive
-    ? await context.runAuthorizedTools({
+  const result = await context.runAuthorizedTools({
+            execution: context.executionPipeline,
         messages,
         registry: toolRegistry,
         config: { ...config, ...(modelIdentityRead ? { thinkingMode: 'disabled' as const, maxTokens: 512 } : {}) },
@@ -162,12 +164,6 @@ export async function executeChatModelTurn(context: executeChatModelTurnInput) {
           desktopExecutionTracker: context.desktopExecutionTracker,
           requestConfirmation: context.requestToolConfirmation,
         },
-      })
-    : await runLumiTurn({
-        messages, config, onChunk, getters: context.llmGetters,
-        isCancelled: context.isChatCancelled,
-        assertCurrent: () => context.turnAuthorization.assertCurrent(),
-        taskText: context.text,
       });
   if (!context.toolSessionActive) context.markTurnTiming('modelEnd');
   context.responseText = result.text || '';

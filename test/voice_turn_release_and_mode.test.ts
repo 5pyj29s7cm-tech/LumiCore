@@ -29,7 +29,7 @@ describe('single voice release owner and mode result truth', () => {
     expect(owners).toHaveLength(1);
     expect(calls(turn, 'releaseVoiceTurnResources')).toHaveLength(1);
     const owner = owners[0];
-    for (const name of ['persistTurnMemory', 'executeToolCall', 'finishVoiceTerminal', 'runLumiTurn']) {
+    for (const name of ['persistTurnMemory', 'executeToolCall', 'finishVoiceTerminal', 'runResolvedLumiTurn']) {
       const owned = [...calls(owner.tryBlock, name), ...calls(owner.catchClause!, name)];
       expect(owned.length, name + ' must be enclosed by the try/catch release owner').toBeGreaterThan(0);
       for (const call of calls(turn, name).filter(call => call.getStart(ast) > owner.getStart(ast))) expect(owned).toContain(call);
