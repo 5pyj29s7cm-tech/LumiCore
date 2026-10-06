@@ -363,7 +363,14 @@ describe('accepted action-turn durability fence', () => {
     const confirmation = source.indexOf('resolveAcceptedTurnConfirmation({', flush);
     const reservation = source.indexOf(reservationMarker, flush);
     const durableBegin = source.indexOf(durableBeginMarker, flush);
-    const consume = source.indexOf('consumePendingConfirmationDurably(', flush);
+    const consume = source.indexOf('executeConfirmedToolStep({', flush);
+    const confirmedOwner = fs.readFileSync(path.resolve('server/tools/confirmed_step.ts'), 'utf8');
+    const durableConsume = confirmedOwner.indexOf('consumePendingConfirmationDurably(');
+    const execute = confirmedOwner.indexOf('executeToolCall({');
+    expect(durableConsume).toBeGreaterThanOrEqual(0);
+    expect(execute).toBeGreaterThan(durableConsume);
+    expect(confirmedOwner).toContain('preflight: () => consumed');
+    expect(confirmedOwner).toContain("executionOrigin: 'confirmed_action_resume'");
     const routing = source.indexOf('buildLumiExecutionPipeline({', flush);
     expect(admission).toBeGreaterThanOrEqual(0);
     expect(persist).toBeGreaterThan(admission);
