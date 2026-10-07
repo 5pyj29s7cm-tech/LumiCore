@@ -25,9 +25,8 @@ import { modelCandidateKey } from './model_turn_state';
 import { recentProviderProbeFailure } from './provider_health';
 import { buildModelExecutionAwareness } from '../cognition/vision_routing';
 import {
-  normalizeProviderOutboundMessagesEvidence,
-  type ProviderOutboundMessagesEvidence,
-} from './outbound_message_evidence';
+  providerOutboundEvidenceFrom,
+} from './provider/outbound_evidence';
 
 export interface DispatchConfig extends LLMCallConfig {
   /** Explicit cloud fallback selected by the user. Never `auto`. */
@@ -81,14 +80,6 @@ function callArguments(config: DispatchConfig, provider: string, model: string) 
 function attemptErrorCategory(error: unknown): string {
   const attached = String((error as any)?.cloudCategory || '').trim();
   return attached || modelRoutingErrorReason(error);
-}
-
-function providerOutboundEvidenceFrom(value: unknown): ProviderOutboundMessagesEvidence | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  return normalizeProviderOutboundMessagesEvidence(
-    (value as any)._providerOutboundMessagesEvidence
-      || (value as any).providerOutboundMessagesEvidence,
-  ) || undefined;
 }
 
 function completedAttempt(

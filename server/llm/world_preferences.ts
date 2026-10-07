@@ -1,3 +1,4 @@
+import { isSelectionProvider, normalizeModelSelection } from './model_selection';
 import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
@@ -29,52 +30,20 @@ export const DEFAULT_WORLD_MODELS: Record<VisionProvider, string> = {
   relay: LUMI_OFFICIAL_DEFAULT_MODELS.world,
 };
 
-const WORLD_PROVIDERS = new Set<WorldModelProvider>([
-  'inherit_vision',
-  'openai',
-  'gemini',
-  'ark',
-  'qwen',
-  'ollama',
-  'lmstudio',
-  'relay',
-]);
+const WORLD_SELECTION = {
+  defaults: DEFAULT_WORLD_MODELS,
+  defaultProvider: 'inherit_vision' as const,
+  specialProvider: 'inherit_vision' as const,
+  specialModel: 'empty' as const,
+  includeDefaults: true,
+};
 
-function parseSetting(userId: string): any {
-  try {
-    return readSettingJson(`world_prefs_${userId}`);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeModels(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([, model]) => typeof model === 'string' && model.trim())
-    .map(([provider, model]) => [provider, String(model).trim()]));
-}
-
-export function normalizeWorldModelPrefs(raw: any): WorldModelPrefs {
-  const provider = WORLD_PROVIDERS.has(raw?.provider)
-    ? raw.provider as WorldModelProvider
-    : 'inherit_vision';
-  const models = normalizeModels(raw?.models);
-  const model = provider === 'inherit_vision'
-    ? ''
-    : models[provider] || String(raw?.model || '').trim() || DEFAULT_WORLD_MODELS[provider];
-  return {
-    provider,
-    model,
-    models: {
-      ...DEFAULT_WORLD_MODELS,
-      ...models,
-    },
-  };
+export function normalizeWorldModelPrefs(raw: unknown): WorldModelPrefs {
+  return normalizeModelSelection<WorldModelProvider>(raw, WORLD_SELECTION);
 }
 
 export function getUserWorldModelPrefs(userId: string): WorldModelPrefs {
-  return normalizeWorldModelPrefs(parseSetting(userId || 'anonymous'));
+  return normalizeWorldModelPrefs(readSettingJson(`world_prefs_${userId || 'anonymous'}`));
 }
 
 export function getUserPreferredWorldModel(userId: string): ResolvedWorldModel {
@@ -90,7 +59,7 @@ export function getUserPreferredWorldModel(userId: string): ResolvedWorldModel {
   }
   return {
     provider: prefs.provider,
-    model: prefs.model || prefs.models[prefs.provider] || DEFAULT_WORLD_MODELS[prefs.provider],
+    model: prefs.model,
     configuredProvider: prefs.provider,
     inheritedFromVision: false,
   };
@@ -105,5 +74,5 @@ export function upsertUserWorldModelPrefs(userId: string, input: unknown): World
 }
 
 export function isWorldModelProvider(value: unknown): value is WorldModelProvider {
-  return WORLD_PROVIDERS.has(value as WorldModelProvider);
+  return isSelectionProvider(value, WORLD_SELECTION);
 }

@@ -392,7 +392,7 @@ export async function stopVoiceprintRuntime(): Promise<void> {
   if (activeClient) await activeClient.stop();
 }
 
-function sanitizeEmbedding(value: unknown): number[] {
+export function sanitizeEmbedding(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
   const out = value.map(Number).filter(Number.isFinite);
   if (out.length < 32 || out.length > 4096) return [];

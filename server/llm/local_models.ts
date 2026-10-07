@@ -333,18 +333,19 @@ export function saveLocalModelConfig(provider: LocalModelProvider, config: Local
     ...(config.lastError ? { lastError: config.lastError.slice(0, 300) } : {}),
     ...(config.probedModel ? { probedModel: config.probedModel } : {}),
   };
-  endpointVersion(provider, payload.baseUrl);
+  const previousEndpoint = endpointVersion(provider, getLocalModelConfig(provider).baseUrl);
+  const changedEndpoint = endpointVersion(provider, payload.baseUrl) !== previousEndpoint;
   try {
     readSettingRecord(SETTING_KEYS[provider]);
   } catch {
     // Embedders and connection-test harnesses may construct the LLM runtime
     // before the durable database. The live probe result remains authoritative
     // for this call and will be persisted after normal runtime initialization.
-    if (payload.detected) resetCircuit(provider);
+    if (changedEndpoint) resetCircuit(provider);
     return payload;
   }
   writeSetting(SETTING_KEYS[provider], JSON.stringify(payload));
-  if (payload.detected) resetCircuit(provider);
+  if (changedEndpoint) resetCircuit(provider);
   return payload;
 }
 

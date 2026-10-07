@@ -1,3 +1,4 @@
+import { normalizeModelMap } from './model_selection';
 import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import {
@@ -124,13 +125,6 @@ export function isCloudLLMProvider(provider: UserLLMProvider, userId?: string): 
     && !isRegisteredProviderLocal(provider, userId);
 }
 
-function normalizeModels(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([, model]) => typeof model === 'string' && model.trim())
-    .map(([provider, model]) => [provider, String(model).trim().slice(0, 200)]));
-}
-
 function normalizeSelectionMode(value: unknown, provider: UserLLMProvider): UserLLMSelectionMode {
   if (provider === 'auto') return 'auto';
   return value === 'ordered_fallback' ? 'ordered_fallback' : 'pinned';
@@ -156,13 +150,6 @@ function normalizeCloudFallback(value: unknown): CloudUserLLMProvider {
     : 'relay';
 }
 
-function parsePrefsRow(key: string): any {
-  try {
-    return readSettingJson(key);
-  } catch {}
-  return null;
-}
-
 function migrateLegacyModel(provider: UserLLMProvider, model: string): string {
   if (provider === 'deepseek' && model === 'deepseek-chat') return 'deepseek-v4-flash';
   if (provider === 'deepseek' && model === 'deepseek-reasoner') return 'deepseek-v4-pro';
@@ -181,7 +168,7 @@ function usesOfficialGatewayDefaults(): boolean {
 
 function resolvePrefs(raw: any, userId?: string): UserLLMPrefs {
   const provider = normalizeProvider(raw?.provider);
-  const rawModels = normalizeModels(raw?.models);
+  const rawModels = normalizeModelMap(raw?.models, 200);
   const legacySelectedModel = typeof raw?.model === 'string' ? raw.model.trim().slice(0, 200) : '';
   if (!rawModels[provider] && legacySelectedModel) rawModels[provider] = legacySelectedModel;
   const isLegacySchema = Number(raw?.schemaVersion || 0) < 2;
@@ -280,13 +267,13 @@ function persistResolvedPrefs(userId: string, prefs: UserLLMPrefs, updatedAt?: s
 
 export function getUserPreferredLLM(userId: string, options: { persistMigration?: boolean } = {}): UserLLMPrefs {
   const uid = userId || 'anonymous';
-  const raw = parsePrefsRow(`llm_prefs_${uid}`);
+  const raw = readSettingJson(`llm_prefs_${uid}`);
   const resolved = resolvePrefs(raw, uid);
   // Legacy aliases are migrated exactly once. New schema writes preserve the
   // user's literal model id, including ids that happen to match old aliases.
   if (options.persistMigration !== false && raw && (Number(raw.schemaVersion || 0) < 2
     || Number(raw.officialDefaultsVersion || 0) !== resolved.officialDefaultsVersion
-    || JSON.stringify(normalizeModels(raw.models)) !== JSON.stringify(resolved.models)
+    || JSON.stringify(normalizeModelMap(raw.models, 200)) !== JSON.stringify(resolved.models)
     || raw.autoFallbackModel !== resolved.autoFallbackModel
     || JSON.stringify(normalizeFallbackCandidates(raw.fallbackCandidates)) !== JSON.stringify(resolved.fallbackCandidates))) {
     persistResolvedPrefs(uid, resolved, raw.updatedAt);
@@ -313,7 +300,7 @@ export function upsertUserPreferredLLM(
   const provider = input.provider;
   const models = {
     ...current.models,
-    ...normalizeModels(input.models),
+    ...normalizeModelMap(input.models, 200),
   };
   // Schema v2 treats model ids as opaque user choices. Compatibility aliases
   // are only rewritten while reading a pre-v2 row above.

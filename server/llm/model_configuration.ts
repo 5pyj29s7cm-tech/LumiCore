@@ -13,15 +13,10 @@ import { getActiveProvider as getActiveTTSProvider } from '../tts/adapter';
 import { analyzeScreen } from './adapter';
 import { generateConfiguredEmbedding } from './embedding_provider';
 import {
-  DEFAULT_IMAGE_EDIT_MODELS,
-  DEFAULT_IMAGE_GENERATION_MODELS,
-  DEFAULT_IMAGE_TO_VIDEO_MODELS,
-  DEFAULT_VIDEO_GENERATION_MODELS,
+  GENERATION_MODEL_ROLES,
   getUserPreferredGenerationModels,
-  isImageEditProvider,
-  isImageGenerationProvider,
-  isImageToVideoProvider,
-  isVideoGenerationProvider,
+  isGenerationModelRole,
+  updateUserGenerationModel,
   upsertUserPreferredGenerationModels,
 } from './generation_preferences';
 import { ensureLocalModelReady, getLocalModelConfig } from './local_models';
@@ -54,7 +49,6 @@ import {
   upsertUserPreferredVision,
 } from './vision_preferences';
 import {
-  DEFAULT_WORLD_MODELS,
   getUserPreferredWorldModel,
   getUserWorldModelPrefs,
   isWorldModelProvider,
@@ -317,90 +311,27 @@ function officialModelForRole(userId: string, role: LumiModelRole, hasUserSelect
       : officialConfiguredModel(configured, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
   }
 
-  switch (role) {
-    case 'reasoning': {
-      const preference = getUserPreferredLLM(userId, { persistMigration: false });
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
-          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
-          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
-        role,
-        DEFAULT_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
+  let preference: { provider: string; model: string; models?: Record<string, string> };
+  if (isGenerationModelRole(role)) {
+    preference = getUserPreferredGenerationModels(userId)[GENERATION_MODEL_ROLES[role].field];
+  } else {
+    switch (role) {
+      case 'reasoning': preference = getUserPreferredLLM(userId, { persistMigration: false }); break;
+      case 'vision': preference = getUserPreferredVision(userId); break;
+      case 'world': preference = getUserWorldModelPrefs(userId); break;
+      case 'embedding': case 'rerank': preference = getUserRetrievalModelPreferences(userId)[role]; break;
+      case 'speech_recognition': case 'speech_synthesis': {
+        const voice = getVoicePreference();
+        return officialConfiguredModel(role === 'speech_recognition' ? voice.sttModel : voice.ttsModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
+      }
     }
-    case 'vision': {
-      const preference = getUserPreferredVision(userId);
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
-          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
-          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
-        role,
-        DEFAULT_VISION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'world': {
-      const preference = getUserWorldModelPrefs(userId);
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID
-          ? (preference.model || preference.models[LUMI_OFFICIAL_PROVIDER_ID])
-          : preference.models[LUMI_OFFICIAL_PROVIDER_ID],
-        role,
-        DEFAULT_WORLD_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'embedding': {
-      const preference = getUserRetrievalModelPreferences(userId);
-      return officialConfiguredModel(
-        preference.embedding.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.embedding.model : '',
-        role,
-        DEFAULT_EMBEDDING_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'image_generation': {
-      const preference = getUserPreferredGenerationModels(userId).image;
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
-        role,
-        DEFAULT_IMAGE_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'image_edit': {
-      const preference = getUserPreferredGenerationModels(userId).imageEdit;
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
-        role,
-        DEFAULT_IMAGE_EDIT_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'video_generation': {
-      const preference = getUserPreferredGenerationModels(userId).video;
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
-        role,
-        DEFAULT_VIDEO_GENERATION_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'image_to_video': {
-      const preference = getUserPreferredGenerationModels(userId).imageToVideo;
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
-        role,
-        DEFAULT_IMAGE_TO_VIDEO_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'rerank': {
-      const preference = getUserRetrievalModelPreferences(userId).rerank;
-      return officialConfiguredModel(
-        preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model : '',
-        role,
-        DEFAULT_RERANK_MODELS[LUMI_OFFICIAL_PROVIDER_ID],
-      );
-    }
-    case 'speech_recognition':
-      return officialConfiguredModel(getVoicePreference().sttModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
-    case 'speech_synthesis':
-      return officialConfiguredModel(getVoicePreference().ttsModel, role, LUMI_OFFICIAL_DEFAULT_MODELS[role]);
   }
+  const savedModel = role === 'reasoning' || role === 'vision' || role === 'world'
+    ? preference.models?.[LUMI_OFFICIAL_PROVIDER_ID] : '';
+  return officialConfiguredModel(
+    preference.provider === LUMI_OFFICIAL_PROVIDER_ID ? preference.model || savedModel : savedModel,
+    role, LUMI_OFFICIAL_DEFAULT_MODELS[role],
+  );
 }
 
 function rolePreferenceLocation(userId: string, role: LumiModelRole): [string, string] {
@@ -732,48 +663,8 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
       model,
       models: provider === 'inherit_vision' ? current.models : { ...current.models, [provider]: model },
     });
-  } else if (
-    input.role === 'image_generation'
-    || input.role === 'image_edit'
-    || input.role === 'video_generation'
-    || input.role === 'image_to_video'
-  ) {
-    const current = getUserPreferredGenerationModels(uid);
-    if (input.role === 'image_generation') {
-      const provider = input.provider || current.image.provider;
-      if (!isImageGenerationProvider(provider)) throw new Error(`Unsupported image provider: ${provider}`);
-      const model = provider === 'auto'
-        ? cleanModel(input.model)
-        : cleanModel(input.model) || current.image.models[provider] || DEFAULT_IMAGE_GENERATION_MODELS[provider];
-      current.image = {
-        provider,
-        model,
-        models: provider === 'auto' ? current.image.models : { ...current.image.models, [provider]: model },
-      };
-    } else if (input.role === 'image_edit') {
-      const provider = input.provider || current.imageEdit.provider;
-      if (!isImageEditProvider(provider)) throw new Error(`Unsupported image edit provider: ${provider}`);
-      const model = cleanModel(input.model) || current.imageEdit.models[provider] || DEFAULT_IMAGE_EDIT_MODELS[provider];
-      current.imageEdit = { provider, model, models: { ...current.imageEdit.models, [provider]: model } };
-    } else if (input.role === 'video_generation') {
-      const provider = input.provider || current.video.provider;
-      if (!isVideoGenerationProvider(provider)) throw new Error(`Unsupported video provider: ${provider}`);
-      const model = cleanModel(input.model) || current.video.models[provider] || DEFAULT_VIDEO_GENERATION_MODELS[provider];
-      current.video = { provider, model, models: { ...current.video.models, [provider]: model } };
-    } else {
-      const provider = input.provider || current.imageToVideo.provider;
-      if (!isImageToVideoProvider(provider)) throw new Error(`Unsupported image-to-video provider: ${provider}`);
-      const model = cleanModel(input.model)
-        || current.imageToVideo.models[provider]
-        || DEFAULT_IMAGE_TO_VIDEO_MODELS[provider];
-      current.imageToVideo = {
-        provider,
-        model,
-        models: { ...current.imageToVideo.models, [provider]: model },
-      };
-    }
-    const field = rolePreferenceLocation(uid, input.role)[1] as keyof typeof current;
-    upsertUserPreferredGenerationModels(uid, current, [field]);
+  } else if (isGenerationModelRole(input.role)) {
+    updateUserGenerationModel(uid, input.role, input);
   } else if (input.role === 'embedding' || input.role === 'rerank') {
     const current = getUserRetrievalModelPreferences(uid);
     if (input.role === 'embedding') {
@@ -811,35 +702,23 @@ export function updateLumiModelConfiguration(userId: string, input: ModelConfigu
     const current = getVoicePreference();
     const provider = input.provider || (input.role === 'speech_recognition' ? current.stt : current.tts);
     const requestedModel = cleanModel(input.model);
-    if (input.role === 'speech_recognition') {
-      if (!STT_PROVIDERS.has(provider)) throw new Error(`Unsupported speech recognition provider: ${provider}`);
-      if (requestedModel && provider !== LUMI_OFFICIAL_PROVIDER_ID) {
-        throw new Error('Speech model selection is only supported by Lumi Official API.');
-      }
-      if (requestedModel && !normalizeVoiceModelId(requestedModel)) {
-        throw new Error('Speech model must use a provider/model identifier.');
-      }
-      setVoicePreference({
-        stt: provider as any,
-        ...(provider === LUMI_OFFICIAL_PROVIDER_ID
-          ? { sttModel: normalizeVoiceModelId(requestedModel) || current.sttModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_recognition }
-          : {}),
-      });
-    } else {
-      if (!TTS_PROVIDERS.has(provider)) throw new Error(`Unsupported speech synthesis provider: ${provider}`);
-      if (requestedModel && provider !== LUMI_OFFICIAL_PROVIDER_ID) {
-        throw new Error('Speech model selection is only supported by Lumi Official API.');
-      }
-      if (requestedModel && !normalizeVoiceModelId(requestedModel)) {
-        throw new Error('Speech model must use a provider/model identifier.');
-      }
-      setVoicePreference({
-        tts: provider as any,
-        ...(provider === LUMI_OFFICIAL_PROVIDER_ID
-          ? { ttsModel: normalizeVoiceModelId(requestedModel) || current.ttsModel || LUMI_OFFICIAL_DEFAULT_MODELS.speech_synthesis }
-          : {}),
-      });
+    const lane = input.role === 'speech_recognition' ? 'stt' : 'tts';
+    const modelKey = lane === 'stt' ? 'sttModel' : 'ttsModel';
+    const providers = lane === 'stt' ? STT_PROVIDERS : TTS_PROVIDERS;
+    const label = lane === 'stt' ? 'speech recognition' : 'speech synthesis';
+    if (!providers.has(provider)) throw new Error(`Unsupported ${label} provider: ${provider}`);
+    if (requestedModel && provider !== LUMI_OFFICIAL_PROVIDER_ID) {
+      throw new Error('Speech model selection is only supported by Lumi Official API.');
     }
+    const normalizedModel = normalizeVoiceModelId(requestedModel);
+    if (requestedModel && !normalizedModel) throw new Error('Speech model must use a provider/model identifier.');
+    setVoicePreference({
+      [lane]: provider,
+      ...(provider === LUMI_OFFICIAL_PROVIDER_ID
+        ? { [modelKey]: normalizedModel || current[modelKey] || LUMI_OFFICIAL_DEFAULT_MODELS[input.role] }
+        : {}),
+    });
+
   }
 
   return getLumiModelConfiguration(uid, input.role);

@@ -1,6 +1,6 @@
 import { getVoiceprints, touchVoiceprint } from './store';
 import type { VoiceprintMatch, VoiceprintVerificationResult } from './types';
-import { cosineEmbedding, extractSpeechBrainEmbedding } from './voiceprint_provider';
+import { cosineEmbedding, extractSpeechBrainEmbedding, sanitizeEmbedding } from './voiceprint_provider';
 
 export interface VoiceprintVerifyOptions {
   minFrames?: number;
@@ -40,19 +40,6 @@ function sanitizeFrames(value: unknown): number[][] {
     .slice(-80);
 }
 
-function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA < 1e-12 || normB < 1e-12) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
 function normalizedCepstral(frame: number[]): number[] {
   // Drop C0-like energy coefficient and z-normalize the cepstral shape.
   const values = frame.slice(1, COEFF_COUNT);
@@ -86,7 +73,7 @@ function topKAverage(values: number[], ratio = 0.45): number {
 function stabilityScore(frames: number[][]): number {
   if (frames.length < 3) return 0.35;
   const center = normalizedCepstral(centroid(frames));
-  const sims = frames.map(frame => clamp01((cosine(normalizedCepstral(frame), center) + 1) / 2));
+  const sims = frames.map(frame => clamp01((cosineEmbedding(normalizedCepstral(frame), center) + 1) / 2));
   return clamp01(average(sims));
 }
 
@@ -95,14 +82,14 @@ function compareToTemplate(probeFrames: number[][], templateFrames: number[][]):
 
   const probeCenter = normalizedCepstral(centroid(probeFrames));
   const templateCenter = normalizedCepstral(centroid(templateFrames));
-  const centroidScore = clamp01((cosine(probeCenter, templateCenter) + 1) / 2);
+  const centroidScore = clamp01((cosineEmbedding(probeCenter, templateCenter) + 1) / 2);
 
   const normalizedTemplateFrames = templateFrames.map(normalizedCepstral);
   const frameScores = probeFrames.map((probe) => {
     const normalizedProbe = normalizedCepstral(probe);
     let best = 0;
     for (const tplFrame of normalizedTemplateFrames) {
-      best = Math.max(best, clamp01((cosine(normalizedProbe, tplFrame) + 1) / 2));
+      best = Math.max(best, clamp01((cosineEmbedding(normalizedProbe, tplFrame) + 1) / 2));
     }
     return best;
   });
@@ -119,15 +106,6 @@ function thresholdLabel(confidence: number): VoiceprintVerificationResult['thres
   if (confidence >= DEFAULT_MATCH_THRESHOLD) return 'medium';
   if (confidence >= 0.52) return 'low';
   return 'reject';
-}
-
-function sanitizeEmbedding(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  const out = value.map(Number).filter(Number.isFinite);
-  if (out.length < 32 || out.length > 4096) return [];
-  const norm = Math.sqrt(out.reduce((sum, item) => sum + item * item, 0));
-  if (norm < 1e-12) return [];
-  return out.map(item => item / norm);
 }
 
 function calibratedSpeechBrainConfidence(rawScore: number): number {

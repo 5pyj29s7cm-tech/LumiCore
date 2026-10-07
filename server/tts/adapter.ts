@@ -7,7 +7,7 @@ import * as relay from './providers/relay';
 import { getKey } from '../config/keys';
 import { hasDoubaoSpeech } from './providers/ark';
 import { getVoicePreference } from '../config/voice_preference';
-import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+import { acquireCircuitCall, releaseCircuitCall, isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess, type CircuitCall } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 
@@ -38,9 +38,13 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
   if (config.provider !== 'local-cosyvoice' && config.provider !== 'gptsovits') {
     requireNotStrict('Cloud speech synthesis');
   }
+  config.signal?.throwIfAborted();
   const circuit = circuitProvider(config.provider);
+  // SDK-backed providers acquire their own lease inside withCloudResilience.
+  const supervised = config.provider === 'local-cosyvoice' || config.provider === 'relay';
+  let call: CircuitCall | null = null;
   try {
-    if (!isCircuitClosed(circuit)) {
+    if (supervised && !(call = acquireCircuitCall(circuit))) {
       throw new Error(`TTS provider ${config.provider} is temporarily unavailable`);
     }
     let result: TTSResult;
@@ -71,24 +75,15 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
       default:
         throw new Error(`Unknown TTS provider: ${config.provider}`);
     }
-    // Local and relay adapters are supervised here. Cloud SDK-backed
-    // providers own their own circuit state, while the relay provider uses
-    // this shared breaker so a dead official endpoint is not retried forever.
-    if (config.provider === 'local-cosyvoice' || config.provider === 'relay') recordSuccess(circuit);
+    config.signal?.throwIfAborted();
+    if (call) recordSuccess(circuit, undefined, call);
     return result;
   } catch (error: any) {
-    // Cancellation is an expected voice-transport transition. In particular,
-    // never open relay-tts here: doing so made the next sentence of the same
-    // answer silently jump to a local provider and a different speaker.
     if (isTtsCancellationError(error, config.signal)) throw error;
-    // Cloud providers own their resilience/circuit state. Recording the same
-    // failure here used to turn one invalid voice into a provider-wide outage.
-    if (config.provider === 'local-cosyvoice' || config.provider === 'relay') {
-      recordFailure(circuit, undefined, error instanceof Error ? error : new Error(String(error)), { openImmediately: true });
-    }
+    if (call) recordFailure(circuit, undefined, error, { openImmediately: true }, call);
     if (config.allowFallback !== false) {
       const fallbackProvider = getFallbackProvider(config.provider, { requireWarmLocal: true });
-      if (fallbackProvider && fallbackProvider !== config.provider) {
+      if (fallbackProvider) {
         const fallbackVoiceId = await resolveProviderCompatibleFallbackVoice(
           fallbackProvider,
           config.voiceId,
@@ -103,6 +98,8 @@ export async function synthesizeSpeech(text: string, config: TTSConfig): Promise
       }
     }
     throw error;
+  } finally {
+    if (call) releaseCircuitCall(call);
   }
 }
 
@@ -121,19 +118,24 @@ async function resolveProviderCompatibleFallbackVoice(
   return 'default';
 }
 
+const AUTOMATIC_TTS_PROVIDERS: readonly TTSProvider[] = ['local-cosyvoice', 'gptsovits', 'ark', 'cosyvoice'];
+
+function isProviderAvailable(
+  provider: TTSProvider,
+  options: { requireHealthy?: boolean; requireWarmLocal?: boolean } = {},
+): boolean {
+  if (isStrictPrivacy() && provider !== 'local-cosyvoice' && provider !== 'gptsovits') return false;
+  const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
+  return isTTSProviderConfigured(provider) && available(circuitProvider(provider))
+    && (provider !== 'gptsovits' || !options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback());
+}
+
 export function getFallbackProvider(
   excluded: TTSProvider,
   options: { requireWarmLocal?: boolean } = {},
 ): TTSProvider | null {
-  if (excluded !== 'local-cosyvoice' && localCosyvoice.isConfigured() && isCircuitClosed('local-cosyvoice')) return 'local-cosyvoice';
-  if (excluded !== 'gptsovits' && gptsovits.isConfigured() && isCircuitClosed('gptsovits')
-    && (!(options.requireWarmLocal || isStrictPrivacy()) || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
-  if (isStrictPrivacy()) return null;
-  if (excluded !== 'ark' && hasDoubaoSpeech() && isCircuitClosed('doubao-tts')) return 'ark';
-  if (excluded !== 'cosyvoice' && hasDashScopeKey() && isCircuitClosed('cosyvoice')) return 'cosyvoice';
-  // Keep the official gateway out of implicit fallback. Selecting relay as
-  // the primary provider remains explicit and is handled by getActiveProvider.
-  return null;
+  return AUTOMATIC_TTS_PROVIDERS.find(provider => provider !== excluded
+    && isProviderAvailable(provider, { requireWarmLocal: options.requireWarmLocal || isStrictPrivacy() })) || null;
 }
 
 export async function cloneVoice(request: VoiceCloneRequest, provider: TTSProvider): Promise<VoiceCloneResult> {
@@ -214,33 +216,12 @@ export function isTTSProviderConfigured(provider: TTSProvider): boolean {
 }
 
 export function getActiveProvider(options: { requireHealthy?: boolean; requireWarmLocal?: boolean } = {}): TTSProvider | null {
-  const pref = getVoicePreference();
-  const available = options.requireHealthy ? isCircuitHealthy : isCircuitClosed;
-  if (isStrictPrivacy()) {
-    if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')
-      && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
-    if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
-    // Automatic selection must not boot a cold model behind the user's back.
-    if (gptsovits.isConfigured() && available('gptsovits') && gptsovits.isReadyForAutomaticFallback()) return 'gptsovits';
-    return null;
-  }
-  if (pref.tts === 'local-cosyvoice' && localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
-  if (pref.tts === 'gptsovits' && gptsovits.isConfigured() && available('gptsovits')
-    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
-  if (pref.tts === 'cosyvoice' && hasDashScopeKey() && available('cosyvoice')) return 'cosyvoice';
-  if (pref.tts === 'ark' && hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
-  if (pref.tts === 'relay' && relayConfigured() && available('relay-tts')) return 'relay';
-  // Auto mode and unavailable explicit selections — prefer local, then healthy cloud.
-  if (localCosyvoice.isConfigured() && available('local-cosyvoice')) return 'local-cosyvoice';
-  if (gptsovits.isConfigured() && available('gptsovits')
-    && (!options.requireWarmLocal || gptsovits.isReadyForAutomaticFallback())) return 'gptsovits';
-  if (hasDoubaoSpeech() && available('doubao-tts')) return 'ark';
-  const dashscopeKey = hasDashScopeKey();
-  if (dashscopeKey && available('cosyvoice')) return 'cosyvoice';
-  // The official gateway is never an implicit auto-mode fallback. It is
-  // still selected when the user explicitly chooses `relay` above, avoiding
-  // an unexpected billable request after a local/cloud voice failure.
-  return null;
+  const preferred = getVoicePreference().tts;
+  if (preferred !== 'auto' && isProviderAvailable(preferred, options)) return preferred;
+  // The official gateway remains an explicit selection, never an auto fallback.
+  return AUTOMATIC_TTS_PROVIDERS.find(provider => isProviderAvailable(provider, {
+    ...options, requireWarmLocal: options.requireWarmLocal || isStrictPrivacy(),
+  })) || null;
 }
 
 /**

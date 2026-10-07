@@ -1,3 +1,4 @@
+import { cleanModelName, isSelectionProvider, normalizeModelMap, normalizeModelSelection } from './model_selection';
 import { readSettingJson } from '../persistence/settings_repository';
 import { writeModelPreference } from './model_preference_revision';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../../shared/model_provider_capabilities';
@@ -20,36 +21,18 @@ export const DEFAULT_VISION_MODELS: Record<VisionProvider, string> = {
   relay: LUMI_OFFICIAL_DEFAULT_MODELS.vision,
 };
 
-const VALID_VISION_PROVIDERS = new Set<VisionProvider>(['openai', 'gemini', 'ark', 'qwen', 'ollama', 'lmstudio', 'relay']);
-
-function normalizeVisionProvider(value: unknown): VisionProvider {
-  return typeof value === 'string' && VALID_VISION_PROVIDERS.has(value as VisionProvider)
-    ? value as VisionProvider
-    : 'openai';
-}
+const VISION_SELECTION = {
+  defaults: DEFAULT_VISION_MODELS,
+  defaultProvider: 'openai' as const,
+  maxLength: 200,
+};
 
 export function isVisionProvider(value: unknown): value is VisionProvider {
-  return typeof value === 'string' && VALID_VISION_PROVIDERS.has(value as VisionProvider);
-}
-
-function normalizeVisionModels(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([, model]) => typeof model === 'string' && model.trim())
-    .map(([provider, model]) => [provider, String(model).trim().slice(0, 200)]));
+  return isSelectionProvider(value, VISION_SELECTION);
 }
 
 export function getUserPreferredVision(userId: string): VisionPrefs {
-  let raw: any = null;
-  try {
-    raw = readSettingJson(`vision_prefs_${userId}`);
-  } catch {}
-
-  const provider = normalizeVisionProvider(raw?.provider);
-  const models = normalizeVisionModels(raw?.models);
-  const model = models[provider] || raw?.model || DEFAULT_VISION_MODELS[provider];
-
-  return { provider, model, models };
+  return normalizeModelSelection<VisionProvider>(readSettingJson(`vision_prefs_${userId}`), VISION_SELECTION);
 }
 
 export function upsertUserPreferredVision(
@@ -61,9 +44,9 @@ export function upsertUserPreferredVision(
   const provider = input.provider;
   const models = {
     ...current.models,
-    ...normalizeVisionModels(input.models),
+    ...normalizeModelMap(input.models, 200),
   };
-  const model = String(input.model || models[provider] || DEFAULT_VISION_MODELS[provider]).trim().slice(0, 200);
+  const model = cleanModelName(input.model, 200) || models[provider] || DEFAULT_VISION_MODELS[provider];
   if (!model) throw new Error('A vision model name is required');
   models[provider] = model;
   const payload = { provider, model, models, updatedAt: new Date().toISOString() };
