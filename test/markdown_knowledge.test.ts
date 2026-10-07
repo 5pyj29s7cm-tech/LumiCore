@@ -1,10 +1,10 @@
-import { extractSourceExpression } from './source_expression';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET } from './helpers';
+import { groupExistingFileMemories } from '../server/files/knowledge/memory_references';
 import {
   enrichMarkdownKnowledgeContent,
   normalizeKnowledgeLinkTarget,
@@ -61,29 +61,43 @@ See [Spec](docs/spec.md) and #rag.
 });
 
 describe('knowledge file memory associations', () => {
-  const group = extractSourceExpression('routes/files.ts', 'groupExistingFileMemories', { path });
-  it('preserves aliases, Unicode, legacy prefix ambiguity, order and scope without duplicate references', () => {
-    const base = { type: 'knowledge', userId: 'owner', agentId: 'lumi', domain: 'personal' };
-    const rows = [
-      { id: 'path', sourceInteractionId: 'D:/vault/REPORT.TXT', keywords: ['source:report.txt'] },
-      { id: 'keyword', keywords: ['SOURCE:CAFE\u0301.TXT'] },
-      { id: 'header', content: '[cafe\u0301.txt #1] body' },
-      { id: 'ambiguous', content: '[has # fragment.txt #2] body' },
-      { id: 'wrong-case', content: '[Header.txt #1] body' },
-      { id: 'private', userId: 'other', sourceInteractionId: 'Report.txt' },
-      { id: 'work', domain: 'work', orgId: 'org-a', userId: 'other', sourceInteractionId: 'Report.txt' },
-      { id: 'other-org', domain: 'work', orgId: 'org-b', sourceInteractionId: 'Report.txt' },
-      { id: 'other-agent', agentId: 'other', sourceInteractionId: 'Report.txt' },
-      { id: 'non-knowledge', type: 'episodic', sourceInteractionId: 'Report.txt' },
-    ].map(row => ({ ...base, ...row }));
-    const files = ['Report.txt', 'report.txt', 'café.txt', 'cafe\u0301.txt', 'has', 'has # fragment.txt', 'header.txt'];
-    const personal = group({ memories: rows }, files, { domain: 'personal' }, { userId: 'owner', agentId: 'lumi' });
-    expect(Object.fromEntries([...personal].map(([name, memories]: any) => [name, memories.map((m: any) => m.id)]))).toEqual({
-      'Report.txt': ['path'], 'report.txt': ['path'], 'café.txt': ['keyword', 'header'],
-      'cafe\u0301.txt': ['keyword'], 'has': ['ambiguous'], 'has # fragment.txt': ['ambiguous'],
+  const group = groupExistingFileMemories;
+  const personalScope = { domain: 'personal' as const, userId: 'owner', dir: '/vault' };
+  const workScope = { domain: 'work' as const, orgId: 'org-a', userId: 'owner', dir: '/vault' };
+  const base = { type: 'knowledge', userId: 'owner', agentId: 'lumi', domain: 'personal' };
+  const rows = [
+    { id: 'path', sourceInteractionId: 'D:/vault/REPORT.TXT', keywords: ['source:report.txt'] },
+    { id: 'keyword', keywords: ['SOURCE:CAFE\u0301.TXT'] },
+    { id: 'header', content: '[cafe\u0301.txt #1] body' },
+    { id: 'ambiguous', content: '[has # fragment.txt #2] body' },
+    { id: 'wrong-case', content: '[Header.txt #1] body' },
+    { id: 'private', userId: 'other', sourceInteractionId: 'Report.txt' },
+    { id: 'work', domain: 'work', orgId: 'org-a', userId: 'other', sourceInteractionId: 'Report.txt' },
+    { id: 'other-org', domain: 'work', orgId: 'org-b', sourceInteractionId: 'Report.txt' },
+    { id: 'other-agent', agentId: 'other', sourceInteractionId: 'Report.txt' },
+    { id: 'non-knowledge', type: 'episodic', sourceInteractionId: 'Report.txt' },
+  ].map(row => ({ ...base, ...row }));
+  const files = ['Report.txt', 'report.txt', 'café.txt', 'cafe\u0301.txt', 'has', 'has # fragment.txt', 'header.txt'];
+  const ids = (grouped: Map<string, any[]>) => Object.fromEntries([...grouped].map(([name, memories]) => [name, memories.map(memory => memory.id)]));
+
+  it('uses Windows file identity while preserving Unicode identity, complete legacy headers, order and scope', () => {
+    const options = { userId: 'owner', agentId: 'lumi', platform: 'win32' as const };
+    expect(ids(group({ memories: rows }, files, personalScope, options))).toEqual({
+      'Report.txt': ['path'], 'report.txt': ['path'],
+      'cafe\u0301.txt': ['keyword', 'header'],
+      'has # fragment.txt': ['ambiguous'], 'header.txt': ['wrong-case'],
     });
-    expect(group({ memories: rows }, files, { domain: 'work', orgId: 'org-a' }).get('Report.txt').map((m: any) => m.id)).toEqual(['work']);
-    expect(group({ memories: rows }, [], { domain: 'personal' }).size).toBe(0);
+    expect(group({ memories: rows }, files, workScope, { platform: 'win32' }).get('Report.txt')?.map(memory => memory.id)).toEqual(['work']);
+    expect(group({ memories: rows }, [], personalScope, options).size).toBe(0);
+  });
+
+  it('keeps POSIX case and Unicode siblings separate and does not infer ownership from a folded legacy tag', () => {
+    const options = { userId: 'owner', agentId: 'lumi', platform: 'linux' as const };
+    expect(ids(group({ memories: rows }, files, personalScope, options))).toEqual({
+      'cafe\u0301.txt': ['header'], 'has # fragment.txt': ['ambiguous'],
+    });
+    expect(group({ memories: rows }, ['REPORT.TXT'], personalScope, options).get('REPORT.TXT')?.map(memory => memory.id)).toEqual(['path']);
+    expect(group({ memories: rows }, files, workScope, { platform: 'linux' }).get('Report.txt')?.map(memory => memory.id)).toEqual(['work']);
   });
 });
 
