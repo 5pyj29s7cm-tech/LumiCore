@@ -14,11 +14,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { type ManagedSkillIdentity } from "../marketplace/official_identity";
 import { SKILLS_DIR } from "./skill_paths";
 import type { MCPToolDef, MCPServerConfig, SkillPackage, SkillRepairResult, MCPCallOptions } from "./client/contracts";
-import { requireSafeMCPServerName, normalizeSkillInstallName, requireSafeMCPToolName, mapMCPTools, mcpRegistryToolName } from "./client/security";
+import { requireSafeMCPServerName, requireSafeMCPToolName, mapMCPTools, mcpRegistryToolName } from "./client/security";
 import { ownServerConfig, mcpServerConfigFingerprint, hasCurrentCachedToolInventory, mcpToolInventoryAttestation } from "./client/fingerprints";
 import { ensureSkillsDir } from "./client/package_files";
 import { ensureRuntimeNodeModulesLink } from "./client/dependencies";
-import { comparePackageVersions, assertMCPPackageRunnerPolicy } from "./client/package_paths";
+import { assertMCPPackageRunnerPolicy } from "./client/package_paths";
 import { withMCPWallTimeout, PROCESS_CONNECT_TIMEOUT_MS, MCPRuntimeTimeoutError, DEFAULT_TOOL_CALL_WALL_TIMEOUT_MS } from "./client/timeouts";
 
 export { SKILLS_DIR };

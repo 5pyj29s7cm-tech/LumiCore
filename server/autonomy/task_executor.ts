@@ -24,7 +24,7 @@ import { canUseQueuedSelfImprovementStageAuthorization, isLocalAdminAuthorizedSe
 import type { LLMGetters } from './executor/contracts';
 import { retryAutonomousTaskFinalizations, stageAutonomousTaskFinalization, persistAutonomousTaskFinalizations, hasPendingAutonomousTaskFinalization } from './executor/durable_finalization';
 import { inferAutonomousPublicLanguage, projectAutonomousCompletionFeedback, projectAutonomousCustomerMessage } from './executor/customer_projection';
-import { markLinkedPlanRunning, planScopeForTask, markLinkedPlanPaused, markLinkedPlanCancelled, publishAutonomousTaskInterruption, markLinkedPlanFailed, clipPlanResult } from './executor/linked_plan';
+import { markLinkedPlanRunning, planScopeForTask, publishAutonomousTaskInterruption, markLinkedPlanFailed, clipPlanResult } from './executor/linked_plan';
 import { autonomousTurnPlanningData } from './executor/tool_policy';
 import { upsertToolLedger } from './executor/receipts';
 import { evaluateAutonomousTaskOutcome } from './executor/outcome';

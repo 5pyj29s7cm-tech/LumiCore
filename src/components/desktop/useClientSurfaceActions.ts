@@ -293,7 +293,7 @@ export function useClientSurfaceActions({
           const requestedCommandView = registeredSurface.commandCenterViewByAction?.[action];
           if (requestedCommandView) {
             openCommandCenter(requestedCommandView);
-            const rendered = await waitForSurfaceCommit('command-center');
+            await waitForSurfaceCommit('command-center');
             respond({
               ok: true,
               action,

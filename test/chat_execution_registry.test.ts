@@ -137,7 +137,8 @@ describe('chat execution registry', () => {
     });
   });
 
-  it('keeps a queued request resumable beyond the client safety probe and promotes it in place', () => {
+  it('keeps a queued request resumable beyond the client safety probe and promotes it in place', async () => {
+    await initializeChatExecutionRegistryPersistence(memoryPersistence().adapter);
     vi.useFakeTimers();
     const now = Date.parse('2026-08-22T00:00:00.000Z');
     vi.setSystemTime(now);
@@ -149,7 +150,7 @@ describe('chat execution registry', () => {
     expect(beginChatExecution(scope, 'queued-B')).toBeNull();
     expect(getChatExecution(scope, 'queued-B')).toMatchObject({ queued: false, terminal: false });
     expect(countUnsettledChatExecutions()).toBe(1);
-    recordChatExecutionEvent(scope, 'queued-B', 'agent:response', { finalized: true, reason: 'request_cancelled' });
+    await recordChatExecutionTerminalEventDurably(scope, 'queued-B', 'agent:response', { finalized: true, reason: 'request_cancelled' });
     expect(countUnsettledChatExecutions()).toBe(0);
   });
 
@@ -254,11 +255,12 @@ describe('chat execution registry', () => {
     expect(getChatExecution(scope, 'request-status-truth')?.status).toBe('executing');
   });
 
-  it('exposes cancelling before a terminal cancellation response', () => {
+  it('exposes cancelling before a terminal cancellation response', async () => {
+    await initializeChatExecutionRegistryPersistence(memoryPersistence().adapter);
     beginChatExecution(scope, 'request-1');
     expect(markChatExecutionCancelling(scope, 'request-1')).toMatchObject({ status: 'cancelling', terminal: false });
 
-    expect(recordChatExecutionEvent(scope, 'request-1', 'agent:response', {
+    expect(await recordChatExecutionTerminalEventDurably(scope, 'request-1', 'agent:response', {
       text: '[Cancelled]',
       finalized: true,
       blocked: true,
@@ -267,12 +269,13 @@ describe('chat execution registry', () => {
     expect(getChatExecution(scope, 'request-1')).toMatchObject({ status: 'cancelled', terminal: true });
   });
 
-  it('accepts an ordinary terminal exactly once', () => {
+  it('accepts an ordinary terminal exactly once', async () => {
+    await initializeChatExecutionRegistryPersistence(memoryPersistence().adapter);
     beginChatExecution(scope, 'request-terminal-once');
     const payload = { text: 'complete', finalized: true, blocked: false };
 
-    expect(recordChatExecutionEvent(scope, 'request-terminal-once', 'agent:response', payload)).toBe(true);
-    expect(recordChatExecutionEvent(scope, 'request-terminal-once', 'agent:response', payload)).toBe(false);
+    expect(await recordChatExecutionTerminalEventDurably(scope, 'request-terminal-once', 'agent:response', payload)).toBe(true);
+    expect(await recordChatExecutionTerminalEventDurably(scope, 'request-terminal-once', 'agent:response', payload)).toBe(false);
     expect(getChatExecution(scope, 'request-terminal-once')?.terminalEvent?.payload.text).toBe('complete');
   });
 
@@ -516,13 +519,13 @@ describe('chat execution registry', () => {
     beginChatExecution(conversationScope, 'foreground-A');
 
     expect(beginChatSidecarExecution(conversationScope, 'status-S')).toBe(true);
-    expect(recordChatExecutionEvent(conversationScope, 'status-S', 'agent:response', {
+    expect(await recordChatExecutionTerminalEventDurably(conversationScope, 'status-S', 'agent:response', {
       text: 'still working',
       sidecar: true,
       finalized: true,
       blocked: false,
     })).toBe(true);
-    expect(recordChatExecutionEvent(conversationScope, 'status-S', 'agent:response', {
+    expect(await recordChatExecutionTerminalEventDurably(conversationScope, 'status-S', 'agent:response', {
       text: 'duplicate',
       sidecar: true,
       finalized: true,
@@ -745,7 +748,7 @@ describe('chat execution registry', () => {
     await initializeChatExecutionRegistryPersistence(persistence.adapter, now);
     expect(beginChatSidecarExecution(scope, 'cancel-retained')).toBe(true);
     await persistChatSidecarCancellationIntent(scope, 'cancel-retained', 'foreground-A');
-    expect(recordChatExecutionEvent(scope, 'cancel-retained', 'agent:response', {
+    expect(await recordChatExecutionTerminalEventDurably(scope, 'cancel-retained', 'agent:response', {
       text: 'cancelled',
       sidecar: true,
       finalized: true,
@@ -803,7 +806,7 @@ describe('chat execution registry', () => {
     const assignedConversation: ChatExecutionScope = { ...scope, conversationId: 'conversation-1' };
 
     beginChatExecution(assignedConversation, 'request-durable');
-    expect(recordChatExecutionEvent(assignedConversation, 'request-durable', 'agent:response', {
+    expect(await recordChatExecutionTerminalEventDurably(assignedConversation, 'request-durable', 'agent:response', {
       text: `done:${'x'.repeat(20_000)}`,
       agentName: 'Lumi',
       finalized: true,
@@ -849,7 +852,7 @@ describe('chat execution registry', () => {
       conversationId: 'work-conversation',
     };
     beginChatExecution(workScope, 'shared-request-id');
-    recordChatExecutionEvent(workScope, 'shared-request-id', 'agent:response', {
+    await recordChatExecutionTerminalEventDurably(workScope, 'shared-request-id', 'agent:response', {
       text: 'work complete',
       finalized: true,
     });
@@ -901,7 +904,7 @@ describe('chat execution registry', () => {
     await ensureDatabaseInitialized();
     await initializeChatExecutionRegistryPersistence();
     beginChatExecution(sqliteScope, requestId);
-    recordChatExecutionEvent(sqliteScope, requestId, 'agent:response', {
+    await recordChatExecutionTerminalEventDurably(sqliteScope, requestId, 'agent:response', {
       text: 'durable SQLite result',
       finalized: true,
       blocked: false,

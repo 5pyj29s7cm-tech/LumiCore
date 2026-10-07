@@ -7,7 +7,7 @@ import { hasCurrentMemoryEmbedding, invalidateMemoryEmbedding, memoryEmbeddingIn
 
 import { getMemoryStore, saveMemoryStore } from './state';
 import { matchesMemoryScope } from './evidence';
-import { embeddingNamespace, attachEmbedding, refreshMemoryEmbedding } from './embeddings';
+import { attachEmbedding, refreshMemoryEmbedding } from './embeddings';
 import { contentSimilarity, findContradictions, dedupeKeywords } from './text';
 
 function generateId(): string {

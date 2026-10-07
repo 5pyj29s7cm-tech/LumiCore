@@ -5,7 +5,7 @@ import * as localWhisper from './providers/local-whisper';
 import * as relay from './providers/official';
 import { getKey } from '../config/keys';
 import { getConfiguredVoiceModel, getVoicePreference } from '../config/voice_preference';
-import { isCircuitClosed, isCircuitHealthy, recordFailure, recordSuccess } from '../cloud/circuit_breaker';
+import { isCircuitClosed, isCircuitHealthy } from '../cloud/circuit_breaker';
 import { relayConfigured } from '../relay/config';
 import { isStrictPrivacy, requireNotStrict } from '../config/privacy';
 

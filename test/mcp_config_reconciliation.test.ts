@@ -81,6 +81,16 @@ class FakeMcpManager {
 }
 
 describe('MCP config reconciliation', () => {
+  it('does not label disconnected registered declarations as a usable runtime', async () => {
+    const config = stdio('node', 'probe');
+    const manager = new FakeMcpManager({ service: config });
+    const registry = new ToolRegistry();
+    await recoverServerTools('service', [tool('service', 'probe')], registry, config);
+    const result = await updateMCPConfig({ service: config }, { manager, registry });
+    expect(result.services[0]).toMatchObject({ action: 'unchanged', connected: false, registered: true, usable: false });
+    expect(manager.restartCalls).toEqual([]);
+  });
+
   it('toggles an installed runtime while preserving server-owned identity, credentials and metadata', async () => {
     const original = {
       ...stdio('node', 'probe'),

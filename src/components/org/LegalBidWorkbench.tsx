@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Download, FileText, Loader2, Upload } from 'lucide-react';
 import { useT } from '../../lib/useT';
 import { getLegalCaseLabel, type LegalCaseFile } from '../../lib/legalCaseStore';

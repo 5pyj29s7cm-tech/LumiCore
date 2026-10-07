@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import { formatUiMessage, uiMessage } from '../../i18n/uiMessages';
 
 export function BiometricsEnrollPanel() {
-  const t = useT();
+  useT(); // Subscribe to locale changes used by uiMessage().
   const voiceprint = useVoiceprint();
   // Enrollment opens its own short-lived camera stream on demand.
   const faceRecognition = useFaceRecognition({ enabled: false });

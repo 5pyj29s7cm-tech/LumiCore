@@ -269,7 +269,7 @@ export function useChatIdentityAndState({
       if (preferredVoice && preferredVoice.voiceId !== selectedVoiceId) {
         setSelectedVoiceId(preferredVoice.voiceId, preferredVoice.provider || data.provider || undefined);
       }
-    }).catch(err => toast.error(t.failedToLoadVoices || 'Failed to load voices'));
+    }).catch(() => toast.error(t.failedToLoadVoices || 'Failed to load voices'));
   }, [
     activeDomain,
     activeOrgId,

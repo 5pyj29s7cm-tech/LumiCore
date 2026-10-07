@@ -725,7 +725,7 @@ function runtimeResult(
     configured: Boolean(config),
     connected,
     registered: registeredToolNames.length > 0,
-    usable: enabled && registeredToolNames.length > 0,
+    usable: enabled && connected && registeredToolNames.length > 0,
     enabled,
     toolCount: registeredToolNames.length,
     registeredToolNames,
@@ -767,6 +767,35 @@ async function activateMCPServerRuntime(
     return activation.registeredToolNames;
   }
   return recoverServerTools(name, tools, registry, activationConfig);
+}
+
+async function restoreMCPServerRuntime(
+  manager: MCPConfigRuntimeManager, registry: ToolRegistry, name: string,
+  before: MCPServerConfig | undefined, configurationRestored = false,
+  restoreError?: unknown,
+): Promise<{ finalConfig?: MCPServerConfig; rollbackError?: unknown }> {
+  let rollbackError = restoreError;
+  let finalConfig = before;
+  if (!rollbackError) {
+    try {
+      if (!configurationRestored) saveOneServerConfig(manager, name, before);
+      if (before?.enabled) await activateMCPServerRuntime(manager, registry, name, before);
+    } catch (error) { rollbackError = error; }
+  }
+  if (rollbackError) {
+    unregisterServerTools(name, registry);
+    finalConfig = before ? { ...before, enabled: false, cachedTools: undefined,
+      cachedToolsFingerprint: undefined, cachedToolsAttestation: undefined, toolCount: undefined } : undefined;
+    try {
+      if (before || !configurationRestored) saveOneServerConfig(manager, name, finalConfig);
+    } catch (disableError) {
+      rollbackError = new Error(
+        String((rollbackError as any)?.message || rollbackError) + '; disabling also failed: '
+        + String((disableError as any)?.message || disableError),
+      );
+    }
+  }
+  return { finalConfig, rollbackError };
 }
 
 /**
@@ -847,34 +876,9 @@ async function updateMCPConfigUnlocked(
     const services: MCPServerConfigResult[] = [];
     for (const name of affectedNames) {
       const before = previous[name];
-      let rollbackError: unknown;
-      let finalConfig = before;
-      if (!restorePersistError && before?.enabled) {
-        try {
-          await activateMCPServerRuntime(manager, registry, name, before);
-        } catch (error) {
-          rollbackError = error;
-          unregisterServerTools(name, registry);
-        }
-      } else if (restorePersistError) {
-        rollbackError = restorePersistError;
-      }
-      if (rollbackError && before) {
-        finalConfig = {
-          ...before,
-          enabled: false,
-          cachedTools: undefined,
-          cachedToolsFingerprint: undefined,
-          toolCount: undefined,
-        };
-        try {
-          saveOneServerConfig(manager, name, finalConfig);
-        } catch (disableError) {
-          rollbackError = new Error(
-            `${String((rollbackError as any)?.message || rollbackError)}; disabling also failed: ${String((disableError as any)?.message || disableError)}`,
-          );
-        }
-      }
+      const { finalConfig, rollbackError } = await restoreMCPServerRuntime(
+        manager, registry, name, before, true, restorePersistError,
+      );
       services.push(runtimeResult(
         name,
         rollbackError ? 'disabled_after_failure' : 'rolled_back',
@@ -921,31 +925,7 @@ async function updateMCPConfigUnlocked(
     } catch (activationError) {
       try { await manager.disconnectServer(name); } catch {}
       unregisterServerTools(name, registry);
-      let rollbackError: unknown;
-      let finalConfig: MCPServerConfig | undefined = before;
-      try {
-        saveOneServerConfig(manager, name, before);
-        if (before?.enabled) {
-          await activateMCPServerRuntime(manager, registry, name, before);
-        }
-      } catch (error) {
-        rollbackError = error;
-        unregisterServerTools(name, registry);
-        finalConfig = before ? {
-          ...before,
-          enabled: false,
-          cachedTools: undefined,
-          cachedToolsFingerprint: undefined,
-          toolCount: undefined,
-        } : undefined;
-        try {
-          saveOneServerConfig(manager, name, finalConfig);
-        } catch (disableError) {
-          rollbackError = new Error(
-            `${String((error as any)?.message || error)}; disabling also failed: ${String((disableError as any)?.message || disableError)}`,
-          );
-        }
-      }
+      const { finalConfig, rollbackError } = await restoreMCPServerRuntime(manager, registry, name, before);
       services.push(runtimeResult(
         name,
         rollbackError ? 'disabled_after_failure' : 'rolled_back',
@@ -967,6 +947,12 @@ async function updateMCPConfigUnlocked(
 
 let mcpConfigUpdateTail: Promise<void> = Promise.resolve();
 
+function enqueueMCPConfigUpdate(operation: () => Promise<MCPConfigUpdateResult>): Promise<MCPConfigUpdateResult> {
+  const attempt = mcpConfigUpdateTail.then(operation, operation);
+  mcpConfigUpdateTail = attempt.then(() => undefined, () => undefined);
+  return attempt;
+}
+
 /** Toggle an existing runtime without treating server-owned metadata as user input. */
 export function setMCPServerEnabled(
   name: string,
@@ -982,9 +968,7 @@ export function setMCPServerEnabled(
     forceRestartNames: enabled ? [safeName] : [],
     runtimeStateChange: { name: safeName, enabled },
   });
-  const run = mcpConfigUpdateTail.then(operation, operation);
-  mcpConfigUpdateTail = run.then(() => undefined, () => undefined);
-  return run;
+  return enqueueMCPConfigUpdate(operation);
 }
 
 export function updateMCPConfig(
@@ -997,12 +981,7 @@ export function updateMCPConfig(
     registry?: ToolRegistry;
   } = {},
 ): Promise<MCPConfigUpdateResult> {
-  const run = mcpConfigUpdateTail.then(
-    () => updateMCPConfigUnlocked(servers, options),
-    () => updateMCPConfigUnlocked(servers, options),
-  );
-  mcpConfigUpdateTail = run.then(() => undefined, () => undefined);
-  return run;
+  return enqueueMCPConfigUpdate(() => updateMCPConfigUnlocked(servers, options));
 }
 
 function mcpSchemaToParams(schema: Record<string, any>): Record<string, any> {

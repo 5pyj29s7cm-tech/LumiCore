@@ -14,7 +14,7 @@ export function LegalCaseContextBar({
   state?: LegalToolState;
   detail?: string;
 }) {
-  const t = useT();
+  useT(); // Subscribe to locale changes used by uiMessage().
   const title = caseFile?.title || caseFile?.party || caseFile?.caseNumber || uiMessage('legal-case-context-bar.untitled-case.796e2578d9');
   const stageLabel = caseFile ? ({
     consultation: uiMessage('legal-case-context-bar.consultation.af6082a2f4'),

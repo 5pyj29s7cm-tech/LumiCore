@@ -3,7 +3,7 @@ export { getMessageByRequestId } from './manager/request_identity';
 import { acceptConversationActionTurn } from "./action_turn_ledger";
 import { normalizeCompletionFeedbackForPersistence } from "./completion_feedback";
 import { readDatabaseTables, commitDatabaseTables } from "../../db_layer";
-import type { Conversation, MessageRecord } from "./manager/contracts";
+import type { Conversation } from "./manager/contracts";
 import { archiveBoundConversationActionReceipts } from "./ledger/receipt_archive";
 import type { ConversationActionTerminalDisposition } from "./ledger/contracts";
 import { normalizeNativeRequestBinding } from "../devices/native_identity";

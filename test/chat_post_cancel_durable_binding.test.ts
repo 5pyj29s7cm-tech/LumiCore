@@ -3,6 +3,7 @@ import {
   beginChatExecution,
   beginChatSidecarExecution,
   getDurableChatCancellationForCurrentExecution,
+  getChatExecution,
   initializeChatExecutionRegistryPersistence,
   persistChatSidecarCancellationIntent,
   recordChatExecutionEvent,
@@ -147,7 +148,8 @@ describe('durable post-cancellation status binding', () => {
       finalized: true,
       blocked: true,
       reason: 'request_cancelled',
-    })).toBe(true);
+    })).toBe(false);
+    expect(getChatExecution(scope, 'foreground-request')).toMatchObject({ terminal: false });
     await recordChatExecutionTerminalEventDurably(scope, 'stop-request', 'agent:response', {
       text: 'stop receipt is durable',
       sidecar: true,

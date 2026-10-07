@@ -85,7 +85,7 @@ export function useVoiceSocketEvents(previousBindings: ReturnType<typeof useVoic
         onTranscript?.(data.text, true);
       }
     };
-    const { prepareAudio, prepareQueueHead, playAudioChunk } = createVoicePlaybackRuntime({
+    const { prepareQueueHead, playAudioChunk } = createVoicePlaybackRuntime({
     audioQueue, isCallActive, ensureTtsContext, isConversationTtsPlaying, playbackRequestIdRef,
     setHasConversationPlayback, isTtsPlaying, proactiveSource, setError, setCallState, playbackGenerationRef,
     ttsStartedAt, ttsBargeInCandidateSentRef, clearThinkingWatchdog, outputLevelRef, ttsEchoFloorRef,

@@ -26,7 +26,7 @@ export function WorkModeSwitch({
   onOpenCommandCenter,
   connected,
 }: Props) {
-  const t = useT();
+  useT(); // Subscribe to locale changes used by uiMessage().
   const [switching, setSwitching] = useState(false);
   const isWork = domain === 'work';
 

@@ -114,7 +114,7 @@ export function OrbitalRings({ hue, syncRate }: OrbitalRingsProps) {
       ))}
 
       {/* Orbiting particles on each ring */}
-      {rings.map((r, ri) => (
+      {rings.map((_, ri) => (
         <group key={`particles-${ri}`}>
           {particleData[ri].map((_, pi) => (
             <mesh

@@ -3,7 +3,7 @@ import { runResolvedLumiTurn } from "../../../cognition/turn_model";
 import { CN_VOICE_FAST_PATH_MESSAGES } from "../../../regions/messages/voice_fast_path_messages";
 import { getMessages, getConversationActionStatus, completeConversationActionFromUserObservation } from "../../../conversation/manager";
 import { formatConversationActionTaskStatus } from "../../../cognition/action_continuation";
-import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, consumePendingConfirmationDurably } from "../../../tools/pending_confirmation";
+import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
 import { coalesceToolExecutionRecords, recordsToTaskReceipts, confirmedStepNeedsContinuation, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
@@ -13,7 +13,7 @@ import { isDirectDesktopTool } from "../../desktop_relay";
 import { buildConfirmedStepContinuationMessages } from "../../../llm/adapter";
 import { formatConversationExecutionFactAnswer, getConversationExecutionFacts, isConversationExecutionFactQuestion } from "../../../conversation/execution_facts";
 import { resolveExactConversationCorrection } from "../../../conversation/exact_correction";
-import { executeToolCall } from "../../../tools/execution_engine";
+
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from "../../../cognition/result_finalizer";
 import { recordTokenUsageBatch } from "../../../llm/token_tracker";
 import { collectRecentActionToolRecords, describeRecentActionsFromHistory } from "../../voice_action_history";

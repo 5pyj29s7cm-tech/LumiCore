@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, FileText, HelpCircle, Loader2, Shield, Upload } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { useT } from '../../lib/useT';
@@ -7,11 +7,7 @@ import { LegalCaseContextBar } from './LegalCaseContextBar';
 import { uiMessage } from '../../i18n/uiMessages';
 import { useLegalDocument, useLegalDocumentScope } from '../../hooks/useLegalDocument';
 import { runLegalRequest } from '../../lib/legalToolClient';
-import {
-  chinaLegalCopy,
-  parseChinaContractRisks,
-  type ChinaContractRisk,
-} from '../../i18n/regions/cn/legal';
+import { chinaLegalCopy, parseChinaContractRisks, type ChinaContractRisk } from '../../i18n/regions/cn/legal';
 
 type RiskItem = ChinaContractRisk;
 

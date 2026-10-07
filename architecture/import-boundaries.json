@@ -450,18 +450,6 @@
       ],
       "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
     },
-    "server/memory/store.ts": {
-      "tables": [
-        "memories",
-        "memoryAssociations",
-        "reminders"
-      ],
-      "allowedExports": [
-        "readDatabaseTables",
-        "commitDatabaseTables"
-      ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
-    },
     "server/memory/turn_memory.ts": {
       "tables": [
         "memories",
@@ -666,12 +654,6 @@
     },
     "server/scheduler.ts": {
       "tables": [
-        "conversationActionReceipts",
-        "conversationActionTasks",
-        "conversationActionTurns",
-        "conversations",
-        "interactions",
-        "reminders",
         "settings",
         "users"
       ],
@@ -680,7 +662,7 @@
         "readDatabaseTables",
         "commitDatabaseTables"
       ],
-      "reason": "Detached selected-table reads and atomic staged row/field delta commits; existing owner and authorization predicates remain in the domain module."
+      "reason": "Scheduler controls own only schedule settings and authoritative user selection; execution ledger and delivery projections belong to their reviewed leaf owners."
     },
     "server/skills/translations.ts": {
       "tables": [
@@ -1212,6 +1194,79 @@
         "readDatabaseTables"
       ],
       "reason": "Scheduler disable and runtime-state hydration reads settings only; execution fences and writers remain with Scheduler."
+    },
+    "server/memory/store/state.ts": {
+      "tables": [
+        "memories"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Detached memory rows and their accepted selected-table session."
+    },
+    "server/memory/store/associations.ts": {
+      "tables": [
+        "memoryAssociations"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Only the persistent association graph; memories are obtained through the memory state owner."
+    },
+    "server/memory/store/reminders.ts": {
+      "tables": [
+        "reminders"
+      ],
+      "allowedExports": [
+        "readDatabaseTables",
+        "commitDatabaseTables"
+      ],
+      "reason": "Only reminder rows and their accepted selected-table session."
+    },
+    "server/scheduler/delivery.ts": {
+      "tables": [
+        "interactions",
+        "reminders"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Atomic delivery and reminder batch, exact rollback and emission recheck."
+    },
+    "server/scheduler/execution_owner.ts": {
+      "tables": [
+        "conversationActionTasks",
+        "conversationActionReceipts",
+        "conversationActionTurns",
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Execution cancellation, late settlement and exact ledger rollback; no user or delivery table reads."
+    },
+    "server/scheduler/run_execution.ts": {
+      "tables": [
+        "conversationActionTasks",
+        "conversationActionReceipts",
+        "conversationActionTurns",
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "Admission and terminal ledger plus schedule metadata; conversation turns are required by receipt binding."
+    },
+    "server/scheduler/persistence.ts": {
+      "tables": [
+        "settings"
+      ],
+      "allowedExports": [
+        "readDatabaseTables"
+      ],
+      "reason": "The shared scheduler runtime metadata writer."
     }
   },
   "approvedSqlImporters": {
@@ -1221,14 +1276,6 @@
         "withDatabaseSqlWriteLock"
       ],
       "reason": "Exact avatar and user history; serialized private history inserts/deletes, no in-memory database root."
-    },
-    "server/socket/chat_execution_registry.ts": {
-      "allowedExports": [
-        "ensureDatabaseInitialized",
-        "querySQL",
-        "runSQL"
-      ],
-      "reason": "Durable execution receipt adapter with exact request scope; startup recovers receipt metadata, no in-memory database root."
     },
     "server/tools/pending_confirmation_repository.ts": {
       "allowedExports": [
@@ -1245,6 +1292,14 @@
         "querySQL"
       ],
       "reason": "Explicit admin-confirmed database_query contract: one bounded read-only SELECT or allowlisted PRAGMA; no snapshot or write API."
+    },
+    "server/socket/chat_execution_registry/persistence.ts": {
+      "allowedExports": [
+        "ensureDatabaseInitialized",
+        "querySQL",
+        "runSQL"
+      ],
+      "reason": "The unique chat execution receipt SQL queue, recovery hydration and exact conversation deletion owner. Existing SQL export and table constraints are retained."
     }
   }
 }

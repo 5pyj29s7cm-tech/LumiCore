@@ -21,6 +21,7 @@ export function dedupeMemoriesInRankOrder<T>(
 }
 
 // Match CJK characters for language-aware tokenization
+// i18n-allow: CJK input tokenization pattern; never displayed as interface copy.
 const CJK_RE = /[一-鿿㐀-䶿]/;
 
 export function tokenize(text: string): string[] {
@@ -50,6 +51,7 @@ export function tokenize(text: string): string[] {
 }
 
 // Negation patterns in Chinese and English
+// i18n-allow: Negation recognition patterns for memory input, not interface copy.
 const NEGATION_PATTERNS = [
   /不[^过论妨仅管只论止断愧外必再会]/u, /没[有想]/u, /别/u, /否/u, /非/u,
   /\bnot\b/i, /\bdon'?t\b/i, /\bnever\b/i, /\bno\b/i, /\bcan'?t\b/i, /\bwon'?t\b/i,
@@ -58,13 +60,21 @@ const NEGATION_PATTERNS = [
 // Common polarity-flip pairs: positive → negative
 const POLARITY_PAIRS: [RegExp, string][] = [
   [/\b(?:like|likes|liked|love|loves|loved)\b/gi, 'dislike|dislikes|disliked|hate|hates|hated|does not like|do not like'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/喜欢|爱|享受|热爱/g, '讨厌|恨|厌恶|反感'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/好|棒|优秀|出色|赞/g, '差|烂|糟糕|坏|垃圾'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/快|迅速|高效/g, '慢|缓慢|拖沓'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/简单|容易/g, '复杂|困难'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/美|漂亮|好看/g, '丑|难看'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/有用|方便|实用/g, '没用|不便|鸡肋'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/开启|打开|启用|使用/g, '关闭|禁用|停用|不用'],
+  // i18n-allow: Input polarity lexicon; never displayed as interface copy.
   [/经常|一直|总是/g, '从不|很少|偶尔'],
 ];
 

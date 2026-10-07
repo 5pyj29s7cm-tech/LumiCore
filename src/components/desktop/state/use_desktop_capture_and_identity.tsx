@@ -339,7 +339,7 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
     voiceprint.templatesLoaded,
   ]);
   useAmbientPoller(socket); // Ambient awareness: polls window, clipboard, idle state
-  const { callState, audioLevel, startCall, startCallRef, switchVoice, endCall, error: callError, transcript, interrupt, toggleMute, isMuted, switchPersonality } = useVoiceCall({
+  const { callState, audioLevel, startCall, startCallRef, switchVoice, endCall, error: callError, transcript, interrupt, toggleMute, isMuted } = useVoiceCall({
     socket,
     onTranscript: appendMeetingTranscript,
     proactive: {

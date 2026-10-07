@@ -93,7 +93,7 @@ function MemoryAvatarProfileEditor({ avatar, ownerId, locale, onUpdated, onArchi
       setMaterials(result.materials); setMaterialsReady(true);
       // A newer source revision must not be attached to the old editable profile.
       if (result.revision !== avatar.revision) { setConflict(true); setError(copy.conflict); }
-    }).catch(err => {
+    }).catch(() => {
       if (!controller.signal.aborted && current === generation.current) { setError(copy.materialLoadError); }
     }).finally(() => { if (current === generation.current) setLoading(false); });
     return () => { generationRef.current++; controller.abort(); };

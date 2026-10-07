@@ -216,7 +216,7 @@ export function DesignHub({ workspace = 'spatial' }: { workspace?: DesignWorkspa
 }
 
 function useDesignChat() {
-  const t = useT();
+  useT(); // Subscribe to locale changes used by uiMessage().
   const [input, setInput] = useState('');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
@@ -246,7 +246,7 @@ function useDesignChat() {
 }
 
 function DesignToolView({ config, workspace }: { config: ToolConfig; workspace: DesignWorkspace }) {
-  const t = useT();
+  useT(); // Subscribe to locale changes used by uiMessage().
   const { input, setInput, result, loading, send } = useDesignChat();
 
   const run = () => {

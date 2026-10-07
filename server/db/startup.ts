@@ -1,3 +1,4 @@
+import { getBootstrapMarketplaceSkills, BOOTSTRAP_FOUNDER_VISION } from '../regions/resources/bootstrap_seeds';
 import type sqlite3 from 'sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -163,10 +164,8 @@ export async function migrateRetiredLocalAgentTables({ query, run }: DatabaseSql
 
 export function createTables(db: sqlite3.Database, session: DatabaseSqlWriteSession): Promise<void> {
   return new Promise((resolve, reject) => {
-    const sql = INITIAL_SCHEMA_SQL;
-
-    // Canvas sessions — infinite canvas workbench
-    db!.run(`CREATE TABLE IF NOT EXISTS canvas_sessions (
+    // One checked schema operation owns every initial table creation.
+    const sql = `CREATE TABLE IF NOT EXISTS canvas_sessions (
       id TEXT PRIMARY KEY,
       userId TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT '',
@@ -178,9 +177,10 @@ export function createTables(db: sqlite3.Database, session: DatabaseSqlWriteSess
       orgId TEXT DEFAULT '',
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL
-    )`);
+    );
+    ${INITIAL_SCHEMA_SQL}`;
 
-    db!.exec(sql, (err) => {
+    db.exec(sql, (err) => {
       if (err) { reject(err); return; }
       insertInitialData(session).then(resolve).catch(reject);
     });
@@ -206,11 +206,7 @@ async function insertInitialData({ query, run }: DatabaseSqlWriteSession): Promi
   }
 
   if (counts.marketplace_skills === 0) {
-    const defaultSkills = [
-      ['skill-1', '财务报表分析 LoRA', 'LumiNode_01', 50, '针对企业财务报表的深度微调权重，支持自动化对账与异常检测。', 'Finance'],
-      ['skill-2', '创意剧本创作 LoRA', 'CreativeMind', 30, '专注于科幻与悬疑风格的剧本创作，具备极强的逻辑连贯性。', 'Creative'],
-      ['skill-3', '医疗辅助诊断 LoRA', 'HealthGuard', 100, '基于公开医疗数据集微调，辅助识别常见病症与用药建议。', 'Medical']
-    ];
+    const defaultSkills = getBootstrapMarketplaceSkills();
     for (const skill of defaultSkills) {
       await run(`INSERT INTO marketplace_skills (id, name, author, price, description, category) VALUES (?, ?, ?, ?, ?, ?)`, skill);
     }
@@ -230,7 +226,7 @@ async function insertInitialData({ query, run }: DatabaseSqlWriteSession): Promi
   if (counts.founder_vision === 0) {
     await run(
       `INSERT INTO founder_vision (id, content, updatedAt) VALUES (?, ?, ?)`,
-      [1, 'LumiAI 旨在构建一个去中心化的智能协议。我们追求空间存在感、边缘计算与数据主权。通过分布式节点，每一个用户都能拥有真正属于自己的、可进化的数字生命。', new Date().toISOString()]
+      [1, BOOTSTRAP_FOUNDER_VISION, new Date().toISOString()]
     );
   }
 }

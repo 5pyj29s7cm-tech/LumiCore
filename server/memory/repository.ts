@@ -12,7 +12,12 @@ function belongs(row: { userId: string; domain?: string; orgId?: string; agentId
     && (scope.agentId === undefined ? !isMemoryAvatarAgentId(row.agentId) : (row.agentId || '') === scope.agentId);
 }
 
-function rows<K extends keyof Tables>(table: K): Tables[K][] { return readDatabaseTables([table])[table] || []; }
+/** Literal selections preserve the static grant and clone only the requested row family. */
+function readRowSession(table: keyof Tables): ReturnType<typeof readDatabaseTables<'memories' | 'reminders'>> {
+  const selected = table === 'memories' ? readDatabaseTables(['memories']) : readDatabaseTables(['reminders']);
+  return selected as ReturnType<typeof readDatabaseTables<'memories' | 'reminders'>>;
+}
+function rows<K extends keyof Tables>(table: K): Tables[K][] { return readRowSession(table)[table] || []; }
 function owned<K extends keyof Tables>(table: K, scope: MemoryOwnerScope, id: string): Tables[K] | undefined {
   return rows(table).find(row => row.id === id && belongs(row, scope));
 }
@@ -35,7 +40,7 @@ export function assertMemoryParent(scope: MemoryOwnerScope, memory: Memory, all:
 
 /** Callbacks see one detached owned row. Refused writes cannot alter the live table. */
 function updateRow<K extends keyof Tables>(table: K, scope: MemoryOwnerScope, id: string, update: (row: Tables[K]) => void): Tables[K] | undefined {
-  const db = readDatabaseTables([table]), all: Tables[K][] = db[table] || [];
+  const db = readRowSession(table), all: Tables[K][] = db[table] || [];
   const current = all.find(row => row.id === id && belongs(row, scope));
   if (!current) return undefined;
   const draft = cloneDatabaseValue(current);
