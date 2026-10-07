@@ -347,4 +347,155 @@ describe('external commit unknown-outcome safety', () => {
     expect(record.error).toMatch(/outcome is unknown.*timed out after 30s/i);
     expect(record.envelope?.status).toBe('unknown_outcome');
   });
+  it('rejects a different target while an external commit with the same key is still running', async () => {
+    const durable = durableJournalAdapter();
+    configureExternalCommitJournal(durable.adapter);
+    const registry = new ToolRegistry();
+    let release!: (result: string) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const handler = vi.fn(() => new Promise<string>(resolve => { release = resolve; entered(); }));
+    registerExternalCommit(registry, 'external_commit_live_target_binding', handler);
+    const context = confirmedContext('live-target-binding');
+    const first = registry.execute('external_commit_live_target_binding', { target: 'Alice', payload: 'Only once' }, context);
+    await started;
+    const changed = registry.execute('external_commit_live_target_binding', { target: 'Bob', payload: 'Only once' }, context)
+      .then(result => ({ result, error: undefined }), error => ({ result: undefined, error }));
+    release(JSON.stringify({ verified: true, providerReceipt: 'alice-once' }));
+    await first;
+    expect((await changed).error?.message).toMatch(/target mismatch/i);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a different target before replaying a verified in-process receipt', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'alice-verified' }));
+    registerExternalCommit(registry, 'external_commit_verified_target_binding', handler);
+    const context = confirmedContext('verified-target-binding');
+    await registry.execute('external_commit_verified_target_binding', { target: 'Alice', payload: 'Only once' }, context);
+    await expect(registry.execute('external_commit_verified_target_binding', { target: 'Bob', payload: 'Only once' }, context))
+      .rejects.toThrow(/target mismatch/i);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects another tool reusing an already verified external commit key', async () => {
+    const registry = new ToolRegistry();
+    const firstHandler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'first-tool-receipt' }));
+    const otherHandler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'other-tool-receipt' }));
+    registerExternalCommit(registry, 'external_commit_first_key_owner', firstHandler);
+    registerExternalCommit(registry, 'external_commit_other_key_owner', otherHandler);
+    const context = confirmedContext('cross-tool-key-binding');
+    const args = { target: 'Alice', payload: 'Only once' };
+    await registry.execute('external_commit_first_key_owner', args, context);
+    await expect(registry.execute('external_commit_other_key_owner', args, context))
+      .rejects.toThrow(/target mismatch/i);
+    expect(firstHandler).toHaveBeenCalledTimes(1);
+    expect(otherHandler).not.toHaveBeenCalled();
+  });
+
+  it('keeps a recovered verified receipt unknown when its durable terminal write fails', async () => {
+    const durable = durableJournalAdapter();
+    const name = 'external_commit_recovery_persistence_failure';
+    const args = { target: 'Alice', payload: 'Already submitted' };
+    const context = confirmedContext('recovery-write-failure');
+    durable.rows.set(context.idempotencyKey, {
+      idempotencyKey: context.idempotencyKey, taskId: context.taskId, userId: context.userId,
+      toolName: name, inputDigest: externalCommitInputDigest(name, args), state: 'unknown',
+      replayResult: '', claimToken: 'prior-attempt', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    configureExternalCommitJournal({ ...durable.adapter, async settle() { return false; } });
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => JSON.stringify({ verified: true }));
+    const reconcile = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'read-only-proof' }));
+    registerExternalCommit(registry, name, handler, reconcile);
+    await expect(registry.execute(name, args, context)).rejects.toThrow(/outcome is unknown/i);
+    await expect(registry.execute(name, args, context)).rejects.toThrow(/unknown prior outcome/i);
+    expect(handler).not.toHaveBeenCalled();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(durable.rows.get(context.idempotencyKey)?.state).toBe('unknown');
+  });
+
+  it('pins detached arguments before an asynchronous preflight yields', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'pinned-target' }));
+    const name = 'external_commit_preflight_argument_capture';
+    registerExternalCommit(registry, name, handler);
+    let release!: () => void;
+    registry.get(name)!.preflight = async () => new Promise<void>(resolve => { release = resolve; });
+    const args = { target: 'Alice', payload: 'Approved input' };
+    const accepted = registry.execute(name, args, confirmedContext('preflight-argument-capture'));
+    args.target = 'Bob';
+    release();
+    await accepted;
+    expect(handler).toHaveBeenCalledWith({ target: 'Alice', payload: 'Approved input' }, expect.any(Object));
+  });
+
+  it('pins the external effect classification before asynchronous preflight can mutate registry metadata', async () => {
+    const durable = durableJournalAdapter();
+    configureExternalCommitJournal({ ...durable.adapter, async claim() { throw new Error('journal unavailable'); } });
+    const registry = new ToolRegistry();
+    const name = 'external_commit_preflight_capability_capture';
+    const handler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'must-not-send' }));
+    registerExternalCommit(registry, name, handler);
+    let release!: () => void;
+    registry.get(name)!.preflight = async () => new Promise<void>(resolve => { release = resolve; });
+    const accepted = registry.execute(name, { target: 'Alice', payload: 'No bypass' }, confirmedContext('capability-capture'));
+    registry.get(name)!.capability!.sideEffects![0].type = 'local_read';
+    release();
+    await expect(accepted).rejects.toThrow(/durable idempotency journal is unavailable/i);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('pins accepted task and user identity before asynchronous preflight', async () => {
+    const durable = durableJournalAdapter();
+    configureExternalCommitJournal(durable.adapter);
+    const registry = new ToolRegistry();
+    const name = 'external_commit_preflight_identity_capture';
+    const handler = vi.fn(async (_args: Record<string, any>, _context?: unknown) => JSON.stringify({ verified: true, providerReceipt: 'accepted-identity' }));
+    registerExternalCommit(registry, name, handler);
+    let release!: () => void;
+    registry.get(name)!.preflight = async () => new Promise<void>(resolve => { release = resolve; });
+    const context = confirmedContext('accepted-identity-key');
+    const accepted = registry.execute(name, { target: 'Alice', payload: 'Original scope' }, context);
+    context.idempotencyKey = 'replacement-key';
+    context.userId = 'replacement-user';
+    context.taskId = 'replacement-task';
+    release();
+    await accepted;
+    expect(durable.rows.get('accepted-identity-key')).toMatchObject({
+      userId: 'external-commit-test-user', taskId: 'external-commit-test-task', state: 'verified',
+    });
+    expect(durable.rows.has('replacement-key')).toBe(false);
+    expect(handler.mock.calls[0][1]).toMatchObject({
+      userId: 'external-commit-test-user', taskId: 'external-commit-test-task', idempotencyKey: 'accepted-identity-key',
+    });
+  });
+
+  it('does not submit when cancellation arrives while the durable handler-entry fence is arming', async () => {
+    const durable = durableJournalAdapter();
+    const controller = new AbortController();
+    let entered!: () => void;
+    let release!: () => void;
+    const arming = new Promise<void>(resolve => { entered = resolve; });
+    configureExternalCommitJournal({
+      ...durable.adapter,
+      async settle(input) {
+        if (input.state === 'running') await new Promise<void>(resolve => { release = resolve; entered(); });
+        return durable.adapter.settle(input);
+      },
+    });
+    const registry = new ToolRegistry();
+    const name = 'external_commit_cancelled_at_durable_entry';
+    const handler = vi.fn(async () => JSON.stringify({ verified: true, providerReceipt: 'must-not-submit' }));
+    registerExternalCommit(registry, name, handler);
+    const context = { ...confirmedContext('cancelled-at-durable-entry'), executionSignal: controller.signal, isCancelled: () => false };
+    const accepted = registry.execute(name, { target: 'Alice', payload: 'No cancelled submission' }, context);
+    await arming;
+    controller.abort(new Error('execution revoked while arming'));
+    release();
+    await expect(accepted).rejects.toThrow('execution revoked while arming');
+    expect(handler).not.toHaveBeenCalled();
+    expect(durable.rows.get(context.idempotencyKey)?.state).toBe('not_started');
+  });
+
 });

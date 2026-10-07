@@ -589,8 +589,7 @@ describe('unified tool execution engine', () => {
     const first = registry.execute('local_mutation_scoped_fence_test', args, sameScope);
     await Promise.resolve();
     const concurrentDuplicate = registry.execute('local_mutation_scoped_fence_test', args, sameScope);
-    await Promise.resolve();
-    expect(handler).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
 
     releaseFirst();
     const [firstResult, duplicateResult] = await Promise.all([first, concurrentDuplicate]);
@@ -664,4 +663,73 @@ describe('unified tool execution engine', () => {
     await expect(executeToolCall({ registry, name: 'read_lifecycle_name_spoof' }))
       .resolves.toMatchObject({ error: 'provider failure' });
   });
+  it('does not enter a handler for an aborted signal even when the cancellation callback says false', async () => {
+    const { registry, handler } = registryWithTool();
+    const controller = new AbortController();
+    controller.abort(new Error('accepted execution revoked'));
+    const onAdapterStart = vi.fn();
+    const onAdapterSettlement = vi.fn();
+    await expect(registry.execute('read_demo', { target: 'desktop' }, {
+      executionSignal: controller.signal, isCancelled: () => false, onAdapterStart, onAdapterSettlement,
+    })).rejects.toThrow('accepted execution revoked');
+    expect(handler).not.toHaveBeenCalled();
+    expect(onAdapterStart).not.toHaveBeenCalled();
+    expect(onAdapterSettlement).not.toHaveBeenCalled();
+  });
+
+  it('does not enter a handler after its signal is aborted during the adapter-start barrier', async () => {
+    const { registry, handler } = registryWithTool();
+    const controller = new AbortController();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const onAdapterSettlement = vi.fn();
+    const accepted = registry.execute('read_demo', { target: 'desktop' }, {
+      executionSignal: controller.signal, isCancelled: () => false, onAdapterSettlement,
+      onAdapterStart: async () => new Promise<void>(resolve => { release = resolve; entered(); }),
+    });
+    await started;
+    controller.abort(new Error('execution revoked at barrier'));
+    release();
+    await expect(accepted).rejects.toThrow('execution revoked at barrier');
+    expect(handler).not.toHaveBeenCalled();
+    expect(onAdapterSettlement).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a transient read failure after its upstream signal is aborted', async () => {
+    const { registry, handler } = registryWithTool();
+    const controller = new AbortController();
+    registry.get('read_demo')!.capability = {
+      id: 'test.abort-retry', family: 'test', lane: 'files', operation: 'observe', risk: 'low',
+      sideEffects: [{ type: 'local_read', scope: 'test target', reversible: true }],
+    };
+    handler.mockImplementationOnce(async () => {
+      controller.abort(new Error('execution revoked after first read'));
+      throw new Error('503 temporarily unavailable');
+    });
+    const onAdapterStart = vi.fn();
+    await expect(registry.execute('read_demo', { target: 'desktop' }, {
+      executionSignal: controller.signal, isCancelled: () => false, onAdapterStart,
+    })).rejects.toThrow('503 temporarily unavailable');
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(onAdapterStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enter a handler when cancellation wins the final handler microtask', async () => {
+    const { registry, handler } = registryWithTool();
+    const controller = new AbortController();
+    const onAdapterSettlement = vi.fn();
+    await expect(registry.execute('read_demo', { target: 'desktop' }, {
+      executionSignal: controller.signal, isCancelled: () => false, onAdapterSettlement,
+      onAdapterStart: async () => {
+        queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => {
+          controller.abort(new Error('execution revoked at handler microtask'));
+        })));
+      },
+    })).rejects.toThrow('execution revoked at handler microtask');
+    expect(handler).not.toHaveBeenCalled();
+    expect(onAdapterSettlement).not.toHaveBeenCalled();
+  });
+
+
 });
