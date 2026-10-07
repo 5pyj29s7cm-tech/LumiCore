@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { normalizePathIdentity } from '../../shared/file_identity';
 import { ensurePrivateRuntimeDirectory, restrictOwnerAccess } from './runtime_file_security';
 
 const ENV_KEY = 'LUMI_DATA_DIR';
@@ -102,8 +103,7 @@ interface ProductDataMigrationVerificationReceipt {
 }
 
 function normalizeRoot(value: string): string {
-  const normalized = path.normalize(path.resolve(value));
-  return process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized;
+  return normalizePathIdentity(path.resolve(value));
 }
 
 function digestRoot(value: string): string {

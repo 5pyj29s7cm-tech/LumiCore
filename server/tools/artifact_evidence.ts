@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { normalizePathIdentity } from '../../shared/file_identity';
 import crypto from 'node:crypto';
 import type { ToolExecutionRecord } from './types';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from './receipt_payload';
@@ -35,10 +35,8 @@ export function artifactReadbackText(record: ToolExecutionRecord): string | unde
 }
 
 export function sameArtifactPath(left: string, right: string): boolean {
-  const normalize = (value: string) => /^[a-z]:[\\/]|^\\\\/iu.test(value)
-    ? path.win32.normalize(value.replace(/\//gu, '\\')).toLowerCase()
-    : path.posix.normalize(value);
-  return Boolean(left && right && normalize(left) === normalize(right));
+  const identity = (value: string) => normalizePathIdentity(value, /^[a-z]:[\\/]|^\\\\/iu.test(value) ? 'win32' : 'linux');
+  return Boolean(left && right && identity(left) === identity(right));
 }
 
 /** Producer receipts describe outputs; a mutation's input is never its output. */

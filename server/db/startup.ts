@@ -2,7 +2,6 @@ import { getBootstrapMarketplaceSkills, BOOTSTRAP_FOUNDER_VISION } from '../regi
 import type sqlite3 from 'sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import bcrypt from 'bcryptjs';
 import { INITIAL_SCHEMA_SQL } from './initial_schema';
 import type { DatabaseSqlWriteSession } from './sql_session';
 import { assertSafeSqliteDataPath, getDataPath, getDataRoot, hasExplicitDataRoot } from '../config/data_path';
@@ -188,7 +187,7 @@ export function createTables(db: sqlite3.Database, session: DatabaseSqlWriteSess
 }
 
 async function insertInitialData({ query, run }: DatabaseSqlWriteSession): Promise<void> {
-  const tables = ['users', 'interactions', 'marketplace_skills', 'skills', 'founder_vision'];
+  const tables = ['interactions', 'marketplace_skills', 'skills', 'founder_vision'];
   const counts: { [table: string]: number } = {};
 
   for (const table of tables) {
@@ -196,14 +195,8 @@ async function insertInitialData({ query, run }: DatabaseSqlWriteSession): Promi
     counts[table] = count[0]?.cnt ?? 0;
   }
 
-  if (counts.users === 0) {
-    const hashedPassword = await bcrypt.hash('admin123', 10);
-    const now = new Date().toISOString();
-    await run(
-      `INSERT INTO users (uid, username, password, role, balance, phone, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ['admin-uid', 'admin', hashedPassword, 'admin', 1000, '', now]
-    );
-  }
+  // First-run administrator creation belongs to the native-proof auth route.
+  // Database seeds must never create a separately usable administrator secret.
 
   if (counts.marketplace_skills === 0) {
     const defaultSkills = getBootstrapMarketplaceSkills();

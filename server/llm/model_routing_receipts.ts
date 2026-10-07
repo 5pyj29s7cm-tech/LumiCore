@@ -16,6 +16,7 @@ export interface ModelRouteAttempt {
   provider: string;
   model: string;
   status: ModelRouteAttemptStatus;
+  configurationEpoch?: string;
   reason?: string;
   errorCategory?: string;
   errorDigest?: string;
@@ -110,6 +111,7 @@ function normalizeAttempt(value: ModelRouteAttempt): ModelRouteAttempt {
     provider,
     model,
     status: value.status,
+    ...(value.configurationEpoch ? { configurationEpoch: compact(value.configurationEpoch, 100) } : {}),
     ...(value.reason ? { reason: compact(value.reason) } : {}),
     ...(value.errorCategory ? { errorCategory: compact(value.errorCategory, 64) } : {}),
     ...(value.errorDigest ? { errorDigest: compact(value.errorDigest, 64) } : {}),
@@ -198,7 +200,7 @@ export function listModelRoutingReceipts(
     .map((receipt: ModelRoutingReceipt) => cloneDatabaseValue(receipt));
 }
 
-export function findProviderRuntimeObservation(provider: string, model: string): ProviderRuntimeObservation | null {
+export function findProviderRuntimeObservation(provider: string, model: string, configurationEpoch?: string): ProviderRuntimeObservation | null {
   try {
     const db = readDatabaseTables(["modelRoutingReceipts"]);
     const receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
@@ -208,6 +210,7 @@ export function findProviderRuntimeObservation(provider: string, model: string):
       for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex -= 1) {
         const attempt = attempts[attemptIndex];
         if (String(attempt?.provider || '') !== provider || String(attempt?.model || '') !== model) continue;
+        if (configurationEpoch && attempt.configurationEpoch !== configurationEpoch) continue;
         // Policy/circuit skips and user cancellation did not test the model.
         // They must not hide the actual failure (or recovery) behind them.
         if (!['succeeded', 'failed'].includes(attempt.status) || attempt.reason === 'cancelled') continue;
@@ -215,6 +218,7 @@ export function findProviderRuntimeObservation(provider: string, model: string):
           provider,
           model,
           status: attempt.status,
+          ...(attempt.configurationEpoch ? { configurationEpoch: String(attempt.configurationEpoch).slice(0, 100) } : {}),
           observedAt: String(attempt.completedAt || receipt.completedAt || ''),
           ...(attempt.durationMs !== undefined ? { durationMs: Math.max(0, Math.trunc(Number(attempt.durationMs) || 0)) } : {}),
           ...(attempt.reason ? { reason: String(attempt.reason).slice(0, 100) } : {}),

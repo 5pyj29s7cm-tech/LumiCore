@@ -20,7 +20,7 @@ import {
   isRegisteredOpenAICompatibleProvider,
   isRegisteredProviderLocal,
 } from '../extensions/registry';
-import { isCircuitClosed } from '../cloud/circuit_breaker';
+import { isCircuitClosed, getProviderConfigurationEpoch } from '../cloud/circuit_breaker';
 import { modelCandidateKey } from './model_turn_state';
 import { recentProviderProbeFailure } from './provider_health';
 import { buildModelExecutionAwareness } from '../cognition/vision_routing';
@@ -100,6 +100,7 @@ function completedAttempt(
     error?: unknown;
     response?: NormalizedLLMResponse;
     visibleOutputCommitted?: boolean;
+    configurationEpoch?: string;
   } = {},
 ): ModelRouteAttempt {
   const completedAtMs = Date.now();
@@ -109,6 +110,7 @@ function completedAttempt(
   return {
     ...candidate,
     status,
+    ...(options.configurationEpoch ? { configurationEpoch: options.configurationEpoch } : {}),
     ...(options.reason ? { reason: options.reason } : {}),
     ...(options.error !== undefined ? {
       errorCategory: attemptErrorCategory(options.error),
@@ -356,6 +358,7 @@ async function dispatchCandidatePhase(
       ? createCandidateVisibility(onChunk, config.bufferStreamUntilCandidateSuccess === true)
       : undefined;
     const startedAt = Date.now();
+    const configurationEpoch = getProviderConfigurationEpoch(candidate.provider);
     let result: NormalizedLLMResponse | undefined;
     try {
       const candidateMessages = messagesForCandidate(messages, config, candidate);
@@ -371,7 +374,7 @@ async function dispatchCandidatePhase(
         : result && !responseHasSemanticContent(result) ? 'empty_response' : modelRoutingErrorReason(error);
       lastError = error;
       attempts.push(completedAttempt(candidate, 'failed', startedAt, {
-        reason, error, response: result,
+        reason, error, response: result, configurationEpoch,
         ...(visibility ? { visibleOutputCommitted: visibility.committed } : {}),
       }));
       const routing = routingTrace({ config, attempts, fallbackReason: reason });
@@ -382,7 +385,7 @@ async function dispatchCandidatePhase(
       continue;
     }
     attempts.push(completedAttempt(candidate, 'succeeded', startedAt, {
-      response: result,
+      response: result, configurationEpoch,
       ...(visibility ? { visibleOutputCommitted: visibility.committed } : {}),
     }));
     return {

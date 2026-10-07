@@ -237,17 +237,12 @@ export function saveKeys(keys: Partial<KeyStore>): void {
     }
   }
 
-  // Reset circuit breakers for affected providers so updated keys take effect immediately
-  try {
-    for (const keyName of Object.keys(keys)) {
-      const circuits = KEY_TO_CIRCUIT[keyName as keyof KeyStore];
-      if (circuits) {
-        for (const c of circuits) {
-          resetCircuit(c);
-        }
-      }
-    }
-  } catch {}
+  const affected = new Set<string>();
+  for (const name of Object.keys(keys)) {
+    if (String(existing[name] || '').trim() === String(merged[name] || '').trim()) continue;
+    for (const provider of KEY_TO_CIRCUIT[name] || []) affected.add(provider);
+  }
+  for (const provider of affected) resetCircuit(provider);
 }
 
 export function getKey(name: keyof KeyStore): string | undefined {

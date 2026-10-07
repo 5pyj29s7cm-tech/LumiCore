@@ -14,7 +14,7 @@
  *   );
  */
 
-import { isCircuitClosed, recordSuccess, recordFailure } from './circuit_breaker';
+import { acquireCircuitCall, releaseCircuitCall, recordSuccess, recordFailure } from './circuit_breaker';
 import { withRetry, RetryOptions } from './retry';
 import { classifyCloudError, CloudErrorCategory } from './core';
 
@@ -99,7 +99,8 @@ export async function withCloudResilience<T>(
   if (signal?.aborted) throw abortError(signal);
 
   // 1. Circuit breaker gate
-  if (!isCircuitClosed(provider, model)) {
+  const call = acquireCircuitCall(provider, model);
+  if (!call) {
     const err = new Error(
       `[CircuitBreaker] ${provider}${model ? ` (${model})` : ''} is OPEN — failing fast.` +
       ` The circuit will automatically probe after the cooldown period.`,
@@ -136,7 +137,7 @@ export async function withCloudResilience<T>(
     const result = await raceWithAbort(operation, operationSignal);
 
     // 3. Success — record to circuit breaker
-    recordSuccess(provider, model);
+    recordSuccess(provider, model, call);
     return result;
   } catch (err: any) {
     // A caller choosing to stop work says nothing about provider health. A
@@ -158,7 +159,7 @@ export async function withCloudResilience<T>(
       // Existing credential updates reset these same circuits immediately.
       ...(unavailableAccount ? { cooldownMs: 5 * 60_000 }
         : stalledLocalInference ? { cooldownMs: 2 * 60_000 } : {}),
-    });
+    }, call);
 
     // Attach classification to error for upstream handling
     err.cloudCategory = classified.category;
@@ -166,6 +167,7 @@ export async function withCloudResilience<T>(
 
     throw err;
   } finally {
+    releaseCircuitCall(call);
     if (deadlineTimer) clearTimeout(deadlineTimer);
   }
 }

@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import { spawn } from "child_process";
+import { isPathInsideRoot } from '../../../shared/file_identity';
 import { readKnowledgeFileState } from "../knowledge_state";
 import { getDataPath, getGeneratedOutputDir } from "../../config/data_path";
 import { collectChatArtifacts } from "../../conversation/chat_artifacts";
@@ -14,11 +15,7 @@ export const PERSONAL_KNOWLEDGE_DIR = getDataPath('knowledge');
 
 fs.mkdirSync(PERSONAL_KNOWLEDGE_DIR, { recursive: true });
 
-export function isInsideRoot(filePath: string, root: string): boolean {
-  const normalizedFile = path.normalize(filePath).toLowerCase();
-  const normalizedRoot = path.normalize(root).toLowerCase();
-  return normalizedFile === normalizedRoot || normalizedFile.startsWith(normalizedRoot + path.sep.toLowerCase());
-}
+export const isInsideRoot = isPathInsideRoot;
 
 export function resolveGeneratedDownloadPath(value: unknown, req?: Request): string {
   const rawInput = String(value || '').trim();
@@ -116,14 +113,14 @@ export function openPathWithDefaultApp(filePath: string): Promise<void> {
         '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
-        '-Command',
-        '$ErrorActionPreference = "Stop"; $target = $args[0]; if (-not (Test-Path -LiteralPath $target)) { throw "Path not found: $target" }; Start-Process -LiteralPath $target',
-        filePath,
+        '-EncodedCommand',
+        Buffer.from('$ErrorActionPreference = "Stop"; $target = $env:LUMI_OPEN_TARGET; if (-not (Test-Path -LiteralPath $target)) { throw "Path not found: $target" }; Start-Process -FilePath $target', 'utf16le').toString('base64'),
       ]
       : [filePath];
     const proc = spawn(command, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
+      env: { ...process.env, LUMI_OPEN_TARGET: filePath },
     });
     let stderr = '';
     const timer = setTimeout(() => {

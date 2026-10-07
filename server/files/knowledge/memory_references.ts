@@ -1,4 +1,5 @@
 import path from "path";
+import { fileNameIdentity } from "../../../shared/file_identity";
 import fs from "fs";
 import { invalidateMemoryEmbedding } from "../../memory/embedding_identity";
 import { evaluateKnowledgeManifest } from "../../knowledge/ingestion_manifest";
@@ -11,15 +12,15 @@ import { repairFilename } from './formats';
 // ── GET /files/list — list knowledge base files ──
 export function groupExistingFileMemories(
   db: any, filenames: string[], scope: FileScope,
-  options: { userId?: string; agentId?: string } = {},
+  options: { userId?: string; agentId?: string; platform?: NodeJS.Platform } = {},
 ): Map<string, any[]> {
   const grouped = new Map<string, any[]>(), targets = new Map<string, string[]>();
   const names = new Set(filenames);
-  let headerLength = 0;
+  const identity = (value: string) => fileNameIdentity(value, options.platform);
+  const sourcePaths = (options.platform || process.platform) === 'win32' ? path.win32 : path.posix;
   for (const name of names) {
-    const key = name.normalize('NFC').toLowerCase();
+    const key = identity(name);
     targets.set(key, [...(targets.get(key) || []), name]);
-    headerLength = Math.max(headerLength, name.length + 3);
   }
   if (!names.size) return grouped;
   for (const memory of db.memories || []) {
@@ -28,16 +29,22 @@ export function groupExistingFileMemories(
       || (memory.domain || 'personal') !== scope.domain || (memory.orgId || '') !== (scope.orgId || '')) continue;
     const matched = new Set<string>();
     const include = (key: string) => { for (const name of targets.get(key) || []) matched.add(name); };
-    include(path.basename(String(memory.sourceInteractionId || '')).normalize('NFC').toLowerCase());
-    for (const keyword of Array.isArray(memory.keywords) ? memory.keywords : []) {
-      const key = String(keyword || '').normalize('NFC').toLowerCase();
-      if (key.startsWith('source:')) include(key.slice(7));
-    }
-    // Preserve every legacy prefix match, including filenames containing " #".
-    const header = String(memory.content || '').normalize('NFC').slice(0, headerLength);
-    if (header.startsWith('[')) for (let end = header.indexOf(' #', 1); end !== -1; end = header.indexOf(' #', end + 2)) {
-      const name = header.slice(1, end);
-      if (names.has(name)) matched.add(name);
+    const source = String(memory.knowledgeProvenance?.sourcePath || memory.knowledgeProvenance?.sourceLabel || memory.sourceInteractionId || '');
+    // A file-backed source owns its identity. Legacy search tags cannot also
+    // attach the same chunk to a different, case-distinct file.
+    if (/[\\/]/u.test(source) || sourcePaths.extname(source) || targets.has(identity(sourcePaths.basename(source)))) {
+      include(identity(sourcePaths.basename(source)));
+    } else {
+      const header = /^\[(.+?) #\d+\]/u.exec(String(memory.content || '').slice(0, 1024));
+      if (header) {
+        include(identity(header[1]));
+      } else if ((options.platform || process.platform) === 'win32') {
+        // A case-folded legacy tag cannot establish exact POSIX file ownership.
+        for (const keyword of Array.isArray(memory.keywords) ? memory.keywords : []) {
+          const value = String(keyword || '');
+          if (/^source:/iu.test(value)) include(identity(value.slice(7)));
+        }
+      }
     }
     for (const name of matched) {
       if (!grouped.has(name)) grouped.set(name, []);
@@ -49,15 +56,15 @@ export function groupExistingFileMemories(
 
 export function findExistingFileMemories(
   db: any, filename: string, scope: FileScope,
-  options: { userId?: string; agentId?: string } = {},
+  options: { userId?: string; agentId?: string; platform?: NodeJS.Platform } = {},
 ): any[] {
   return groupExistingFileMemories(db, [filename], scope, options).get(filename) || [];
 }
 
-export function removeFileMemoryReferences(db: any, filename: string, scope: FileScope): number {
+export function removeFileMemoryReferences(db: any, filename: string, scope: FileScope, platform: NodeJS.Platform = process.platform): number {
   if (scope.domain !== 'personal') return 0;
   const ids = new Set(
-    findExistingFileMemories(db, filename, scope, { userId: scope.userId })
+    findExistingFileMemories(db, filename, scope, { userId: scope.userId, platform })
       .map((memory: any) => memory.id)
       .filter(Boolean),
   );
@@ -72,11 +79,11 @@ export function renameFileMemoryReferences(
   newName: string,
   newPath: string,
   scope: FileScope,
+  platform: NodeJS.Platform = process.platform,
 ): number {
   if (scope.domain !== 'personal') return 0;
-  const memories = findExistingFileMemories(db, oldName, scope, { userId: scope.userId });
-  const normalizedOldName = oldName.normalize('NFC').toLowerCase();
-  const oldSourceKeyword = `source:${oldName}`.normalize('NFC').toLowerCase();
+  const memories = findExistingFileMemories(db, oldName, scope, { userId: scope.userId, platform });
+  const normalizedOldName = fileNameIdentity(oldName, platform);
   for (const memory of memories) {
     const content = String(memory.content || '');
     if (content.startsWith(`[${oldName} #`)) {
@@ -84,9 +91,9 @@ export function renameFileMemoryReferences(
     }
     memory.keywords = (Array.isArray(memory.keywords) ? memory.keywords : []).map((keyword: unknown) => {
       const value = String(keyword || '');
-      const normalized = value.normalize('NFC').toLowerCase();
+      const normalized = fileNameIdentity(value, platform);
       if (normalized === normalizedOldName) return newName;
-      if (normalized === oldSourceKeyword) return `source:${newName}`;
+      if (/^source:/iu.test(value) && fileNameIdentity(value.slice(7), platform) === normalizedOldName) return `source:${newName}`;
       return value;
     });
     memory.sourceInteractionId = newPath;

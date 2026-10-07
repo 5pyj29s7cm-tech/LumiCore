@@ -11,7 +11,8 @@ import { logger } from "../../logger";
 import { getDataRoot } from "../config/data_path";
 import { toolRegistry } from "../tools/registry";
 import { scheduler } from "../scheduler";
-import { classifyCloudError, getCloudHealth, recordFailure, resetCircuit } from "../cloud/core";
+import { getProviderConfigurationEpoch } from "../cloud/circuit_breaker";
+import { classifyCloudError, getCloudHealth, resetCircuit } from "../cloud/core";
 import { loadKeys, saveKeys, getAllKeyNames, isPersistableKeyName } from "../config/keys";
 import { parseDoubaoSpeechCredentials } from "../config/doubao_speech";
 import { optionalAuth, requireAdmin, requireAuth, requireLocalRequest, resolveDomain } from "../middleware/auth";
@@ -890,12 +891,13 @@ function mountModelDiagnosticRoutes(router: Router, llm: TestableModelRuntime) {
     const { provider, model } = req.body || {};
     const providerId = String(provider || '');
     const modelId = typeof model === 'string' ? model : undefined;
+    const configurationEpoch = getProviderConfigurationEpoch(providerId);
     try {
       const result = await testLLMProviderConnection(providerId, modelId, llm);
-      resetCircuit(result.provider);
       saveProviderProbe({
         provider: result.provider,
         model: result.model,
+        configurationEpoch,
         ok: true,
         testedAt: new Date().toISOString(),
         latencyMs: result.latencyMs,
@@ -905,10 +907,10 @@ function mountModelDiagnosticRoutes(router: Router, llm: TestableModelRuntime) {
       const message = sanitizedProviderError(err);
       const classified = classifyCloudError(err instanceof Error ? err : new Error(message), providerId);
       if (providerId) {
-        recordFailure(providerId, undefined, err instanceof Error ? err : new Error(message), { openImmediately: true });
         saveProviderProbe({
           provider: providerId,
           model: String(modelId || ''),
+          configurationEpoch,
           ok: false,
           testedAt: new Date().toISOString(),
           error: message,
