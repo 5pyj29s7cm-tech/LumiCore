@@ -148,7 +148,7 @@ describe('scheduler stability', () => {
       await (scheduler as any).runTask(task);
 
       expect(handlerSignal?.aborted).toBe(true);
-      expect((scheduler as any).runningTasks.has(taskId)).toBe(true);
+      expect((scheduler as any).executions.active.has(taskId)).toBe(true);
       expect(scheduler.listTasks()).toEqual([
         expect.objectContaining({
           id: taskId,
@@ -196,7 +196,7 @@ describe('scheduler stability', () => {
       }
 
       settle();
-      await vi.waitFor(() => expect((scheduler as any).runningTasks.has(taskId)).toBe(false));
+      await vi.waitFor(() => expect((scheduler as any).executions.active.has(taskId)).toBe(false));
       expect(scheduler.listTasks()[0]).toMatchObject({
         lastStatus: 'unknown',
         running: false,
@@ -361,7 +361,7 @@ describe('scheduler stability', () => {
       await didStart;
       scheduler.stop();
       settle();
-      await vi.waitFor(() => expect((scheduler as any).runningTasks.has(taskId)).toBe(false));
+      await vi.waitFor(() => expect((scheduler as any).executions.active.has(taskId)).toBe(false));
       await Promise.resolve();
       expect((scheduler as any).timers.size).toBe(0);
     } finally {

@@ -395,14 +395,11 @@ describe('scheduler capability execution protocol', () => {
   });
 
   it('plans and persists before invoking a handler and requires policy on every built-in task', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'server', 'scheduler.ts'), 'utf8');
-    const runStart = source.indexOf('private async runAdmittedTask');
-    const runEnd = source.indexOf('private async executeTaskHandler', runStart);
-    const run = source.slice(runStart, runEnd);
+    const run = fs.readFileSync(path.join(process.cwd(), 'server', 'scheduler', 'run_execution.ts'), 'utf8');
     expect(run.indexOf('buildScheduledTaskExecutionPlan(task, startedAt)'))
-      .toBeLessThan(run.indexOf('await this.executeTaskHandler(task, plan, execution)'));
+      .toBeLessThan(run.indexOf('await owner.executeTaskHandler(task, plan, execution)'));
     expect(run.indexOf("status: authorization.allowed ? 'executing' : 'blocked'"))
-      .toBeLessThan(run.indexOf('await this.executeTaskHandler(task, plan, execution)'));
+      .toBeLessThan(run.indexOf('await owner.executeTaskHandler(task, plan, execution)'));
     expect(run).toContain("authorizeCapabilityPlanTool(plan, 'scheduler_task_handler')");
     expect(run).toContain("previousStatus === 'executing'");
     expect(run).toContain("const compactAudit = task.auditMode !== 'full'");
@@ -410,8 +407,8 @@ describe('scheduler capability execution protocol', () => {
     expect(run).toContain('automatic replay for this slot is disabled');
     expect(run).toContain('durability');
     expect(run.indexOf("lastStatus: 'completed'"))
-      .toBeLessThan(run.indexOf('this.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'));
-    expect(run.indexOf('this.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'))
+      .toBeLessThan(run.indexOf('owner.context.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'));
+    expect(run.indexOf('owner.context.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'))
       .toBeLessThan(run.indexOf('task.lastStatus = completedTask.lastStatus'));
 
     const tasks = createScheduledBuiltinTasks({ scheduler: { io: null }, getters: { getDeepSeek: () => null, getGemini: () => null },
