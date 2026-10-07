@@ -410,8 +410,8 @@ describe('scheduler capability execution protocol', () => {
     expect(run).toContain('automatic replay for this slot is disabled');
     expect(run).toContain('durability');
     expect(run.indexOf("lastStatus: 'completed'"))
-      .toBeLessThan(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'));
-    expect(run.indexOf('this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution)'))
+      .toBeLessThan(run.indexOf('this.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'));
+    expect(run.indexOf('this.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution)'))
       .toBeLessThan(run.indexOf('task.lastStatus = completedTask.lastStatus'));
 
     const tasks = createScheduledBuiltinTasks({ scheduler: { io: null }, getters: { getDeepSeek: () => null, getGemini: () => null },

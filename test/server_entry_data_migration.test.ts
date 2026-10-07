@@ -20,13 +20,15 @@ describe('runtime data migration entry boundary', () => {
   it('has one process-local migration owner with a db-layer fallback', () => {
     const preflight = source('server/runtime/data_root_preflight.ts');
     const database = source('db_layer.ts');
+    const startup = source('server/db/startup.ts');
 
     expect(preflight).toContain('migrateLegacyProductDataRoot(claimDataRootForMigration)');
     expect(preflight).toContain('if (runtimeDataRootPrepared) return;');
     expect(preflight.indexOf('acquireDataRootLease()'))
       .toBeLessThan(preflight.indexOf('preflightProductDataMigrationReceipts()'));
-    expect(database).toContain('prepareRuntimeDataRoot();');
-    expect(database).not.toContain('migrateLegacyProductDataRoot(');
+    expect(startup).toContain('prepareRuntimeDataRoot();');
+    expect(database).toContain('const dbPath = prepareDatabaseRuntime();');
+    expect(database + startup).not.toContain('migrateLegacyProductDataRoot(');
   });
 
   it('uses the ordered entry in both supervised source and packaged runtimes', () => {

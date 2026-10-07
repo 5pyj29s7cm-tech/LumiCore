@@ -12,6 +12,33 @@ import {
 } from '../server/scheduler';
 
 describe('scheduler stability', () => {
+
+  it('runs an internal probe when unrelated chat and user snapshots are unavailable', async () => {
+    const database = await import('../db_layer');
+    const read = database.readDatabaseTables;
+    const boundary = vi.spyOn(database, 'readDatabaseTables').mockImplementation((tables: any) => {
+      if (tables.some((table: string) => ['interactions', 'memories', 'users', 'conversations', 'reminders'].includes(table))) {
+        throw new Error('Unrelated chat and user snapshots are deliberately unavailable.');
+      }
+      return read(tables);
+    });
+    const scheduler = new Scheduler(async () => {});
+    const task: ScheduledTask = {
+      id: 'probe-table-boundary-' + crypto.randomUUID(), cron: 'every_hour', lastRun: null,
+      executionClass: 'client_probe', handler: vi.fn(async () => null),
+    };
+    try {
+      scheduler.register(task);
+      await (scheduler as any).runTask(task);
+      expect(task.handler).toHaveBeenCalledOnce();
+      expect(task.lastStatus).toBe('completed');
+      expect(task.persistenceStatus).toBe('coalesced');
+    } finally {
+      scheduler.stop();
+      boundary.mockRestore();
+    }
+  });
+
   beforeAll(async () => {
     const { initDatabase } = await import('../db_layer');
     await initDatabase();
@@ -427,7 +454,7 @@ describe('scheduler stability', () => {
       });
       // A later coalesced metadata write (for example nextRun/disable state)
       // cannot falsely heal a failed strict durability boundary.
-      (scheduler as any).persistRuntimeState(task);
+      (scheduler as any).persistence.runtime(task);
       expect(scheduler.listTasks()[0]).toMatchObject({
         persistenceStatus: 'failed',
         lastPersistenceError: expect.stringContaining('[REDACTED]'),
@@ -677,7 +704,7 @@ describe('scheduler stability', () => {
       },
     ];
     try {
-      expect(() => (scheduler as any).persistProactiveMessageBatch(
+      expect(() => (scheduler as any).deliveries.persistProactiveMessageBatch(
         taskId,
         executionId,
         deliveries,
@@ -688,7 +715,7 @@ describe('scheduler stability', () => {
       ))).toHaveLength(0);
       expect(targetCounts).not.toContain(1);
 
-      const retry = (scheduler as any).persistProactiveMessageBatch(
+      const retry = (scheduler as any).deliveries.persistProactiveMessageBatch(
         taskId,
         executionId,
         deliveries,
@@ -699,7 +726,7 @@ describe('scheduler stability', () => {
       expect((readDB().interactions || []).filter((candidate: any) => (
         candidate.message?.startsWith(`[${taskId}]`)
       ))).toHaveLength(2);
-      (scheduler as any).rollbackProactiveMessageBatch(retry.createdInteractionIds);
+      (scheduler as any).deliveries.rollbackProactiveMessageBatch(retry.createdInteractionIds);
     } finally {
       scheduler.stop();
     }

@@ -1,18 +1,17 @@
+import { ScheduledRuntimePersistence } from './scheduler/persistence';
+import { ScheduledDeliveryService } from './scheduler/delivery';
 import { createScheduledBuiltinTasks } from "./scheduler/builtins";
 import crypto from "node:crypto";
 import type { Server as SocketIOServer } from "socket.io";
-import type { Reminder } from "./memory";
 import { flushDBOrThrow, readDatabaseTables, commitDatabaseTables } from "../db_layer";
 import { authorizeCapabilityPlanTool, type CapabilityExecutionPlan } from "./cognition/capability_execution_plan";
 import { getScheduledCapabilityExecutionStatus, persistScheduledCapabilityExecution } from "./conversation/ledger/scheduler";
-import type { ScheduledTask, ScheduledTaskExecutionContract, ScheduledDelivery, ScheduledTaskResult, ScheduledTaskRunStatus } from './scheduler/contracts';
+import type { ScheduledTask, ScheduledTaskExecutionContract, ScheduledTaskResult, ScheduledTaskRunStatus } from './scheduler/contracts';
 import type { ScheduledInFlightHandler } from './scheduler/execution_phase';
 import { hydrateRuntimeState, loadDisabledState, stageRuntimeState } from './scheduler/runtime_state';
 import { redactSchedulerDiagnostic } from './scheduler/diagnostics';
-import { requiresStrictScheduledPersistence, getScheduledTaskTimeoutMs, getScheduledTaskExecutionContract } from './scheduler/execution_contract';
+import { getScheduledTaskTimeoutMs, getScheduledTaskExecutionContract } from './scheduler/execution_contract';
 import { awaitExecutionPhase, ScheduledTaskExecutionError, executionOperationsSettled } from './scheduler/execution_phase';
-import { buildScheduledProactiveInteractionId } from './scheduler/execution_identity';
-import { finalizeScheduledDelivery } from './scheduler/delivery_finalization';
 import { parseSchedule, nextCronTime } from './scheduler/schedule';
 import { buildScheduledTaskExecutionPlan } from './scheduler/capability_plan';
 import { buildScheduledTaskRecord } from './scheduler/execution_record';
@@ -40,6 +39,25 @@ export { resolveScheduledUserIds } from './scheduler/user_selection';
 export { createReminderCheckTask } from './scheduler/reminder_check';
 
 export class Scheduler {
+  private readonly persistence = new ScheduledRuntimePersistence(
+    data => this.writeDatabase(data), execution => this.flushExecution(execution),
+  );
+  private readonly deliveries = new ScheduledDeliveryService(
+    data => this.writeDatabase(data), () => this.io,
+    execution => this.startDurableFlush(execution),
+    (operation, execution) => this.trackDurableOperation(operation, execution),
+  );
+
+  private startDurableFlush(execution?: ScheduledInFlightHandler): Promise<void> {
+    const flush = this.strictFlush();
+    return execution ? this.trackDurableOperation(flush, execution) : flush;
+  }
+
+  private flushExecution(execution?: ScheduledInFlightHandler): Promise<void> {
+    const flush = this.startDurableFlush(execution);
+    return execution ? awaitExecutionPhase(flush, execution, execution.phase) : flush;
+  }
+
   private tasks: ScheduledTask[] = [];
   private timers: Map<string, NodeJS.Timeout> = new Map();
   private runningTasks: Set<string> = new Set();
@@ -115,89 +133,6 @@ export class Scheduler {
     }
   }
 
-  private async persistDbWithRuntimeState(
-    db: any,
-    task: ScheduledTask,
-    hasUserDelivery = false,
-    execution?: ScheduledInFlightHandler,
-  ) {
-    const strict = requiresStrictScheduledPersistence(
-      task.executionClass,
-      hasUserDelivery || task.deliveryPolicy === 'scoped',
-    );
-    task.persistenceStatus = strict ? 'ok' : 'coalesced';
-    task.lastPersistenceError = null;
-    if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-    stageRuntimeState(db, task);
-    try {
-      this.writeDatabase(db);
-      if (strict) {
-        const flush = execution
-          ? this.trackDurableOperation(this.strictFlush(), execution)
-          : this.strictFlush();
-        await (execution
-          ? awaitExecutionPhase(flush, execution, execution.phase)
-          : flush);
-      }
-    } catch (error: any) {
-      task.persistenceStatus = 'failed';
-      task.lastPersistenceError = redactSchedulerDiagnostic(error);
-      console.error(`[Scheduler] Failed to persist runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
-      throw error;
-    }
-  }
-
-  private persistRuntimeState(task: ScheduledTask) {
-    const preservePersistenceFailure = task.persistenceStatus === 'failed';
-    const priorPersistenceError = task.lastPersistenceError;
-    try {
-      if (!preservePersistenceFailure) {
-        task.persistenceStatus = task.executionClass === 'client_probe' ? 'coalesced' : 'ok';
-        task.lastPersistenceError = null;
-      }
-      if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-      const db = readDatabaseTables(["settings"]);
-      stageRuntimeState(db, task);
-      this.writeDatabase(db);
-      if (preservePersistenceFailure) {
-        task.persistenceStatus = 'failed';
-        task.lastPersistenceError = priorPersistenceError;
-      }
-    } catch (error: any) {
-      task.persistenceStatus = 'failed';
-      task.lastPersistenceError = redactSchedulerDiagnostic(error);
-      console.error(`[Scheduler] Failed to persist runtime state for "${redactSchedulerDiagnostic(task.id)}":`, task.lastPersistenceError);
-    }
-  }
-
-  private persistRecoveryDbWithRuntimeState(
-    db: any,
-    task: ScheduledTask,
-    preservePersistenceFailure = false,
-  ) {
-    const priorPersistenceError = task.lastPersistenceError;
-    if (!preservePersistenceFailure) {
-      task.persistenceStatus = 'coalesced';
-      task.lastPersistenceError = null;
-    }
-    if (task.lastError) task.lastError = redactSchedulerDiagnostic(task.lastError);
-    stageRuntimeState(db, task);
-    try {
-      this.writeDatabase(db);
-      if (preservePersistenceFailure) {
-        task.persistenceStatus = 'failed';
-        task.lastPersistenceError = priorPersistenceError;
-      }
-    } catch (error: any) {
-      task.persistenceStatus = 'failed';
-      task.lastPersistenceError = redactSchedulerDiagnostic(error);
-      console.error(
-        `[Scheduler] Failed to persist recovery state for "${redactSchedulerDiagnostic(task.id)}":`,
-        task.lastPersistenceError,
-      );
-    }
-  }
-
   private abortRunningTask(id: string, reason: string) {
     const controller = this.runningControllers.get(id);
     if (controller && !controller.signal.aborted) {
@@ -218,13 +153,13 @@ export class Scheduler {
             target.lastError = message;
           }
           try {
-            this.persistRecoveryDbWithRuntimeState(
-              readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]),
+            this.persistence.recovery(
+              readDatabaseTables(["settings"]),
               visibleTask,
               visibleTask.persistenceStatus === 'failed' || execution.task.persistenceStatus === 'failed',
             );
           } catch {
-            // persistRecoveryDbWithRuntimeState already records and logs the failure.
+            // ScheduledRuntimePersistence already records and logs the failure.
           }
         }
       }
@@ -296,7 +231,7 @@ export class Scheduler {
     this.clearTimer(id);
     this.abortRunningTask(id, 'Scheduled task was disabled.');
     task.nextRun = null;
-    this.persistRuntimeState(task);
+    this.persistence.runtime(task);
     this.persistDisabledState();
     console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(id)}" disabled`);
     return true;
@@ -316,7 +251,7 @@ export class Scheduler {
       this.scheduleTask(task);
     } else {
       task.nextRun = null;
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
     }
     this.persistDisabledState();
     console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(id)}" enabled`);
@@ -413,7 +348,7 @@ export class Scheduler {
       persistenceStatus: 'ok',
       lastPersistenceError: null,
     };
-    const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+    const currentDb = readDatabaseTables(["settings"]);
     const candidateDb = {
       ...currentDb,
       settings: (currentDb.settings || []).map((setting: any) => ({ ...setting })),
@@ -453,287 +388,19 @@ export class Scheduler {
     return { reconciled: true, found: true, reason: 'reconciled' };
   }
 
-  /**
-   * Stage the complete candidate batch and swap it into the in-memory database
-   * with one write. No delivery row becomes visible before every row has been
-   * materialized, so a later item cannot strand an earlier silent message.
-   */
-  private persistProactiveMessageBatch(
-    taskId: string,
-    executionId: string,
-    deliveries: Array<{ deliveryIndex: number; delivery: ScheduledDelivery }>,
-    timestamp: string,
-  ): { createdInteractionIds: string[]; createdDeliveryIndexes: Set<number>; reminderChanges: Array<{ before: Reminder; after: Reminder }> } {
-    const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
-    const originalInteractions = Array.isArray(currentDb.interactions)
-      ? currentDb.interactions
-      : [];
-    const candidateDb = {
-      ...currentDb,
-      interactions: [...originalInteractions],
-      reminders: [...(currentDb.reminders || [])],
-    };
-    const existingIds = new Set(originalInteractions.map((candidate: any) => candidate.id));
-    const createdInteractionIds: string[] = [];
-    const createdDeliveryIndexes = new Set<number>();
-    const reminderChanges: Array<{ before: Reminder; after: Reminder }> = [];
-    const claimedReminderIds = new Set<string>();
-    for (const { deliveryIndex, delivery } of deliveries) {
-      const id = buildScheduledProactiveInteractionId(executionId, deliveryIndex, delivery);
-      if (existingIds.has(id)) continue;
-      if (taskId === 'reminder_check' || delivery.reminderIds) {
-        if (taskId !== 'reminder_check' || !delivery.reminderIds?.length) {
-          throw new ScheduledTaskExecutionError('Reminder delivery is missing its server-owned claims.', 'scheduler_delivery_invalid');
-        }
-        const reminders = delivery.reminderIds.map(reminderId => {
-          const reminder = candidateDb.reminders.find((item: Reminder) => item.id === reminderId);
-          if (claimedReminderIds.has(reminderId) || !reminder || reminder.status !== 'pending'
-            || !reminder.dueAt || reminder.dueAt > timestamp
-            || reminder.userId !== delivery.userId
-            || (reminder.domain || 'personal') !== (delivery.domain || 'personal')
-            || (reminder.orgId || '') !== (delivery.orgId || '')) {
-            throw new ScheduledTaskExecutionError('Reminder delivery claims are no longer current or do not match the recipient.', 'scheduler_delivery_invalid');
-          }
-          claimedReminderIds.add(reminderId);
-          const before = { ...reminder };
-          const after = { ...reminder, status: 'fired' as const, firedAt: timestamp };
-          candidateDb.reminders[candidateDb.reminders.indexOf(reminder)] = after;
-          reminderChanges.push({ before, after });
-          return reminder;
-        });
-        // A reminder can be edited between handler selection and delivery.
-        // Construct the message from the same authoritative candidate we commit.
-        delivery.message = `Reminder: ${reminders.map((reminder: Reminder) => reminder.content).join(' | ')}`;
-      }
-      existingIds.add(id);
-      candidateDb.interactions.push({
-        id,
-        userId: delivery.userId,
-        agentId: 'lumi',
-        conversationId: '',
-        module: 'lumi',
-        message: `[${taskId}] ${delivery.message}`,
-        response: '',
-        role: 'assistant',
-        personality: 'lumi',
-        mode: 'proactive',
-        toolCalls: JSON.stringify({ executionId, scheduledTaskId: taskId, ...(delivery.reminderIds ? { reminderIds: delivery.reminderIds } : {}) }),
-        domain: delivery.domain || 'personal',
-        orgId: delivery.domain === 'work' ? delivery.orgId || '' : '',
-        timestamp,
-      });
-      createdInteractionIds.push(id);
-      createdDeliveryIndexes.add(deliveryIndex);
-    }
-    if (createdInteractionIds.length === 0) {
-      return { createdInteractionIds, createdDeliveryIndexes, reminderChanges };
-    }
-    try {
-      this.writeDatabase(candidateDb);
-    } catch (error) {
-      try {
-        this.rollbackProactiveMessageBatch(createdInteractionIds, reminderChanges);
-      } catch (rollbackError) {
-        throw new Error(
-          'Atomic proactive delivery persistence failed and its in-memory rollback could not be confirmed.',
-          { cause: rollbackError },
-        );
-      }
-      throw error;
-    }
-    return { createdInteractionIds, createdDeliveryIndexes, reminderChanges };
-  }
-
-  private rollbackProactiveMessageBatch(createdInteractionIds: string[], reminderChanges: Array<{ before: Reminder; after: Reminder }> = []): void {
-    if (createdInteractionIds.length === 0) return;
-    const rollbackDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
-    const created = new Set(createdInteractionIds);
-    // Mutate the live projection before calling the writer as well: even a
-    // writer that throws after swapping its candidate cannot leave these rows
-    // available to a retry as created=false.
-    rollbackDb.interactions = (rollbackDb.interactions || [])
-      .filter((candidate: any) => !created.has(candidate.id));
-    // Restore only our claim. Do not resurrect a deleted reminder or overwrite
-    // another user's edit while the asynchronous flush was settling.
-    rollbackDb.reminders = (rollbackDb.reminders || []).map((reminder: Reminder) => {
-      const change = reminderChanges.find(item => item.after.id === reminder.id);
-      return change && reminder.status === change.after.status && reminder.firedAt === change.after.firedAt
-        ? { ...reminder, status: change.before.status, firedAt: change.before.firedAt }
-        : reminder;
-    });
-    this.writeDatabase(rollbackDb);
-  }
-
-  private async deliverTaskResult(
-    task: ScheduledTask,
-    plan: CapabilityExecutionPlan,
-    result: ScheduledTaskResult,
-    timestamp: string,
-    execution: ScheduledInFlightHandler,
-  ): Promise<{ deliveryCount: number; persistedCount: number; emittedCount: number; withheldCount: number }> {
-    const summary = { deliveryCount: 0, persistedCount: 0, emittedCount: 0, withheldCount: 0 };
-    if (execution.controller.signal.aborted) throw execution.controller.signal.reason;
-    if (!result) return summary;
-    if (!Array.isArray(result)) {
-      if (!task.quiet) {
-        console.warn(`[Scheduler] Dropped unscoped proactive result from "${redactSchedulerDiagnostic(task.id)}". Return ScheduledDelivery[] instead.`);
-      }
-      return summary;
-    }
-
-    // Validate the complete delivery envelope before creating any durable row
-    // or emitting anything. In particular, a work-scoped delivery without an
-    // organization must never silently fall back to a personal user room.
-    const invalidDeliveryIndex = result.findIndex((delivery: any) => (
-      !delivery
-      || typeof delivery !== 'object'
-      || typeof delivery.userId !== 'string'
-      || !delivery.userId.trim()
-      || typeof delivery.message !== 'string'
-      || !delivery.message.trim()
-      || (delivery.domain !== undefined && delivery.domain !== 'personal' && delivery.domain !== 'work')
-      || (delivery.domain === 'work' && (
-        typeof delivery.orgId !== 'string' || !delivery.orgId.trim()
-      ))
-    ));
-    if (invalidDeliveryIndex >= 0) {
-      throw new ScheduledTaskExecutionError(
-        `Scheduled delivery ${invalidDeliveryIndex} was rejected because its recipient, message, or scope was invalid.`,
-        'scheduler_delivery_invalid',
-      );
-    }
-
-    const preparedDeliveries: Array<{
-      deliveryIndex: number;
-      normalized: ScheduledDelivery;
-      finalized: boolean;
-      reason: string;
-    }> = [];
-    result.forEach((delivery, deliveryIndex) => {
-      summary.deliveryCount += 1;
-      const deliveryFinalization = finalizeScheduledDelivery(task.id, delivery);
-      if (!deliveryFinalization.delivery) {
-        summary.withheldCount += 1;
-        console.warn(
-          `[Scheduler] Withheld unverified model-authored proactive message from "${redactSchedulerDiagnostic(task.id)}": `
-          + redactSchedulerDiagnostic(deliveryFinalization.reason),
-        );
-        return;
-      }
-      const safeDelivery = deliveryFinalization.delivery;
-      const normalized: ScheduledDelivery = {
-        userId: safeDelivery.userId.trim(),
-        message: safeDelivery.message.trim(),
-        domain: safeDelivery.domain === 'work' ? 'work' : 'personal',
-        orgId: safeDelivery.domain === 'work' ? safeDelivery.orgId!.trim() : '',
-        ...(safeDelivery.reminderIds ? { reminderIds: [...safeDelivery.reminderIds] } : {}),
-      };
-      preparedDeliveries.push({
-        deliveryIndex,
-        normalized,
-        finalized: deliveryFinalization.finalized,
-        reason: deliveryFinalization.reason,
-      });
-    });
-    let batch: ReturnType<Scheduler['persistProactiveMessageBatch']>;
-    try {
-      batch = this.persistProactiveMessageBatch(
-        task.id,
-        plan.taskId,
-        preparedDeliveries.map(item => ({
-          deliveryIndex: item.deliveryIndex,
-          delivery: item.normalized,
-        })),
-        timestamp,
-      );
-    } catch (error) {
-      task.persistenceStatus = 'failed';
-      task.lastPersistenceError = redactSchedulerDiagnostic(error);
-      throw error;
-    }
-    summary.persistedCount = preparedDeliveries.length;
-    const pendingEmissions = preparedDeliveries.filter(item => (
-      batch.createdDeliveryIndexes.has(item.deliveryIndex) && !task.quiet && this.io
-    ));
-    if (batch.createdInteractionIds.length > 0) {
-      // Never tell the client about a proactive result that exists only in
-      // process memory. The strict flush is the delivery evidence boundary.
-      const deliveryFlush = this.trackDurableOperation(this.strictFlush(), execution);
-      try {
-        await awaitExecutionPhase(deliveryFlush, execution, 'delivery');
-        if (execution.controller.signal.aborted) throw execution.controller.signal.reason;
-      } catch (error) {
-        task.persistenceStatus = 'failed';
-        task.lastPersistenceError = redactSchedulerDiagnostic(error);
-        try {
-          this.rollbackProactiveMessageBatch(batch.createdInteractionIds, batch.reminderChanges);
-        } catch (rollbackError: any) {
-          task.lastPersistenceError = redactSchedulerDiagnostic(
-            `${task.lastPersistenceError || 'Delivery persistence failed'}; rollback failed: ${rollbackError}`,
-          );
-        }
-        // A timed-out flush may still commit its captured candidate. Chain a
-        // strict rollback boundary behind its real settlement and keep both
-        // promises inside the execution fence.
-        const rollbackFlush = this.trackDurableOperation(
-          deliveryFlush.catch(() => undefined).then(() => this.strictFlush()),
-          execution,
-        );
-        if (!execution.controller.signal.aborted) {
-          try {
-            await awaitExecutionPhase(rollbackFlush, execution, 'delivery');
-          } catch (rollbackError: any) {
-            task.lastPersistenceError = redactSchedulerDiagnostic(
-              `${task.lastPersistenceError || 'Delivery persistence failed'}; durable rollback failed: ${rollbackError}`,
-            );
-            if (execution.controller.signal.aborted) {
-              throw execution.controller.signal.reason;
-            }
-          }
-        }
-        throw error;
-      }
-      for (const emission of pendingEmissions) {
-        if (emission.normalized.reminderIds?.some(reminderId => {
-          const expected = batch.reminderChanges.find(item => item.after.id === reminderId)?.after;
-          const current = (readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]).reminders || []).find((item: Reminder) => item.id === reminderId);
-          return !expected || !current || current.status !== 'fired' || current.firedAt !== expected.firedAt
-            || current.userId !== expected.userId || current.content !== expected.content || current.dueAt !== expected.dueAt
-            || (current.domain || 'personal') !== (expected.domain || 'personal') || (current.orgId || '') !== (expected.orgId || '');
-        })) continue;
-        const room = emission.normalized.domain === 'work' && emission.normalized.orgId
-          ? `user:${emission.normalized.userId}:org:${emission.normalized.orgId}`
-          : `user:${emission.normalized.userId}:personal`;
-        this.io!.to(room).emit('agent:proactive', {
-          taskId: task.id,
-          interactionId: buildScheduledProactiveInteractionId(plan.taskId, emission.deliveryIndex, emission.normalized),
-          message: emission.normalized.message,
-          domain: emission.normalized.domain,
-          orgId: emission.normalized.orgId,
-          timestamp,
-          finalized: emission.finalized,
-          blocked: false,
-          reason: emission.reason,
-        });
-        summary.emittedCount += 1;
-      }
-    }
-    return summary;
-  }
-
   private scheduleTask(task: ScheduledTask) {
     this.clearTimer(task.id);
     const taskScheduleGeneration = this.scheduleGenerations.get(task.id) || 0;
     const scheduleGeneration = this.lifecycleGeneration;
     if (task.enabled === false) {
       task.nextRun = null;
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
       console.log(`[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" is disabled — skipping schedule`);
       return;
     }
     if (task.requiresReconciliation) {
       task.nextRun = null;
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
       console.warn(
         `[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" remains quarantined until its unknown outcome is explicitly reconciled.`,
       );
@@ -744,14 +411,14 @@ export class Scheduler {
     if (parsed.type === 'interval') {
       // Simple fixed interval — use setInterval (backward compat)
       task.nextRun = new Date(Date.now() + parsed.intervalMs).toISOString();
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
       const timer = setInterval(() => {
         if (
           scheduleGeneration !== this.lifecycleGeneration
           || taskScheduleGeneration !== this.scheduleGenerations.get(task.id)
         ) return;
         task.nextRun = new Date(Date.now() + parsed.intervalMs).toISOString();
-        this.persistRuntimeState(task);
+        this.persistence.runtime(task);
         void this.runTask(task);
       }, parsed.intervalMs);
       this.timers.set(task.id, timer);
@@ -773,12 +440,12 @@ export class Scheduler {
         // Schedule next run
         const nextMs = nextCronTime(parsed.fields!);
         task.nextRun = new Date(Date.now() + nextMs).toISOString();
-        this.persistRuntimeState(task);
+        this.persistence.runtime(task);
         this.setTaskTimeout(task.id, runAndReschedule, nextMs, taskScheduleGeneration);
       };
       const firstMs = nextCronTime(parsed.fields!);
       task.nextRun = new Date(Date.now() + firstMs).toISOString();
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
       this.setTaskTimeout(task.id, runAndReschedule, firstMs, taskScheduleGeneration);
       const [m, h, dom, mon, dow] = parsed.fields!;
       console.log(`[Scheduler] Registered cron task "${redactSchedulerDiagnostic(task.id)}" — ${m} ${h} ${dom} ${mon} ${dow} (next in ${Math.round(firstMs / 1000)}s)`);
@@ -833,7 +500,7 @@ export class Scheduler {
       plan = buildScheduledTaskExecutionPlan(task, startedAt);
       execution.plan = plan;
       const authorization = authorizeCapabilityPlanTool(plan, 'scheduler_task_handler');
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+      const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","settings"]);
       const previousStatus = compactAudit
         ? getScheduledCapabilityExecutionStatus(db, {
             scheduledTaskId: task.id,
@@ -865,7 +532,7 @@ export class Scheduler {
           task.lastError = 'A previous execution in this exact schedule slot has an unknown outcome; replay was stopped.';
           task.lastDurationMs = Math.max(0, unknownAt.getTime() - startedAt.getTime());
           execution.phase = 'terminal_persistence';
-          await this.persistDbWithRuntimeState(db, task, true, execution);
+          await this.persistence.strict(db, task, true, execution);
         }
         return;
       }
@@ -891,7 +558,7 @@ export class Scheduler {
         compactAudit,
       });
       execution.phase = 'admission_persistence';
-      await this.persistDbWithRuntimeState(db, task, !authorization.allowed, execution);
+      await this.persistence.strict(db, task, !authorization.allowed, execution);
       if (!authorization.allowed) {
         console.warn(
           `[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" blocked by capability policy: ${redactSchedulerDiagnostic(authorization.reason)}`,
@@ -928,7 +595,7 @@ export class Scheduler {
         );
       }
       const deliveryTimestamp = new Date().toISOString();
-      const delivery = await this.deliverTaskResult(task, plan, result, deliveryTimestamp, execution);
+      const delivery = await this.deliveries.deliverTaskResult(task, plan, result, deliveryTimestamp, execution);
       userDeliveryDeclared = delivery.deliveryCount > 0;
       if (
         delivery.deliveryCount > 0
@@ -949,7 +616,7 @@ export class Scheduler {
         lastDurationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
       };
       phase = 'terminal_persistence';
-      const completedDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+      const completedDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","settings"]);
       rollbackTerminalLedger = this.captureScheduledLedgerCheckpoint(completedDb, task.id, plan.taskId);
       persistScheduledCapabilityExecution(completedDb, {
         scheduledTaskId: task.id,
@@ -971,7 +638,7 @@ export class Scheduler {
       // boundary declared by the execution class and actual side effects.
       execution.phase = 'terminal_persistence';
       try {
-        await this.persistDbWithRuntimeState(completedDb, completedTask, userDeliveryDeclared, execution);
+        await this.persistence.strict(completedDb, completedTask, userDeliveryDeclared, execution);
       } catch (error) {
         task.persistenceStatus = completedTask.persistenceStatus;
         task.lastPersistenceError = completedTask.lastPersistenceError;
@@ -1047,7 +714,7 @@ export class Scheduler {
         task.quarantinedExecutionId = plan.taskId;
         task.quarantineReason = task.lastError;
         try {
-          const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+          const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","settings"]);
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
             plan,
@@ -1057,7 +724,7 @@ export class Scheduler {
             now: failedAt.toISOString(),
             compactAudit,
           });
-          this.persistRecoveryDbWithRuntimeState(db, task, task.persistenceStatus === 'failed');
+          this.persistence.recovery(db, task, task.persistenceStatus === 'failed');
         } catch (pendingError: any) {
           task.persistenceStatus = 'failed';
           task.lastPersistenceError = redactSchedulerDiagnostic(pendingError);
@@ -1134,7 +801,7 @@ export class Scheduler {
       }
       if (plan) {
         try {
-          const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+          const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","settings"]);
           persistScheduledCapabilityExecution(db, {
             scheduledTaskId: task.id,
             plan,
@@ -1151,7 +818,7 @@ export class Scheduler {
             now: failedAt.toISOString(),
             compactAudit,
           });
-          this.persistRecoveryDbWithRuntimeState(
+          this.persistence.recovery(
             db,
             task,
             task.persistenceStatus === 'failed',
@@ -1163,13 +830,13 @@ export class Scheduler {
         }
       } else {
         try {
-          this.persistRecoveryDbWithRuntimeState(
-            readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]),
+          this.persistence.recovery(
+            readDatabaseTables(["settings"]),
             task,
             task.persistenceStatus === 'failed',
           );
         } catch {
-          // persistRecoveryDbWithRuntimeState already records and logs the failure.
+          // ScheduledRuntimePersistence already records and logs the failure.
         }
       }
       console.warn(`[Scheduler] Task "${redactSchedulerDiagnostic(task.id)}" ${runtimeStatus}:`, blocker);
@@ -1257,7 +924,7 @@ export class Scheduler {
       target.nextRun = null;
     }
     try {
-      const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+      const db = readDatabaseTables(["conversationActionTasks","conversationActionReceipts","conversationActionTurns","settings"]);
       if (inFlight.plan) {
         persistScheduledCapabilityExecution(db, {
           scheduledTaskId: taskId,
@@ -1280,7 +947,7 @@ export class Scheduler {
           compactAudit: inFlight.compactAudit,
         });
       }
-      this.persistRecoveryDbWithRuntimeState(
+      this.persistence.recovery(
         db,
         visibleTask,
         visibleTask.persistenceStatus === 'failed',
@@ -1356,7 +1023,7 @@ export class Scheduler {
       ))
       .map((candidate: any) => candidate.id));
     return () => {
-      const currentDb = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+      const currentDb = readDatabaseTables(["conversationActionTasks","conversationActionReceipts"]);
       currentDb.conversationActionTasks = (currentDb.conversationActionTasks || []).filter((candidate: any) => {
         if (candidate?.conversationId !== conversationId || candidate?.target !== scheduledTaskId) return true;
         return snapshots.has(candidate.id);
@@ -1408,7 +1075,7 @@ export class Scheduler {
     this.timers.clear();
     for (const task of this.tasks) {
       task.nextRun = null;
-      this.persistRuntimeState(task);
+      this.persistence.runtime(task);
     }
     for (const taskId of this.runningControllers.keys()) {
       const execution = this.inFlightHandlers.get(taskId);
@@ -1445,15 +1112,13 @@ export function registerScheduledTasks(
   getRelay?: () => any,
 ) {
 
-
   /** Get scheduler recipients from the authoritative user registry. */
   function getAllUserIds(): string[] {
-    return resolveScheduledUserIds(readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]));
+    return resolveScheduledUserIds(readDatabaseTables(["users"]));
   }
 
-
   function getSystemAdminUserIds(): string[] {
-    const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","interactions","reminders","settings","users","conversationActionTurns","conversations"]);
+    const db = readDatabaseTables(["users"]);
     return (db.users || [])
       .filter((user: any) => user?.uid && user.role === 'admin')
       .map((user: any) => user.uid);

@@ -68,13 +68,14 @@ describe('scheduled reminder atomic delivery', () => {
     let fail = true;
     const writer = (candidate: any) => {
       writeDB(candidate);
-      if (fail && candidate.interactions.some((row: any) => row.mode === 'proactive')) {
+      if (fail && 'interactions' in candidate && candidate.interactions.some((row: any) => row.mode === 'proactive')) {
         fail = false;
         throw new Error('synthetic write-after-swap failure');
       }
     };
     const { scheduler, run, emit } = setup(flushDBOrThrow, writer);
     await run();
+    expect(fail).toBe(false);
     expect(readDB().reminders.find((row: any) => row.id === reminder.id)).toMatchObject({ status: 'pending', firedAt: null });
     expect(deliveryRows()).toHaveLength(0);
     expect(emit).not.toHaveBeenCalled();

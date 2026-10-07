@@ -1,0 +1,323 @@
+import type { MCPSkillInstallOptions } from './contracts';
+import fs from "fs";
+import path from "path";
+import { createGeneratedSkillIdentity } from "../../marketplace/official_identity";
+import { getJwtSecret } from "../../config/local_identity";
+import { SKILLS_DIR, LEGACY_SKILLS_DIR } from "../skill_paths";
+import { migrateProfileSkills } from "../skill_profile_migration";
+import type { MCPServerConfig, SkillPackage } from "./contracts";
+import { requireSafeMCPServerName, PENDING_SKILL_MARKER, normalizeSkillInstallName } from "./security";
+import { ownServerConfig } from "./fingerprints";
+import { resolveDirectSkillDirectory, resolveValidatedSkillSourceDirectory } from "./package_sources";
+import { readPkg, ensureSkillsDir, assertManagedSkillSource, copyDirSync, patchInstalledMetadata, patchInstalledVersion } from "./package_files";
+import { ensureRuntimeNodeModulesLink, installLockedDepsWithoutScripts, prepareLocalSkillDependenciesSync } from "./dependencies";
+import { managedSkillRuntimeEnvironment, stampManagedSkillIdentity } from "./managed_identity";
+import { toPortableSkillPath } from "./package_paths";
+import type { MCPConfigurationAccess } from './contracts';
+import type { ManagedSkillRuntime } from './skill_runtime';
+
+export class MCPInstalledSkills {
+  constructor(private host: MCPConfigurationAccess, private runtime: ManagedSkillRuntime, private quarantineRoot: string) {}
+
+/** Make one pending package startable only for the explicit activation transaction. */
+  beginSkillActivation(name: string): MCPServerConfig {
+    const safeName = requireSafeMCPServerName(name);
+    const config = this.host.getConfig();
+    const current = ownServerConfig(config, safeName);
+    if (!current) throw new Error(`MCP Skill "${safeName}" has no installed runtime configuration.`);
+    if (current.source === 'local') this.runtime.assertLocalSkillRuntimeIdentity(safeName, current);
+    const next: MCPServerConfig = {
+      ...current,
+      enabled: true,
+      installationState: current.installationState === 'active' ? 'active' : 'pending',
+    };
+    config[safeName] = next;
+    this.host.saveConfig(config);
+    return next;
+  }
+
+/** Commit activation only after the caller verified live tools and manifest entries. */
+  commitSkillActivation(name: string): void {
+    const safeName = requireSafeMCPServerName(name);
+    const config = this.host.getConfig();
+    const current = ownServerConfig(config, safeName);
+    if (!current) throw new Error(`MCP Skill "${safeName}" disappeared before activation commit.`);
+    if (current.source === 'local') this.runtime.assertLocalSkillRuntimeIdentity(safeName, current);
+    if (current.source === 'local') {
+      const skillDir = resolveDirectSkillDirectory(safeName);
+      if (!fs.existsSync(skillDir)) throw new Error(`MCP Skill "${safeName}" package is missing.`);
+      const pkg = readPkg(skillDir);
+      if (!pkg.lumi) pkg.lumi = {};
+      pkg.lumi.status = 'active';
+      fs.writeFileSync(path.join(skillDir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+    }
+    config[safeName] = {
+      ...current,
+      enabled: true,
+      installationState: 'active',
+    };
+    this.host.saveConfig(config);
+    if (current.source === 'local') {
+      fs.rmSync(path.join(resolveDirectSkillDirectory(safeName), PENDING_SKILL_MARKER), { force: true });
+    }
+  }
+
+migrateLegacySkills() {
+    if (process.env.VITEST) return { migrated: [], skipped: [] };
+    return migrateProfileSkills({
+      legacyRoot: LEGACY_SKILLS_DIR, skillsRoot: SKILLS_DIR,
+      servers: this.host.getConfig(), secret: getJwtSecret(),
+      bindRuntime: (directory, identity) => {
+        if (!ensureRuntimeNodeModulesLink(directory)) {
+          throw new Error('Approved Skill dependencies are unavailable in this LumiCore host');
+        }
+        return this.runtime.bindManagedSkillRuntime(directory, identity);
+      },
+      saveServers: servers => this.host.saveConfig(servers),
+    });
+  }
+
+/** List all local skills in ~/lumi_skills/ */
+  listLocalSkills(): SkillPackage[] {
+    ensureSkillsDir();
+    const skills: SkillPackage[] = [];
+    const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.staging-')) continue;
+      const skillDir = path.join(SKILLS_DIR, entry.name);
+      const pkgPath = path.join(skillDir, 'package.json');
+      const indexPath = path.join(skillDir, 'index.ts');
+
+      let pkg: any = {};
+      try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')); } catch {}
+
+      const hasIndex = fs.existsSync(indexPath);
+      const hasRunCommand = !!pkg.lumi?.runCommand;
+      const broken = !hasIndex && !hasRunCommand;
+
+      skills.push({
+        name: entry.name,
+        description: pkg.description || pkg.lumi?.description || entry.name,
+        toolCount: pkg.lumi?.toolCount || 0,
+        autoGenerated: pkg.lumi?.autoGenerated || false,
+        generatedFrom: pkg.lumi?.generatedFrom,
+        installedAt: pkg.lumi?.installedAt || '',
+        source: 'local',
+        broken,
+      });
+    }
+    return skills;
+  }
+
+/** Install a local skill as one transaction: stage, prepare, then atomically publish. */
+  async installSkillValidated(
+    name: string,
+    sourceDir: string,
+    options?: MCPSkillInstallOptions,
+  ): Promise<string> {
+    ensureSkillsDir();
+    const skillName = normalizeSkillInstallName(name);
+    const destDir = resolveDirectSkillDirectory(skillName);
+    const sourceDirectory = resolveValidatedSkillSourceDirectory(sourceDir);
+    const generatedReviewHash = String(
+      options?.approvedGeneratedDraft?.review?.contentHash || '',
+    ).trim();
+    const managedIdentity = options?.managedSkill
+      || (options?.approvedGeneratedDraft
+        ? createGeneratedSkillIdentity(skillName, sourceDirectory, generatedReviewHash)
+        : undefined);
+    const stagingDir = path.resolve(
+      SKILLS_DIR,
+      `.staging-${skillName}-${process.pid}-${Date.now()}`,
+    );
+    if (path.dirname(stagingDir) !== path.resolve(SKILLS_DIR)) {
+      throw new Error('Invalid skill staging directory target');
+    }
+    const config = this.host.getConfig();
+    if (fs.existsSync(destDir) || ownServerConfig(config, skillName)) {
+      throw new Error(`Skill "${skillName}" already exists. Uninstall it first.`);
+    }
+
+    try {
+      assertManagedSkillSource(sourceDirectory, managedIdentity);
+      copyDirSync(sourceDirectory, stagingDir);
+      fs.writeFileSync(
+        path.join(stagingDir, PENDING_SKILL_MARKER),
+        `${new Date().toISOString()}\n`,
+        'utf8',
+      );
+      const pkg = readPkg(stagingDir);
+      const hasIndex = fs.existsSync(path.join(stagingDir, 'index.ts'));
+      const hasRunCommand = Boolean(pkg.lumi?.runCommand);
+      if (!hasIndex && !hasRunCommand) {
+        throw new Error('Skill package must provide index.ts or lumi.runCommand');
+      }
+      if (options?.approvedGeneratedDraft) {
+        pkg.lumi = {
+          ...(pkg.lumi || {}),
+          autoGenerated: false,
+          generatedByLumi: true,
+          status: 'pending',
+          approvedAt: options.approvedGeneratedDraft.approvedAt,
+          draftReview: options.approvedGeneratedDraft.review,
+        };
+        fs.writeFileSync(
+          path.join(stagingDir, 'package.json'),
+          `${JSON.stringify(pkg, null, 2)}\n`,
+          'utf8',
+        );
+      }
+
+      if (!pkg.lumi) pkg.lumi = {};
+      pkg.lumi.status = 'pending';
+      if (managedIdentity) pkg.lumi.managedSkill = managedIdentity;
+      else delete pkg.lumi.managedSkill;
+      fs.writeFileSync(
+        path.join(stagingDir, 'package.json'),
+        `${JSON.stringify(pkg, null, 2)}\n`,
+        'utf8',
+      );
+
+      if (options?.approvedGeneratedDraft) {
+        await installLockedDepsWithoutScripts(stagingDir);
+      } else {
+        await prepareLocalSkillDependenciesSync(stagingDir);
+      }
+      patchInstalledMetadata(stagingDir);
+      patchInstalledVersion(stagingDir, readPkg(sourceDirectory).version || '0.0.0');
+      fs.renameSync(stagingDir, destDir);
+      try {
+        const installedIdentity = managedIdentity
+          ? this.runtime.bindManagedSkillRuntime(destDir, managedIdentity)
+          : undefined;
+        stampManagedSkillIdentity(destDir, installedIdentity);
+        this.registerLocalSkill(skillName, destDir, readPkg(destDir), { pendingActivation: true });
+      } catch (error) {
+        fs.rmSync(destDir, { recursive: true, force: true });
+        throw error;
+      }
+      return destDir;
+    } finally {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    }
+  }
+
+/** Remove incomplete local skill directories that cannot be started. */
+  cleanupBrokenSkills(): string[] {
+    const removed: string[] = [];
+    for (const skill of this.listLocalSkills()) {
+      if (!skill.broken) continue;
+      this.uninstallSkill(skill.name);
+      removed.push(skill.name);
+    }
+    return removed;
+  }
+
+/** Uninstall a local skill */
+  uninstallSkill(name: string): void {
+    const skillName = normalizeSkillInstallName(name);
+    const skillDir = resolveDirectSkillDirectory(skillName);
+    // Remove the executable configuration first. If Windows has a locked file,
+    // the package must still be unable to auto-start on the next boot.
+    const config = this.host.getConfig();
+    if (ownServerConfig(config, skillName)) {
+      delete config[skillName];
+      this.host.saveConfig(config);
+    }
+    if (!fs.existsSync(skillDir)) return;
+
+    try {
+      fs.rmSync(skillDir, { recursive: true, force: true });
+    } catch (error: any) {
+      let quarantinePath = '';
+      try {
+        fs.mkdirSync(this.quarantineRoot, { recursive: true });
+        quarantinePath = path.join(
+          this.quarantineRoot,
+          `${skillName}-failed-uninstall-${Date.now()}`,
+        );
+        fs.renameSync(skillDir, quarantinePath);
+      } catch {
+        try {
+          fs.writeFileSync(
+            path.join(skillDir, '.lumi-disabled'),
+            `${new Date().toISOString()}\n`,
+            'utf8',
+          );
+        } catch {}
+      }
+      throw new Error(
+        quarantinePath
+          ? `Skill "${skillName}" was disabled and quarantined after removal failed: ${error?.message || error}`
+          : `Skill "${skillName}" was disabled but its locked package could not be removed or quarantined: ${error?.message || error}`,
+      );
+    }
+  }
+
+/** Register a skill directory as an MCP server entry in config.json */
+  private registerLocalSkill(
+    name: string,
+    skillDir: string,
+    pkg: any,
+    options: { pendingActivation?: boolean } = {},
+  ): void {
+    const safeName = requireSafeMCPServerName(name);
+    if (resolveDirectSkillDirectory(safeName) !== path.resolve(skillDir)) {
+      throw new Error('Local skill runtime path is outside the installed skills directory');
+    }
+    const config = this.host.getConfig();
+    const lumi = pkg.lumi || {};
+    const pendingActivation = options.pendingActivation === true
+      || lumi.status === 'pending'
+      || fs.existsSync(path.join(skillDir, PENDING_SKILL_MARKER));
+    const installationState: MCPServerConfig['installationState'] = pendingActivation
+      ? (lumi.requiresApiKey ? 'disabled' : 'pending')
+      : 'active';
+    const enabled = !pendingActivation && !lumi.requiresApiKey;
+
+    const common = {
+        enabled,
+        installationState,
+        source: 'local' as const,
+        transport: 'stdio' as const,
+        autoGenerated: lumi.autoGenerated || false,
+        generatedFrom: lumi.generatedFrom,
+        description: pkg.description || lumi.description || safeName,
+        toolCount: lumi.toolCount,
+        requiresApiKey: lumi.requiresApiKey || false,
+        apiKeyEnv: lumi.apiKeyEnv,
+        apiKeyUrl: lumi.apiKeyUrl,
+        capabilityDefault: lumi.capabilityDefault,
+        toolCapabilities: lumi.toolCapabilities,
+        managedSkill: lumi.managedSkill,
+    };
+    // Support external MCP packages with custom run commands
+    if (lumi.runCommand) {
+      config[safeName] = {
+        command: lumi.runCommand,
+        args: lumi.runArgs || [],
+        cwd: path.resolve(skillDir),
+        env: lumi.requiresApiKey && lumi.apiKeyEnv
+          ? { [lumi.apiKeyEnv]: `\${${lumi.apiKeyEnv}}` }
+          : undefined,
+        ...common,
+      };
+    } else {
+      const indexPath = toPortableSkillPath(path.join(skillDir, 'index.ts'));
+      const managedRuntime = lumi.managedSkill?.runtime;
+      // Build env map from lumi.envKeys (array of key names to pass through from stored keys)
+      const env = managedRuntime?.env || managedSkillRuntimeEnvironment(pkg);
+      config[safeName] = {
+        command: managedRuntime?.command || 'npx',
+        args: managedRuntime?.args || ['tsx', indexPath],
+        cwd: managedRuntime?.cwd || path.resolve(skillDir),
+        env,
+        ...common,
+      };
+    }
+
+    this.host.saveConfig(config);
+  }
+}

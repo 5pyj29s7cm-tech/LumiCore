@@ -213,7 +213,7 @@ describe('runtime data isolation', () => {
   });
 
   it('keeps explicit data roots isolated from the legacy cwd data importer', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'db_layer.ts'), 'utf8');
+    const source = fs.readFileSync(path.join(process.cwd(), 'server', 'db', 'startup.ts'), 'utf8');
     const preflight = fs.readFileSync(
       path.join(process.cwd(), 'server', 'runtime', 'data_root_preflight.ts'),
       'utf8',

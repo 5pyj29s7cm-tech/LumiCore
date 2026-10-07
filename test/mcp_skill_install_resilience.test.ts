@@ -104,9 +104,9 @@ describe('MCP skill install resilience', () => {
     }
     fs.writeFileSync(path.join(skill, 'package.json'), JSON.stringify({ lumi: { documentRuntime: true } }));
     const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
-    vi.spyOn(manager as any, 'resolveRuntimeTsxCli').mockReturnValue(cli);
-    vi.spyOn(manager as any, 'collectManagedRuntimeDependencyDirectories').mockReturnValue([]);
-    const runtime = (manager as any).deriveManagedSkillRuntime(skill);
+    vi.spyOn((manager as any).runtime, 'resolveRuntimeTsxCli').mockReturnValue(cli);
+    vi.spyOn((manager as any).runtime, 'collectManagedRuntimeDependencyDirectories').mockReturnValue([]);
+    const runtime = (manager as any).runtime.deriveManagedSkillRuntime(skill);
     expect(verifyManagedSkillRuntimeIdentity(runtime).valid).toBe(true);
     for (const helper of helpers) {
       fs.writeFileSync(helper, 'export const value = 2;\n');
@@ -141,7 +141,7 @@ describe('MCP skill install resilience', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    (manager as any).recordStartupFailure('unstable', new Error('initial MCP crash'));
+    (manager as any).health.recordStartupFailure('unstable', new Error('initial MCP crash'));
     expect(manager.getServerHealth().unstable).toMatchObject({
       status: 'restarting',
       consecutiveCrashes: 1,
@@ -155,7 +155,7 @@ describe('MCP skill install resilience', () => {
       consecutiveCrashes: 5,
       lastError: 'injected MCP crash',
     });
-    expect((manager as any).crashTrackers.get('unstable').restartTimer).toBeNull();
+    expect((manager as any).health.trackers.get('unstable').restartTimer).toBeNull();
     expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/giving up/i));
     consoleError.mockRestore();
     consoleLog.mockRestore();
@@ -199,7 +199,7 @@ describe('MCP skill install resilience', () => {
     manager.saveConfig(declaredConfig);
     const reducedFactory = path.join(tempHome, 'factory-without-capability-declarations.json');
     fs.writeFileSync(reducedFactory, JSON.stringify({ mcpServers: { filesystem: { command: 'factory-command', enabled: false } } }));
-    (manager as any).factoryConfigPath = reducedFactory;
+    (manager as any).configuration.factoryConfigPath = reducedFactory;
     expect(manager.syncFactoryCapabilityMetadata()).toEqual(['filesystem']);
     const reconciled = manager.getConfig().filesystem;
     expect(reconciled.capabilityDefault).toBeUndefined();
@@ -360,7 +360,7 @@ describe('MCP skill install resilience', () => {
       lumi: { status: 'active' },
     }));
     const connect = vi.spyOn(manager as any, 'ensureServerConnected');
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const tools = await manager.connectAll();
 
@@ -370,7 +370,7 @@ describe('MCP skill install resilience', () => {
     expect(manager.getAvailableServers()).toEqual([]);
     expect(manager.getRoutableServers()).toEqual([]);
     expect(connect).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('package present without an approved local runtime configuration'));
+    expect(manager.listLocalSkills()).toContainEqual(expect.objectContaining({ name: 'directory-only', broken: false }));
     expect(execMock).not.toHaveBeenCalled();
   });
 
@@ -634,7 +634,7 @@ describe('MCP skill install resilience', () => {
       isError: true,
       content: [{ type: 'text', text: 'AutoCAD operation 1 failed.' }],
     });
-    (manager as any).servers.set('broken', {
+    (manager as any).connections.live.set('broken', {
       client: { callTool },
       transport: {},
       config: { enabled: true },
@@ -651,7 +651,7 @@ describe('MCP skill install resilience', () => {
     const callTool = vi.fn().mockResolvedValue({
       content: [{ type: 'text', text: '{"status":"completed"}' }],
     });
-    (manager as any).servers.set('cad-drafting', {
+    (manager as any).connections.live.set('cad-drafting', {
       client: { callTool },
       transport: {},
       config: { enabled: true },
@@ -681,7 +681,7 @@ describe('MCP skill install resilience', () => {
     const callTool = vi.fn().mockReturnValue(new Promise(() => undefined));
     const config = { enabled: true, source: 'external' as const };
     manager.saveConfig({ hanging: config });
-    (manager as any).servers.set('hanging', {
+    (manager as any).connections.live.set('hanging', {
       client: { callTool },
       transport: { close },
       config,
@@ -693,7 +693,7 @@ describe('MCP skill install resilience', () => {
     await rejection;
 
     expect(close).toHaveBeenCalledTimes(1);
-    expect((manager as any).servers.has('hanging')).toBe(false);
+    expect((manager as any).connections.live.has('hanging')).toBe(false);
   });
 
   it('actively closes a transport when the MCP initialize handshake times out', async () => {
@@ -713,14 +713,14 @@ describe('MCP skill install resilience', () => {
       transport: 'stdio' as const,
     };
 
-    const pending = (manager as any).connectServer('hanging-connect', config);
+    const pending = (manager as any).ensureServerConnected('hanging-connect', config);
     const rejection = expect(pending).rejects.toThrow(/timed out while connecting/i);
     await vi.advanceTimersByTimeAsync(15_001);
     await rejection;
 
     expect(connect).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
-    expect((manager as any).servers.has('hanging-connect')).toBe(false);
+    expect((manager as any).connections.live.has('hanging-connect')).toBe(false);
   });
 
   it('binds an MCP call to the explicit server instead of guessing by longest prefix', async () => {
@@ -739,10 +739,10 @@ describe('MCP skill install resilience', () => {
     const fooBarCall = vi.fn().mockResolvedValue({
       content: [{ type: 'text', text: '{"status":"completed","owner":"foo_bar"}' }],
     });
-    (manager as any).servers.set('foo', {
+    (manager as any).connections.live.set('foo', {
       client: { callTool: fooCall }, transport: { close: vi.fn() }, config: fooConfig,
     });
-    (manager as any).servers.set('foo_bar', {
+    (manager as any).connections.live.set('foo_bar', {
       client: { callTool: fooBarCall }, transport: { close: vi.fn() }, config: fooBarConfig,
     });
 
@@ -788,7 +788,7 @@ describe('MCP skill install resilience', () => {
     fs.mkdirSync(source, { recursive: true });
     fs.writeFileSync(path.join(source, 'index.ts'), 'export {};\n');
     fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'registration-failure', version: '1.0.0' }));
-    vi.spyOn(manager as any, 'registerLocalSkill').mockImplementation(() => { throw new Error('registration refused'); });
+    vi.spyOn((manager as any).installed, 'registerLocalSkill').mockImplementation(() => { throw new Error('registration refused'); });
     await expect(manager.installSkillValidated('registration-failure', source)).rejects.toThrow('registration refused');
     expect(fs.existsSync(path.join(skillsDir, 'registration-failure'))).toBe(false);
     expect(fs.readdirSync(skillsDir).filter(name => name.startsWith('.staging-'))).toEqual([]);
@@ -1276,5 +1276,166 @@ describe('MCP skill install resilience', () => {
     })).rejects.toThrow(/runCommand|immutable local runtime/i);
     expect(manager.getConfig()).not.toHaveProperty(`unbound-${command}`);
     expect(fs.existsSync(path.join(skillsDir, `unbound-${command}`))).toBe(false);
+  });
+});
+
+describe('MCP connection owner regressions', () => {
+  async function setupConnection() {
+    const { MCPClientManager } = await importClientWithExec(makeExec((_command, _options, callback) => callback(null, '', '')));
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+    const connect = vi.spyOn(Client.prototype, 'connect').mockResolvedValue(undefined);
+    const list = vi.spyOn(Client.prototype, 'listTools').mockResolvedValue({ tools: [] });
+    const close = vi.spyOn(StdioClientTransport.prototype, 'close').mockResolvedValue(undefined);
+    const manager = new MCPClientManager(path.join(tempHome, 'data', 'mcp_config.json'));
+    const config = { command: process.execPath, args: ['--version'], enabled: true, source: 'external' as const, transport: 'stdio' as const };
+    return { manager, config, connect, list, close };
+  }
+
+  it('connection owner: late disconnect cannot remove a replacement connection', async () => {
+    const { manager, config } = await setupConnection();
+    let entered!: () => void, release!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const old = { client: {}, config, transport: { close: vi.fn(() => new Promise<void>(resolve => { release = resolve; entered(); })) } };
+    (manager as any).connections.live.set('handoff', old);
+    const retired = manager.disconnectServer('handoff');
+    await closing;
+    const replacement = { client: {}, config, transport: { close: vi.fn().mockResolvedValue(undefined) } };
+    (manager as any).connections.live.set('handoff', replacement);
+    release(); await retired;
+    expect((manager as any).connections.live.get('handoff')).toBe(replacement);
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: concurrent discovery of a live connection is single flight', async () => {
+    const { manager, config } = await setupConnection();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const listTools = vi.fn(async () => { await gate; return { tools: [] }; });
+    (manager as any).connections.live.set('single', { client: { listTools }, config, transport: { close: vi.fn().mockResolvedValue(undefined) } });
+    const first = (manager as any).ensureServerConnected('single', config);
+    const second = (manager as any).ensureServerConnected('single', config);
+    release();
+    await Promise.all([first, second]);
+    expect(listTools).toHaveBeenCalledTimes(1);
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: stale discovery reconnects within its own accepted generation', async () => {
+    const { manager, config, connect } = await setupConnection();
+    (manager as any).connections.live.set('stale', { client: { listTools: vi.fn().mockRejectedValue(new Error('transport closed')) }, config, transport: { close: vi.fn().mockResolvedValue(undefined) } });
+    await expect((manager as any).ensureServerConnected('stale', config)).resolves.toEqual([]);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(manager.getConnectedServers()).toContain('stale');
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: old tool timeout cannot revoke a newer pending connection', async () => {
+    vi.useFakeTimers();
+    const { manager, config, connect } = await setupConnection();
+    manager.saveConfig({ rollover: config });
+    (manager as any).connections.live.set('rollover', { client: { callTool: vi.fn(() => new Promise(() => undefined)) }, config, transport: { close: vi.fn().mockResolvedValue(undefined) } });
+    const oldCall = manager.callToolForServer('rollover', 'read', {}, { timeoutMs: 1_000 });
+    const oldFailure = expect(oldCall).rejects.toThrow(/wall timeout/i);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    connect.mockImplementationOnce(async () => new Promise<void>(resolve => { release = resolve; entered(); }));
+    const replacement = (manager as any).ensureServerConnected('rollover', { ...config, args: ['--help'] });
+    const replacementOutcome = replacement.then((tools: unknown) => ({ tools, error: undefined }), (error: Error) => ({ tools: undefined, error }));
+    await started; await vi.advanceTimersByTimeAsync(1_001); await oldFailure;
+    release();
+    const outcome = await replacementOutcome;
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.tools).toEqual([]);
+    expect(manager.getConnectedServers()).toContain('rollover');
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: late discovery failure cannot withdraw a newer connection', async () => {
+    const { manager, config, list } = await setupConnection();
+    let entered!: () => void, rejectOld!: (error: Error) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    list.mockImplementationOnce(async () => new Promise((_resolve, reject) => { rejectOld = reject; entered(); }));
+    const old = (manager as any).ensureServerConnected('replaced', config);
+    const oldOutcome = old.then(() => undefined, (error: Error) => error);
+    await started;
+    await (manager as any).ensureServerConnected('replaced', { ...config, args: ['--help'] });
+    const replacement = (manager as any).connections.live.get('replaced');
+    rejectOld(new Error('old discovery failed'));
+    expect(await oldOutcome).toBeInstanceOf(Error);
+    expect((manager as any).connections.live.get('replaced')).toBe(replacement);
+    expect(replacement).toBeDefined();
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: disconnect all revokes pending handshakes before publication', async () => {
+    const { manager, config, connect } = await setupConnection();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    connect.mockImplementationOnce(async () => new Promise<void>(resolve => { release = resolve; entered(); }));
+    const pending = (manager as any).ensureServerConnected('closing', config);
+    const outcome = pending.then(() => undefined, (error: Error) => error);
+    await started;
+    const stopping = manager.disconnectAll();
+    release(); await stopping;
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(manager.getConnectedServers()).toEqual([]);
+  });
+
+  it('connection owner: lifecycle close preserves the SDK protocol callback', async () => {
+    const { manager, config, connect } = await setupConnection();
+    const protocolClose = vi.fn();
+    connect.mockImplementationOnce(async function (transport: any) { transport.onclose = protocolClose; });
+    await (manager as any).ensureServerConnected('protocol', config);
+    const transport = (manager as any).connections.live.get('protocol').transport;
+    transport.onclose();
+    expect(protocolClose).toHaveBeenCalledTimes(1);
+    expect(manager.getConnectedServers()).not.toContain('protocol');
+    await manager.disconnectAll();
+  });
+
+  it('connection owner: a retired call cannot expire an active replacement after disconnect all', async () => {
+    vi.useFakeTimers();
+    const { manager, config } = await setupConnection();
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    let releaseOld!: (value: unknown) => void;
+    const oldResult = new Promise(resolve => { releaseOld = resolve; });
+    manager.saveConfig({ activity: config });
+    (manager as any).connections.live.set('activity', {
+      client: { callTool: vi.fn(() => oldResult) }, config,
+      transport: { close: vi.fn().mockResolvedValue(undefined) },
+    });
+    const oldCall = manager.callToolForServer('activity', 'read', {});
+    await manager.disconnectAll();
+    const next = { ...config, args: ['--help'] };
+    manager.saveConfig({ activity: next });
+    let entered!: () => void, releaseNew!: (value: any) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(Client.prototype, 'callTool').mockImplementationOnce(async () => {
+      entered();
+      return new Promise(resolve => { releaseNew = resolve; });
+    });
+    const newCall = manager.callToolForServer('activity', 'read', {});
+    try {
+      await started;
+      releaseOld({ content: [{ type: 'text', text: 'old completed' }] });
+      await oldCall;
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(manager.getConnectedServers()).toContain('activity');
+    } finally {
+      releaseNew?.({ content: [{ type: 'text', text: 'new completed' }] });
+      await newCall;
+      await manager.disconnectAll();
+    }
+  });
+
+  it('connection owner: a failed transport close remains retryable through disconnect all', async () => {
+    const { manager, config } = await setupConnection();
+    const close = vi.fn().mockRejectedValueOnce(new Error('synthetic close failure')).mockResolvedValue(undefined);
+    (manager as any).connections.live.set('retry-close', { client: {}, config, transport: { close } });
+    await expect(manager.disconnectServer('retry-close')).rejects.toThrow(/synthetic close failure/i);
+    await manager.disconnectAll();
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(manager.getConnectedServers()).toEqual([]);
   });
 });

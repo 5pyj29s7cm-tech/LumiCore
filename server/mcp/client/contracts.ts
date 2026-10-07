@@ -115,3 +115,13 @@ export interface CrashTracker {
   lastError?: string;
   restartTimer: ReturnType<typeof setTimeout> | null;
 }
+
+export interface MCPConfigurationAccess {
+  getConfig(): Record<string, MCPServerConfig>;
+  saveConfig(servers: Record<string, MCPServerConfig>): void;
+}
+
+export interface MCPSkillInstallOptions {
+  approvedGeneratedDraft?: { approvedAt: string; review: Record<string, unknown> };
+  managedSkill?: ManagedSkillIdentity;
+}

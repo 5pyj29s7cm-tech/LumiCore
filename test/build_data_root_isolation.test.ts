@@ -35,14 +35,16 @@ describe('build-time data-root isolation', () => {
 
   it('keeps database lease acquisition lazy until persistence initialization', () => {
     const database = fs.readFileSync(path.join(process.cwd(), 'db_layer.ts'), 'utf8');
-    const prepareFunctionAt = database.indexOf('function prepareDatabaseRuntime()');
-    const leaseAt = database.indexOf('prepareRuntimeDataRoot();', prepareFunctionAt);
+    const startup = fs.readFileSync(path.join(process.cwd(), 'server', 'db', 'startup.ts'), 'utf8');
+    const prepareFunctionAt = startup.indexOf('function prepareDatabaseRuntime()');
+    const leaseAt = startup.indexOf('prepareRuntimeDataRoot();', prepareFunctionAt);
     const initAt = database.indexOf('export function initDatabase()');
     const initPrepareAt = database.indexOf('const dbPath = prepareDatabaseRuntime();', initAt);
 
     expect(prepareFunctionAt).toBeGreaterThan(-1);
     expect(leaseAt).toBeGreaterThan(prepareFunctionAt);
     expect(initPrepareAt).toBeGreaterThan(initAt);
-    expect(database.slice(0, prepareFunctionAt)).not.toContain('prepareRuntimeDataRoot();');
+    expect(startup.slice(0, prepareFunctionAt)).not.toContain('prepareRuntimeDataRoot();');
+    expect(database).toContain("from './server/db/startup'");
   });
 });
