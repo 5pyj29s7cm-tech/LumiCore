@@ -6,6 +6,7 @@ export const executionState = {
   persistenceAdapter: null as ChatExecutionPersistenceAdapter | null,
   persistenceQueue: Promise.resolve() as Promise<void>,
   lastPersistentPurgeAt: 0,
+  recoveryBatch: null as { retiredConversations: Set<string> } | null,
 };
 
 export function createSidecarDurabilityBoundary(): Pick<StoredExecution,
@@ -59,4 +60,5 @@ export function resetChatExecutionRegistryForTests(): void {
   executionState.persistenceAdapter = null;
   executionState.persistenceQueue = Promise.resolve();
   executionState.lastPersistentPurgeAt = 0;
+  executionState.recoveryBatch = null;
 }

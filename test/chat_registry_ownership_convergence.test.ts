@@ -147,4 +147,66 @@ describe('chat execution identity and late publication ownership', () => {
     expect(getChatExecution(scope)?.requestId).toBe('current');
     expect(getChatExecution(scope, 'historical')?.terminal).toBe(true);
   });
+  it('excludes a deleted conversation from an in-flight recovery read while retaining unrelated receipts', async () => {
+    const started = deferred(), rows = deferred<PersistedChatExecutionReceipt[]>();
+    const hydration = initializeChatExecutionRegistryPersistence(adapter({ loadRecoverable: async () => { started.resolve(); return rows.promise; } }));
+    await started.promise;
+    const deletion = forgetConversationChatExecutionsDurably(scope);
+    const unrelated = { ...persisted('unrelated'), conversationId: 'unrelated-conversation' };
+    rows.resolve([persisted('deleted'), unrelated]);
+    expect(await hydration).toBe(1);
+    await deletion;
+    expect(getChatExecution(scope, 'deleted')).toBeNull();
+    expect(getChatExecution({ ...scope, conversationId: unrelated.conversationId }, 'unrelated')?.terminal).toBe(true);
+  });
+  it('does not accept receipts from an obsolete recovery initialization after a newer owner is selected', async () => {
+    const started = deferred(), rows = deferred<PersistedChatExecutionReceipt[]>();
+    const obsolete = initializeChatExecutionRegistryPersistence(adapter({ loadRecoverable: async () => { started.resolve(); return rows.promise; } }));
+    await started.promise;
+    const current = initializeChatExecutionRegistryPersistence(adapter({ loadRecoverable: async () => [persisted('current-recovery')] }));
+    rows.resolve([persisted('obsolete-recovery')]);
+    expect(await obsolete).toBe(0);
+    expect(await current).toBe(1);
+    expect(getChatExecution(scope, 'obsolete-recovery')).toBeNull();
+    expect(getChatExecution(scope)?.requestId).toBe('current-recovery');
+  });
+  it('uses the accepted conversation deletion identity after its queued persistence barrier waits', async () => {
+    const started = deferred(), release = deferred();
+    const deletedScopes: unknown[] = [];
+    await initializeChatExecutionRegistryPersistence(adapter({
+      upsert: async () => { started.resolve(); await release.promise; },
+      deleteConversation: async accepted => { deletedScopes.push(structuredClone(accepted)); },
+    }));
+    beginChatExecution(scope, 'writer-before-delete');
+    const write = recordChatExecutionTerminalEventDurably(scope, 'writer-before-delete', 'agent:response', { finalized: true });
+    await started.promise;
+    const submitted = { ...scope };
+    const deletion = forgetConversationChatExecutionsDurably(submitted);
+    submitted.conversationId = 'caller-changed-target';
+    release.resolve();
+    expect(await write).toBe(false);
+    await deletion;
+    expect(deletedScopes).toEqual([scope]);
+  });
+  it('orders a new recovery read after a previously accepted conversation deletion', async () => {
+    const started = deferred(), release = deferred();
+    let rows: PersistedChatExecutionReceipt[] = [];
+    const sink = adapter({
+      loadRecoverable: async () => structuredClone(rows),
+      upsert: async () => { started.resolve(); await release.promise; },
+      deleteConversation: async accepted => { rows = rows.filter(row => row.conversationId !== accepted.conversationId); },
+    });
+    await initializeChatExecutionRegistryPersistence(sink);
+    rows = [persisted('historical-before-delete')];
+    beginChatExecution(scope, 'writer');
+    const write = recordChatExecutionTerminalEventDurably(scope, 'writer', 'agent:response', { finalized: true });
+    await started.promise;
+    const deletion = forgetConversationChatExecutionsDurably(scope);
+    const recovery = initializeChatExecutionRegistryPersistence(sink);
+    release.resolve();
+    expect(await write).toBe(false);
+    await deletion;
+    expect(await recovery).toBe(0);
+    expect(getChatExecution(scope, 'historical-before-delete')).toBeNull();
+  });
 });

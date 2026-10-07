@@ -23,8 +23,16 @@ export function receiptIdentity(receipt: PersistedChatExecutionReceipt): string 
     receipt.source, receipt.conversationId, receipt.requestId]);
 }
 
+function domainScopeIdentity(scope: Pick<ChatExecutionScope, 'userId' | 'domain' | 'orgId'>) {
+  return [scope.userId, scope.domain, scope.domain === 'work' ? String(scope.orgId || '') : ''];
+}
+
+export function normalizedConversationKey(scope: Pick<ChatExecutionScope, 'userId' | 'domain' | 'orgId' | 'conversationId'>): string {
+  return JSON.stringify([...domainScopeIdentity(scope), String(scope.conversationId || '')]);
+}
+
 function scopeIdentity(scope: ChatExecutionScope) {
-  return [scope.userId, scope.domain, scope.domain === 'work' ? String(scope.orgId || '') : '', scope.source || 'chat'];
+  return [...domainScopeIdentity(scope), scope.source || 'chat'];
 }
 
 export function ownsChatExecution(scope: ChatExecutionScope, requestId: string, record: StoredExecution): boolean {

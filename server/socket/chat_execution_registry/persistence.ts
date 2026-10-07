@@ -3,7 +3,7 @@ import { ensureDatabaseInitialized, querySQL, runSQL } from '../../../db_layer';
 
 import { type ChatExecutionScope, type ChatExecutionEvent, type ChatExecutionPersistenceAdapter, TERMINAL_RETENTION_MS, CONTROL_INTENT_RETENTION_MS, PERSISTENT_PURGE_INTERVAL_MS } from './contracts';
 import { resolveSidecarDurability, executionState } from './state';
-import { normalizedScopeKey, normalizedRecoveryScopeKey, executionKey, receiptIdentity } from './identity';
+import { normalizedScopeKey, normalizedRecoveryScopeKey, normalizedConversationKey, executionKey, receiptIdentity } from './identity';
 import { compactString } from './payload';
 
 export function enqueueStrictPersistence(
@@ -78,7 +78,9 @@ const sqlitePersistenceAdapter: ChatExecutionPersistenceAdapter = {
 export async function forgetConversationChatExecutionsDurably(
   scope: Pick<ChatExecutionScope, 'userId' | 'domain' | 'orgId' | 'conversationId'>,
 ): Promise<void> {
+  scope = { ...scope };
   if (!scope.conversationId) throw new Error('A conversation identity is required for deletion');
+  executionState.recoveryBatch?.retiredConversations.add(normalizedConversationKey(scope));
   for (const [key, record] of executionState.executions) {
     if (record.scopeKey !== normalizedScopeKey({ ...scope, source: record.source })) continue;
     // Release duplicate sidecar waiters without keeping private recovery text.
@@ -112,83 +114,98 @@ export async function initializeChatExecutionRegistryPersistence(
   adapter: ChatExecutionPersistenceAdapter = sqlitePersistenceAdapter,
   now = Date.now(),
 ): Promise<number> {
-  executionState.persistenceAdapter = adapter;
-  executionState.lastPersistentPurgeAt = now;
-  const nowIso = new Date(now).toISOString();
-  await adapter.purgeExpired(nowIso);
-  const receipts = await adapter.loadRecoverable(nowIso);
-  const seen = new Set<string>();
-  let hydrated = 0;
-
-  for (const receipt of receipts) {
-    if (seen.has(receiptIdentity(receipt))) continue;
-    seen.add(receiptIdentity(receipt));
-    if (!receipt.userId || !receipt.requestId || !receipt.source) continue;
-    if (receipt.domain !== 'personal' && receipt.domain !== 'work') continue;
-    const receiptPayload = parsePayload(receipt.payload);
-    const isSidecarControlIntent = receipt.status === 'cancelling'
-      && receipt.event === 'agent:status'
-      && receiptPayload.sidecar === true
-      && receiptPayload.controlIntent === 'cancel';
-    const isTerminalReceipt = ['completed', 'cancelled', 'failed'].includes(receipt.status)
-      && ['agent:response', 'agent:error'].includes(receipt.event)
-      && (receipt.event !== 'agent:error' || receipt.status === 'failed');
-    const isTerminalCancellationBinding = isTerminalReceipt
-      && receiptPayload.sidecar === true
-      && receiptPayload.controlIntent === 'cancel'
-      && Boolean(compactString(receiptPayload.targetRequestId, 180));
-    if (!isSidecarControlIntent && !isTerminalReceipt) continue;
-    const updatedAtMs = Date.parse(receipt.updatedAt);
-    const expiresAtMs = Date.parse(receipt.expiresAt);
-    if (!Number.isFinite(updatedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= now) continue;
-
-    const scope: ChatExecutionScope = {
-      userId: receipt.userId,
-      domain: receipt.domain,
-      orgId: receipt.domain === 'work' ? receipt.orgId : '',
-      source: receipt.source,
-      conversationId: receipt.conversationId,
-    };
-    const scopeKey = normalizedScopeKey(scope);
-    const key = executionKey(scope, receipt.requestId);
-    if (executionState.executions.get(key)?.inProcess) continue;
-    const recoveredEvent: ChatExecutionEvent = {
-      event: receipt.event,
-      payload: {
-        ...receiptPayload,
-        source: receipt.source,
-        requestId: receipt.requestId,
-        conversationId: receipt.conversationId,
-      },
-    };
-    executionState.executions.set(key, {
-      scopeKey,
-      recoveryScopeKey: normalizedRecoveryScopeKey(scope),
-      requestId: receipt.requestId,
-      source: receipt.source,
-      ...(scope.conversationId ? { conversationId: scope.conversationId } : {}),
-      sidecar: recoveredEvent.payload.sidecar === true,
-      controlIntentTarget: isSidecarControlIntent || isTerminalCancellationBinding
-        ? compactString(recoveredEvent.payload.targetRequestId, 180)
-        : undefined,
-      controlIntentDurable: isSidecarControlIntent || isTerminalCancellationBinding,
-      status: receipt.status,
-      createdAt: receipt.createdAt,
-      updatedAt: receipt.updatedAt,
-      terminal: isTerminalReceipt,
-      lastEvent: recoveredEvent,
-      terminalEvent: isTerminalReceipt ? recoveredEvent : undefined,
-      terminalReceiptDurable: isTerminalReceipt,
+  const batch = { retiredConversations: new Set<string>() };
+  executionState.recoveryBatch = batch;
+  try {
+    executionState.persistenceAdapter = adapter;
+    executionState.lastPersistentPurgeAt = now;
+    const nowIso = new Date(now).toISOString();
+    let receipts: import('./contracts').PersistedChatExecutionReceipt[] = [];
+    // Recovery reads share the receipt queue: an already accepted deletion
+    // must settle before a new read can observe recovery rows.
+    await enqueueStrictPersistence(async acceptedAdapter => {
+      if (executionState.recoveryBatch !== batch) return;
+      await acceptedAdapter.purgeExpired(nowIso);
+      if (executionState.recoveryBatch !== batch) return;
+      receipts = await acceptedAdapter.loadRecoverable(nowIso);
     });
+    if (executionState.recoveryBatch !== batch) return 0;
+    const seen = new Set<string>();
+    let hydrated = 0;
 
-    if (recoveredEvent.payload.sidecar !== true) {
-      const activeKey = executionState.activeByScope.get(scopeKey);
-      const active = activeKey ? executionState.executions.get(activeKey) : undefined;
-      if (!active || (!active.inProcess && Date.parse(active.updatedAt) <= updatedAtMs)) executionState.activeByScope.set(scopeKey, key);
+    for (const receipt of receipts) {
+      if (seen.has(receiptIdentity(receipt))) continue;
+      seen.add(receiptIdentity(receipt));
+      if (!receipt.userId || !receipt.requestId || !receipt.source) continue;
+      if (receipt.domain !== 'personal' && receipt.domain !== 'work') continue;
+      const receiptPayload = parsePayload(receipt.payload);
+      const isSidecarControlIntent = receipt.status === 'cancelling'
+        && receipt.event === 'agent:status'
+        && receiptPayload.sidecar === true
+        && receiptPayload.controlIntent === 'cancel';
+      const isTerminalReceipt = ['completed', 'cancelled', 'failed'].includes(receipt.status)
+        && ['agent:response', 'agent:error'].includes(receipt.event)
+        && (receipt.event !== 'agent:error' || receipt.status === 'failed');
+      const isTerminalCancellationBinding = isTerminalReceipt
+        && receiptPayload.sidecar === true
+        && receiptPayload.controlIntent === 'cancel'
+        && Boolean(compactString(receiptPayload.targetRequestId, 180));
+      if (!isSidecarControlIntent && !isTerminalReceipt) continue;
+      const updatedAtMs = Date.parse(receipt.updatedAt);
+      const expiresAtMs = Date.parse(receipt.expiresAt);
+      if (!Number.isFinite(updatedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= now) continue;
+
+      const scope: ChatExecutionScope = {
+        userId: receipt.userId,
+        domain: receipt.domain,
+        orgId: receipt.domain === 'work' ? receipt.orgId : '',
+        source: receipt.source,
+        conversationId: receipt.conversationId,
+      };
+      if (batch.retiredConversations.has(normalizedConversationKey(scope))) continue;
+      const scopeKey = normalizedScopeKey(scope);
+      const key = executionKey(scope, receipt.requestId);
+      if (executionState.executions.get(key)?.inProcess) continue;
+      const recoveredEvent: ChatExecutionEvent = {
+        event: receipt.event,
+        payload: {
+          ...receiptPayload,
+          source: receipt.source,
+          requestId: receipt.requestId,
+          conversationId: receipt.conversationId,
+        },
+      };
+      executionState.executions.set(key, {
+        scopeKey,
+        recoveryScopeKey: normalizedRecoveryScopeKey(scope),
+        requestId: receipt.requestId,
+        source: receipt.source,
+        ...(scope.conversationId ? { conversationId: scope.conversationId } : {}),
+        sidecar: recoveredEvent.payload.sidecar === true,
+        controlIntentTarget: isSidecarControlIntent || isTerminalCancellationBinding
+          ? compactString(recoveredEvent.payload.targetRequestId, 180)
+          : undefined,
+        controlIntentDurable: isSidecarControlIntent || isTerminalCancellationBinding,
+        status: receipt.status,
+        createdAt: receipt.createdAt,
+        updatedAt: receipt.updatedAt,
+        terminal: isTerminalReceipt,
+        lastEvent: recoveredEvent,
+        terminalEvent: isTerminalReceipt ? recoveredEvent : undefined,
+        terminalReceiptDurable: isTerminalReceipt,
+      });
+
+      if (recoveredEvent.payload.sidecar !== true) {
+        const activeKey = executionState.activeByScope.get(scopeKey);
+        const active = activeKey ? executionState.executions.get(activeKey) : undefined;
+        if (!active || (!active.inProcess && Date.parse(active.updatedAt) <= updatedAtMs)) executionState.activeByScope.set(scopeKey, key);
+      }
+      hydrated += 1;
     }
-    hydrated += 1;
+    return hydrated;
+  } finally {
+    if (executionState.recoveryBatch === batch) executionState.recoveryBatch = null;
   }
-  return hydrated;
 }
 
 export async function waitForChatExecutionPersistence(): Promise<void> {
