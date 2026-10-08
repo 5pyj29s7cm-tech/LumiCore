@@ -148,7 +148,7 @@ describe('video generation model routing', () => {
         'DashScope 视频生成任务已提交。',
         'DashScope 视频任务正在排队或生成中。',
         '视频已生成，正在下载结果。',
-        '视频文件已保存，但实际尺寸或时长尚未满足请求，需要核对。',
+        '视频文件已保存，但实际尺寸或时长尚未满足请求，需要核对。 文件不含音轨。',
       ]);
     } finally {
       removeGeneratedVideo(result);

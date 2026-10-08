@@ -24,6 +24,7 @@ export const CN_MEDIA_PROGRESS = {
   videoSequenceDurationInvalid: '视频时长需为 1 至 120 秒的整数。',
   videoSequenceModelInvalid: '连续长视频需要在图生视频设置中选择 Lumi 官方 Wan2.2 图生视频模型。',
   videoCompleteSaved: '视频生成完成，结果已保存。',
+  videoAudioStatus: (hasAudio?: boolean) => hasAudio === true ? '已检测到音轨。' : hasAudio === false ? '文件不含音轨。' : '音轨尚未核实。',
   videoSettingsReview: '视频文件已保存，但实际尺寸或时长尚未满足请求，需要核对。',
   videoCompleteRemote: '视频生成完成，已取得结果链接。',
   videoDownloading: '视频已生成，正在下载结果。',

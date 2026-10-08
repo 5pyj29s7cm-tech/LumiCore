@@ -1,4 +1,4 @@
-import { requestedVideoDuration } from '../../shared/video_generation_options';
+import { requestedVideoDuration, requestedVideoAudio } from '../../shared/video_generation_options';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { resolveArtifactDelivery } from '../tools/artifact_evidence';
@@ -866,6 +866,11 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   if (!record || !isVerifiedCurrentTurnRecord(input, record)) return null;
   const receipt = buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error);
   if (!receipt) return null;
+  if (receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedVideoAudio(mediaRequest?.prompt || task) && receipt.settings.hasAudio !== true) return {
+    text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoAudioIncomplete(receipt.settings.hasAudio)
+      : 'The video file was saved, but the requested audio is missing or unverified. The task is incomplete; the existing video is preserved and generation will not be retried automatically.',
+    blocked: true, reason: 'media_audio_requirement_unmet',
+  };
   const requestedDuration = mediaRequest?.duration ?? requestedVideoDuration(task);
   const durationMismatch = receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedDuration !== undefined
     && (!Number.isFinite(receipt.settings.duration) || Math.abs(Number(receipt.settings.duration) - requestedDuration) > 0.35);
@@ -886,6 +891,10 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   const requestedCount = countText ? chineseCounts[countText] || Number(countText) : 1;
   if (!Number.isSafeInteger(requestedCount) || receipt.artifacts.length < requestedCount) return null;
   const zh = isChineseText(languageText);
-  // i18n-allow: Verified media completion copy; the authenticated media card carries the artifact paths.
-  return { text: zh ? (receipt.artifacts[0].kind === 'video' ? '视频已生成。' : '图片已生成。') : 'The requested media was generated.', blocked: false, reason: 'Grounded verified generated-media artifact.' };
+  const text = receipt.artifacts[0].kind === 'video'
+    ? zh ? CN_EXECUTION_EVIDENCE_MESSAGES.videoGenerated(receipt.settings.hasAudio)
+      : receipt.settings.hasAudio === true ? 'The video was generated; an audio track was detected.'
+        : receipt.settings.hasAudio === false ? 'The video picture was generated, but the file has no audio track.' : 'The video was saved; its audio track has not been verified.'
+    : zh ? CN_EXECUTION_EVIDENCE_MESSAGES.imageGenerated : 'The requested media was generated.';
+  return { text, blocked: false, reason: 'Grounded verified generated-media artifact.' };
 }

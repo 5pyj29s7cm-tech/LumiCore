@@ -30,6 +30,7 @@ export async function generateVideoSequence(input: {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const manifest = path.join(directory, 'progress.json');
   const clips: VideoSequenceClip[] = [];
+  const clipSettings: Array<{ duration: number; hasAudio: boolean }> = [];
   const temporaryFiles: string[] = [];
   const outputPath = path.join(input.outputDirectory, 'official_video_' + Date.now() + '_' + id + '.mp4');
   const temporaryOutput = path.join(directory, 'composed.partial.mp4');
@@ -58,27 +59,39 @@ export async function generateVideoSequence(input: {
       // The callback owns this file. Preserve it even if verification rejects it.
       clips.push(clip); save('verifying', currentClip); check();
       const measured = await measureGeneratedVideo(clip.path, { duration: input.clipDuration }, input.signal);
-      if (!measured.settingsMatch) throw new Error('A generated clip has an unverified or unexpected duration.');
+      if (!measured.settingsMatch || !measured.actualSettings) throw new Error('A generated clip has an unverified or unexpected duration.');
+      clipSettings.push(measured.actualSettings);
       progress(CN_MEDIA_PROGRESS.videoSequenceClipSaved(currentClip, count)); check();
     }
     save('composing', count); progress(CN_MEDIA_PROGRESS.videoSequenceComposing);
     const filenames: string[] = [];
+    const hasAudio = clipSettings.some(clip => clip.hasAudio);
     for (const [index, clip] of clips.entries()) {
       check();
-      const name = 'clip-' + index + '.mp4'; const normalized = path.join(directory, name);
+      const name = 'clip-' + index + '.mkv'; const normalized = path.join(directory, name);
       temporaryFiles.push(normalized); filenames.push(name);
-      await runMediaProcess('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-threads', '1', '-i', clip.path, '-map', '0:v:0', '-an', '-vf',
+      // Use lossless PCM between clips to avoid accumulating AAC encoder delay.
+      // A silent gap keeps later native audio at its original position; no audio
+      // track is created when every source clip is silent.
+      const audio = hasAudio ? [
+        ...(clipSettings[index].hasAudio ? [] : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo']),
+        '-map', '0:v:0', '-map', clipSettings[index].hasAudio ? '0:a:0' : '1:a:0',
+        '-af', 'aresample=48000:async=1:first_pts=0,apad', '-c:a', 'pcm_s16le', '-ac', '2', '-ar', '48000',
+      ] : ['-map', '0:v:0'];
+      await runMediaProcess('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-threads', '1', '-i', clip.path, ...audio, '-vf',
         'scale=' + width + ':' + height + ':force_original_aspect_ratio=decrease:force_divisible_by=2,pad=' + width + ':' + height + ':(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,setpts=PTS-STARTPTS',
-        '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p', '-n', normalized], input.signal);
+        '-t', String(clipSettings[index].duration), '-c:v', 'libx264', '-threads', '2', '-preset', 'fast', '-crf', '20', '-pix_fmt', 'yuv420p', '-n', normalized], input.signal);
     }
     const list = path.join(directory, 'clips.ffconcat'); temporaryFiles.push(list);
     fs.writeFileSync(list, 'ffconcat version 1.0\n' + filenames.map(name => 'file ' + name).join('\n') + '\n');
-    await runMediaProcess('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-f', 'concat', '-safe', '1', '-i', list, '-t', String(input.duration), '-c', 'copy', '-movflags', '+faststart', '-n', temporaryOutput], input.signal);
+    await runMediaProcess('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-f', 'concat', '-safe', '1', '-i', list, '-t', String(input.duration), '-map', '0:v:0', '-c:v', 'copy',
+      ...(hasAudio ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'] : []), '-movflags', '+faststart', '-n', temporaryOutput], input.signal);
     check();
     if (fs.statSync(temporaryOutput).size > 100 * 1024 * 1024) throw new Error('Composed video exceeds the output size limit.');
     validateVideoContainer(fs.readFileSync(temporaryOutput));
     const measured = await measureGeneratedVideo(temporaryOutput, { size: input.size, duration: input.duration }, input.signal);
     if (!measured.settingsMatch) throw new Error('Composed video settings do not match the requested duration or size.');
+    if (measured.actualSettings?.hasAudio !== hasAudio) throw new Error('Composed video audio does not match its source clips.');
     check(); fs.renameSync(temporaryOutput, outputPath); save('completed', count);
     return { outputPath, clips };
   } catch (error: any) {

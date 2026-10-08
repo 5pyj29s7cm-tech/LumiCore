@@ -23,6 +23,7 @@ export type MediaGenerationArtifact = {
   prompt?: string;
   model?: string;
   createdAt?: string;
+  hasAudio?: boolean;
 };
 
 export type MediaGenerationExpectation = {
@@ -186,6 +187,8 @@ export function extractMediaGenerationArtifacts(
       url: location.url,
       path: location.path,
       fileName: fileNameFor(location.path || value),
+      ...(kind === 'video' && typeof (payload.actualSettings || payload.settings)?.hasAudio === 'boolean'
+        ? { hasAudio: (payload.actualSettings || payload.settings).hasAudio } : {}),
     });
   }
   return artifacts;

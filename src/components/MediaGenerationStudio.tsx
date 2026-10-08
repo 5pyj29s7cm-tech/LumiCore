@@ -771,6 +771,9 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
                       <p className="truncate px-1 text-xs font-semibold text-white/55">
                         {artifact.fileName || (artifact.kind === 'image' ? copy.viewImage : copy.viewVideo)}
                       </p>
+                      {artifact.kind === 'video' && <p className={`mt-1 px-1 text-[11px] ${artifact.hasAudio === false ? 'text-amber-200' : 'text-white/50'}`}>
+                        {artifact.hasAudio === true ? copy.videoAudioPresent : artifact.hasAudio === false ? copy.videoAudioAbsent : copy.videoAudioUnverified}
+                      </p>}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {artifact.fileId && onReferenceArtifact && <button type="button" onClick={() => onReferenceArtifact(artifact)} className="rounded-lg border border-cyan-200/20 bg-cyan-200/10 px-2.5 py-1.5 text-[10px] font-bold text-cyan-100">{copy.referenceInChat}</button>}
                         <button

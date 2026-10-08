@@ -11,6 +11,7 @@ export type MediaArtifactReceipt = {
     size?: string;
     count?: number;
     duration?: number;
+    hasAudio?: boolean;
     hasReference: boolean;
     hasSource?: boolean;
   };
@@ -90,6 +91,7 @@ export function sanitizeMediaArtifactReceipt(value: unknown): MediaArtifactRecei
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count: Math.min(4, Math.max(1, count)) } : {}),
       ...(kind === 'video' && Number.isFinite(duration) ? { duration: Math.min(120, Math.max(1, duration)) } : {}),
+      ...(kind === 'video' && typeof rawSettings.hasAudio === 'boolean' ? { hasAudio: rawSettings.hasAudio } : {}),
       hasReference: rawSettings.hasReference === true,
       ...(candidate.toolName === 'ai_edit_image' && typeof rawSettings.hasSource === 'boolean'
         ? { hasSource: rawSettings.hasSource }
@@ -180,6 +182,7 @@ export function buildMediaArtifactReceipt(
       ...(size ? { size } : {}),
       ...(kind === 'image' && Number.isInteger(count) ? { count } : {}),
       ...(kind === 'video' && Number.isFinite(duration) ? { duration } : {}),
+      ...(measured && typeof payload.actualSettings?.hasAudio === 'boolean' ? { hasAudio: payload.actualSettings.hasAudio } : {}),
       hasReference: Boolean(String(parameters.first_frame_image || '').trim()),
       ...(toolName === 'ai_edit_image'
         ? { hasSource: Boolean(String(parameters.filePath || '').trim()) }

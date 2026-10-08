@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-const media = vi.hoisted(() => ({ run: vi.fn(), measurements: new Map<string, any>(), png: Buffer.alloc(0), unavailable: false, failComposition: false, durationOffset: 0 }));
+const media = vi.hoisted(() => ({ run: vi.fn(), measurements: new Map<string, any>(), png: Buffer.alloc(0), unavailable: false, failComposition: false, durationOffset: 0, hasAudio: false, dropComposedAudio: false }));
 vi.mock('../server/media/process', () => ({ runMediaProcess: media.run }));
 import { initDatabase } from '../db_layer';
 import { saveKeys } from '../server/config/keys';
@@ -25,11 +25,11 @@ beforeEach(() => {
   fs.writeFileSync(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
   before = new Set(fs.existsSync(directory) ? fs.readdirSync(directory) : []); posts = []; failPost = 0;
   vi.spyOn(fs, 'renameSync').mockImplementation((sourcePath, targetPath) => { realRename(sourcePath, targetPath); const measured = media.measurements.get(String(sourcePath)); if (measured) { media.measurements.set(String(targetPath), measured); media.measurements.delete(String(sourcePath)); } });
-  media.unavailable = media.failComposition = false; media.durationOffset = 0; media.measurements.clear(); media.run.mockReset();
+  media.unavailable = media.failComposition = media.hasAudio = media.dropComposedAudio = false; media.durationOffset = 0; media.measurements.clear(); media.run.mockReset();
   media.run.mockImplementation(async (binary: string, args: string[]) => {
     if (args.includes('-version')) { if (media.unavailable) throw new Error('ffmpeg unavailable'); return 'media tool ready'; }
     const output = args.at(-1)!;
-    if (binary === 'ffprobe') { const m = media.measurements.get(output) || { width: 832, height: 480, duration: 5 }; return JSON.stringify({ streams: [m] }); }
+    if (binary === 'ffprobe') { const m = media.measurements.get(output) || { width: 832, height: 480, duration: 5 }; return JSON.stringify({ streams: [{ codec_type: 'video', ...m }, ...(media.hasAudio && !(media.dropComposedAudio && output.endsWith('composed.partial.mp4')) ? [{ codec_type: 'audio' }] : [])] }); }
     if (args.includes('-frames:v')) { fs.writeFileSync(output, media.png); return ''; }
     const concat = args.includes('concat');
     if (concat && media.failComposition) { fs.writeFileSync(output, 'partial'); throw new Error('injected composition failure'); }
@@ -106,4 +106,12 @@ describe('automatic long video generation', () => {
     expect(getToolExecutionTimeoutMs('generate_video', { duration: 30 })).toBe(17 * 60_000);
     expect(getToolExecutionTimeoutMs('generate_video', { duration: 120 })).toBe(45 * 60_000);
   });
+});
+
+it('rejects a composition that lost source audio and preserves paid source clips without retry', async () => {
+  media.hasAudio = media.dropComposedAudio = true;
+  await expect(generate()).rejects.toThrow(/audio does not match/);
+  expect(posts).toHaveLength(6); expect(manifest().value.state).toBe('failed');
+  expect(manifest().value.clips.every((clip: { path: string }) => fs.existsSync(clip.path))).toBe(true);
+  expect(fs.readdirSync(manifest().location)).toEqual(['progress.json']);
 });

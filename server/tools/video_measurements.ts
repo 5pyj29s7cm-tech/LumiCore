@@ -4,19 +4,20 @@ import { validateVideoContainer } from './video_container';
 import { runMediaProcess } from '../media/process';
 
 export type VideoSettings = { size?: string; duration?: number };
-export type VideoMeasurements = { actualSettings?: { size: string; duration: number }; settingsMatch: boolean; sizeAdaptation?: 'fit_with_padding' };
+export type VideoMeasurements = { actualSettings?: { size: string; duration: number; hasAudio: boolean }; settingsMatch: boolean; sizeAdaptation?: 'fit_with_padding' };
 
 /** Measure the saved file, never echo requested parameters as output evidence. */
 export async function measureGeneratedVideo(file: string, requested: VideoSettings, signal?: AbortSignal): Promise<VideoMeasurements> {
   try {
-    const probe = JSON.parse(await runMediaProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file', '-select_streams', 'v:0',
-      '-show_entries', 'stream=width,height,duration:format=duration', '-of', 'json', file], signal, 15_000));
-    const video = probe.streams?.[0];
+    const probe = JSON.parse(await runMediaProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file',
+      '-show_entries', 'stream=codec_type,width,height,duration:format=duration', '-of', 'json', file], signal, 15_000));
+    const video = probe.streams?.find((stream: { codec_type?: string }) => stream.codec_type === 'video');
     const width = Number(video?.width), height = Number(video?.height);
     const streamDuration = Number(video?.duration);
     const duration = Number.isFinite(streamDuration) && streamDuration > 0 ? streamDuration : Number(probe.format?.duration);
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || !Number.isFinite(duration) || duration <= 0) return { settingsMatch: false };
-    const actualSettings = { size: `${width}x${height}`, duration };
+    const hasAudio = probe.streams.some((stream: { codec_type?: string }) => stream.codec_type === 'audio');
+    const actualSettings = { size: `${width}x${height}`, duration, hasAudio };
     const settingsMatch = (!requested.size || requested.size.toLowerCase().replace('*', 'x') === actualSettings.size)
       && (!requested.duration || Math.abs(requested.duration - duration) <= 0.15);
     return { actualSettings, settingsMatch };
@@ -47,7 +48,7 @@ export async function fitGeneratedVideoSize(file: string, requested: VideoSettin
     if (fs.statSync(temporary).size > 100 * 1024 * 1024) return measured;
     validateVideoContainer(fs.readFileSync(temporary));
     const converted = await measureGeneratedVideo(temporary, { ...requested, duration: requested.duration || measured.actualSettings.duration }, signal);
-    if (!converted.settingsMatch) return measured;
+    if (!converted.settingsMatch || converted.actualSettings?.hasAudio !== measured.actualSettings.hasAudio) return measured;
     signal?.throwIfAborted();
     fs.renameSync(temporary, file);
     return { ...converted, sizeAdaptation: 'fit_with_padding' };

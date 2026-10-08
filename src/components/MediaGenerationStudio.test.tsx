@@ -301,3 +301,10 @@ it('submits a 30-second final length using the current model composition options
   fireEvent.submit(container.querySelector('form')!);
   expect(generate).toHaveBeenCalledWith(expect.objectContaining({ duration: 30 }));
 });
+
+it.each([[true, '已检测到音轨'], [false, '无音轨'], [undefined, '音轨尚未核实']] as const)('shows measured audio state in a video result (%s)', (hasAudio, label) => {
+  render(<MediaGenerationStudio {...studioProps({ mode: 'video', locale: 'zh', status: 'completed', artifacts: [
+    { id: 'video-audio', kind: 'video', url: '/api/files/generated?path=clip.mp4&inline=1', hasAudio },
+  ] })} />);
+  expect(screen.getByText(label)).toBeTruthy();
+});

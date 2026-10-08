@@ -488,9 +488,9 @@ describe('closed isolated Chat conversation continuity', () => {
     );
     expect(isolatedAfterStatus).toMatchObject({ status: 'closed' });
   });
-  it.each([false, true])('binds the original video through persisted history and the sole execution lane (interrupted=%s)', async interrupted => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])('binds the original video through the sole execution lane (interrupted=%s, audioRequired=%s)', async (interrupted, audioRequired) => {
     const selected = startIsolatedConversation(userId, 'lumi', 'personal', '');
-    const brief = '帮我做一个tiktok的推广视频，要三十秒的，纯英文版';
+    const brief = '帮我做一个tiktok的推广视频，要三十秒的，纯英文版' + (audioRequired ? '，要有声音' : '');
     const script = '30秒英文视频脚本：0–3秒展示产品；3–24秒展示玩法；24–30秒结尾。需要我按这个脚本生成30秒成片吗？';
     for (const [role, content] of [['user', brief], ['assistant', script]]) {
       addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role, content, skipActionContinuation: true });
@@ -512,7 +512,7 @@ describe('closed isolated Chat conversation continuity', () => {
     }
     const source = path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), 'product.png');
     fs.writeFileSync(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=', 'base64'));
-    const requestId = 'media-version-' + interrupted + '-' + suffix;
+    const requestId = 'media-version-' + interrupted + '-' + audioRequired + '-' + suffix;
     const response = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
     const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
       text: interrupted ? videoResumeText : videoChoiceText, requestId, conversationId: selected.id, domain: 'personal', source: 'e2e-formal-client',
@@ -520,7 +520,10 @@ describe('closed isolated Chat conversation continuity', () => {
       history: [{ role: 'assistant', message: '请改成五秒自检。' }],
     });
     expect(ack).toMatchObject({ ok: true, requestId });
-    expect(await response).toMatchObject({ requestId, conversationId: selected.id, text: '视频已生成。', finalized: true, blocked: false });
+    const delivered = await response;
+    expect(delivered).toMatchObject({ requestId, conversationId: selected.id, finalized: true, blocked: audioRequired });
+    expect(delivered.text).toContain(audioRequired ? '尚未核实你要求的音轨' : '视频已保存，音轨尚未核实。');
+    expect(readDB().conversationActionTasks.find((task: any) => task.id === mediaInvocation.taskId)?.status).toBe(audioRequired ? 'blocked' : 'completed');
     expect(mediaInvocation.runtimeOwnedDeterministicRecoveryCall).toMatchObject({ source: 'structured_media_request', requestId, name: 'generate_video',
       arguments: { duration: 30, size: '1080x1920', first_frame_image: fs.realpathSync(source) } });
     const prompt = mediaInvocation.runtimeOwnedDeterministicRecoveryCall.arguments.prompt;

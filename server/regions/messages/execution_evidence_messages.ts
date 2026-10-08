@@ -19,6 +19,12 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   artifactSavedVerified: (path: string) => `已保存并核实文件：${path}`,
   formulaResultsHeading: '公式计算结果：',
   spreadsheetIncomplete: (missing: string[]) => `表格文件已保存，但${missing.map(key => ({ formulas: '可计算的公式', calculation: '公式计算结果', chart: '图表', grand_total_formula: '总计公式' }[key] || key)).join('、')}还未核实完成，这项任务尚未全部完成。`,
+  imageGenerated: '图片已生成。',
+  videoAudioIncomplete: (hasAudio?: boolean) => hasAudio === false
+    ? '视频画面已保存，但文件不含音轨，未满足你要求的声音。这项任务尚未全部完成，现有视频已保留，不会自动重复生成。'
+    : '视频文件已保存，但尚未核实你要求的音轨，暂不能确认整项任务完成。现有视频已保留，不会自动重复生成。',
+  videoGenerated: (hasAudio?: boolean) => hasAudio === true ? '视频已生成，已检测到音轨。'
+    : hasAudio === false ? '视频画面已生成，但文件不含音轨。' : '视频已保存，音轨尚未核实。',
   videoSettingsReview: (size?: string, duration?: number) => size && duration
     ? `视频文件已保留，实际为 ${duration.toFixed(2)} 秒、${size}，与请求的参数不同，暂未通过验收。可预览后采用或调整生成要求。`
     : '视频文件已保留，但尚未核实实际尺寸和时长，暂不能确认满足生成要求。',

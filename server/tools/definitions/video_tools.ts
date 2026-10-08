@@ -287,12 +287,15 @@ async function completedResult(input: {
     artifactDurability: 'local_file',
     outputPath: input.outputPath,
     artifacts,
-    tip: measurements.settingsMatch ? 'Video saved; measured output settings match the request.'
+    tip: [measurements.settingsMatch ? 'Video saved; measured size and duration match the request.'
       : 'Video saved, but its output settings do not match the request or could not be measured. Preserve this file and report its actual settings; do not claim the requested settings or automatically regenerate.',
+      measurements.actualSettings?.hasAudio === true ? 'An audio track was detected; its speech, music and content are not verified.'
+        : measurements.actualSettings?.hasAudio === false ? 'No audio track was found. Do not claim voice, music or sound effects were generated; do not automatically regenerate.'
+          : 'Audio could not be verified. Do not claim voice, music or sound effects were generated.'].join(' '),
   });
   reportVideoProgress(
     input.onProgress,
-    measurements.settingsMatch ? CN_MEDIA_PROGRESS.videoCompleteSaved : CN_MEDIA_PROGRESS.videoSettingsReview,
+    (measurements.settingsMatch ? CN_MEDIA_PROGRESS.videoCompleteSaved : CN_MEDIA_PROGRESS.videoSettingsReview) + ' ' + CN_MEDIA_PROGRESS.videoAudioStatus(measurements.actualSettings?.hasAudio),
   );
   return result;
 }

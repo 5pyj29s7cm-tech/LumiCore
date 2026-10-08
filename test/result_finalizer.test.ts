@@ -3305,7 +3305,7 @@ it('never allows incidental successful client checks to replace the video delive
     result:JSON.stringify({ok:true,success:true,status:'generated',verified:true,verificationStatus:'verified',settingsMatch:true,actualSettings:{duration:30,size:'1080x1920'},outputPath:'D:/generated/video.mp4'}),
     terminalVerification:{status:'verified',strategy:'artifact',reason:'Verified generated file'},
   }]});
-  expect(result).toMatchObject({blocked:false,text:'视频已生成。'});
+  expect(result).toMatchObject({blocked:false,text:'视频已保存，音轨尚未核实。'});
   expect(result.text).not.toMatch(/自检|client_get_state|internal-plugin|attention/);
 });
 it.each([false, true])('does not accept five seconds against thirty merely because tool arguments matched (structured=%s)', async structured => {
@@ -3315,4 +3315,33 @@ it.each([false, true])('does not accept five seconds against thirty merely becau
     toolRecords:[{name:'generate_video',arguments:{duration:5,size:'1080x1920'},result:JSON.stringify({ok:true,success:true,status:'generated',verified:true,verificationStatus:'verified',settingsMatch:true,actualSettings:{duration:5,size:'1080x1920'},outputPath:'D:/generated/short.mp4'}),terminalVerification:{status:'verified',strategy:'artifact',reason:'File exists'}}]});
   expect(result).toMatchObject({blocked:true,reason:'media_settings_mismatch'});
   expect(result.text).toContain('5.00');
+});
+
+it.each([false, true, undefined])('reports only measured audio evidence on a generated video (%s)', async hasAudio => {
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const result = finalizeLumiResponse({ taskText: '生成一个带英文配音的视频', responseText: '视频和英文配音都已经生成。', source: 'chat',
+    toolRecords: [{ name: 'generate_video', arguments: { duration: 5, size: '832x480', hasAudio: true },
+      result: JSON.stringify({ ok: true, success: true, status: 'generated', verified: true, verificationStatus: 'verified', settingsMatch: true,
+        actualSettings: { duration: 5, size: '832x480', hasAudio }, outputPath: 'D:/generated/video.mp4' }),
+      terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'Saved video' } }] });
+  expect(result.blocked).toBe(hasAudio !== true);
+  if (hasAudio === true) expect(result.text).toBe('视频已生成，已检测到音轨。');
+  else {
+    expect(result.reason).toBe('media_audio_requirement_unmet');
+    expect(result.text).toContain(hasAudio === false ? '不含音轨' : '尚未核实');
+    expect(result.text).toContain('不会自动重复生成');
+    const { decideExecutionGuardRecovery } = await import('../server/cognition/execution_guard_recovery');
+    expect(decideExecutionGuardRecovery({ ...result, allowToolUse: true, task: '生成一个带英文配音的视频' }).recoverable).toBe(false);
+  }
+  expect(result.text).not.toContain('英文配音都已经生成');
+});
+
+it('keeps an intentionally silent video complete and rejects missing audio in a structured studio prompt', async () => {
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const record = { name: 'generate_video', arguments: { duration: 5, size: '832x480' },
+    result: JSON.stringify({ ok: true, status: 'generated', verified: true, verificationStatus: 'verified', settingsMatch: true, actualSettings: { duration: 5, size: '832x480', hasAudio: false }, outputPath: 'D:/generated/video.mp4' }),
+    terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'Saved file' } };
+  expect(finalizeLumiResponse({ taskText: '生成一个视频，不要声音', responseText: '已经生成', source: 'chat', toolRecords: [record] })).toMatchObject({ blocked: false, text: '视频画面已生成，但文件不含音轨。' });
+  expect(finalizeLumiResponse({ taskText: '开始生成', responseText: '已经生成', source: 'chat', toolRecords: [record],
+    flow: { structuredMediaRequest: { operation: 'text_to_video', prompt: 'Make a product video with English voiceover', size: '832x480', duration: 5 } } as any })).toMatchObject({ blocked: true, reason: 'media_audio_requirement_unmet' });
 });

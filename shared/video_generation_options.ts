@@ -27,3 +27,11 @@ export function requestedVideoDuration(text: string): number | undefined {
   }
   return value * (/^(?:分钟|minutes?|mins?)$/iu.test(match[2]) ? 60 : 1);
 }
+
+/** Explicit audio requirements are checked against the saved file, without adding another execution route. */
+export function requestedVideoAudio(text: string): boolean {
+  // i18n-allow: Audio requirement and negation input recognition, not user-visible copy.
+  const positive = text.replace(/(?:不要|无需|不需要|不要求|不加|不带|不用|去掉|去除|没有|无)\s*(?:任何|背景|英文|中文|英语|额外)?(?:声音|音轨|音效|配音|旁白|音乐)|\b(?:without|no|do not(?: need| add| include| generate)?|don't(?: need| add| include| generate)?)\s+(?:(?:any|background|English|extra)\s+)?(?:audio|sound(?: effects)?|voice[ -]?over|music|narration|soundtrack)\b/giu, '');
+  // i18n-allow: Explicit native audio, voice, music and sound-effects requests.
+  return /有声(?:视频|成片)?|声画同步|(?:带|包含|需要|要|有|保留|加入|加上|配上).{0,10}(?:声音|音轨|音效|配音|旁白|音乐)|(?:英文|中文|英语|国语|男声|女声).{0,6}(?:配音|旁白)|\b(?:with|include|including|needs?|add|retain|preserve)\b[^.!?\n,;]{0,50}\b(?:sound|audio|voice[ -]?over|music|narration|soundtrack|dialogue)\b|\b(?:English|spoken|native|synchronized)\s+(?:audio|voice[ -]?over|narration|dialogue)\b/iu.test(positive);
+}
