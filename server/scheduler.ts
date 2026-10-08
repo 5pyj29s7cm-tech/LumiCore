@@ -417,13 +417,18 @@ export class Scheduler {
       clearTimeout(timer); // Also clear cron timeouts
     }
     this.timers.clear();
+    const draining = new Set([...this.executions.active].filter(([, execution]) =>
+      options.drainSettledHandlers && execution.handlerStarted && execution.handlerSettled
+      && execution.handlerOutcome === 'fulfilled' && !execution.controller.signal.aborted,
+    ).map(([taskId]) => taskId));
     for (const task of this.tasks) {
       task.nextRun = null;
-      this.persistence.runtime(task);
+      // The accepted terminal projection may already be awaiting its flush.
+      // Do not overwrite it with the still-executing in-memory task snapshot.
+      if (!draining.has(task.id)) this.persistence.runtime(task);
     }
-    for (const [taskId, execution] of this.executions.active) {
-      if (options.drainSettledHandlers && execution?.handlerStarted && execution.handlerSettled
-        && execution.handlerOutcome === 'fulfilled' && !execution.controller.signal.aborted) {
+    for (const [taskId] of this.executions.active) {
+      if (draining.has(taskId)) {
         // The handler is finished. Let the existing bounded delivery/receipt
         // commit drain instead of turning a normal restart into an unknown side
         // effect. Its original deadline still applies; no new slot is admitted.

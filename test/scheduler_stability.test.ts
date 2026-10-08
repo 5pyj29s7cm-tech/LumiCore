@@ -506,6 +506,9 @@ describe('scheduler stability', () => {
       expect(scheduler.listTasks()[0]).toMatchObject({ lastStatus: 'completed', running: false,
         requiresReconciliation: false, nextRun: null, persistenceStatus: 'ok' });
       expect(task.handler).toHaveBeenCalledOnce();
+      const { readDB } = await import('../db_layer');
+      const persisted = JSON.parse(readDB().settings.find((row: any) => row.key === 'scheduler_task_runtime_state_v1').value);
+      expect(persisted[task.id]).toMatchObject({ lastStatus: 'completed', requiresReconciliation: false });
     } finally { release(); await pending; scheduler.stop(); }
   });
 
