@@ -3345,3 +3345,35 @@ it('keeps an intentionally silent video complete and rejects missing audio in a 
   expect(finalizeLumiResponse({ taskText: '开始生成', responseText: '已经生成', source: 'chat', toolRecords: [record],
     flow: { structuredMediaRequest: { operation: 'text_to_video', prompt: 'Make a product video with English voiceover', size: '832x480', duration: 5 } } as any })).toMatchObject({ blocked: true, reason: 'media_audio_requirement_unmet' });
 });
+
+it.each([false, true])('rejects DOCX output as a video completion (structured=%s)', async structured => {
+  const { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } = await import('../server/cognition/result_finalizer');
+  const { sanitizeExecutionResponseForDelivery } = await import('../server/cognition/execution_guard_recovery');
+  const { sanitizeUserFacingExecutionOutput } = await import('../server/cognition/user_output_protection');
+  const toolRecords = ['TikTok_30s_English_Script_Storyboard.docx', 'TikTok_30s_English_Voiceover_Narration.docx'].map(file => ({
+    name: 'create_docx', arguments: {}, taskId: 'video-doc-task', requestId: 'video-doc-request',
+    result: JSON.stringify({ ok: true, status: 'created', path: 'C:\\private\\' + file }),
+    terminalVerification: { status: 'verified' as const, strategy: 'artifact' as const, reason: 'file saved' },
+  }));
+  const input = { taskText: structured ? '继续' : '帮我生成30秒的TikTok视频，要16:9', responseText: '任务已经完成。', source: 'chat',
+    taskId: 'video-doc-task', requestId: 'video-doc-request', toolRecords,
+    ...(structured ? { flow: { structuredMediaRequest: { operation: 'text_to_video' as const, prompt: '生成30秒视频，16:9', duration: 30, size: '1920x1080' } } as import('../server/cognition/turn_flow').LumiTurnFlow } : {}),
+  };
+  const result = finalizeLumiResponse(input);
+  expect(result).toMatchObject({ blocked: true, reason: 'media_output_type_mismatch' });
+  const { decideExecutionGuardRecovery } = await import('../server/cognition/execution_guard_recovery');
+  expect(decideExecutionGuardRecovery({ ...result, task: input.taskText, allowToolUse: true }).recoverable).toBe(false);
+  expect(result.text).toContain('没有交付你要求的视频');
+  expect(result.text).toContain('TikTok_30s_English_Script_Storyboard.docx');
+  expect(result.text).toContain('TikTok_30s_English_Voiceover_Narration.docx');
+  expect(result.text).not.toContain('C:/private');
+  expect(tryFinalizeVerifiedBoundedAction(input)).toMatchObject({ blocked: true, reason: 'media_output_type_mismatch' });
+  expect(sanitizeExecutionResponseForDelivery(result, { task: input.taskText, toolRecords }).text).toBe(result.text);
+  const summary = sanitizeUserFacingExecutionOutput(toolRecords[0].result, { task: '生成文件', toolRecords });
+  expect(summary).toContain('TikTok_30s_English_Script_Storyboard.docx');
+  expect(summary).toContain('TikTok_30s_English_Voiceover_Narration.docx');
+  expect(summary).not.toMatch(/private|原始系统数据|我会只汇报/);
+  expect(sanitizeUserFacingExecutionOutput(toolRecords[0].result, { task: '生成文件', toolRecords: toolRecords.map(record => ({ ...record, terminalVerification: undefined })) })).not.toContain('已保存文件');
+  expect(finalizeLumiResponse({ ...input, requestId: 'another-request' }).reason).not.toBe('media_output_type_mismatch');
+  expect(finalizeLumiResponse({ ...input, taskText: '只生成视频脚本Word文档', flow: undefined }).reason).not.toBe('media_output_type_mismatch');
+});

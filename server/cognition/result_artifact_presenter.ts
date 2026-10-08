@@ -1,7 +1,8 @@
+import { mediaGenerationIntent } from './normalized_action_intent';
 import { requestedVideoDuration, requestedVideoAudio } from '../../shared/video_generation_options';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
-import { resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { matchesRequestedArtifactOutput } from './artifact_write_scope';
 import { getArtifactTaskProgress } from './action_contract';
 import { formatArtifactProgress } from './artifact_progress';
@@ -862,9 +863,20 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   // i18n-allow: Media creation versus compound external-work input recognition.
   if ((!mediaRequest && !/(?:生成|创建|制作|绘制|画).{0,90}(?:图片|图像|插画|海报|视频)|\b(?:generate|create|draw|make).{0,80}(?:image|picture|video)\b/iu.test(task))
     || /(?:发送|发给|上传|发布|打开|导出|写入|保存到|CAD|图纸|文档|PPT)|\b(?:send|upload|publish|open|export|document|save to|cad)\b/iu.test(task)) return null; // i18n-allow: Compound task boundaries.
+  // i18n-allow: Requested media kind, excluding covers and document-only briefs.
+  const videoRequested = mediaRequest ? ['text_to_video', 'image_to_video'].includes(mediaRequest.operation) : mediaGenerationIntent(task)?.target === 'generate_video';
   const record = [...(input.toolRecords || [])].reverse().find(item => /^(?:generate_image|get_image_generation_status|ai_edit_image|generate_video)$/u.test(item.name));
-  if (!record || !isVerifiedCurrentTurnRecord(input, record)) return null;
-  const receipt = buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error);
+  const receipt = record && isVerifiedCurrentTurnRecord(input, record) ? buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error) : null;
+  if (videoRequested && !receipt?.artifacts.some(artifact => artifact.kind === 'video')) {
+    const outputs = (input.toolRecords || []).filter(item => isArtifactProducerRecord(item) && isVerifiedCurrentTurnRecord(input, item))
+      .map(artifactPathFromRecord).filter(file => /\.(?:docx?|pdf|txt|md|pptx?|xlsx?|png|jpe?g|webp)$/iu.test(file));
+    const files = [...new Set(outputs.map(file => file.split(/[\\/]/u).at(-1)!))].slice(0, 5);
+    if (files.length || receipt?.artifacts.some(artifact => artifact.kind !== 'video')) return {
+      text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoDeliverableMismatch(files)
+        : `The saved output ${files.length ? '(' + files.join(', ') + ')' : ''} is supporting material, not the requested video. Video creation is incomplete; existing files are preserved and generation will not be retried automatically.`,
+      blocked: true, reason: 'media_output_type_mismatch',
+    };
+  }
   if (!receipt) return null;
   if (receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedVideoAudio(mediaRequest?.prompt || task) && receipt.settings.hasAudio !== true) return {
     text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoAudioIncomplete(receipt.settings.hasAudio)
@@ -879,8 +891,6 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
       : `The video was saved, but its measured settings (${receipt.settings.size || 'unknown size'}, ${receipt.settings.duration ?? 'unknown'} seconds) do not match the request or could not be verified. Review the existing file before generating again.`,
     blocked: true, reason: 'media_settings_mismatch',
   };
-  // i18n-allow: Requested media kind and count, not output copy.
-  const videoRequested = mediaRequest ? ['text_to_video', 'image_to_video'].includes(mediaRequest.operation) : /(?:视频(?![^。\n]*(?:封面|图片|图像|海报|缩略图))|\bvideo\b(?![^.\n]*\b(?:cover|image|thumbnail|poster)\b))/iu.test(task);
   const requestedKind = videoRequested ? 'video' : 'image';
   if (receipt.artifacts.some(artifact => artifact.kind !== requestedKind)) return null;
   // i18n-allow: Multiple distinct media deliverables cannot share one receipt.

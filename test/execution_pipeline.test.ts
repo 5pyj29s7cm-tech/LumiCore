@@ -689,3 +689,20 @@ it.each(['chat', 'voice', 'task'] as const)('keeps new and stale %s plans separa
   expect(owned.executionPlan.taskId).toBe('new-owned-task');
   expect(owned.executionPlan.contextRefs).toEqual([]);
 });
+
+it.each(['继续', 'continue'])('executes a validated media binding for %s while keeping unbound continuations read-only', text => {
+  const input = { userText: text, dispatch: { userId: 'bound-video-continuation', channel: 'chat' as const, targetIsLumi: true, text },
+    registry: createRegistry(), personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 3 } };
+  const unbound = buildLumiExecutionPipeline(input);
+  expect(unbound.executionRequested).toBe(false);
+  const bound = buildLumiExecutionPipeline({ ...input, structuredMediaRequest: { operation: 'text_to_video', prompt: 'A product advertisement', duration: 30, size: '1920x1080' } });
+  expect(bound.executionRequested).toBe(true);
+  expect(bound.modelToolProjection.toolNames).toContain('generate_video');
+  expect(bound.modelToolProjection.toolNames).toEqual(['generate_video']);
+  expect(bound.authorizationPolicy.allowedTools).toEqual(['generate_video']);
+  expect(bound.modelToolProjection.allowDynamicDiscovery).toBe(false);
+  expect(buildLumiExecutionPipeline({ ...input, personalityToolPolicy: { ...input.personalityToolPolicy, forbiddenTools: ['generate_video'] },
+    structuredMediaRequest: { operation: 'text_to_video', prompt: 'A product advertisement', duration: 30, size: '1920x1080' } }).executionRequested).toBe(false);
+  expect(buildLumiExecutionPipeline({ ...input, dispatch: { ...input.dispatch, text: '继续，暂时不要执行' }, userText: '继续，暂时不要执行',
+    structuredMediaRequest: { operation: 'text_to_video', prompt: 'A product advertisement', duration: 30, size: '1920x1080' } }).executionRequested).toBe(false);
+});

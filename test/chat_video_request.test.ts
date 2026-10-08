@@ -108,3 +108,51 @@ it('does not revive old media through unrelated turns, a veto, casual assent or 
   const delivered = { role: 'assistant', message: 'guard reply', cognitiveIntent: 'work_product_guard', toolCalls: [{ name: 'generate_video', arguments: { duration: 30 }, result: JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', outputPath: 'D:/generated/finished.mp4', settingsMatch: true, actualSettings: { duration: 30 } }) }] };
   expect(resolveChatVideoRequest('继续完成原任务', images(), scope, [...interruptedVideoHistory, delivered])).toBeNull();
 });
+
+const confirmedVideoHistory = [
+  { role: 'user', message: '帮我做一个tiktok的推广视频，要三十秒的，纯英文版' },
+  { role: 'assistant', message: '视频已生成。' },
+  { role: 'user', message: '你这做的什么东西，声音也没有' },
+  { role: 'assistant', message: '没有真正生成出视频。' },
+  { role: 'user', message: '你已经生成过了，但是我看不上你做的东西，东西不对，而且画面要16比9的' },
+  { role: 'assistant', message: '已停止当前任务，未完成的步骤不会继续执行。', cognitiveIntent: 'task_cancelled' },
+  { role: 'user', message: '继续' },
+  { role: 'assistant', message: '没法直接吐出成片，因为这轮执行合同没有开放视频生成工具。\n我按你要的标准重新生成，需要你先确认三点：\n配音风格：活泼女声 / 沉稳男声 / 童声（选一个）\n你回一句确认，我就按30秒、16:9、纯英文配音继续推进成片。' },
+];
+it.each(['确认', '继续'])('binds the promised video on %s and preserves the user correction', text => {
+  const history = text === '确认' ? confirmedVideoHistory : [...confirmedVideoHistory,
+    { role: 'user', message: '确认' },
+    { role: 'assistant', message: '这一步没有返回明确结果。', cognitiveIntent: 'work_product_guard', toolCalls: [{ name: 'client_capability_manifest', result: '{"ok":true}' }] },
+  ];
+  const request = resolveChatVideoRequest(text, images(), scope, history)!;
+  expect(request).toMatchObject({ operation: 'image_to_video', duration: 30, size: '1920x1080' });
+  expect(request.prompt).toContain('画面要16比9');
+  expect(request.prompt).toContain('纯英文配音');
+  expect(request.prompt).not.toMatch(/执行合同|工具|选一个|没有真正生成/);
+  expect(structuredMediaToolCall(request).name).toBe('generate_video');
+});
+it.each([
+  ['帮我做个tiktok视频，16:9', '1920x1080'],
+  ['帮我做个tiktok视频，16比9', '1920x1080'],
+  ['帮我做个tiktok视频，横屏', '1920x1080'],
+  ['帮我做个视频，16:9，改成9:16', '1080x1920'],
+  ['帮我做个视频，720x1280，改成16:9', '1920x1080'],
+  ['帮我做个视频，16:9，改成720x1280', '720x1280'],
+])('gives the latest explicit dimensions precedence: %s', (text, size) => {
+  expect(resolveChatVideoRequest(text, images(), scope)).toMatchObject({ size });
+});
+it('does not revive a video for a complaint, an unrelated document confirmation, or a finished receipt', () => {
+  expect(resolveChatVideoRequest('我要的是视频这是什么', images(), scope, confirmedVideoHistory)).toBeNull();
+  expect(resolveChatVideoRequest('确认', images(), scope, [...confirmedVideoHistory,
+    { role: 'user', message: '只生成Word视频脚本' },
+    { role: 'assistant', message: '请你确认，我就生成视频脚本文档。' },
+  ])).toBeNull();
+  const delivery = { role: 'assistant', message: '视频已生成。', toolCalls: [{ name: 'generate_video', arguments: {},
+    result: JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', outputPath: 'D:/generated/finished.mp4', settingsMatch: true }) }] };
+  expect(resolveChatVideoRequest('继续', images(), scope, [...confirmedVideoHistory, { role: 'user', message: '确认' }, delivery])).toBeNull();
+});
+
+it('keeps the original video brief when incidental tool events fill the raw history window', () => {
+  const history = [...confirmedVideoHistory.slice(0, -1), ...Array.from({ length: 40 }, () => ({ role: 'tool', message: '[Tool: client_capability_manifest] Done' })), confirmedVideoHistory.at(-1)!];
+  expect(resolveChatVideoRequest('确认', images(), scope, history)).toMatchObject({ duration: 30, size: '1920x1080' });
+});

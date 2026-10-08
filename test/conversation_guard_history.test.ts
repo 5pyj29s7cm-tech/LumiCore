@@ -355,3 +355,24 @@ describe('conversation guard history isolation', () => {
     expect(getConversationSummary(conversation.id)).toBe(mixedSummary);
   });
 });
+
+it.each([true, false])('retains only verified saved-file evidence from a guard turn (verified=%s)', verified => {
+  const userId = 'guard-artifact-' + verified + '-' + Date.now();
+  const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+  const guardText = 'terminalVerification: 任务失败；内部执行合同未满足。';
+  const requestId = 'guard-artifact-receipt-' + verified;
+  addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'user', content: '生成30秒视频', requestId });
+  addMessage({ userId, agentId: 'lumi', conversationId: conversation.id, role: 'assistant', content: guardText, cognitiveIntent: 'work_product_guard', requestId,
+    toolCalls: [{ name: 'create_docx', requestId, arguments: {}, result: JSON.stringify({ ok: true, status: 'created', path: 'C:/private/Script_Storyboard.docx' }),
+      ...(verified ? { terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'saved file' } } : {}) }] });
+  const prompt = getMessagesByTokenBudget(conversation.id).filter(message => message.role === 'assistant');
+  if (verified) {
+    expect(prompt).toHaveLength(1);
+    expect(prompt[0].message).toContain('Script_Storyboard.docx');
+    expect(prompt[0].message).toContain('did not fulfill the user request');
+    expect(prompt[0].message).not.toMatch(/terminalVerification|内部执行合同|private/);
+    expect(prompt[0].cognitiveIntent).toBe('work_product_guard');
+    expect(prompt[0].toolFileObservations).toContain('Script_Storyboard.docx');
+  } else expect(prompt).toHaveLength(0);
+  expect(getMessages(conversation.id).some(message => message.message === guardText)).toBe(true);
+});

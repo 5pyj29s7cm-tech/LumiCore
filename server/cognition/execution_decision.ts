@@ -1,3 +1,4 @@
+import { structuredMediaToolCall } from '../../shared/media_generation';
 import { TurnAnalysis } from './turn_analysis';
 import type { ToolPolicy } from '../personality/types';
 import type { ToolRegistry } from '../tools/registry';
@@ -256,7 +257,7 @@ function primaryUserInstruction(text: string): string {
 }
 
 function isUnboundTerseContinuation(input: LumiExecutionDecisionInput): boolean {
-  if (input.trustedActionContinuation) return false;
+  if (input.trustedActionContinuation || input.flow.structuredMediaRequest) return false;
   const text = primaryUserInstruction(input.userText ?? input.text ?? input.flow.routeText);
   // i18n-allow: Multilingual terse-continuation input recognition; not user-visible copy.
   return /^(?:继续|接着|接着做|继续做|继续执行|再试(?:一次|一下)?|重试|可以了|好了|continue|resume|retry|try\s+again|go\s+on)[\s。！？.!?]*$/iu.test(text);
@@ -613,8 +614,13 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
         trustedActionContinuation: input.trustedActionContinuation,
         })
       : null;
-  const toolRoute = rawToolRoute
-    ? enhanceToolRouteForFlow(
+  // A validated workbench request already owns its exact generator and inputs.
+  // Keep that route exact so generic file/contract expansion cannot substitute documents.
+  const mediaTool = input.flow.structuredMediaRequest ? structuredMediaToolCall(input.flow.structuredMediaRequest).name : undefined;
+  const toolRoute = rawToolRoute && mediaTool
+    ? { ...rawToolRoute, toolNames: rawToolRoute.toolNames.filter(name => name === mediaTool),
+        requiredTools: [mediaTool], hardAllowlist: true }
+    : rawToolRoute ? enhanceToolRouteForFlow(
         rawToolRoute,
         input.flow,
         input.toolDeclarations,

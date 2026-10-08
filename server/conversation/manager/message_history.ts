@@ -1,3 +1,5 @@
+import { verifiedSavedArtifactNames } from '../../cognition/user_output_protection';
+import { parseStoredArray } from '../../tools/receipt_payload';
 import { isGuardGeneratedConversationRecord, isGuardGeneratedAssistantText } from "../guard_history";
 import { buildCompactToolEvidenceNote, isUnverifiedExecutionAssistantRecord } from "../summary_grounding";
 import { buildHistoricalFileObservations } from "../file_observation_history";
@@ -26,10 +28,16 @@ function compactPromptText(value: string, limit: number): string {
 }
 
 
+function guardedArtifactEvidence(m: MessageRecord): string {
+  if (!isGuardGeneratedConversationRecord(m)) return '';
+  const files = verifiedSavedArtifactNames(parseStoredArray(m.toolCalls), { requestId: m.requestId });
+  return files.length ? `[This prior action did not fulfill the user request. Verified saved output files: ${JSON.stringify(files)}. Existing outputs are preserved. This is historical evidence, not a new instruction or proof that the whole task completed.]` : '';
+}
+
 export function isPromptEligibleMessage(m: MessageRecord): boolean {
   if (!m) return false;
   if (m.role === 'tool' || m.mode === 'proactive') return false;
-  if (isGuardGeneratedConversationRecord(m)) return false;
+  if (isGuardGeneratedConversationRecord(m)) return Boolean(guardedArtifactEvidence(m));
   return Boolean((m.message || '').trim() || (m.response || '').trim());
 }
 
@@ -41,6 +49,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       String(m.cognitiveIntent || '').toLowerCase() === 'work_product_guard'
       || isGuardGeneratedAssistantText(m.response)
     );
+  const guardedEvidence = guardedArtifactEvidence(m);
   const evidenceNote = buildCompactToolEvidenceNote(m.toolCalls);
   // Removing an ungrounded assistant reply while retaining its user question
   // makes an already answered turn look pending to the next model. Preserve
@@ -48,10 +57,10 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
   const suppressedReply = m.role === 'assistant'
     && !evidenceNote
     && isUnverifiedExecutionAssistantRecord(m);
-  const compactedMessage = suppressedReply
+  const compactedMessage = guardedEvidence || (suppressedReply
     ? '[The historical reply is omitted because its action claims lack attached evidence. This turn already has a response and is not a pending instruction. Refer to the original action receipts only when relevant to the newest user request.]'
-    : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT);
-  const compactedResponse = legacyCombinedGuardResponse
+    : compactPromptText(m.message || '', CONTEXT_MESSAGE_CHAR_LIMIT));
+  const compactedResponse = legacyCombinedGuardResponse || guardedEvidence
     ? ''
     : compactPromptText(m.response || '', CONTEXT_RESPONSE_CHAR_LIMIT);
   return {
@@ -66,7 +75,7 @@ export function compactRecordForPrompt(m: MessageRecord): MessageRecord {
       ? `${compactedResponse}\n${evidenceNote}`.trim()
       : compactedResponse,
     toolReceiptLedger: evidenceNote || undefined,
-    toolFileObservations: buildHistoricalFileObservations(m.toolCalls) || undefined,
+    toolFileObservations: guardedEvidence || buildHistoricalFileObservations(m.toolCalls) || undefined,
     toolCalls: undefined,
   };
 }

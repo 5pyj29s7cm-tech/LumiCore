@@ -23,10 +23,9 @@ const explicitResume = (text: string) => explicitlyReferencesUnfinishedTask(text
 
 /** A version choice binds only to the adjacent video proposal and a real user brief. */
 function acceptedVideoBrief(text: string, history: readonly MediaHistoryMessage[]): string | null {
-  const resume = explicitResume(text);
+  const resume = explicitResume(text) || /^(?:继续|continue)[。！!\s]*$/iu.test(text.trim()); // i18n-allow: Adjacent video continuation only.
   if (!resume && !VIDEO_APPROVAL_RE.test(text.trim())) return null;
-  const recent = history.slice(-32).filter(item => {
-    if (item.role === 'tool') return false;
+  const recent = history.filter(item => item.role !== 'tool').slice(-32).filter(item => {
     if (!isGuardGeneratedConversationRecord(item)) return true;
     // Guard prose cannot replace the creative brief. A real delivered media
     // receipt still closes it, even when the old reply was guard-marked.
@@ -44,7 +43,8 @@ function acceptedVideoBrief(text: string, history: readonly MediaHistoryMessage[
   // i18n-allow: The adjacent assistant must still be discussing a video deliverable.
   if (previous?.role !== 'assistant' || !/(?:视频|成片|video|clip)/iu.test(proposal)) return null;
   // i18n-allow: An acknowledgement authorizes creation only after an actual generation/version proposal.
-  if (!/(?:需要我|要不要我|要我|是否).{0,100}(?:生成|制作|做)|(?:按|选|用).{0,80}(?:版|风格).{0,20}[？?]|(?:shall I|would you like me).{0,100}(?:generate|create|make)|which.{0,50}(?:version|style)/iu.test(proposal)) return null;
+  if (!/(?:需要我|要不要我|要我|是否).{0,100}(?:生成|制作|做)|(?:按|选|用).{0,80}(?:版|风格).{0,20}[？?]|(?:需要你|请你|你回(?:一句)?|请回复).{0,50}(?:确认|确定)|(?:确认|同意).{0,50}(?:后|就).{0,80}(?:生成|制作|成片)|(?:shall I|would you like me).{0,100}(?:generate|create|make)|which.{0,50}(?:version|style)/iu.test(proposal)) return null;
+  const revisions: string[] = [];
   for (const item of [...recent].reverse()) {
     if (item.role !== 'user') continue;
     const brief = historyUserText(item);
@@ -52,10 +52,17 @@ function acceptedVideoBrief(text: string, history: readonly MediaHistoryMessage[
       // A proposed script is creative data inside the same validated envelope,
       // never authority to call diagnostics or any other tool.
       // i18n-allow: Strip the assistant approval question from proposed creative content.
-      const script = proposal.split(/(?:需要我|要不要我|would you like me|shall I)/iu)[0].trim().slice(0,12000);
-      return [brief, script, ...selections].filter(Boolean).join('\n\n');
+      const script = proposal.split(/(?:需要我|要不要我|would you like me|shall I)/iu)[0].split('\n')
+        .filter(line => !/(?:执行合同|(?:视频生成|本轮|这轮|调用|开放|启用|关闭|可用).{0,20}工具|能力查询|不能假装|没法直接|卡点|选一个|需要你.*确认)/iu.test(line)).join('\n').trim().slice(0,12000);
+      return [brief, script, ...revisions.reverse(), ...selections].filter(Boolean).join('\n\n');
     }
-    if (hasRequestedArtifactMutation(brief) || !['none', 'status_query'].includes(normalizeActionIntent(brief).kind)) return null;
+    // i18n-allow: A past-generation complaint with an explicit new video setting is a revision, not a file-write instruction.
+    const videoRevision = /(?:画面|视频|比例|尺寸|分辨率|时长|配音|声音).{0,24}(?:要|改为|改成|换成|调整)/u.test(brief)
+      && !/(?:Word|文档|报告|脚本|封面)/iu.test(brief); // i18n-allow: Non-video deliverable boundary.
+    if ((hasRequestedArtifactMutation(brief) && !videoRevision) || hasExplicitNoToolInstruction(brief) || hasExplicitNoMutationInstruction(brief)) return null;
+    if (explicitResume(brief) || VIDEO_APPROVAL_RE.test(brief)) continue;
+    if (!['none', 'status_query'].includes(normalizeActionIntent(brief).kind)) return null;
+    revisions.push(brief);
   }
   return null;
 }
@@ -90,13 +97,16 @@ export function resolveChatVideoRequest(
   }
   // i18n-allow: Read requested duration and aspect ratio from the user's instruction only.
   const duration = requestedVideoDuration(text) ?? requestedVideoDuration(prompt);
-  const dimensions = prompt.match(/\b(\d{3,4})\s*[x×*]\s*(\d{3,4})\b/iu);
+  // The latest explicit shape wins over earlier dimensions and platform defaults.
+  // i18n-allow: User dimensions, aspect-ratio separators and orientation names.
+  const shape = [...prompt.matchAll(/\b(\d{3,4})\s*[x×*]\s*(\d{3,4})\b|(?:16\s*[:：比]\s*9|9\s*[:：比]\s*16)|横屏|横版|竖屏|竖版|landscape|portrait/giu)].at(-1);
   const preferences = getUserPreferredGenerationModels(scope.userId);
   const options = videoGenerationOptions(referenceImage ? preferences.imageToVideo : preferences.video);
-  const portrait = /9\s*[:：]\s*16|竖屏|竖版|portrait|tiktok/iu.test(prompt); // i18n-allow: User-requested portrait video.
-  const size = dimensions ? dimensions[1] + 'x' + dimensions[2]
-    : portrait ? options?.sizes.find(value => { const [width, height] = value.split('x').map(Number); return width < height; }) || '720x1280'
-    : options?.sizes[0] || '1280x720';
+  const portrait = shape ? /9\s*[:：比]\s*16|竖屏|竖版|portrait/iu.test(shape[0]) : /tiktok/iu.test(prompt); // i18n-allow: Explicit orientation before platform default.
+  const ratio = portrait ? 9 / 16 : 16 / 9;
+  const size = shape?.[1] ? shape[1] + 'x' + shape[2]
+    : options?.sizes.find(value => { const [width, height] = value.split('x').map(Number); return Math.abs(width / height - ratio) < 0.02; })
+      || (portrait ? '720x1280' : '1280x720');
   return normalizeStructuredMediaRequest({
     operation: referenceImage ? 'image_to_video' : 'text_to_video',
     prompt,

@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { artifactPathFromRecord, isArtifactProducerRecord } from '../tools/artifact_evidence';
+import { isVerifiedCurrentTurnRecord } from './result_finalizer_support';
 import type { ToolExecutionRecord } from '../tools/types';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from "../regions/messages/user_output_protection_messages";
@@ -498,6 +500,13 @@ function boundedLabel(value: unknown): string {
   return redactSensitive(base).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 100);
 }
 
+/** Names from verified writes only; safe to reuse in output and historical progress projections. */
+export function verifiedSavedArtifactNames(records: ToolExecutionRecord[], turn: { requestId?: string; taskId?: string } = {}): string[] {
+  return [...new Set(records.filter(record => isArtifactProducerRecord(record)
+    && isVerifiedCurrentTurnRecord({ taskText: '', responseText: '', source: 'artifact-output', ...turn }, record))
+    .map(artifactPathFromRecord).filter(Boolean).map(file => boundedLabel(file.split(/[\\/]/u).at(-1))))].filter(Boolean).slice(0, 5) as string[];
+}
+
 function collectDirectoryEntries(value: unknown, output: string[], depth = 0): void {
   if (depth > 4 || output.length >= 20 || value === null || value === undefined) return;
   if (Array.isArray(value)) {
@@ -556,6 +565,11 @@ function humanSummary(
     ...resultValues(records),
     ...(rawValue ? [rawValue] : []),
   ];
+
+  const savedFiles = verifiedSavedArtifactNames(records);
+  if (savedFiles.length) return zh
+    ? CN_USER_OUTPUT_PROTECTION_MESSAGES.savedFiles(savedFiles, failed)
+    : `Saved files: ${savedFiles.join(', ')}. ${failed ? 'Some steps failed; the full task is not confirmed complete.' : 'This confirms file creation only; completion depends on the requested deliverable.'}`;
 
   // i18n-allow -- Chinese screen-tool intent recognition; not user-visible copy.
   const screen = records.some(record => /^(?:desktop_capture_screen|capture_screen|ocr_screen|screen_capture|desktop_ui_snapshot|computer_use)$/iu.test(record.name)
