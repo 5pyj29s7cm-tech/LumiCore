@@ -1,3 +1,4 @@
+import type { VideoGenerationOptions } from '../../shared/video_generation_options';
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
@@ -84,13 +85,15 @@ export type MediaGenerationStudioProps = MediaGenerationSources & {
   onRefreshLibrary?: () => void;
   onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
   sourceArtifacts?: MediaGenerationArtifact[];
+  videoOptions?: Partial<Record<'text_to_video' | 'image_to_video', VideoGenerationOptions | null>>;
   retryRequest?: MediaGenerationRequest | null;
   onModeChange: (mode: MediaGenerationKind) => void;
   onOperationChange?: (operation: MediaGenerationOperation) => void;
   onSourceChange: (change: MediaGenerationSourceChange) => void;
-  onRequestSourceImage?: (
+  onUploadSourceImage?: (
     operation: MediaGenerationSourceOperation,
     slot: MediaGenerationSourceSlot,
+    files: File[],
   ) => void;
   onClose: () => void;
   onOpenChatSong?: () => void;
@@ -121,7 +124,7 @@ type SourceImageFieldProps = {
   selectedArtifactId?: string;
   disabled: boolean;
   onChange: (value: string, artifact?: MediaGenerationArtifact) => void;
-  onUpload?: () => void;
+  onUpload?: (files: File[]) => void;
 };
 
 function SourceImageField({
@@ -136,8 +139,11 @@ function SourceImageField({
   onChange,
   onUpload,
 }: SourceImageFieldProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedArtifact = artifacts.find(artifact => selectedArtifactId === artifact.id
+    || (!selectedArtifactId && value === (artifact.path || artifact.url)));
   return (
-    <fieldset className="mt-4 space-y-2" disabled={disabled} aria-label={label}>
+    <fieldset className="mb-5 min-w-0 space-y-3 rounded-2xl border border-white/10 bg-black/20 p-3" disabled={disabled} aria-label={label}>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] font-bold text-white/48">
           {label}{required ? ' *' : ''}
@@ -145,7 +151,7 @@ function SourceImageField({
         {onUpload && (
           <button
             type="button"
-            onClick={onUpload}
+            onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-bold text-white/48 transition-colors hover:bg-white/[0.08] hover:text-white/75 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Upload size={12} />
@@ -153,6 +159,14 @@ function SourceImageField({
           </button>
         )}
       </div>
+      {onUpload && <input ref={fileInputRef} type="file" className="sr-only"
+        accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
+        aria-label={`${copy.uploadSourceImage}: ${label}`}
+        onChange={event => { const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = ''; if (files.length) onUpload(files); }} />}
+      {selectedArtifact && <div className="flex min-w-0 items-center gap-3 rounded-xl bg-white/5 p-2" data-media-source-preview>
+        <FileResourceImage src={selectedArtifact.url} alt={selectedArtifact.fileName || copy.selectedSourceImage} className="h-20 w-24 shrink-0 rounded-lg object-contain" />
+        <div className="min-w-0"><p className="text-xs font-semibold text-cyan-100">{copy.selectedSourceImage}</p><p className="mt-1 break-all text-xs text-white/60">{selectedArtifact.fileName}</p></div>
+      </div>}
       <div className="relative">
         <input
           value={value}
@@ -178,7 +192,7 @@ function SourceImageField({
       {artifacts.length > 0 && (
         <div className="space-y-2 pt-1">
           <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-white/28">{copy.chooseFromArtifacts}</p>
-          <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-w-0 gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {artifacts.map(artifact => {
               const selected = selectedArtifactId === artifact.id
                 || (!selectedArtifactId && value === (artifact.path || artifact.url));
@@ -220,6 +234,7 @@ function useMediaGenerationStudioState({
   onRefreshLibrary,
   onReferenceArtifact,
   sourceArtifacts = [],
+  videoOptions,
   primaryImage,
   referenceImages,
   referenceImage,
@@ -230,7 +245,7 @@ function useMediaGenerationStudioState({
   onModeChange,
   onOperationChange,
   onSourceChange,
-  onRequestSourceImage,
+  onUploadSourceImage,
   onClose,
   onOpenChatSong,
   chatSongActive = false,
@@ -257,6 +272,9 @@ function useMediaGenerationStudioState({
   ));
   const activeOperation = operation || localOperation;
   const activeKind = mediaGenerationKindForOperation(activeOperation);
+  const selectedVideoOptions = activeOperation === 'text_to_video' || activeOperation === 'image_to_video' ? videoOptions?.[activeOperation] : null;
+  const videoSizeValues = selectedVideoOptions?.sizes || VIDEO_SIZE_VALUES;
+  const videoDurations = selectedVideoOptions?.durations || [5, 6, 10];
   const library = libraryArtifacts.filter(artifact => artifact.kind === activeKind);
   const displayedArtifacts = gallery === 'current' ? artifacts : library.filter(artifact => (artifact.fileName || '').toLocaleLowerCase().includes(librarySearch.toLocaleLowerCase()));
   useEffect(() => { if (status === 'submitting' || status === 'generating') setGallery('current'); }, [status]);
@@ -291,8 +309,12 @@ function useMediaGenerationStudioState({
   }, [mode, operation]);
 
   useEffect(() => {
-    setSize(activeKind === 'image' ? IMAGE_SIZE_VALUES[0] : VIDEO_SIZE_VALUES[0]);
-  }, [activeKind]);
+    if (activeKind === 'image') { setSize(IMAGE_SIZE_VALUES[0]); return; }
+    const sizes = selectedVideoOptions?.sizes || VIDEO_SIZE_VALUES;
+    const durations = selectedVideoOptions?.durations || [5, 6, 10];
+    setSize(current => sizes.includes(current) ? current : sizes[0]);
+    setDuration(current => durations.includes(current) ? current : durations[0]);
+  }, [activeKind, selectedVideoOptions]);
 
   useEffect(() => {
     if (chatSongActive) return;
@@ -332,11 +354,11 @@ function useMediaGenerationStudioState({
         { value: IMAGE_SIZE_VALUES[1], label: copy.landscape },
         { value: IMAGE_SIZE_VALUES[2], label: copy.portrait },
       ]
-    : [
-        { value: VIDEO_SIZE_VALUES[0], label: copy.landscape },
-        { value: VIDEO_SIZE_VALUES[1], label: copy.portrait },
-        { value: VIDEO_SIZE_VALUES[2], label: copy.square },
-      ];
+    : videoSizeValues.map(value => {
+        const [width, height] = value.split('x').map(Number);
+        const ratio = width === height ? '1:1' : width / height > 1.6 ? '16:9' : height / width > 1.6 ? '9:16' : width > height ? '4:3' : '3:4';
+        return { value, label: `${ratio} · ${value}` };
+      });
 
   const operationOptions: Array<{
     value: MediaGenerationOperation;
@@ -453,7 +475,7 @@ function useMediaGenerationStudioState({
     : activeKind === 'image'
       ? copy.generateImage
       : copy.generateVideo;
-  return { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onRequestSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
+  return { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
 }
 
 export function MediaGenerationStudio(props: Parameters<typeof useMediaGenerationStudioState>[0]) {
@@ -461,7 +483,7 @@ export function MediaGenerationStudio(props: Parameters<typeof useMediaGeneratio
 }
 
 function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGenerationStudioState>) {
-  const { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onRequestSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
+  const { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
 
 
   return (
@@ -518,8 +540,8 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
         })}
       </nav>
       {(chatSongActive || chatSongVisited) && <div hidden={!chatSongActive} className={chatSongActive ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}>{chatSongContent}</div>}
-      <div hidden={chatSongActive} className={chatSongActive ? 'hidden' : 'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 [scrollbar-width:none] md:grid md:grid-cols-[minmax(300px,0.8fr)_minmax(360px,1.2fr)] md:px-8 md:py-7 [&::-webkit-scrollbar]:hidden'}>
-        <form onSubmit={submit} className="flex min-h-0 flex-col rounded-[1.75rem] border border-white/[0.09] bg-white/[0.035] p-5 shadow-2xl shadow-black/20">
+      <div hidden={chatSongActive} className={chatSongActive ? 'hidden' : 'grid min-h-0 flex-1 content-start items-start gap-5 overflow-y-auto p-5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr))] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'}>
+        <form onSubmit={submit} className="flex min-h-0 min-w-0 flex-col rounded-[1.75rem] border border-white/[0.09] bg-white/[0.035] p-5 shadow-2xl shadow-black/20">
           <div className="mb-5 grid grid-cols-2 gap-2 rounded-2xl bg-black/25 p-1.5">
             {operationOptions.filter(item => mediaGenerationKindForOperation(item.value) === activeKind).map(item => (
               <button
@@ -539,6 +561,56 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
             ))}
           </div>
 
+          {activeOperation === 'image_edit' && (
+            <>
+              <SourceImageField
+                label={copy.primaryImage}
+                required
+                requiredText={copy.primaryImageRequired}
+                copy={copy}
+                value={primaryImage}
+                artifacts={selectableImageArtifacts}
+                selectedArtifactId={primaryArtifactId}
+                disabled={isWorking}
+                onChange={setPrimarySource}
+                onUpload={onUploadSourceImage
+                  ? files => onUploadSourceImage('image_edit', 'primary', files)
+                  : undefined}
+              />
+              <SourceImageField
+                label={copy.editReferenceImage}
+                required={false}
+                requiredText=""
+                copy={copy}
+                value={editReferenceImage}
+                artifacts={selectableImageArtifacts.filter(artifact => artifact.id !== primaryArtifactId)}
+                selectedArtifactId={referenceArtifactIds[0]}
+                disabled={isWorking}
+                onChange={setEditReferenceSource}
+                onUpload={onUploadSourceImage
+                  ? files => onUploadSourceImage('image_edit', 'reference', files)
+                  : undefined}
+              />
+            </>
+          )}
+
+          {activeOperation === 'image_to_video' && (
+            <SourceImageField
+              label={copy.videoReferenceImage}
+              required
+              requiredText={copy.videoReferenceRequired}
+              copy={copy}
+              value={referenceImage}
+              artifacts={selectableImageArtifacts}
+              selectedArtifactId={referenceArtifactId}
+              disabled={isWorking}
+              onChange={setVideoReferenceSource}
+              onUpload={onUploadSourceImage
+                ? files => onUploadSourceImage('image_to_video', 'first_frame', files)
+                : undefined}
+            />
+          )}
+
           <label className="text-[11px] font-black uppercase tracking-[0.16em] text-white/48" htmlFor="media-generation-prompt">
             {copy.describe}
           </label>
@@ -547,10 +619,10 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
             ref={promptRef}
             value={prompt}
             onChange={event => setPrompt(event.target.value)}
-            rows={6}
+            rows={4}
             autoFocus
             placeholder={promptPlaceholder}
-            className="mt-2 min-h-36 w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm leading-6 text-white/85 outline-none transition-colors placeholder:text-white/22 focus:border-cyan-200/35"
+            className="mt-2 min-h-28 w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm leading-6 text-white/85 outline-none transition-colors placeholder:text-white/22 focus:border-cyan-200/35"
           />
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -586,62 +658,13 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
                   disabled={isWorking}
                   className="h-11 w-full rounded-xl border border-white/10 bg-[#080d15] px-3 text-xs text-white/75 outline-none focus:border-cyan-200/35 disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {[5, 6, 10].map(value => <option key={value} value={value}>{value} {copy.seconds}</option>)}
+                  {videoDurations.map(value => <option key={value} value={value}>{value} {copy.seconds}</option>)}
                 </select>
               </label>
             ) : <div aria-hidden="true" />}
           </div>
 
-          {activeOperation === 'image_edit' && (
-            <>
-              <SourceImageField
-                label={copy.primaryImage}
-                required
-                requiredText={copy.primaryImageRequired}
-                copy={copy}
-                value={primaryImage}
-                artifacts={selectableImageArtifacts}
-                selectedArtifactId={primaryArtifactId}
-                disabled={isWorking}
-                onChange={setPrimarySource}
-                onUpload={onRequestSourceImage
-                  ? () => onRequestSourceImage('image_edit', 'primary')
-                  : undefined}
-              />
-              <SourceImageField
-                label={copy.editReferenceImage}
-                required={false}
-                requiredText=""
-                copy={copy}
-                value={editReferenceImage}
-                artifacts={selectableImageArtifacts.filter(artifact => artifact.id !== primaryArtifactId)}
-                selectedArtifactId={referenceArtifactIds[0]}
-                disabled={isWorking}
-                onChange={setEditReferenceSource}
-                onUpload={onRequestSourceImage
-                  ? () => onRequestSourceImage('image_edit', 'reference')
-                  : undefined}
-              />
-            </>
-          )}
-
-          {activeOperation === 'image_to_video' && (
-            <SourceImageField
-              label={copy.videoReferenceImage}
-              required
-              requiredText={copy.videoReferenceRequired}
-              copy={copy}
-              value={referenceImage}
-              artifacts={selectableImageArtifacts}
-              selectedArtifactId={referenceArtifactId}
-              disabled={isWorking}
-              onChange={setVideoReferenceSource}
-              onUpload={onRequestSourceImage
-                ? () => onRequestSourceImage('image_to_video', 'first_frame')
-                : undefined}
-            />
-          )}
-
+          {selectedVideoOptions?.fixedDuration && <p className="mt-3 text-[11px] leading-5 text-amber-100/65">{copy.fixedVideoDuration}</p>}
           <div className="mt-6 flex flex-col gap-2 sm:flex-row">
             <button
               type="submit"
@@ -679,7 +702,7 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
           )}
         </form>
 
-        <div className="flex min-h-[22rem] flex-col overflow-hidden rounded-[1.75rem] border border-white/[0.09] bg-black/20">
+        <div className="flex min-h-[22rem] min-w-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/[0.09] bg-black/20">
           <div className="flex items-center gap-2 border-b border-white/[0.07] px-5 py-3" role="tablist" aria-label={activeKind === 'image' ? copy.imageLibrary : copy.videoLibrary}>
             <button type="button" role="tab" aria-selected={gallery === 'current'} onClick={() => setGallery('current')} className={`rounded-lg px-3 py-2 text-xs ${gallery === 'current' ? 'bg-white/10 text-white' : 'text-white/45'}`}>{copy.currentResults}</button>
             <button type="button" role="tab" aria-selected={gallery === 'library'} onClick={() => { setGallery('library'); onRefreshLibrary?.(); }} className={`rounded-lg px-3 py-2 text-xs ${gallery === 'library' ? 'bg-cyan-200/15 text-cyan-100' : 'text-white/45'}`}>{activeKind === 'image' ? copy.imageLibrary : copy.videoLibrary} ({library.length})</button>
@@ -715,7 +738,7 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
                 <p className="mt-2 text-[11px] leading-5 text-white/24">{gallery === 'library' ? copy.libraryHint : copy.noFakeCompletion}</p>
               </div>
             ) : (
-              <div className="grid w-full grid-cols-1 gap-4 xl:grid-cols-2">
+              <div className="grid w-full min-w-0 gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr))]">
                 {displayedArtifacts.map(artifact => (
                   <article key={artifact.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-black/35">
                     <div className="aspect-video overflow-hidden bg-black/45">

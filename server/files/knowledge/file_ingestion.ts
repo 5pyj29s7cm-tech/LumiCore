@@ -154,6 +154,15 @@ export async function saveKnowledgeFile(
     domain: scope.domain,
     orgId: scope.orgId,
   };
+  if (input.mediaSource) {
+    input.signal?.throwIfAborted();
+    input.assertAuthorized?.();
+    assertSourceCurrent();
+    const meta = findFileMeta(db, finalName, scope);
+    Object.assign(meta, { status: 'ready', mediaSource: true });
+    commitKnowledgeFileState(db);
+    return { ...entry, mediaSource: true, status: 'ready', ingested: false };
+  }
   let extraction: KnowledgeExtractionResult = {
     content: null,
     method: 'unsupported',

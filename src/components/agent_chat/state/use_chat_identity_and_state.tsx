@@ -392,7 +392,6 @@ export function useChatIdentityAndState({
   const [mediaSourceArtifacts, setMediaSourceArtifacts] = useState<MediaGenerationArtifact[]>([]);
   const [mediaSources, setMediaSources] = useState(EMPTY_MEDIA_GENERATION_SOURCES);
   const [mediaSourceUploading, setMediaSourceUploading] = useState(false);
-  const mediaSourceFileInputRef = useRef<HTMLInputElement>(null);
   const mediaSourceUploadTargetRef = useRef<{
     operation: MediaGenerationSourceOperation;
     slot: MediaGenerationSourceSlot;
@@ -456,7 +455,7 @@ export function useChatIdentityAndState({
     setConversationHistorySelectorExpanded, conversationHistory, conversationHistorySelectorExpanded,
     conversationHistoryHasMore, conversationHistoryListRef, deletingConversationId, appConfirm,
     setDeletingConversationId, scrollRef, chatProgressLines, attachmentUploadText, operationMode, creationRequestId,
-    onCreationRequestConsumed, mediaSourceUploading, mediaSourceFileInputRef, isTyping, setChatSongOpen,
+    onCreationRequestConsumed, mediaSourceUploading, isTyping, setChatSongOpen,
     chatSongWorkbenchRef, prefillMessage, prefillSource, onPrefillConsumed, isListening, localVoiceSession,
     isElectron, callState, selectedVoiceId, attachmentRequest, onAttachmentRequestConsumed, setIsDraggingFiles,
     nativeDropHandledAtRef, onClose, workflowStatus, chatAccentTheme, previewFile, layout, commandCenterView,

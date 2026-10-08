@@ -225,7 +225,7 @@ describe('MediaGenerationStudio operations', () => {
     const props = studioProps({ onGenerate, operation, mode: operation === 'image_edit' ? 'image' : 'video', sourceArtifacts: [sourceArtifact] });
     const { container } = render(<StudioHarness {...props} />);
     fireEvent.click(screen.getAllByRole('button', { name: 'source.png' })[0]);
-    const input = container.querySelector('fieldset input')!;
+    const input = container.querySelector('fieldset input:not([type=file])')!;
     fireEvent.change(input, { target: { value: 'D:/media/replacement.png' } });
     fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Animate this image' } });
     fireEvent.submit(container.querySelector('form')!);
@@ -244,7 +244,7 @@ describe('MediaGenerationStudio operations', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Keep both characters' } });
     fireEvent.submit(container.querySelector('form')!);
     expect(onGenerate.mock.calls[0][0]).toMatchObject({ primaryArtifactId: 'image-1', referenceArtifactIds: ['style-id'] });
-    fireEvent.change(container.querySelectorAll('fieldset input')[1], { target: { value: '' } });
+    fireEvent.change(container.querySelectorAll('fieldset input:not([type=file])')[1], { target: { value: '' } });
     fireEvent.submit(container.querySelector('form')!);
     expect(onGenerate.mock.calls[1][0]).toMatchObject({ primaryArtifactId: 'image-1', referenceImages: [] });
     expect(onGenerate.mock.calls[1][0]).not.toHaveProperty('referenceArtifactIds');
@@ -258,4 +258,35 @@ describe('MediaGenerationStudio operations', () => {
     expect(container.querySelector('fieldset input')).toHaveProperty('value', '');
   });
 
+});
+
+ it('uploads an external first frame from the source field, previews it, and submits its exact path', () => {
+   const upload = vi.fn();
+   const generate = vi.fn();
+   const props = studioProps({ mode: 'video', operation: 'image_to_video', onUploadSourceImage: upload, onGenerate: generate });
+   const { container, rerender } = render(<StudioHarness {...props} />);
+   const source = screen.getByRole('group', { name: 'First-frame image' });
+   const prompt = screen.getByRole('textbox', { name: 'Describe what to generate' });
+   expect(source.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+   const file = new File(['external image bytes'], 'my-photo.png', { type: 'image/png' });
+   fireEvent.change(screen.getByLabelText('Upload image: First-frame image'), { target: { files: [file] } });
+   expect(upload).toHaveBeenCalledWith('image_to_video', 'first_frame', [file]);
+   const uploaded = { ...sourceArtifact, id: 'uploaded-source', fileName: file.name };
+   rerender(<StudioHarness {...props} referenceImage={uploaded.path!} referenceArtifactId={uploaded.id} sourceArtifacts={[uploaded]} />);
+   expect(container.querySelector('[data-media-source-preview] img')?.getAttribute('alt')).toBe(file.name);
+   fireEvent.change(prompt, { target: { value: 'Slow camera movement' } });
+   fireEvent.submit(container.querySelector('form')!);
+   expect(generate).toHaveBeenCalledWith(expect.objectContaining({ operation: 'image_to_video', referenceImage: uploaded.path, referenceArtifactId: uploaded.id }));
+ });
+
+it('uses the selected video model sizes and fixed duration instead of unsupported six-second defaults', () => {
+  const generate = vi.fn();
+  const { container } = render(<StudioHarness {...studioProps({ mode: 'video', operation: 'image_to_video', referenceImage: sourceArtifact.path!, onGenerate: generate,
+    videoOptions: { image_to_video: { sizes: ['1920x1080', '1080x1920', '1440x1440'], durations: [5], fixedDuration: 5 } } })} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Slow camera movement' } });
+  fireEvent.submit(container.querySelector('form')!);
+  expect(generate).toHaveBeenCalledWith(expect.objectContaining({ size: '1920x1080', duration: 5 }));
+  expect(container.querySelectorAll('option[value="6"]')).toHaveLength(0);
+  expect(container.querySelector('option[value="1280x720"]')).toBeNull();
+  expect(screen.getByText(/generates 5-second clips/)).toBeTruthy();
 });

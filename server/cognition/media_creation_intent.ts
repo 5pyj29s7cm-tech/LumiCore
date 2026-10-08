@@ -6,7 +6,7 @@ export function mediaCreationInstruction(text: string): string | null {
     // i18n-allow: explanatory questions do not order image generation.
     if (/^(?:为什么|怎么|如何|是否|能否|介绍|说明|解释)|\b(?:why|explain|describe how)\b/iu.test(clause.trim())) continue;
     // i18n-allow: media generation intent recognition.
-    const match = clause.match(/(?<![刚已曾])(?:生成|创建|制作|产出|绘制|画)(?!的|过|完|好|了)(?:一张|一个|一些|几张)?[^。！？!?；;\n]{0,100}(?:图片|图像|插画|海报|封面|壁纸|人像|形象素材|视频|短视频|动画|成片)/u);
+    const match = clause.match(/(?<![刚已曾])(?:生成|创建|制作|产出|绘制|画|做(?:成)?|合成|转成|转换为|变成)(?!的|过|完|好|了)(?:一?[张个段条]|一些|几[张个段条])?[^。！？!?；;\n]{0,100}(?:图片|图像|插画|海报|封面|壁纸|人像|形象素材|视频|短视频|动画|成片)/u);
     // i18n-allow: exclude requests to write planning text.
     if (!match || /(?:提示词|文案|脚本|大纲|方案|字幕|标题)/u.test(match[0])) continue;
     return clause.slice(match.index).trim();

@@ -973,7 +973,7 @@ export function routeToolsForTurn(
     const matchesTrustedCadContinuation = route.category === 'cad_design'
       && trustedCadContinuation;
     if (!routeMatches(route, instructionText) && !matchesTrustedCadContinuation
-      && !(route.category === 'image_generation' && creationInstruction
+      && !(['image_generation', 'video_generation'].includes(route.category) && creationInstruction
         && routeMatches(route, creationInstruction))) continue;
     if (
       explicitArtifactCreation

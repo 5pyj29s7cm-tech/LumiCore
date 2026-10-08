@@ -1,14 +1,32 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import { apiJson } from '@/services/apiClient';
+import { videoGenerationOptions } from '../../../../shared/video_generation_options';
+import type { MediaGenerationStudioProps } from '../../MediaGenerationStudio';
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { uiMessage } from "../../../i18n/uiMessages";
-import type { MediaGenerationRequest, MediaGenerationSourceChange, MediaGenerationSourceSlot } from "../../MediaGenerationStudio";
-import type { MediaGenerationArtifact, MediaGenerationKind, MediaGenerationSourceOperation } from "@/lib/mediaGenerationArtifacts";
+import type { MediaGenerationRequest, MediaGenerationSourceChange } from "../../MediaGenerationStudio";
+import type { MediaGenerationArtifact, MediaGenerationKind } from "@/lib/mediaGenerationArtifacts";
 import { normalizeStructuredMediaRequest } from "../../../../shared/media_generation";
 import type { useChatRequestControls } from './use_chat_request_controls';
 
 export function useChatMediaControls(previousBindings: ReturnType<typeof useChatRequestControls>) {
-  const { refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, mediaSourceFileInputRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t, voiceSession } = previousBindings;
+  const { refreshKnowledgeFiles, activeMediaGenerationRef, mediaStudioOpenRef, setMediaStudioMode, mediaStudioMode, mediaGenerationArtifactsRef, setMediaGenerationArtifacts, setMediaGeneration, isOpen, isOfficeCommandCenter, creationRequestId, onCreationRequestConsumed, setMediaSources, mediaSourceUploading, mediaSourceUploadTargetRef, isTyping, mediaGenerationText, mediaGenerationArtifactValidationRef, setMediaGenerationRetryRequest, isZh, sendText, setMediaSourceUploading, setChatSongOpen, chatSongWorkbenchRef, openChatFile, chatRequestLedgerRef, socket, chatViewWorkRef, setWorkflowStatus, pushChatProgress, chatTurnTimerGuardRef, chatExecutionSource, activeDomain, activeOrgId, attachmentConversationIdRef, prefillMessage, setMessages, agentName, prefillSource, onPrefillConsumed, draftTextRef, pendingAttachments, pendingAttachmentsRef, isListening, inputDictationActiveRef, localVoiceSession, setIsListening, recognition, isElectron, callState, selectedVoiceId, agentId, t, voiceSession } = previousBindings;
 
+
+  const [mediaVideoOptions, setMediaVideoOptions] = useState<MediaGenerationStudioProps['videoOptions']>();
+  const [mediaVideoOptionsLoading, setMediaVideoOptionsLoading] = useState(false);
+  useEffect(() => {
+    if (!isOpen || mediaStudioMode !== 'video') return;
+    const controller = new AbortController();
+    setMediaVideoOptions(undefined);
+    setMediaVideoOptionsLoading(true);
+    void apiJson<any>('/api/preferences/generation', { signal: controller.signal }).then(preferences => {
+      if (!controller.signal.aborted) setMediaVideoOptions({ text_to_video: videoGenerationOptions(preferences.video), image_to_video: videoGenerationOptions(preferences.imageToVideo) });
+    }).catch(error => {
+      if (!controller.signal.aborted) setMediaGeneration({ status: 'error', detail: error.message });
+    }).finally(() => { if (!controller.signal.aborted) setMediaVideoOptionsLoading(false); });
+    return () => controller.abort();
+  }, [activeDomain, activeOrgId, isOpen, mediaStudioMode, setMediaGeneration]);
 
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
     void refreshKnowledgeFiles();
@@ -45,15 +63,6 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
       return { ...current, referenceImages: change.value.trim() ? [change.value] : [], referenceArtifactIds: artifactId ? [artifactId] : [] };
     });
   }, [setMediaSources]);
-
-  const requestMediaSourceImage = useCallback((
-    operation: MediaGenerationSourceOperation,
-    slot: MediaGenerationSourceSlot,
-  ) => {
-    if (mediaSourceUploading) return;
-    mediaSourceUploadTargetRef.current = { operation, slot };
-    mediaSourceFileInputRef.current?.click();
-  }, [mediaSourceFileInputRef, mediaSourceUploadTargetRef, mediaSourceUploading]);
 
   const generateMediaFromStudio = useCallback((request: MediaGenerationRequest) => {
     if (isTyping || activeMediaGenerationRef.current) {
@@ -295,7 +304,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     }
   };
   return {
-    ...previousBindings, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, requestMediaSourceImage, generateMediaFromStudio,
+    ...previousBindings, mediaVideoOptions, mediaVideoOptionsLoading, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, generateMediaFromStudio,
     closeMediaGenerationStudio, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
     handleSendMessage, toggleListening, startVoiceSession
   } as const;

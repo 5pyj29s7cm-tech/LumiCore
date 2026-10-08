@@ -10,7 +10,7 @@ import { registerGeneratedKnowledgeFile } from "../generated_archive";
 import { requireAdmin as requireUnifiedAdmin, requireAuth as requireUnifiedAuth, requireLocalRequest as requireUnifiedLocalRequest } from "../../middleware/auth";
 import * as OrgKB from "../../org/kb";
 import { requireAuth, getUserId, getFileScope, assertKnowledgeWriteAccess, sendRouteError, assertLocalHostRequest, metaMatchesScope, archiveFileMeta, findFileMeta } from './ownership';
-import { upload, MAX_UPLOAD_FILES, captureUploadAuthorization, uploadItemIdentities, saveUploadedKnowledgeFile, MAX_UPLOAD_BYTES } from './uploads';
+import { upload, MAX_UPLOAD_FILES, captureUploadAuthorization, uploadItemIdentities, saveUploadedKnowledgeFile, MAX_UPLOAD_BYTES, validateMediaSourceUpload } from './uploads';
 import { repairFilename, getDownloadMime, sanitizeKnowledgeFilename } from './formats';
 import { resolveLocalImportPath } from './paths';
 import { captureKnowledgeSource, extractGeneratedTextKnowledge } from './extraction';
@@ -32,6 +32,11 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
     const userId = getUserId(req);
     const scope = getFileScope(req);
     assertKnowledgeWriteAccess(scope);
+    const mediaSource = req.body?.purpose === 'media_source';
+    if (mediaSource) {
+      if (uploadedFiles.length !== 1) throw new Error('Choose one source image at a time.');
+      await validateMediaSourceUpload(uploadedFiles[0], request.signal);
+    }
     const db = readKnowledgeFileState();
     if (!db.knowledgeFiles) db.knowledgeFiles = [];
 
@@ -45,6 +50,7 @@ router.post('/files/upload', requireAuth, upload.array('files', MAX_UPLOAD_FILES
         const entry = await saveUploadedKnowledgeFile({
           signal: request.signal,
           sourcePath: file.path,
+          mediaSource,
           originalName: file.originalname,
           size: file.size,
           mimeType: file.mimetype || '',

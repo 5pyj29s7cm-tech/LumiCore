@@ -98,6 +98,8 @@ export interface FileScope extends GeneratedArchiveScope {
 }
 
 export interface KnowledgeFileInput {
+  /** A validated creative source is saved without running cloud knowledge extraction. */
+  mediaSource?: boolean;
   signal?: AbortSignal;
   sourcePath: string;
   originalName: string;

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { videoGenerationOptions } from '../../../shared/video_generation_options';
 import { requireNotStrict } from '../../config/privacy';
 import path from 'path';
 import crypto from 'crypto';
@@ -24,7 +25,7 @@ import { downloadPublicMedia, readResponseBytes } from '../media_artifact';
 import { cancelDashScopeTaskBestEffort } from '../dashscope_async_task';
 import { CN_MEDIA_PROGRESS } from '../../regions/packs/cn/media_progress';
 import { validateVideoContainer } from '../video_container';
-import { measureGeneratedVideo, type VideoSettings } from '../video_measurements';
+import { measureGeneratedVideo, fitGeneratedVideoSize, type VideoSettings } from '../video_measurements';
 
 const OUTPUT_DIR = getGeneratedOutputDir();
 const POLL_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 5_000;
@@ -260,7 +261,10 @@ async function completedResult(input: {
   onProgress?: VideoProgressReporter;
 }): Promise<string> {
   throwIfAborted(input.signal);
-  const measurements = await measureGeneratedVideo(input.outputPath, input.requestedSettings, input.signal);
+  let measurements = await measureGeneratedVideo(input.outputPath, input.requestedSettings, input.signal);
+  if (input.provider === 'relay' && input.generationMode === 'image_to_video' && videoGenerationOptions(input)) {
+    measurements = await fitGeneratedVideoSize(input.outputPath, input.requestedSettings, measurements, input.signal);
+  }
   throwIfAborted(input.signal);
   const artifacts = [{ type: 'video', path: input.outputPath }];
   const result = JSON.stringify({
@@ -603,6 +607,14 @@ async function generateOfficialVideo(
     imageToVideo ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL',
     selectedModel || (imageToVideo ? DEFAULT_IMAGE_TO_VIDEO_MODELS.relay : DEFAULT_VIDEO_GENERATION_MODELS.relay),
   );
+  const options = videoGenerationOptions({ provider: 'relay', model });
+  if (options && args.duration !== undefined && Number(args.duration) !== options.fixedDuration) {
+    throw new Error('The configured Wan2.2 model produces 5-second clips. Longer videos require multiple clips and composition; no generation was submitted.');
+  }
+  if (options && args.size && !options.sizes.includes(normalizeSize(args.size, 'x'))) {
+    throw new Error('The configured Wan2.2 model requires a supported size: ' + options.sizes.join(', ') + '. No generation was submitted.');
+  }
+  args = { ...args, size: args.size || options?.sizes[0], duration: args.duration ?? options?.fixedDuration };
   // ModelDepot documents JSON POST /v1/videos/generations. A deployment can
   // opt into multipart for an OpenAI-compatible gateway with the explicit
   // override rather than making the documented path an accidental fallback.
@@ -611,9 +623,9 @@ async function generateOfficialVideo(
   const payload = {
     model,
     prompt,
-    duration: Math.max(1, Math.round(Number(args.duration) || 4)),
-    size: normalizeSize(args.size, 'x'),
-    ...(args.first_frame_image ? { input_reference: String(args.first_frame_image) } : {}),
+    duration: Math.max(1, Math.round(Number(args.duration) || options?.fixedDuration || 4)),
+    size: args.size ? normalizeSize(args.size, 'x') : options?.sizes[0] || normalizeSize(args.size, 'x'),
+    ...(args.first_frame_image ? { image: String(args.first_frame_image) } : {}),
     ...(args.last_frame_image ? { last_frame_image: String(args.last_frame_image) } : {}),
   };
   const request = await officialApiRequest<any>(pathName, {
@@ -676,7 +688,7 @@ async function generateOfficialVideo(
       }
     }
     if (['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(state)) {
-      throw new Error(`Lumi Official API video generation failed: ${String(body?.error?.message || body?.message || body?.error || 'unknown error').slice(0, 300)}`);
+      throw new Error(`Lumi Official API video generation failed: ${String(body?.error_message || body?.error?.message || body?.message || body?.error || 'unknown error').slice(0, 300)}`);
     }
   }
   throw new Error(`Lumi Official API video generation timed out. Task: ${taskId}`);

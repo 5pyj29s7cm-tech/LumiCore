@@ -1,3 +1,4 @@
+import { resolveChatVideoRequest } from '../media_request';
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../cognition/turn_model";
 import { createChatMessageWriter } from "../message_writer";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "../attachments";
@@ -52,14 +53,11 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `chat_${crypto.randomUUID()}`;
-    const structuredMediaRequest = normalizeStructuredMediaRequest(data.mediaRequest);
+    let structuredMediaRequest = normalizeStructuredMediaRequest(data.mediaRequest);
     if (data.mediaRequest !== undefined && !structuredMediaRequest) {
       try { ack?.({ ok: false, requestId, error: 'Invalid media workbench request' }); } catch {}
       { return { terminal: true as const, context: undefined }; }
     }
-    const mediaRoutingEnvelope = structuredMediaRequest
-      ? structuredMediaRoutingEnvelope(structuredMediaRequest)
-      : '';
     const requestReceivedAt = new Date().toISOString();
     const eventSource = source || 'chat';
     const toolResultPreviewLimit = 500;
@@ -126,6 +124,9 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
       : socketScope;
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
+    structuredMediaRequest ||= resolveChatVideoRequest(visibleUserText, attachments, { userId: uid, ...requestScope });
+    const mediaRoutingEnvelope = structuredMediaRequest ? structuredMediaRoutingEnvelope(structuredMediaRequest) : '';
+
     const addMessageIdempotent = createChatMessageWriter({
       userId: uid, agentId: conversationAgentId, domain: resolvedDomain, orgId: resolvedOrgId,
       requestId, source: eventSource, getNativeBinding: () => buildSocketNativeRequestBinding(socket),

@@ -334,7 +334,7 @@ describe('video generation model routing', () => {
       expect(payload).toMatchObject({
         model: OFFICIAL_I2V_MODEL,
         duration: 5,
-        input_reference: `data:image/png;base64,${referenceBytes.toString('base64')}`,
+        image: `data:image/png;base64,${referenceBytes.toString('base64')}`,
       });
       expect(result).toMatchObject({
         ok: true,
@@ -372,7 +372,7 @@ describe('video generation model routing', () => {
       const payload = JSON.parse(String(fetchMock.mock.calls[0][1]?.body || '{}'));
 
       expect(payload.model).toBe(OFFICIAL_T2V_MODEL);
-      expect(payload).not.toHaveProperty('input_reference');
+      expect(payload).not.toHaveProperty('image');
       expect(result).toMatchObject({
         ok: true,
         status: 'generated',
@@ -456,4 +456,24 @@ describe('video generation model routing', () => {
       fs.rmSync(referencePath, { force: true });
     }
   });
+  it('rejects unsupported Wan clip duration or size before submitting a paid generation', async () => {
+    const user = 'wan-spec-admission'; configureOfficialVideoModels(user);
+    process.env.RELAY_VIDEO_MODEL = 'aliyun/Wan2.2-T2V-A14B';
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await expect(runVideo(user, { duration: 30, size: '1920x1080' })).rejects.toThrow(/5-second clips/);
+    await expect(runVideo(user, { duration: 5, size: '1280x720' })).rejects.toThrow(/supported size/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('applies current Wan defaults to both the provider request and its measured receipt', async () => {
+    const user = 'wan-spec-defaults'; configureOfficialVideoModels(user);
+    process.env.RELAY_VIDEO_MODEL = 'aliyun/Wan2.2-T2V-A14B';
+    const fetchMock = vi.fn(async (..._request: Parameters<typeof fetch>): Promise<Response> => jsonResponse({ video_base64: MINIMAL_MP4.toString('base64') }));
+    vi.stubGlobal('fetch', fetchMock); let result: any;
+    try {
+      result = await runVideo(user);
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ size: '1920x1080', duration: 5 });
+      expect(result.requestedSettings).toEqual({ size: '1920x1080', duration: 5 });
+    } finally { removeGeneratedVideo(result); }
+  });
+
 });

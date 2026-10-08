@@ -125,9 +125,10 @@ describe('outer voice failure owns its accepted conversation and call', () => {
     await prior.waitForTurn(); const old = runPipeline(f);
     try {
       await vi.waitFor(() => expect(getMessages(f.selected.id).some(row => row.role === 'user')).toBe(true));
+      const resources = fixture.process.mock.calls[0][9] as VoiceInputResources;
+      await vi.waitFor(() => expect(resources.admission?.waitingForRequestId).toBe('prior-chat'));
       f.session.callControlGeneration++; f.session.sessionId = 'new-call';
       f.session.activeTurnRequestId = 'new-request'; f.session.pipelineAbortController = new AbortController();
-      const resources = fixture.process.mock.calls[0][9] as VoiceInputResources;
       await vi.waitFor(() => expect(resources.admission?.controller.signal.aborted).toBe(true));
       expect(resources.admission?.waitingForRequestId).toBe('prior-chat');
       prior.release(); await old;
@@ -142,6 +143,7 @@ describe('outer voice failure owns its accepted conversation and call', () => {
     try {
       await vi.waitFor(() => expect(getMessages(f.selected.id).some(row => row.role === 'user')).toBe(true));
       const resources = fixture.process.mock.calls[0][9] as VoiceInputResources;
+      await vi.waitFor(() => expect(resources.admission?.waitingForRequestId).toBe('before-deleted-voice'));
       const active = startNewConversation(f.session.userId, 'lumi', 'personal', '');
       const db = readDB(); db.conversations = db.conversations.filter(row => row.id !== f.selected.id); writeDB(db);
       f.session.inputQueue = [{ text: 'Stale queued work', queuedAt: new Date().toISOString(), voiceAuthorized: true, inputTiming: {} }];

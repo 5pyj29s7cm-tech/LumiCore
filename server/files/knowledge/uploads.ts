@@ -1,4 +1,5 @@
 import multer from "multer";
+import { getSharp } from './extraction';
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -115,4 +116,17 @@ export async function saveUploadedKnowledgeFile(
   activeUploadItems.set(key, operation);
   try { return await operation; }
   finally { if (activeUploadItems.get(key) === operation) activeUploadItems.delete(key); }
+}
+
+/** Validate creative material locally; uploading a first frame must not invoke a vision model. */
+export async function validateMediaSourceUpload(file: Express.Multer.File, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  if (!/\.(?:png|jpe?g|webp|gif)$/i.test(file.originalname)) throw new Error('Choose a PNG, JPEG, WebP or GIF source image.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('Source image must be smaller than 20 MB.');
+  const sharp = await getSharp();
+  const image = sharp(file.path, { limitInputPixels: 40_000_000, failOn: 'error' });
+  const info = await image.metadata();
+  if (!['png', 'jpeg', 'webp', 'gif'].includes(String(info.format))) throw new Error('Choose a PNG, JPEG, WebP or GIF source image.');
+  await image.stats();
+  signal?.throwIfAborted();
 }

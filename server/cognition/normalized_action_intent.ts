@@ -1026,7 +1026,7 @@ export function mediaGenerationIntent(value: string): NormalizedActionIntent | n
   const head = (mediaCreationInstruction(text) || text).split(/[：:，,。；;\n]/u)[0]; // i18n-allow: instruction/creative-brief boundary.
   // Only an affirmative creation/edit imperative owns a new generation. A
   // prompt, script, configuration question or historical result does not.
-  if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|编辑|修改|重绘|替换).{0,50}(?:图片|图像|照片|插画|海报|视频|短片|人像)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
+  if (!/^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:生成|创建|制作|绘制|画|做(?:成)?|合成|转成|转换为|变成|编辑|修改|重绘|替换).{0,100}(?:图片|图像|照片|插画|海报|视频|短片|人像)|^(?:please\s+)?(?:generate|create|make|draw|render|edit|modify|redraw)\b.{0,60}\b(?:image|images|picture|photo|poster|video|clip)\b/iu.test(head)) return null; // i18n-allow: affirmative media operations.
   if (/(?:提示词|脚本|文案|方案|大纲|字幕|标题|配置|模型|代码|网页|组件|是否|了吗|了没|吗[？?]?|不要生成|不要创建)|\b(?:prompt|script|copy|plan|outline|caption|configuration|model|code|webpage)\b|\?/iu.test(head)) return null; // i18n-allow: non-media deliverables and questions.
   const target = /^(?:(?:请|帮我|给我|现在|直接)\s*)*(?:编辑|修改|重绘|替换)|^(?:please\s+)?(?:edit|modify|redraw)\b/iu.test(head) // i18n-allow: media editing.
     ? 'ai_edit_image' : /视频|短片|\b(?:video|clip)\b/iu.test(head) ? 'generate_video' : 'generate_image'; // i18n-allow: media kind.

@@ -246,7 +246,7 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
   }, [messages]);
   const availableMediaSourceArtifacts = useMemo(() => {
     const collected = [
-      ...mediaSourceArtifacts,
+      ...mediaSourceArtifacts.slice().reverse(),
       ...mediaGenerationArtifacts,
       ...messages.flatMap(message => Array.isArray(message?.mediaArtifacts) ? message.mediaArtifacts : []),
       ...libraryMediaArtifacts,
@@ -257,7 +257,7 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    }).slice(-24).reverse();
+    }).slice(0, 24);
   }, [libraryMediaArtifacts, mediaGenerationArtifacts, mediaSourceArtifacts, messages]);
 
   const openNativeFilePath = useCallback(async (target?: string | null): Promise<boolean> => {

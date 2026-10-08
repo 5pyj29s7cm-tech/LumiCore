@@ -36,7 +36,7 @@ import { useRuntimeStatus } from '@/hooks/useRuntimeStatus';
 import { CommandCenterPlanner } from "../CommandCenterPlanner";
 import { commandCenterPlannerCopy } from '@/i18n/locales/commandCenterPlanner';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
-import { MediaGenerationStudio, type MediaGenerationRequest, type MediaGenerationSourceChange, type MediaGenerationSourceSlot, type MediaGenerationStudioStatus } from "../MediaGenerationStudio";
+import { MediaGenerationStudio, type MediaGenerationRequest, type MediaGenerationSourceChange, type MediaGenerationSourceSlot, type MediaGenerationStudioStatus, MediaGenerationStudioProps } from "../MediaGenerationStudio";
 import { type MediaGenerationArtifact, type MediaGenerationKind, type MediaGenerationSourceOperation } from '@/lib/mediaGenerationArtifacts';
 
 const ChatSongWorkbench = React.lazy(() => import('../ChatSongWorkbench'));
@@ -56,12 +56,13 @@ handleChatDrop: (event: React.DragEvent<HTMLDivElement>) => void;
 chatAccentTheme: typeof CHAT_LIGHT_THEME | typeof CHAT_NEUTRAL_THEME;
 fileInputRef: React.RefObject<HTMLInputElement>;
 uploadChatAttachments: (files: FileList | null) => Promise<void>;
-mediaSourceFileInputRef: React.RefObject<HTMLInputElement>;
-uploadMediaSourceImage: (files: FileList | null) => Promise<void>;
+uploadMediaSourceImage: (operation: MediaGenerationSourceOperation, slot: MediaGenerationSourceSlot, files: File[]) => Promise<void>;
 isOfficeCommandCenter: boolean;
 mediaStudioMode: MediaGenerationKind;
 isTyping: boolean;
 mediaSourceUploading: boolean;
+mediaVideoOptions: MediaGenerationStudioProps['videoOptions'];
+mediaVideoOptionsLoading: boolean;
 mediaGenerationStatus: MediaGenerationStudioStatus;
 mediaGenerationDetail: string;
 mediaGenerationArtifacts: MediaGenerationArtifact[];
@@ -76,7 +77,6 @@ mediaSources: Required<Pick<MediaGenerationRequest, "primaryImage" | "referenceI
 mediaGenerationRetryRequest: MediaGenerationRequest;
 openMediaGenerationStudio: (mode: MediaGenerationKind) => void;
 handleMediaSourceChange: (change: MediaGenerationSourceChange) => void;
-requestMediaSourceImage: (operation: MediaGenerationSourceOperation, slot: MediaGenerationSourceSlot) => void;
 isWorkChat: boolean;
 setChatSongOpen: React.Dispatch<React.SetStateAction<boolean>>;
 chatSongOpen: boolean;
@@ -203,7 +203,7 @@ deletingConversationId: string;
 deleteConversationFromHistory: (conversationId: string) => Promise<void>;
 };
 export function AgentChatView(input: AgentChatViewInput) {
-  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, mediaSourceFileInputRef, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, requestMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
+  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
 
   return (
     <AnimatePresence>
@@ -244,16 +244,6 @@ export function AgentChatView(input: AgentChatViewInput) {
         accept={CHAT_ATTACHMENT_ACCEPT}
         onChange={(e) => { void uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
-      <input
-        type="file"
-        ref={mediaSourceFileInputRef}
-        className="hidden"
-        accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff"
-        onChange={(event) => {
-          void uploadMediaSourceImage(event.target.files);
-          event.target.value = '';
-        }}
-      />
       <AnimatePresence>
         {isOfficeCommandCenter && mediaStudioMode && (
           <motion.div
@@ -267,7 +257,8 @@ export function AgentChatView(input: AgentChatViewInput) {
             <MediaGenerationStudio
               mode={mediaStudioMode}
               locale={isZh ? 'zh' : 'en'}
-              busy={isTyping || mediaSourceUploading || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+              videoOptions={mediaVideoOptions}
+              busy={isTyping || mediaSourceUploading || mediaVideoOptionsLoading || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
               status={mediaGenerationStatus}
               statusDetail={mediaGenerationDetail}
               artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
@@ -287,7 +278,7 @@ export function AgentChatView(input: AgentChatViewInput) {
               retryRequest={mediaGenerationRetryRequest}
               onModeChange={openMediaGenerationStudio}
               onSourceChange={handleMediaSourceChange}
-              onRequestSourceImage={requestMediaSourceImage}
+              onUploadSourceImage={uploadMediaSourceImage}
               onClose={() => { void requestCloseCreativeStudio(); }}
               onOpenChatSong={!isWorkChat ? () => { void refreshKnowledgeFiles(); setChatSongOpen(true); } : undefined}
               chatSongActive={chatSongOpen && !isWorkChat}
