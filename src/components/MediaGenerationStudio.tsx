@@ -77,7 +77,6 @@ export type MediaGenerationStudioProps = MediaGenerationSources & {
   operation?: MediaGenerationOperation;
   locale: 'zh' | 'en';
   busy: boolean;
-  interactionLocked?: boolean;
   status: MediaGenerationStudioStatus;
   statusDetail?: string;
   artifacts: MediaGenerationArtifact[];
@@ -227,7 +226,6 @@ function useMediaGenerationStudioState({
   operation,
   locale,
   busy,
-  interactionLocked = false,
   status,
   statusDetail,
   artifacts,
@@ -290,7 +288,7 @@ function useMediaGenerationStudioState({
 
   const editReferenceImage = referenceImages[0] || '';
   const selectableImageArtifacts = sourceArtifacts.filter(artifact => artifact.kind === 'image');
-  const isWorking = interactionLocked || busy || status === 'submitting' || status === 'generating' || status === 'cancelling';
+  const isWorking = busy || status === 'submitting' || status === 'generating' || status === 'cancelling';
   const sourceRequired = activeOperation === 'image_edit' || activeOperation === 'image_to_video';
   const hasRequiredSource = activeOperation === 'image_edit'
     ? Boolean(primaryImage.trim())
@@ -320,7 +318,7 @@ function useMediaGenerationStudioState({
   }, [activeKind, selectedVideoOptions]);
 
   useEffect(() => {
-    if (chatSongActive || interactionLocked) return;
+    if (chatSongActive) return;
     const focusPrompt = () => promptRef.current?.focus({ preventScroll: true });
     const restoreVisiblePrompt = () => {
       if (document.visibilityState === 'visible') focusPrompt();
@@ -331,7 +329,7 @@ function useMediaGenerationStudioState({
       window.removeEventListener('focus', focusPrompt);
       document.removeEventListener('visibilitychange', restoreVisiblePrompt);
     };
-  }, [chatSongActive, interactionLocked]);
+  }, [chatSongActive]);
 
   const switchOperation = (nextOperation: MediaGenerationOperation) => {
     if (isWorking || nextOperation === activeOperation) return;
@@ -478,7 +476,7 @@ function useMediaGenerationStudioState({
     : activeKind === 'image'
       ? copy.generateImage
       : copy.generateVideo;
-  return { isZh: locale === 'zh', activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, interactionLocked, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
+  return { isZh: locale === 'zh', activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
 }
 
 export function MediaGenerationStudio(props: Parameters<typeof useMediaGenerationStudioState>[0]) {
@@ -486,7 +484,7 @@ export function MediaGenerationStudio(props: Parameters<typeof useMediaGeneratio
 }
 
 function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGenerationStudioState>) {
-  const { isZh, activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, interactionLocked, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
+  const { isZh, activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
 
 
   return (
@@ -496,7 +494,6 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
       data-media-generation-operation={activeOperation}
       className="absolute inset-0 z-[215] flex min-h-0 flex-col overflow-hidden bg-[#03070d]/96 backdrop-blur-2xl"
       aria-label={copy.aiCreation}
-      aria-busy={interactionLocked}
     >
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/[0.08] px-5 py-4 md:px-8">
         <div className="flex min-w-0 items-center gap-3">
@@ -508,7 +505,7 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
               {copy.aiCreation}
             </h2>
             <p className="mt-0.5 truncate text-[11px] text-white/38">
-              <span role={interactionLocked ? 'status' : undefined}>{interactionLocked ? copy.chatBusy : copy.aiCreationHint}</span>
+              {copy.aiCreationHint}
             </p>
           </div>
         </div>
@@ -523,7 +520,6 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
         </button>
       </header>
 
-      <fieldset disabled={interactionLocked} inert={interactionLocked} className="contents" data-creation-controls>
       <nav aria-label={copy.creationTypes} className="flex shrink-0 gap-2 border-b border-white/[0.08] px-5 py-3 md:px-8">
         {([
           { kind: 'image', label: copy.image, icon: <ImageIcon size={16} /> },
@@ -822,7 +818,6 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
           </div>
         </div>
       </div>
-      </fieldset>
     </section>
   );
 }
