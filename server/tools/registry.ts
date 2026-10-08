@@ -228,11 +228,15 @@ export function isToolNameAllowedByPolicy(toolName: string, policy?: ToolPolicy)
   return allowed.includes('*') || allowed.includes(toolName);
 }
 
-export function getToolExecutionTimeoutMs(name: string): number {
+export function getToolExecutionTimeoutMs(name: string, args?: Record<string, any>): number {
   if (name === 'external_cli_run') return 16 * 60_000;
   if (name === 'external_cli_status') return 60_000;
   if (name === 'computer_use') return 10 * 60_000;
-  if (name === 'generate_video') return 15 * 60_000;
+  if (name === 'generate_video') {
+    const seconds = Number(args?.duration);
+    const clips = Number.isFinite(seconds) ? Math.ceil(Math.min(120, Math.max(1, seconds)) / 5) : 1;
+    return Math.min(45, Math.max(15, clips * 2 + 5)) * 60_000;
+  }
   if (name === 'generate_image' || name === 'generate_image_dalle' || name === 'ai_edit_image') return 3 * 60_000;
   if (/^model_configuration_(?:update|test)$/i.test(name)) return 2 * 60_000;
   if (name === 'transcribe_audio_to_text_file') return 60 * 60_000;
@@ -967,7 +971,7 @@ export class ToolRegistry {
     }
 
     // Wrap with timeouts to prevent hanging. Vision/CAD extraction needs more room than simple tools.
-    const timeoutMs = getToolExecutionTimeoutMs(semanticToolName);
+    const timeoutMs = getToolExecutionTimeoutMs(semanticToolName, executionArgs);
     const externalCommit = capability.sideEffects.some(effect => (
       effect.type === 'external_communication' || effect.type === 'external_state_change'
     ));

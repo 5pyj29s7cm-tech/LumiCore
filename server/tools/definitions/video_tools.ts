@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { generateVideoSequence } from '../video_composition';
 import { videoGenerationOptions } from '../../../shared/video_generation_options';
 import { requireNotStrict } from '../../config/privacy';
 import path from 'path';
@@ -709,7 +710,7 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   const preference = generationMode === 'image_to_video' ? preferences.imageToVideo : preferences.video;
   if (args.officialOnly === true && preference.provider !== 'relay') throw new Error('This project requires Lumi Official API. Select it for video generation in model settings.');
   const provider = preference.provider;
-  const model = String(
+  let model = String(
     preference.model
     || preference.models[provider]
     || (generationMode === 'image_to_video'
@@ -726,6 +727,23 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
   }
   if (generationMode === 'image_to_video' && provider !== 'relay' && provider !== 'minimax') {
     throw new Error(`${provider} does not have a verified image-to-video input adapter in this build.`);
+  }
+
+  if (provider === 'relay') {
+    model = officialApiModel(generationMode === 'image_to_video' ? 'RELAY_IMAGE_TO_VIDEO_MODEL' : 'RELAY_VIDEO_MODEL', model);
+    if (generationMode === 'image_to_video' && isT2VModel(model)) throw new Error(`The selected model ${model} is text-to-video only.`);
+    if (generationMode === 'text_to_video' && isI2VModel(model)) throw new Error(`The selected model ${model} requires a reference image.`);
+  }
+  const options = videoGenerationOptions({ provider, model });
+  const duration = args.duration === undefined ? options?.fixedDuration || 6 : Number(args.duration);
+  if (options && (!Number.isInteger(duration) || duration < 1 || duration > 120)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceDurationInvalid);
+  if (options && args.size && !options.sizes.includes(normalizeSize(args.size, 'x'))) throw new Error('The configured Wan2.2 model requires a supported size: ' + options.sizes.join(', '));
+  const compose = Boolean(options && duration !== options.fixedDuration);
+  let continuationModel = model;
+  if (compose && duration > options!.fixedDuration! && generationMode === 'text_to_video') {
+    const continuation = preferences.imageToVideo;
+    continuationModel = officialApiModel('RELAY_IMAGE_TO_VIDEO_MODEL', continuation.model || continuation.models.relay || DEFAULT_IMAGE_TO_VIDEO_MODELS.relay);
+    if (continuation.provider !== 'relay' || !videoGenerationOptions({ provider: 'relay', model: continuationModel }) || !isI2VModel(continuationModel)) throw new Error(CN_MEDIA_PROGRESS.videoSequenceModelInvalid);
   }
 
   // Resolve role/model admission before reading or downloading a reference.
@@ -745,6 +763,29 @@ async function generateVideo(args: Record<string, any>, context?: ToolContext): 
 
   const onProgress = context?.onProgress;
 
+  if (compose && options) {
+    const size = args.size ? normalizeSize(args.size, 'x') : options.sizes[0];
+    const sequence = await generateVideoSequence({ duration, size, clipDuration: options.fixedDuration!, outputDirectory: ensureOutputDir(),
+      owner: { userId: context?.userId, domain: context?.domain, orgId: context?.orgId, taskId: context?.taskId }, signal, onProgress,
+      generateClip: async (index, count, previousEndFrame) => {
+        throwIfAborted(signal);
+        if (context?.isCancelled?.()) throw new DOMException('Video generation cancelled', 'AbortError');
+        const frame = previousEndFrame ? await normalizeVideoReference(previousEndFrame, 'continuation_frame', signal) : firstFrame;
+        const segmentPrompt = [prompt, 'This is segment ' + (index + 1) + ' of ' + count + ' in a continuous ' + duration + '-second video.',
+          'Generate only this ' + options.fixedDuration + '-second segment. Preserve the subject, visual identity and lighting.',
+          index === 0 ? 'Establish the scene and begin the requested motion.' : index === count - 1 ? 'Continue smoothly from the supplied frame and bring the motion to a natural ending.' : 'Continue smoothly from the supplied frame; advance the action without restarting it.'].join('\n');
+        const clip = JSON.parse(await generateOfficialVideo({ ...normalizedArgs, prompt: segmentPrompt, size, duration: options.fixedDuration,
+          first_frame_image: frame, last_frame_image: index === count - 1 ? lastFrame : undefined }, index === 0 ? model : continuationModel, signal,
+          message => reportVideoProgress(onProgress, CN_MEDIA_PROGRESS.videoSequenceProvider(index + 1, count, message))));
+        return { path: clip.outputPath, taskId: clip.taskId, model: clip.model };
+      },
+    });
+    const result = JSON.parse(await completedResult({ provider: 'relay', model, prompt, taskId: 'composed_' + crypto.randomUUID(), outputPath: sequence.outputPath,
+      ...completionMetadata({ ...normalizedArgs, size, duration }), signal, onProgress }));
+    return JSON.stringify({ ...result, composition: { strategy: 'sequential_clips_with_end_frame_continuation', clipDuration: options.fixedDuration, clipCount: sequence.clips.length,
+      sourceTaskIds: sequence.clips.map(clip => clip.taskId), models: [...new Set(sequence.clips.map(clip => clip.model))] } });
+  }
+
   if (provider === 'qwen') return generateQwenVideo(normalizedArgs, model, signal, onProgress);
   if (provider === 'minimax') return generateMiniMaxVideo(normalizedArgs, model, signal, onProgress);
   if (provider === 'siliconflow') return generateSiliconFlowVideo(normalizedArgs, model, signal, onProgress);
@@ -762,7 +803,7 @@ export function registerVideoTools(registry: ToolRegistry): void {
         officialOnly: { type: 'boolean', description: 'Require the selected provider to be Lumi Official API; reject other providers.' },
         prompt: { type: 'string', description: 'Describe the scene, motion, lighting, camera angle, and style.' },
         size: { type: 'string', description: 'Requested output size, such as 1280x720, 720x1280, or 960x960.' },
-        duration: { type: 'number', description: 'Requested duration in seconds. The selected provider may normalize it to a supported duration.' },
+        duration: { type: 'number', minimum: 1, maximum: 120, description: 'Final output duration in seconds, up to 120. Lumi Official Wan2.2 automatically generates continuous five-second clips and combines them to the requested length.' },
         resolution: { type: 'string', description: 'MiniMax resolution, such as 1080P or 768P.' },
         first_frame_image: { type: 'string', description: 'Optional first-frame image: absolute local path, HTTPS URL, or image data URL. Its presence selects the image-to-video role.' },
         last_frame_image: { type: 'string', description: 'Optional last-frame image in the same formats; requires first_frame_image and provider support.' },

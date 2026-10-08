@@ -94,7 +94,9 @@ export function normalizeStructuredMediaRequest(value: unknown): StructuredMedia
     };
   }
 
-  const duration = Math.max(1, Math.min(120, Math.trunc(Number(candidate.duration) || 6)));
+  const requestedDuration = candidate.duration === undefined ? 6 : Number(candidate.duration);
+  if (!Number.isInteger(requestedDuration) || requestedDuration < 1 || requestedDuration > 120) return null;
+  const duration = requestedDuration;
   if (operation === 'text_to_video') return { operation, prompt, size, duration, ...restriction };
 
   const referenceImage = normalizeReference(candidate.referenceImage);

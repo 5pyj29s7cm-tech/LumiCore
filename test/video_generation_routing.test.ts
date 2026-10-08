@@ -456,11 +456,11 @@ describe('video generation model routing', () => {
       fs.rmSync(referencePath, { force: true });
     }
   });
-  it('rejects unsupported Wan clip duration or size before submitting a paid generation', async () => {
+  it('rejects invalid Wan final duration or size before submitting a paid generation', async () => {
     const user = 'wan-spec-admission'; configureOfficialVideoModels(user);
     process.env.RELAY_VIDEO_MODEL = 'aliyun/Wan2.2-T2V-A14B';
     const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
-    await expect(runVideo(user, { duration: 30, size: '1920x1080' })).rejects.toThrow(/5-second clips/);
+    await expect(runVideo(user, { duration: 121, size: '1920x1080' })).rejects.toThrow(/1 至 120/);
     await expect(runVideo(user, { duration: 5, size: '1280x720' })).rejects.toThrow(/supported size/);
     expect(fetchMock).not.toHaveBeenCalled();
   });

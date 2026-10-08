@@ -288,5 +288,16 @@ it('uses the selected video model sizes and fixed duration instead of unsupporte
   expect(generate).toHaveBeenCalledWith(expect.objectContaining({ size: '1920x1080', duration: 5 }));
   expect(container.querySelectorAll('option[value="6"]')).toHaveLength(0);
   expect(container.querySelector('option[value="1280x720"]')).toBeNull();
-  expect(screen.getByText(/generates 5-second clips/)).toBeTruthy();
+  expect(screen.getByText(/automatically combined/)).toBeTruthy();
+});
+
+it('submits a 30-second final length using the current model composition options', () => {
+  const generate = vi.fn();
+  const { container } = render(<StudioHarness {...studioProps({ mode: 'video', operation: 'image_to_video', referenceImage: sourceArtifact.path!, onGenerate: generate,
+    videoOptions: { image_to_video: { sizes: ['1920x1080'], durations: [5, 10, 15, 30, 60, 120], fixedDuration: 5 } } })} />);
+  const duration = container.querySelectorAll('select')[1];
+  fireEvent.change(duration, { target: { value: '30' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Describe what to generate' }), { target: { value: 'Slow camera movement' } });
+  fireEvent.submit(container.querySelector('form')!);
+  expect(generate).toHaveBeenCalledWith(expect.objectContaining({ duration: 30 }));
 });
