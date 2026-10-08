@@ -6,6 +6,7 @@ import { localFileResourcePath, saveFileResource } from '@/services/fileResource
 import { useFileResource } from '@/hooks/useFileResource';
 import { chatArtifactKind, type ChatDocumentPreview } from '../../shared/chat_artifacts';
 import { chatPreviewCopy } from '@/i18n/locales/chatPreview';
+import { VideoPlayer } from './VideoPlayer';
 import { FileLocationActions } from './FileLocationActions';
 
 export type ChatPreviewFile = { fileName: string; url: string; path?: string; kind?: string };
@@ -30,6 +31,7 @@ export function ChatFilePreview({ file, isZh, onClose, onOpenSystem }: {
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector('[data-video-expanded="true"]')) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close.current(); }
       if (event.key !== 'Tab') return;
       const items = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], video[controls], audio[controls], [tabindex="0"]') || [])];
@@ -82,7 +84,7 @@ export function ChatFilePreview({ file, isZh, onClose, onOpenSystem }: {
           </div>}
           {!error && !resource.error && (media ? !resource.url : !preview) && <p role="status">{copy.loading}</p>}
           {kind === 'image' && resource.url && <button type="button" className="block min-h-0 w-full" aria-label={copy.zoom} onClick={() => setZoom(value => !value)}><img src={resource.url} alt={file.fileName} onError={() => setError(true)} className={zoom ? 'mx-auto max-w-none' : 'mx-auto max-h-[68vh] max-w-full object-contain'} /></button>}
-          {kind === 'video' && resource.url && <video src={resource.url} controls playsInline preload="metadata" onError={() => setError(true)} className="mx-auto max-h-[68vh] w-full rounded-xl bg-black" aria-label={file.fileName} />}
+          {kind === 'video' && resource.url && <VideoPlayer isZh={isZh} src={resource.url} controls playsInline preload="metadata" onError={() => setError(true)} className="mx-auto max-h-[68vh] w-full rounded-xl bg-black" aria-label={file.fileName} />}
           {kind === 'audio' && resource.url && <audio src={resource.url} controls preload="metadata" onError={() => setError(true)} className="w-full" aria-label={file.fileName} />}
           {preview?.extracted && <p className="mb-3 text-xs opacity-60">{copy.extracted}</p>}
           {preview?.kind === 'text' && <pre className="whitespace-pre-wrap break-words font-mono text-sm leading-7">{preview.text?.trim() ? preview.text : copy.empty}</pre>}

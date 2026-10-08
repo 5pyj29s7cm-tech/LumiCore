@@ -220,6 +220,15 @@ export function useDesktopCaptureAndIdentity(previousBindings: ReturnType<typeof
   const handleWindowMaximize = async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const current = getCurrentWindow();
+      const compact = await invoke<{ enabled?: boolean }>('get_compact_window_mode');
+      // Media/native fullscreen can exit independently of the compact-mode state.
+      if (!compact?.enabled && !await current.isFullscreen()) {
+        await current.setFullscreen(true);
+        setIsCompactWindowMode(false);
+        return;
+      }
       const status = await invoke<{ enabled?: boolean }>('toggle_compact_window_mode');
       setIsCompactWindowMode(Boolean(status?.enabled));
     } catch (err: any) {

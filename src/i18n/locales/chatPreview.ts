@@ -7,6 +7,7 @@ export function chatPreviewCopy(isZh: boolean) {
     partial: '这里只展示部分内容，完整内容请打开原文件。',
     extracted: '内容预览：保留文字和表格，完整排版请打开原文件。',
     empty: '没有可展示的文字内容。', zoom: '点击放大或还原图片',
+    expandVideo: '放大视频', restoreVideo: '还原视频',
   } : {
     preview: 'Preview', close: 'Close preview', download: 'Save file', open: 'Open in system app',
     loading: 'Loading preview…', failed: 'Cannot load the preview. The file may have moved, been removed, or no longer be accessible.',
@@ -15,5 +16,6 @@ export function chatPreviewCopy(isZh: boolean) {
     partial: 'Showing part of the content. Open the original file for the complete content.',
     extracted: 'Content preview: text and tables. Open the original file for full formatting.',
     empty: 'No text is available to preview.', zoom: 'Click to zoom or fit the image',
+    expandVideo: 'Expand video', restoreVideo: 'Restore video',
   };
 }

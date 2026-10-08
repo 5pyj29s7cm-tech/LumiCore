@@ -1,3 +1,4 @@
+import { VideoPlayer } from './VideoPlayer';
 import { Loader2 } from 'lucide-react';
 import type { MemoryAvatarMedia, MemoryAvatarMediaVariant } from '../../shared/memory_avatar';
 import { useMemoryAvatarMediaResource } from '../hooks/useMemoryAvatarMediaResource';
@@ -16,6 +17,6 @@ export function MemoryAvatarMediaPreview({ ownerId, avatarId, media, locale, var
       ? <img src={resource.url} alt={media.title} className="max-h-64 w-full object-contain" />
       : media.kind === 'audio' || variant === 'audio'
         ? <audio src={resource.url} aria-label={media.title} controls preload="metadata" className="w-full max-w-full" />
-        : <video src={resource.url} aria-label={media.title} controls playsInline preload="metadata" className="max-h-64 w-full object-contain" />)}
+        : <VideoPlayer isZh={locale === 'zh'} src={resource.url} aria-label={media.title} controls playsInline preload="metadata" className="max-h-64 w-full object-contain" />)}
   </div>;
 }

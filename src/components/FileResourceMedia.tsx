@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { VideoPlayer } from './VideoPlayer';
 import { useFileResource } from '@/hooks/useFileResource';
 
 function useResourceError(error: Error | undefined, callback?: () => void) {
@@ -16,5 +17,5 @@ export function FileResourceImage({ src, onResourceError, ...props }: React.ImgH
 export function FileResourceVideo({ src, onResourceError, ...props }: React.VideoHTMLAttributes<HTMLVideoElement> & { onResourceError?: () => void }) {
   const resource = useFileResource(src);
   useResourceError(resource.error, onResourceError);
-  return <video {...props} src={resource.url} />;
+  return <VideoPlayer {...props} src={resource.url} />;
 }
