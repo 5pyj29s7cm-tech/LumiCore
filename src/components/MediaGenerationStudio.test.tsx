@@ -50,6 +50,37 @@ function StudioHarness(props: MediaGenerationStudioProps) {
 afterEach(cleanup);
 
 describe('MediaGenerationStudio operations', () => {
+  it('locks all creation content during chat and restores the draft afterwards', () => {
+    const props = studioProps({ libraryArtifacts: [sourceArtifact], onRefreshLibrary: vi.fn() });
+    const { container, rerender } = render(<StudioHarness {...props} />);
+    const prompt = screen.getByRole('textbox', { name: 'Describe what to generate' });
+    fireEvent.change(prompt, { target: { value: 'Keep this draft' } });
+    rerender(<StudioHarness {...props} interactionLocked />);
+    expect(screen.getByRole('status').textContent).toContain('Chat is processing a task');
+    const controls = container.querySelector('[data-creation-controls]')!;
+    expect(controls.hasAttribute('inert')).toBe(true);
+    expect(Array.from(controls.querySelectorAll('button, input, select, textarea')).every(control => control.matches(':disabled'))).toBe(true);
+    fireEvent.submit(container.querySelector('form')!);
+    expect(props.onGenerate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to Command Center' }));
+    expect(props.onClose).toHaveBeenCalledOnce();
+    rerender(<StudioHarness {...props} />);
+    expect(controls.hasAttribute('inert')).toBe(false);
+    expect((screen.getByRole('textbox', { name: 'Describe what to generate' }) as HTMLTextAreaElement).value).toBe('Keep this draft');
+    fireEvent.submit(container.querySelector('form')!);
+    expect(props.onGenerate).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Keep this draft' }));
+  });
+
+  it('locks the embedded song workspace and keeps its own generation cancellation available', () => {
+    const props = studioProps({ onOpenChatSong: vi.fn(), chatSongActive: true, chatSongContent: <button>Save episode</button> });
+    const { container, rerender } = render(<StudioHarness {...props} interactionLocked />);
+    expect(screen.getByRole('button', { name: 'Save episode' }).matches(':disabled')).toBe(true);
+    expect(container.querySelector('[data-creation-controls]')!.hasAttribute('inert')).toBe(true);
+    const onCancel = vi.fn();
+    rerender(<StudioHarness {...studioProps({ busy: true, status: 'generating', onCancel })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel generation' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
   it('previews and references archived content while keeping current generation status separate', () => {
     const archived = { ...sourceArtifact, id: 'archive-1', fileId: 'archived.png', url: '/api/files/download/archived.png?inline=1' };
     const props = studioProps({ libraryArtifacts: [archived], onReferenceArtifact: vi.fn(), onRefreshLibrary: vi.fn() });

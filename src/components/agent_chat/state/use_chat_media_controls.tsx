@@ -28,7 +28,15 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     return () => controller.abort();
   }, [activeDomain, activeOrgId, isOpen, mediaStudioMode, setMediaGeneration]);
 
+  const isCreationLocked = useCallback(() => {
+    const ledger = chatRequestLedgerRef.current;
+    const mediaRequestId = activeMediaGenerationRef.current?.requestId;
+    const ownMediaTask = mediaRequestId && ledger.has(mediaRequestId) ? 1 : 0;
+    return ledger.size > ownMediaTask || (isTyping && !mediaRequestId);
+  }, [activeMediaGenerationRef, chatRequestLedgerRef, isTyping]);
+
   const openMediaGenerationStudio = useCallback((mode: MediaGenerationKind) => {
+    if (isCreationLocked()) return;
     void refreshKnowledgeFiles();
     const activeRequest = activeMediaGenerationRef.current;
     mediaStudioOpenRef.current = true;
@@ -45,15 +53,16 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
       setMediaGeneration({ status: 'idle', detail: '' });
     }
     setMediaStudioMode(mode);
-  }, [activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaStudioOpenRef, refreshKnowledgeFiles, setMediaGeneration, setMediaGenerationArtifacts, setMediaStudioMode]);
+  }, [activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaStudioOpenRef, refreshKnowledgeFiles, setMediaGeneration, setMediaGenerationArtifacts, setMediaStudioMode, isCreationLocked]);
 
+  const creationLocked = isCreationLocked();
   const consumedCreationRequestRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter || !creationRequestId || consumedCreationRequestRef.current === creationRequestId) return;
+    if (creationLocked || !isOpen || !isOfficeCommandCenter || !creationRequestId || consumedCreationRequestRef.current === creationRequestId) return;
     consumedCreationRequestRef.current = creationRequestId;
     openMediaGenerationStudio('image');
     onCreationRequestConsumed?.(creationRequestId);
-  }, [creationRequestId, isOfficeCommandCenter, isOpen, onCreationRequestConsumed, openMediaGenerationStudio]);
+  }, [creationLocked, creationRequestId, isOfficeCommandCenter, isOpen, onCreationRequestConsumed, openMediaGenerationStudio]);
 
   const handleMediaSourceChange = useCallback((change: MediaGenerationSourceChange) => {
     const artifactId = change.value.trim() ? change.artifact?.id || '' : '';
@@ -65,7 +74,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
   }, [setMediaSources]);
 
   const generateMediaFromStudio = useCallback((request: MediaGenerationRequest) => {
-    if (isTyping || activeMediaGenerationRef.current) {
+    if (isCreationLocked() || activeMediaGenerationRef.current) {
       setMediaGeneration({ status: 'error', detail: mediaGenerationText.anotherTaskRunning });
       return;
     }
@@ -125,7 +134,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
       activeMediaGenerationRef.current = null;
       setMediaGeneration({ status: 'error', detail: mediaGenerationText.requestNotCreated });
     });
-  }, [activeMediaGenerationRef, isTyping, isZh, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaGenerationText.animateImage, mediaGenerationText.anotherTaskRunning, mediaGenerationText.editImage, mediaGenerationText.generateImage, mediaGenerationText.generateVideo, mediaGenerationText.requestNotCreated, mediaGenerationText.settingsMismatch, sendText, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest]);
+  }, [activeMediaGenerationRef, isCreationLocked, isZh, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaGenerationText.animateImage, mediaGenerationText.anotherTaskRunning, mediaGenerationText.editImage, mediaGenerationText.generateImage, mediaGenerationText.generateVideo, mediaGenerationText.requestNotCreated, mediaGenerationText.settingsMismatch, sendText, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest]);
 
   const closeMediaGenerationStudio = useCallback(() => {
     mediaStudioOpenRef.current = false;
@@ -304,7 +313,7 @@ export function useChatMediaControls(previousBindings: ReturnType<typeof useChat
     }
   };
   return {
-    ...previousBindings, mediaVideoOptions, mediaVideoOptionsLoading, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, generateMediaFromStudio,
+    ...previousBindings, creationLocked, mediaVideoOptions, mediaVideoOptionsLoading, handleMediaSourceChange, requestCloseCreativeStudio, openMediaGenerationStudio, generateMediaFromStudio,
     closeMediaGenerationStudio, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
     handleSendMessage, toggleListening, startVoiceSession
   } as const;

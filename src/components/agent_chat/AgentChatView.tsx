@@ -60,6 +60,7 @@ uploadMediaSourceImage: (operation: MediaGenerationSourceOperation, slot: MediaG
 isOfficeCommandCenter: boolean;
 mediaStudioMode: MediaGenerationKind;
 isTyping: boolean;
+creationLocked: boolean;
 mediaSourceUploading: boolean;
 mediaVideoOptions: MediaGenerationStudioProps['videoOptions'];
 mediaVideoOptionsLoading: boolean;
@@ -203,7 +204,7 @@ deletingConversationId: string;
 deleteConversationFromHistory: (conversationId: string) => Promise<void>;
 };
 export function AgentChatView(input: AgentChatViewInput) {
-  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
+  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, creationLocked, mediaSourceUploading, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
 
   return (
     <AnimatePresence>
@@ -259,6 +260,7 @@ export function AgentChatView(input: AgentChatViewInput) {
               locale={isZh ? 'zh' : 'en'}
               videoOptions={mediaVideoOptions}
               busy={isTyping || mediaSourceUploading || mediaVideoOptionsLoading || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+              interactionLocked={creationLocked}
               status={mediaGenerationStatus}
               statusDetail={mediaGenerationDetail}
               artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
@@ -562,9 +564,10 @@ export function AgentChatView(input: AgentChatViewInput) {
             <button
               type="button"
               data-ai-creation-switch
+              disabled={creationLocked}
               onClick={() => openMediaGenerationStudio('image')}
-              className="lumi-command-center-switcher-button lumi-command-center-ai-creation-switch group flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-left text-amber-50/80 transition-all hover:-translate-x-1 hover:border-amber-200/45 hover:bg-amber-300/[0.16] hover:text-white"
-              title={mediaGenerationText.aiCreation}
+              className="lumi-command-center-switcher-button lumi-command-center-ai-creation-switch disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-x-0 group flex items-center gap-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-left text-amber-50/80 transition-all hover:-translate-x-1 hover:border-amber-200/45 hover:bg-amber-300/[0.16] hover:text-white"
+              title={creationLocked ? mediaGenerationText.chatBusy : mediaGenerationText.aiCreation}
               aria-label={mediaGenerationText.openAiCreation}
             >
               <span className="lumi-command-center-switcher-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200/20 bg-amber-200/10 text-amber-100 transition-transform group-hover:scale-105">
@@ -572,7 +575,7 @@ export function AgentChatView(input: AgentChatViewInput) {
               </span>
               <span className="lumi-command-center-switcher-copy min-w-0">
                 <span className="block text-xs font-black tracking-[0.12em]">{mediaGenerationText.aiCreation}</span>
-                <span className="mt-1 block truncate text-[10px] text-amber-100/45">{mediaGenerationText.aiCreationHint}</span>
+                <span className="mt-1 block truncate text-[10px] text-amber-100/45">{creationLocked ? mediaGenerationText.chatBusy : mediaGenerationText.aiCreationHint}</span>
               </span>
             </button>
           </aside>
