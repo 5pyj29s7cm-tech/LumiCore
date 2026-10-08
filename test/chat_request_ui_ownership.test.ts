@@ -10,14 +10,14 @@ import { resolveChatExecutionEvent } from '../src/lib/conversationSync';
 import { projectAgentActivity } from '../src/lib/agentStatusTruth';
 import { extractMediaGenerationArtifacts } from '../src/lib/mediaGenerationArtifacts';
 
-function listenerHarness(source = pagePath) {
+function listenerHarness(source = pagePath, isCreationWorkspace = false) {
   const h = pageHarness();
   const listeners = new Map<string, (...args: any[]) => void>();
   const acknowledgements: Array<(ack: any) => void> = [];
   let status = 'idle';
   Object.assign(h.deps, {
     ...delivery, ...progress, ...receipts, resolveChatExecutionEvent, projectAgentActivity, extractMediaGenerationArtifacts,
-    isFounder: false, seenWorkflowToolEvents: { current: new Set() },
+    isFounder: false, isCreationWorkspace, CREATION_EXECUTION_SOURCE: 'ai-creation', seenWorkflowToolEvents: { current: new Set() },
     terminalReceiptsRef: { current: new receipts.ChatTerminalReceiptLedger() },
     setWorkflowStatus: vi.fn((next: string) => { status = next; }), pushChatProgress: vi.fn(),
     taskRelationLedgerRef: { current: { controlTarget: () => ({}), record: vi.fn() } },

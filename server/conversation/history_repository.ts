@@ -73,6 +73,7 @@ export function conversationAccessStatus(id: string, owner: ConversationOwner): 
 export function listConversationHeaders(owner: ConversationOwner, limit?: number): any[] {
   if (!owner.userId) return [];
   let rows = (readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]).conversations || []).filter(row => row.userId === owner.userId
+    && (row.surface || 'chat') === (owner.surface || 'chat')
     && (!owner.agentId || row.agentId === owner.agentId) && workspaceMatches(row, owner));
   rows.sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime());
   if (limit !== undefined) rows = rows.slice(0, limit);

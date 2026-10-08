@@ -5,14 +5,14 @@ import type { useChatHistoryAndRequests } from './use_chat_history_and_requests'
 import { CHAT_HISTORY_LIMIT } from './shared';
 
 export function useChatScopeInitialization(previousBindings: ReturnType<typeof useChatHistoryAndRequests>) {
-  const { agentId, user, activeDomain, activeOrgId, lastConversationScopeRef, invalidateChatViewWork, setIsCreatingConversation, setRestoringConversationId, initialLoadDoneRef, detachPreviousExecution, attachmentContextStoragePrefix, setMessages, setPendingAttachments, pendingAttachmentsRef, bindAttachmentContextToConversation, isFounder, attachmentConversationIdRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, scopedConversationUrl, chatRequestLedgerRef, normalizePersistedMessages } = previousBindings;
+  const { chatExecutionSource, agentId, user, activeDomain, activeOrgId, lastConversationScopeRef, invalidateChatViewWork, setIsCreatingConversation, setRestoringConversationId, initialLoadDoneRef, detachPreviousExecution, attachmentContextStoragePrefix, setMessages, setPendingAttachments, pendingAttachmentsRef, bindAttachmentContextToConversation, isFounder, attachmentConversationIdRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, scopedConversationUrl, chatRequestLedgerRef, normalizePersistedMessages } = previousBindings;
 
 
   useEffect(() => {
     if (!agentId) return;
 
     // On user/agent/domain switch, reset and reload
-    const conversationScopeKey = `${user?.uid || user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
+    const conversationScopeKey = `${user?.uid || user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}:${chatExecutionSource}`;
     if (conversationScopeKey !== lastConversationScopeRef.current) {
       invalidateChatViewWork();
       setIsCreatingConversation(false);
@@ -91,7 +91,7 @@ export function useChatScopeInitialization(previousBindings: ReturnType<typeof u
         setConversationTransitionPending(false);
       }
     };
-  }, [attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, detachPreviousExecution, scopedConversationUrl, setMessages, user?.uid, user?.id, user?.username, lastConversationScopeRef, initialLoadDoneRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, setIsCreatingConversation, setRestoringConversationId, setPendingAttachments, pendingAttachmentsRef, chatRequestLedgerRef]);
+  }, [chatExecutionSource, attachmentConversationIdRef, activeDomain, activeOrgId, agentId, attachmentContextStoragePrefix, bindAttachmentContextToConversation, invalidateChatViewWork, isFounder, normalizePersistedMessages, detachPreviousExecution, scopedConversationUrl, setMessages, user?.uid, user?.id, user?.username, lastConversationScopeRef, initialLoadDoneRef, messagesRef, conversationTransitionRef, setConversationTransitionPending, setIsCreatingConversation, setRestoringConversationId, setPendingAttachments, pendingAttachmentsRef, chatRequestLedgerRef]);
   return {
     ...previousBindings
   } as const;

@@ -1,3 +1,4 @@
+import { CREATION_EXECUTION_SOURCE } from '../../shared/creation_workspace';
 import type { Conversation, ConversationTurnResult } from './manager/contracts';
 import { getMessageByRequestId } from './manager/request_identity';
 import { getConversationForScope, getOrCreateActiveConversation, getOrCreateConversationForTurn, startIsolatedConversation } from './conversation_lifecycle';
@@ -28,6 +29,8 @@ export function resolveConversationForEntry(
   }
   const owned = (id: string) => {
     const conversation = getConversationForScope(id, userId, scope.domain, scope.orgId);
+    if (entry.kind === 'chat' && entry.phase === 'select' && conversation
+      && (conversation.surface === 'creation') !== (entry.source === CREATION_EXECUTION_SOURCE)) return null;
     return conversation && (entry.agentId === undefined || conversation.agentId === entry.agentId) ? conversation : null;
   };
   if (entry.kind === 'chat' || entry.kind === 'messaging') {
@@ -41,6 +44,9 @@ export function resolveConversationForEntry(
     if (accepted) return accepted.conversationId ? owned(accepted.conversationId) : null;
   }
   if (requestedId) return owned(requestedId);
+  if (entry.kind === 'chat' && entry.source === CREATION_EXECUTION_SOURCE) {
+    return startIsolatedConversation(userId, entry.agentId, scope.domain, scope.orgId, 'creation');
+  }
   if (entry.kind === 'rest' || entry.kind === 'autonomy') return null;
   if (entry.kind === 'mcp') {
     if (clientConversationId) return null;

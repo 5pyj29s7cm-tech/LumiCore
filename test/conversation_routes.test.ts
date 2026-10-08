@@ -91,6 +91,33 @@ describe('conversation session routes', () => {
     expect(history.conversations.find((item: any) => item.id === second.conversation.id)?.status).toBe('closed');
   });
 
+  it('isolates creation history and search while preserving the active chat', async () => {
+    const activeBefore = await (await fetch(url + '/api/conversations/active?domain=personal&agentId=lumi', { headers: headers() })).json();
+    const createdResponse = await fetch(url + '/api/conversations/new?domain=personal&agentId=lumi&surface=creation', {
+      method: 'POST', headers: headers(), body: JSON.stringify({ agentId: 'lumi' }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const { conversation } = await createdResponse.json();
+    expect(conversation).toMatchObject({ surface: 'creation', status: 'closed' });
+    const { addMessageIdempotent } = await import('../server/conversation/manager');
+    addMessageIdempotent({ userId: conversation.userId, agentId: 'lumi', conversationId: conversation.id,
+      role: 'user', content: 'isolated-creative-search-needle', requestId: crypto.randomUUID(), source: 'ai-creation', channel: 'chat', domain: 'personal', orgId: '', deferActionPreparation: true });
+    const normalHistory = await (await fetch(url + '/api/conversations?domain=personal&agentId=lumi&limit=1', { headers: headers() })).json();
+    expect(normalHistory.conversations.some((row: any) => row.id === conversation.id)).toBe(false);
+    const creationHistory = await (await fetch(url + '/api/conversations?domain=personal&agentId=lumi&surface=creation', { headers: headers() })).json();
+    expect(creationHistory.conversations.map((row: any) => row.id)).toContain(conversation.id);
+    const activeCreation = await (await fetch(url + '/api/conversations/active?domain=personal&agentId=lumi&surface=creation', { headers: headers() })).json();
+    expect(activeCreation.activeConversation?.id).toBe(conversation.id);
+    const normalSearch = await (await fetch(url + '/api/conversations/search?domain=personal&agentId=lumi&q=isolated-creative-search-needle', { headers: headers() })).json();
+    const creationSearch = await (await fetch(url + '/api/conversations/search?domain=personal&agentId=lumi&surface=creation&q=isolated-creative-search-needle', { headers: headers() })).json();
+    expect(normalSearch.results).toEqual([]);
+    expect(creationSearch.results).toHaveLength(1);
+    const activate = await fetch(url + '/api/conversations/' + conversation.id + '/activate?domain=personal&agentId=lumi', { method: 'POST', headers: headers(), body: JSON.stringify({ agentId: 'lumi' }) });
+    expect(activate.status).toBe(404);
+    const activeAfter = await (await fetch(url + '/api/conversations/active?domain=personal&agentId=lumi', { headers: headers() })).json();
+    expect(activeAfter.activeConversation?.id).toBe(activeBefore.activeConversation?.id);
+  });
+
   it('protects new and activate operations with authentication', async () => {
     const createResponse = await fetch(`${url}/api/conversations/new`, { method: 'POST' });
     const activateResponse = await fetch(`${url}/api/conversations/not-found/activate`, { method: 'POST' });

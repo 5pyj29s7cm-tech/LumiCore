@@ -7,6 +7,8 @@ export interface Conversation {
   agentId: string;
   title: string;
   status: 'active' | 'paused' | 'closed';
+  /** Independent creation jobs stay outside the normal chat history. */
+  surface?: 'creation';
   mode?: string;  // Conversation style: casual, teaching, brainstorm, executive
   summary: string;
   /** Multi-level summary chain: [oldest, middle, newest]. Max 3 entries. */

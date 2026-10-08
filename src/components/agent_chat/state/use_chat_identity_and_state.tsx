@@ -1,3 +1,4 @@
+import { CREATION_EXECUTION_SOURCE } from '../../../../shared/creation_workspace';
 import type { ChatExecutionWatch } from '@/lib/chatExecutionWatch';
 import type { AgentChatVoiceSession, ChatAttachment, ConversationHistoryItem, ConversationHistoryContextMenu, WorkflowStatus, ChatTurnUiMeta } from "../contracts";
 import { makeChatMessageId } from "../history";
@@ -49,6 +50,7 @@ export function useChatIdentityAndState({
   onOpenMemoryAvatar,
   onOpenKnowledge,
   voiceSession,
+  onReferenceArtifact,
 }: {
   t: any;
   user: any;
@@ -62,7 +64,7 @@ export function useChatIdentityAndState({
   onCreationRequestConsumed?: (requestId: string) => void;
   attachmentRequest?: ChatAttachmentRequest;
   onAttachmentRequestConsumed?: (requestId: string) => void;
-  layout?: 'standalone' | 'command-center';
+  layout?: 'standalone' | 'command-center' | 'creation';
   commandCenterView?: CommandCenterView;
   onCommandCenterViewChange?: (view: CommandCenterView) => void;
   onOpenNexus?: () => void;
@@ -72,6 +74,7 @@ export function useChatIdentityAndState({
   onOpenKnowledge?: () => void;
   /** Desktop command center reuses the shell's single microphone session. */
   voiceSession?: AgentChatVoiceSession;
+  onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
 }) {
 
   const prefersReducedMotion = useReducedMotion();
@@ -89,9 +92,10 @@ export function useChatIdentityAndState({
   }, []);
   const chatExecutionWatchesRef = useRef(new Map<string, ChatExecutionWatch>());
   useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); for (const watch of chatExecutionWatchesRef.current.values()) watch.dispose(); chatExecutionWatchesRef.current.clear(); }, []);
-  const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
+  const isCreationWorkspace = layout === 'creation';
+  const isOfficeCommandCenter = isCreationWorkspace || (layout === 'command-center' && commandCenterView === 'office');
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
-  const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
+  const chatExecutionSource = isCreationWorkspace ? CREATION_EXECUTION_SOURCE : layout === 'command-center' ? 'command-center-chat' : 'chat';
   const isZh = t?.langCode !== 'en';
   const attachmentUploadText = chatAttachmentCopy(isZh);
   const commandCenterPlannerText = commandCenterPlannerCopy(isZh ? 'zh' : 'en');
@@ -148,7 +152,7 @@ export function useChatIdentityAndState({
     refresh: refreshRuntimeStatus,
   } = useRuntimeStatus({
     userId: user?.uid,
-    enabled: isOpen && isOfficeCommandCenter && Boolean(user),
+    enabled: isOpen && isOfficeCommandCenter && !isCreationWorkspace && Boolean(user),
     scopeKey: `${activeDomain}:${activeDomain === 'work' ? activeOrgId || '' : ''}`,
   });
   const [voices, setVoices] = useState<any[]>([]);
@@ -219,7 +223,7 @@ export function useChatIdentityAndState({
 
   const localVoiceSession = useVoiceCall({
     socket,
-    disabled: usesSharedVoiceSession,
+    disabled: usesSharedVoiceSession || isCreationWorkspace,
     onTranscript: handleLocalVoiceTranscript,
   });
   const callState = voiceSession?.callState ?? localVoiceSession.callState;
@@ -233,7 +237,7 @@ export function useChatIdentityAndState({
   const lastSharedTranscriptRef = useRef<{ key: string; at: number } | null>(null);
 
   useEffect(() => {
-    if (!usesSharedVoiceSession || !isOpen) return;
+    if (!usesSharedVoiceSession || !isOpen || isCreationWorkspace) return;
     const onSharedTranscript = (event: Event) => {
       const detail = (event as CustomEvent<VoiceTranscriptEventDetail>).detail;
       const text = String(detail?.text || '').trim();
@@ -256,9 +260,10 @@ export function useChatIdentityAndState({
     };
     window.addEventListener(LUMI_VOICE_TRANSCRIPT_EVENT, onSharedTranscript);
     return () => window.removeEventListener(LUMI_VOICE_TRANSCRIPT_EVENT, onSharedTranscript);
-  }, [isOpen, setMessages, user?.displayName, user?.username, usesSharedVoiceSession]);
+  }, [isOpen, setMessages, user?.displayName, user?.username, usesSharedVoiceSession, isCreationWorkspace]);
 
   useEffect(() => {
+    if (isCreationWorkspace) return;
     listVoices().then(data => {
       const all = [...data.cloned, ...data.premade];
       setVoices(all);
@@ -278,7 +283,7 @@ export function useChatIdentityAndState({
     selectedVoiceId,
     setSelectedVoiceId,
     t.failedToLoadVoices,
-    voiceProviderRevision,
+    voiceProviderRevision, isCreationWorkspace,
   ]);
 
   useEffect(() => {
@@ -327,15 +332,15 @@ export function useChatIdentityAndState({
   const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || isCreationWorkspace) return;
     const frame = requestAnimationFrame(() => {
       if (!mediaStudioOpenRef.current) messageInputRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [isOpen]);
+  }, [isOpen, isCreationWorkspace]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || isCreationWorkspace) return;
     let focusFrame: number | null = null;
     const focusCommandInput = () => {
       if (mediaStudioOpenRef.current) return;
@@ -358,7 +363,7 @@ export function useChatIdentityAndState({
       document.removeEventListener('visibilitychange', restoreVisibleCommandInput);
       if (focusFrame !== null) cancelAnimationFrame(focusFrame);
     };
-  }, [isOpen]);
+  }, [isOpen, isCreationWorkspace]);
   const [previewFile, setPreviewFile] = useState<ChatPreviewFile | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const nativeDropHandledAtRef = useRef(0);
@@ -455,7 +460,7 @@ export function useChatIdentityAndState({
     setConversationHistoryLoadingMore, setConversationHistoryLoading, setConversationHistoryHasMore,
     setConversationHistorySelectorExpanded, conversationHistory, conversationHistorySelectorExpanded,
     conversationHistoryHasMore, conversationHistoryListRef, deletingConversationId, appConfirm,
-    setDeletingConversationId, scrollRef, chatProgressLines, attachmentUploadText, operationMode, creationRequestId,
+    setDeletingConversationId, scrollRef, chatProgressLines, attachmentUploadText, operationMode, creationRequestId, isCreationWorkspace, onReferenceArtifact,
     onCreationRequestConsumed, mediaSourceUploading, isTyping, setChatSongOpen,
     chatSongWorkbenchRef, prefillMessage, prefillSource, onPrefillConsumed, isListening, localVoiceSession,
     isElectron, callState, selectedVoiceId, attachmentRequest, onAttachmentRequestConsumed, setIsDraggingFiles,

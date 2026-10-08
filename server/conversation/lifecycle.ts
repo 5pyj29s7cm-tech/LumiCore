@@ -1,6 +1,6 @@
 import { ownedConversationExists } from './history_repository';
 
-export type ConversationOwner = { userId: string; domain: 'personal' | 'work'; orgId?: string; agentId?: string };
+export type ConversationOwner = { userId: string; domain: 'personal' | 'work'; orgId?: string; agentId?: string; surface?: 'chat' | 'creation' };
 export type RequestAuthorization = {
   isCurrent(): boolean;
   assertCurrent(): void;

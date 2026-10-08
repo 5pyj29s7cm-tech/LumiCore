@@ -1,3 +1,4 @@
+import { CREATION_EXECUTION_SOURCE } from '../../../../shared/creation_workspace';
 import { createChatStreamReceivers } from "../chat_stream_receivers";
 import { makeChatMessageId } from "../history";
 import { useEffect } from "react";
@@ -16,7 +17,7 @@ import type { useChatScopeInitialization } from './use_chat_scope_initialization
 import { CHAT_HISTORY_LIMIT } from './shared';
 
 export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatScopeInitialization>) {
-  const { isFounder, socket, acceptChatExecutionEvent, taskRelationLedgerRef, isZh, setMessages, agentName, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, mediaGenerationText, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, pushChatProgress, terminalReceiptsRef, settleTrackedChatRequest, setIsTyping, finishChatProgress, scheduleWorkflowReset, clearChatProgress, dropRequestStream, t, agentNameRef, attachmentConversationIdRef, chatExecutionSource, bindAttachmentContextToConversation, agentId, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef, scopedConversationUrl, normalizePersistedMessages, activeDomain, activeOrgId, clearPersistedExecution } = previousBindings;
+  const { isCreationWorkspace, isFounder, socket, acceptChatExecutionEvent, taskRelationLedgerRef, isZh, setMessages, agentName, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, mediaGenerationText, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, pushChatProgress, terminalReceiptsRef, settleTrackedChatRequest, setIsTyping, finishChatProgress, scheduleWorkflowReset, clearChatProgress, dropRequestStream, t, agentNameRef, attachmentConversationIdRef, chatExecutionSource, bindAttachmentContextToConversation, agentId, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef, scopedConversationUrl, normalizePersistedMessages, activeDomain, activeOrgId, clearPersistedExecution } = previousBindings;
 
 
   useEffect(() => {
@@ -320,6 +321,7 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
       previousConversationId?: string;
     }) => {
       if (data.agentId !== agentId) return;
+      if ((data.source === CREATION_EXECUTION_SOURCE) !== isCreationWorkspace) return;
       const currentConversationId = attachmentConversationIdRef.current;
       const isCurrentRollover = data.rolledOver === true
         && Boolean(currentConversationId)
@@ -371,8 +373,8 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
       }
     };
 
-    socket.on("agent:proactive", onProactive);
-    socket.on("agent:desktop_control_state", onDesktopControlState);
+    if (!isCreationWorkspace) socket.on("agent:proactive", onProactive);
+    if (!isCreationWorkspace) socket.on("agent:desktop_control_state", onDesktopControlState);
     socket.on("agent:chunk", onChunk);
     socket.on("agent:progress", onProgress);
     socket.on("agent:tool", onTool);
@@ -396,7 +398,7 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
       socket.off("agent:error", onError);
       socket.off("chat:conversation_updated", onConversationUpdated);
     };
-  }, [attachmentConversationIdRef, activeDomain, activeOrgId, acceptChatExecutionEvent, agentId, agentName, bindAttachmentContextToConversation, chatExecutionSource, clearChatProgress, clearPersistedExecution, dropRequestStream, finishChatProgress, isFounder, isZh, mediaGenerationText, normalizePersistedMessages, pushChatProgress, scheduleWorkflowReset, scopedConversationUrl, setMessages, settleTrackedChatRequest, socket, t.failedToRouteNeuralMesh, t.requestFailed, t.workflowAnalyzing, t.workflowError, taskRelationLedgerRef, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, terminalReceiptsRef, setIsTyping, agentNameRef, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef]);
+  }, [isCreationWorkspace, attachmentConversationIdRef, activeDomain, activeOrgId, acceptChatExecutionEvent, agentId, agentName, bindAttachmentContextToConversation, chatExecutionSource, clearChatProgress, clearPersistedExecution, dropRequestStream, finishChatProgress, isFounder, isZh, mediaGenerationText, normalizePersistedMessages, pushChatProgress, scheduleWorkflowReset, scopedConversationUrl, setMessages, settleTrackedChatRequest, socket, t.failedToRouteNeuralMesh, t.requestFailed, t.workflowAnalyzing, t.workflowError, taskRelationLedgerRef, streamingRawTextRef, streamingMsgIdsRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaGenerationArtifacts, setMediaGeneration, seenWorkflowToolEvents, chatTurnUiMetaRef, chatRequestLedgerRef, currentTurnUiMetaRef, setWorkflowStatus, terminalReceiptsRef, setIsTyping, agentNameRef, chatViewWorkRef, messagesRevisionRef, historyRefreshRevisionRef]);
   return {
     ...previousBindings
   } as const;

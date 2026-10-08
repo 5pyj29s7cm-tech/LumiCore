@@ -18,7 +18,7 @@ import type { MediaGenerationArtifact } from "@/lib/mediaGenerationArtifacts";
 import type { useChatIdentityAndState } from './use_chat_identity_and_state';
 
 export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<typeof useChatIdentityAndState>) {
-  const { mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen, isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState, endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines, chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef, showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu, setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu, setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef, setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages, mediaSourceArtifacts, mediaGenerationArtifacts, platform } = previousBindings;
+  const { isCreationWorkspace, chatExecutionSource, mediaStudioOpenRef, activeMediaGenerationRef, mediaGenerationArtifactsRef, mediaGenerationArtifactValidationRef, setMediaStudioMode, setMediaGenerationArtifacts, setMediaGeneration, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSources, setMediaSourceUploading, mediaSourceUploadTargetRef, isOpen, isOfficeCommandCenter, pendingAttachmentsRef, pendingAttachments, inputDictationActiveRef, localCallState, endLocalVoiceSession, setIsListening, chatProgressClearTimerRef, lastChatProgressTextRef, setChatProgressLines, chatTurnTimerGuardRef, setWorkflowStatus, seenWorkflowToolEvents, draftTextRef, setHasDraftText, messageInputRef, showVoicePicker, setShowVoicePicker, showWeChatSettings, setShowWeChatSettings, showAttachmentMenu, setShowAttachmentMenu, conversationHistoryOpen, setConversationHistoryOpen, conversationContextMenu, setConversationContextMenu, agent, t, user, agentId, activeDomain, activeOrgId, chatViewWorkRef, chatUploadsRef, setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages, mediaSourceArtifacts, mediaGenerationArtifacts, platform } = previousBindings;
 
 
   const resetMediaGenerationSurface = useCallback(() => {
@@ -37,10 +37,10 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
   }, [activeMediaGenerationRef, mediaGenerationArtifactValidationRef, mediaGenerationArtifactsRef, mediaSourceUploadTargetRef, mediaStudioOpenRef, setMediaGeneration, setMediaGenerationArtifacts, setMediaGenerationRetryRequest, setMediaSourceArtifacts, setMediaSourceUploading, setMediaSources, setMediaStudioMode]);
 
   useEffect(() => {
-    if (!isOpen || !isOfficeCommandCenter) {
+    if (!isCreationWorkspace && (!isOpen || !isOfficeCommandCenter)) {
       resetMediaGenerationSurface();
     }
-  }, [isOfficeCommandCenter, isOpen, resetMediaGenerationSurface]);
+  }, [isCreationWorkspace, isOfficeCommandCenter, isOpen, resetMediaGenerationSurface]);
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
@@ -117,7 +117,7 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
   }, [messageInputRef, updateDraftText]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || isCreationWorkspace) return;
     const pasteIntoCommandInput = (event: ClipboardEvent) => {
       const active = document.activeElement;
       if (active && active !== document.body && active !== document.documentElement) return;
@@ -129,10 +129,10 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
     };
     window.addEventListener('paste', pasteIntoCommandInput);
     return () => window.removeEventListener('paste', pasteIntoCommandInput);
-  }, [isOpen, messageInputRef, setDraftText]);
+  }, [isCreationWorkspace, isOpen, messageInputRef, setDraftText]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || isCreationWorkspace) return;
     const replaceCommandInput = (event: Event) => {
       const text = String((event as CustomEvent<{ text?: string }>).detail?.text || '');
       if (!text) return;
@@ -141,7 +141,7 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
     };
     window.addEventListener('lumi:replace-command-input', replaceCommandInput);
     return () => window.removeEventListener('lumi:replace-command-input', replaceCommandInput);
-  }, [isOpen, messageInputRef, setDraftText]);
+  }, [isCreationWorkspace, isOpen, messageInputRef, setDraftText]);
 
   // Escape to close panels
   useEffect(() => {
@@ -160,7 +160,7 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
 
   const agentName = agent?.name || (t.lumiEssence || 'Lumi Essence');
   const agentCategory = agent?.category || (t.friend || 'friend');
-  const attachmentContextStoragePrefix = `lumi_chat_attachment_context:${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}`;
+  const attachmentContextStoragePrefix = `lumi_chat_attachment_context:${user?.id || user?.username || 'anonymous'}:${buildChatConversationScopeKey(agentId, activeDomain, activeOrgId)}${isCreationWorkspace ? `:${chatExecutionSource}` : ''}`;
   const invalidateChatViewWork = useCallback(() => {
     chatViewWorkRef.current.invalidate();
     chatUploadsRef.current.reset();
@@ -179,8 +179,8 @@ export function useChatAttachmentsAndPresentation(previousBindings: ReturnType<t
   } = useConversationAttachments(attachmentContextStoragePrefix, resetAttachmentConversationView);
   const scopedConversationUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
-    return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}`;
-  }, [activeDomain, agentId]);
+    return `${path}${separator}domain=${encodeURIComponent(activeDomain)}&agentId=${encodeURIComponent(agentId)}${isCreationWorkspace ? '&surface=creation' : ''}`;
+  }, [activeDomain, agentId, isCreationWorkspace]);
   const scopedFileUrl = useCallback((path: string) => {
     const separator = path.includes('?') ? '&' : '?';
     const orgScope = activeDomain === 'work' && activeOrgId

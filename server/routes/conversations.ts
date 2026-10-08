@@ -78,7 +78,8 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const agentId = String(req.query.agentId || '').trim() || undefined;
     // Fetch one sentinel row so an exact page-size response still tells the
     // client whether another page exists.
-    const page = getUserConversations(req.user!.uid, limit + 1, offset, scope.domain, scope.orgId, agentId);
+    const surface = req.query.surface === 'creation' ? 'creation' : 'chat';
+    const page = getUserConversations(req.user!.uid, limit + 1, offset, scope.domain, scope.orgId, agentId, surface);
     const hasMore = page.length > limit;
     const visiblePage = page.slice(0, limit);
     const histories = listConversationPreviewMessages(visiblePage.map(conversation => conversation.id), 12);
@@ -105,7 +106,9 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     const scope = getConversationScope(req);
     if (scope.domain === 'work' && !scope.orgId) return res.json({ activeConversation: null });
     const agentId = (req.query.agentId as string | undefined) || undefined;
-    const activeConversation = getActiveConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
+    const activeConversation = req.query.surface === 'creation'
+      ? getUserConversations(req.user!.uid, 1, 0, scope.domain, scope.orgId, agentId, 'creation')[0] || null
+      : getActiveConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
     res.json({ activeConversation });
   });
 
@@ -115,9 +118,10 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
       return res.status(403).json({ error: 'A connected organization is required for a work conversation' });
     }
     const agentId = String(req.body?.agentId || req.query?.agentId || 'lumi').trim() || 'lumi';
-    const isolated = req.body?.activation === 'isolated';
+    const surface = req.query.surface === 'creation' || req.body?.surface === 'creation' ? 'creation' : undefined;
+    const isolated = surface || req.body?.activation === 'isolated';
     const conversation = isolated
-      ? startIsolatedConversation(req.user!.uid, agentId, scope.domain, scope.orgId)
+      ? startIsolatedConversation(req.user!.uid, agentId, scope.domain, scope.orgId, surface)
       : startNewConversation(req.user!.uid, agentId, scope.domain, scope.orgId);
     res.status(201);
     await sendDurableMutation(req, res, { conversation }, undefined, { retryable: false });
@@ -132,7 +136,7 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     }
 
     const agentId = (req.query.agentId as string | undefined) || undefined;
-    const owner = { userId: req.user!.uid, ...scope, agentId };
+    const owner = { userId: req.user!.uid, ...scope, agentId, surface: req.query.surface === 'creation' ? 'creation' as const : 'chat' as const };
     const conversationIds = listConversationHeaders(owner).map(conversation => conversation.id);
     const results = listUserInteractions(req.user!.uid, { conversationIds })
       .filter(item => item.role !== 'tool')

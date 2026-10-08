@@ -160,12 +160,13 @@ export function startNewConversation(userId: string, agentId?: string, domain?: 
  * returned conversationId; the closed status keeps it out of normal active
  * conversation selection while still allowing bound turns to run.
  */
-export function startIsolatedConversation(userId: string, agentId?: string, domain?: string, orgId?: string): Conversation {
+export function startIsolatedConversation(userId: string, agentId?: string, domain?: string, orgId?: string, surface?: 'creation'): Conversation {
   const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   if (!db.conversations) db.conversations = [];
   const scope = resolveConversationScope(domain, orgId);
   const now = new Date().toISOString();
   const conversation: Conversation = newConversationRecord(userId, agentId, scope, 'closed', now);
+  if (surface) conversation.surface = surface;
   db.conversations.push(conversation);
   commitDatabaseTables(db);
   return conversation;
@@ -430,6 +431,7 @@ export function getActiveConversation(userId: string, agentId?: string, domainOr
   const active = db.conversations
     .filter((c: Conversation) => {
       if (c.userId !== userId) return false;
+      if (c.surface === 'creation') return false;
       if (agentId && c.agentId !== agentId) return false;
       if (c.status !== 'active') return false;
       return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
@@ -459,12 +461,14 @@ export function getUserConversations(
   domainOrOrgId?: string,
   orgIdMaybe?: string,
   agentId?: string,
+  surface: 'chat' | 'creation' = 'chat',
 ): Conversation[] {
   const db = readDatabaseTables(["conversationActionReceipts","conversationActionTasks","conversationActionTurns","conversations","interactions","modelRoutingReceipts"]);
   if (!db.conversations) return [];
   const conversations = db.conversations
     .filter((c: Conversation) => {
       if (c.userId !== userId) return false;
+      if ((c.surface || 'chat') !== surface) return false;
       if (agentId && c.agentId !== agentId) return false;
       return conversationMatchesScope(c, domainOrOrgId, orgIdMaybe);
     })
@@ -491,6 +495,7 @@ export function activateConversation(
     conversation.id === conversationId
     && conversation.userId === userId
     && conversation.agentId === agentId
+    && conversation.surface !== 'creation'
     && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
   ));
   if (!target) return null;

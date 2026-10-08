@@ -60,7 +60,7 @@ describe('native file drop listener ownership', () => {
   });
 });
 
-function historyHarness() {
+function historyHarness(isCreationWorkspace = false) {
   const requests: Array<ReturnType<typeof deferred<any>>> = [];
   const current = { current: 'conversation-a' };
   const messagesRef = { current: [{ id: 'old-visible' }] as any[] };
@@ -69,7 +69,7 @@ function historyHarness() {
   const ledger = new ChatRequestLedger();
   const setMessages = callback('setMessages', { messagesRef, messagesRevisionRef, setMessageState: noop });
   const handler = callback('onConversationUpdated', {
-    agentId: 'lumi', attachmentConversationIdRef: current,
+    agentId: 'lumi', attachmentConversationIdRef: current, isCreationWorkspace, CREATION_EXECUTION_SOURCE: 'ai-creation',
     bindAttachmentContextToConversation: (id: string) => { current.current = id; work.invalidate(); },
     shouldReloadPersistedConversation, socket: { id: 'current-client' },
     chatRequestLedgerRef: { current: ledger },
@@ -85,6 +85,16 @@ const event = { agentId: 'lumi', conversationId: 'conversation-a', source: 'voic
 const reply = (id: string) => ({ json: async () => ({ messages: [{ id }] }) });
 
 describe('chat view asynchronous history ownership', () => {
+  it('ignores the other workspace even before a conversation has been selected', () => {
+    for (const creation of [false, true]) {
+      const h = historyHarness(creation);
+      h.current.current = '';
+      h.handler({ ...event, conversationId: 'other-surface', source: creation ? 'chat' : 'ai-creation' });
+      expect(h.current.current).toBe('');
+      expect(h.requests).toHaveLength(0);
+    }
+  });
+
   it('applies history when the conversation and its messages are unchanged', async () => {
     const h = historyHarness();
     h.handler(event);

@@ -39,6 +39,7 @@ import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
 import { MediaGenerationStudio, type MediaGenerationRequest, type MediaGenerationSourceChange, type MediaGenerationSourceSlot, type MediaGenerationStudioStatus, MediaGenerationStudioProps } from "../MediaGenerationStudio";
 import { type MediaGenerationArtifact, type MediaGenerationKind, type MediaGenerationSourceOperation } from '@/lib/mediaGenerationArtifacts';
 
+const CreationWorkspace = React.lazy(() => import('../AgentChatPage').then(module => ({ default: module.AgentChatPage })));
 const ChatSongWorkbench = React.lazy(() => import('../ChatSongWorkbench'));
 export type AgentChatViewInput = {
 isOpen: boolean;
@@ -46,7 +47,8 @@ previewFile: ChatPreviewFile;
 isZh: boolean;
 setPreviewFile: React.Dispatch<React.SetStateAction<ChatPreviewFile>>;
 openChatFileInSystem: (file: Pick<ChatFilePanelItem, "fileName" | "fileId" | "path" | "openUrl" | "saveUrl">) => Promise<void>;
-layout: "standalone" | "command-center";
+layout: "standalone" | "command-center" | "creation";
+onReferenceArtifact?: (artifact: MediaGenerationArtifact) => void;
 commandCenterView: CommandCenterView;
 resolvedAppearanceMode: "light" | "dark";
 prefersReducedMotion: boolean;
@@ -203,7 +205,15 @@ deletingConversationId: string;
 deleteConversationFromHistory: (conversationId: string) => Promise<void>;
 };
 export function AgentChatView(input: AgentChatViewInput) {
-  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, uploadMediaSourceImage, isOfficeCommandCenter, mediaStudioMode, isTyping, mediaSourceUploading, mediaVideoOptions, mediaVideoOptionsLoading, mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts, knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio, availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio, handleMediaSourceChange, isWorkChat, setChatSongOpen, chatSongOpen, user, chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, closeMediaGenerationStudio, setMediaGeneration, mediaGenerationText, cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
+  const { isOpen, previewFile, isZh, setPreviewFile, openChatFileInSystem, layout, commandCenterView, resolvedAppearanceMode, prefersReducedMotion, handleChatDragOver, handleChatDragLeave, handleChatDrop, chatAccentTheme, fileInputRef, uploadChatAttachments, isOfficeCommandCenter, mediaStudioMode, appendPendingAttachments, requestCloseCreativeStudio, openMediaGenerationStudio, user, mediaGenerationText, isDraggingFiles, showWeChatSettings, setShowWeChatSettings, t, isCommandCenterUtility, onCommandCenterViewChange, onOpenNexus, runtimeStatus, runtimeStatusLoading, runtimeStatusError, refreshRuntimeStatus, workflowTaskActive, workflowStatus, chatProgressStatusText, conversationHistoryOpen, toggleConversationHistory, chatPanelStyle, commandCenterPlannerOpen, attachmentConversationIdRef, setDraftText, setCommandCenterPlannerOpen, messageInputRef, onOpenMemoryAvatar, onOpenKnowledge, knowledgeStatusText, conversationContextMenu, setConversationContextMenu, deletingConversationId, deleteConversationFromHistory } = input;
+
+  const [creationLoaded, setCreationLoaded] = React.useState(false);
+  React.useEffect(() => { if (mediaStudioMode) setCreationLoaded(true); }, [mediaStudioMode]);
+  if (layout === 'creation') return <div hidden={!isOpen} className="absolute inset-0" data-creation-workspace>
+    {isOpen && previewFile && <ChatFilePreview file={previewFile} isZh={isZh} onClose={() => setPreviewFile(null)}
+      onOpenSystem={() => openChatFileInSystem({ fileName: previewFile.fileName, path: previewFile.path, openUrl: previewFile.url, saveUrl: previewFile.url })} />}
+    {mediaStudioMode && renderCreationStudio(input)}
+  </div>;
 
   return (
     <AnimatePresence>
@@ -245,83 +255,27 @@ export function AgentChatView(input: AgentChatViewInput) {
         onChange={(e) => { void uploadChatAttachments(e.target.files); e.target.value = ''; }}
       />
       <AnimatePresence>
-        {isOfficeCommandCenter && mediaStudioMode && (
+        {isOfficeCommandCenter && (creationLoaded || mediaStudioMode) && (
           <motion.div
             data-media-generation-studio
+            hidden={!mediaStudioMode}
             initial={prefersReducedMotion ? false : { opacity: 0, x: '3%' }}
             animate={{ opacity: 1, x: 0 }}
             exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, x: '3%' }}
             transition={{ duration: prefersReducedMotion ? 0 : 0.22, ease: [0.25, 0.1, 0.25, 1] }}
             className="absolute inset-0 z-[214]"
           >
-            <MediaGenerationStudio
-              mode={mediaStudioMode}
-              locale={isZh ? 'zh' : 'en'}
-              videoOptions={mediaVideoOptions}
-              busy={isTyping || mediaSourceUploading || mediaVideoOptionsLoading || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
-              status={mediaGenerationStatus}
-              statusDetail={mediaGenerationDetail}
-              artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
-              libraryArtifacts={libraryMediaArtifacts}
-              libraryLoading={knowledgeLoading}
-              libraryFailed={knowledgeFailed}
-              onRefreshLibrary={refreshKnowledgeFiles}
-              onReferenceArtifact={artifact => {
-                const result = appendPendingAttachments([createChatAttachmentReference({
-                  fileId: artifact.fileId, fileName: artifact.fileName, path: artifact.path,
-                  kind: artifact.kind === 'image' ? 'image' : 'file', openUrl: artifact.url,
-                })]);
-                if (result.added.length) void requestCloseCreativeStudio();
-              }}
-              sourceArtifacts={availableMediaSourceArtifacts}
-              {...mediaSources}
-              retryRequest={mediaGenerationRetryRequest}
-              onModeChange={openMediaGenerationStudio}
-              onSourceChange={handleMediaSourceChange}
-              onUploadSourceImage={uploadMediaSourceImage}
-              onClose={() => { void requestCloseCreativeStudio(); }}
-              onOpenChatSong={!isWorkChat ? () => { void refreshKnowledgeFiles(); setChatSongOpen(true); } : undefined}
-              chatSongActive={chatSongOpen && !isWorkChat}
-              onSelectMedia={mode => { setChatSongOpen(false); openMediaGenerationStudio(mode); }}
-              chatSongContent={!isWorkChat && <React.Suspense fallback={<div role="status" className="m-auto text-white/50"><Loader2 className="animate-spin" /></div>}>
-                <ChatSongWorkbench
-                  key={user?.uid}
-                  ref={chatSongWorkbenchRef}
-                  embedded
-                  locale={isZh ? 'zh' : 'en'}
-                  files={knowledgeFiles}
-                  libraryFailed={knowledgeFailed}
-                  busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
-                  onRefreshLibrary={refreshKnowledgeFiles}
-                  onClose={() => setChatSongOpen(false)}
-                  onGenerate={request => {
-                    setChatSongOpen(false);
-                    openMediaGenerationStudio(request.mode);
-                    generateMediaFromStudio(request);
-                  }}
-                  onTask={async prompt => {
-                    const requestId = await sendText(prompt, [], { includeConversationAttachments: false });
-                    if (requestId) closeMediaGenerationStudio();
-                    return requestId;
-                  }}
-                />
-              </React.Suspense>}
-              onGenerate={generateMediaFromStudio}
-              onCancel={() => {
-                setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
-                cancelActiveChat();
-              }}
-              onRetry={generateMediaFromStudio}
-              onOpenArtifact={openMediaGenerationArtifact}
-              onContinueEdit={() => {
-                setMediaGeneration({ status: 'idle', detail: '' });
-              }}
-              onUseAsVideoReference={() => {
-                setMediaGeneration({ status: 'idle', detail: '' });
-              }}
-              onArtifactReady={markMediaGenerationArtifactReady}
-              onArtifactError={markMediaGenerationArtifactFailed}
-            />
+            <React.Suspense fallback={<div role="status" className="m-auto text-white/50"><Loader2 className="animate-spin" /></div>}>
+              <CreationWorkspace t={t} user={user} layout="creation" isOpen={isOpen && Boolean(mediaStudioMode)}
+                onClose={() => { void requestCloseCreativeStudio(); }}
+                onReferenceArtifact={artifact => {
+                  const result = appendPendingAttachments([createChatAttachmentReference({
+                    fileId: artifact.fileId, fileName: artifact.fileName, path: artifact.path,
+                    kind: artifact.kind === 'image' ? 'image' : 'file', openUrl: artifact.url,
+                  })]);
+                  if (result.added.length) void requestCloseCreativeStudio();
+                }} />
+            </React.Suspense>
           </motion.div>
         )}
       </AnimatePresence>
@@ -625,4 +579,84 @@ export function AgentChatView(input: AgentChatViewInput) {
       )}
     </AnimatePresence>
   );
+}
+
+function renderCreationStudio(input: AgentChatViewInput) {
+  const {
+    isZh, mediaStudioMode, mediaVideoOptions, isTyping, mediaSourceUploading, mediaVideoOptionsLoading,
+    mediaGenerationStatus, mediaGenerationDetail, mediaGenerationArtifacts, libraryMediaArtifacts,
+    knowledgeLoading, knowledgeFailed, refreshKnowledgeFiles, appendPendingAttachments, requestCloseCreativeStudio,
+    availableMediaSourceArtifacts, mediaSources, mediaGenerationRetryRequest, openMediaGenerationStudio,
+    handleMediaSourceChange, uploadMediaSourceImage, isWorkChat, setChatSongOpen, chatSongOpen, user,
+    chatSongWorkbenchRef, knowledgeFiles, generateMediaFromStudio, sendText, setMediaGeneration, mediaGenerationText,
+    cancelActiveChat, openMediaGenerationArtifact, markMediaGenerationArtifactReady, markMediaGenerationArtifactFailed,
+  } = input;
+  return (<MediaGenerationStudio
+              mode={mediaStudioMode}
+              locale={isZh ? 'zh' : 'en'}
+              videoOptions={mediaVideoOptions}
+              busy={isTyping || mediaSourceUploading || mediaVideoOptionsLoading || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+              taskActivity={chatSongOpen && (input.messages.length > 0 || isTyping) ? <div className="max-h-52 overflow-y-auto">{renderChatMessageFeed({ ...input, visibleSuggestions: [] })}</div> : undefined}
+              status={mediaGenerationStatus}
+              statusDetail={mediaGenerationDetail}
+              artifacts={mediaGenerationArtifacts.filter(artifact => artifact.kind === mediaStudioMode)}
+              libraryArtifacts={libraryMediaArtifacts}
+              libraryLoading={knowledgeLoading}
+              libraryFailed={knowledgeFailed}
+              onRefreshLibrary={refreshKnowledgeFiles}
+              onReferenceArtifact={input.onReferenceArtifact || (artifact => {
+                const result = appendPendingAttachments([createChatAttachmentReference({
+                  fileId: artifact.fileId, fileName: artifact.fileName, path: artifact.path,
+                  kind: artifact.kind === 'image' ? 'image' : 'file', openUrl: artifact.url,
+                })]);
+                if (result.added.length) void requestCloseCreativeStudio();
+              })}
+              sourceArtifacts={availableMediaSourceArtifacts}
+              {...mediaSources}
+              retryRequest={mediaGenerationRetryRequest}
+              onModeChange={openMediaGenerationStudio}
+              onSourceChange={handleMediaSourceChange}
+              onUploadSourceImage={uploadMediaSourceImage}
+              onClose={() => { void requestCloseCreativeStudio(); }}
+              onOpenChatSong={!isWorkChat ? () => { void refreshKnowledgeFiles(); setChatSongOpen(true); } : undefined}
+              chatSongActive={chatSongOpen && !isWorkChat}
+              onSelectMedia={mode => { setChatSongOpen(false); openMediaGenerationStudio(mode); }}
+              chatSongContent={!isWorkChat && <React.Suspense fallback={<div role="status" className="m-auto text-white/50"><Loader2 className="animate-spin" /></div>}>
+                <ChatSongWorkbench
+                  key={user?.uid}
+                  ref={chatSongWorkbenchRef}
+                  embedded
+                  locale={isZh ? 'zh' : 'en'}
+                  files={knowledgeFiles}
+                  libraryFailed={knowledgeFailed}
+                  busy={isTyping || mediaGenerationStatus === 'submitting' || mediaGenerationStatus === 'generating' || mediaGenerationStatus === 'cancelling'}
+                  onRefreshLibrary={refreshKnowledgeFiles}
+                  onClose={() => setChatSongOpen(false)}
+                  onGenerate={request => {
+                    setChatSongOpen(false);
+                    openMediaGenerationStudio(request.mode);
+                    generateMediaFromStudio(request);
+                  }}
+                  onTask={async prompt => {
+                    const requestId = await sendText(prompt, [], { includeConversationAttachments: false });
+                    return requestId;
+                  }}
+                />
+              </React.Suspense>}
+              onGenerate={generateMediaFromStudio}
+              onCancel={() => {
+                setMediaGeneration({ status: 'cancelling', detail: mediaGenerationText.statusCancelling });
+                cancelActiveChat();
+              }}
+              onRetry={generateMediaFromStudio}
+              onOpenArtifact={openMediaGenerationArtifact}
+              onContinueEdit={() => {
+                setMediaGeneration({ status: 'idle', detail: '' });
+              }}
+              onUseAsVideoReference={() => {
+                setMediaGeneration({ status: 'idle', detail: '' });
+              }}
+              onArtifactReady={markMediaGenerationArtifactReady}
+              onArtifactError={markMediaGenerationArtifactFailed}
+            />);
 }

@@ -1,7 +1,7 @@
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
-import { addMessageIdempotent, getOrCreateActiveConversation, startNewConversation } from '../server/conversation/manager';
+import { addMessageIdempotent, getActiveConversation, getUserConversations, getOrCreateActiveConversation, startNewConversation } from '../server/conversation/manager';
 import { resolveConversationForEntry } from '../server/conversation/entry_conversation';
 
 const personal = { domain: 'personal', orgId: '' };
@@ -9,6 +9,21 @@ const uid = () => crypto.randomUUID();
 const chat = (requestId: string) => ({ kind: 'chat' as const, phase: 'select' as const, agentId: 'lumi', requestId, source: 'chat' });
 describe('conversation identity shared by transport entries', () => {
   beforeAll(async () => { await initDatabase(); });
+
+  it('keeps creation jobs in an isolated transcript without moving or entering normal chat history', () => {
+    const userId = uid(), active = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
+    const entry = { ...chat(uid()), source: 'ai-creation' };
+    const created = resolveConversationForEntry(userId, personal, entry)!;
+    expect(created).toMatchObject({ status: 'closed', surface: 'creation' });
+    expect(created.id).not.toBe(active.id);
+    expect(getActiveConversation(userId, 'lumi', 'personal', '')?.id).toBe(active.id);
+    expect(getUserConversations(userId, 20, 0, 'personal', '', 'lumi').map(row => row.id)).toEqual([active.id]);
+    expect(getUserConversations(userId, 20, 0, 'personal', '', 'lumi', 'creation').map(row => row.id)).toEqual([created.id]);
+    expect(resolveConversationForEntry(userId, personal, entry, active.id)).toBeNull();
+    expect(resolveConversationForEntry(userId, personal, chat(uid()), created.id)).toBeNull();
+    addMessageIdempotent({ userId, agentId: 'lumi', conversationId: created.id, role: 'user', content: 'independent image', requestId: entry.requestId, source: 'ai-creation', channel: 'chat', ...personal, deferActionPreparation: true });
+    expect(resolveConversationForEntry(userId, personal, entry)?.id).toBe(created.id);
+  });
 
   it('chat and voice use the same active owner and explicit archived transcripts', () => {
     const userId = uid();
