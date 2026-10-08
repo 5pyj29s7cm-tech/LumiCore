@@ -44,7 +44,7 @@ import {
 import { DEFAULT_MODELS, getUserPreferredLLM, upsertUserPreferredLLM } from "../llm/user_preferences";
 import { listModelRoutingReceipts } from "../llm/model_routing_receipts";
 import {
-  assessProviderAvailability,
+  createProviderAvailabilityReader,
   saveProviderProbe,
 } from "../llm/provider_health";
 import {
@@ -837,13 +837,14 @@ function mountModelDiagnosticRoutes(router: Router, llm: TestableModelRuntime) {
       const lmstudioConfig = getLocalModelConfig('lmstudio');
       const reasoningPreference = getUserPreferredLLM(req.user!.uid);
       const extensionProviders = listRegisteredProviders(req.user!.uid).map(({ userId: _userId, ...provider }) => provider);
+      const assessAvailability = createProviderAvailabilityReader();
       const status = (
         provider: string,
         configured: boolean,
         model: string,
         runtimeHealthy = false,
       ) => ({
-        ...assessProviderAvailability({ provider, configured, model, runtimeHealthy }),
+        ...assessAvailability({ provider, configured, model, runtimeHealthy }),
         model,
       });
       const dynamicProviders = Object.fromEntries(extensionProviders.map(provider => {

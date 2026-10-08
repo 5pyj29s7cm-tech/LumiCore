@@ -200,10 +200,14 @@ export function listModelRoutingReceipts(
     .map((receipt: ModelRoutingReceipt) => cloneDatabaseValue(receipt));
 }
 
-export function findProviderRuntimeObservation(provider: string, model: string, configurationEpoch?: string): ProviderRuntimeObservation | null {
+/** One detached receipt snapshot for all providers in a status response. */
+export function createProviderRuntimeObservationReader() {
+  let receipts: any[] = [];
   try {
     const db = readDatabaseTables(["modelRoutingReceipts"]);
-    const receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
+    receipts = Array.isArray(db.modelRoutingReceipts) ? db.modelRoutingReceipts : [];
+  } catch {}
+  return (provider: string, model: string, configurationEpoch?: string): ProviderRuntimeObservation | null => {
     for (let receiptIndex = receipts.length - 1; receiptIndex >= 0; receiptIndex -= 1) {
       const receipt = receipts[receiptIndex] as any;
       const attempts = Array.isArray(receipt?.attempts) ? receipt.attempts : [];
@@ -226,6 +230,10 @@ export function findProviderRuntimeObservation(provider: string, model: string, 
         };
       }
     }
-  } catch {}
-  return null;
+    return null;
+  };
+}
+
+export function findProviderRuntimeObservation(provider: string, model: string, configurationEpoch?: string): ProviderRuntimeObservation | null {
+  return createProviderRuntimeObservationReader()(provider, model, configurationEpoch);
 }

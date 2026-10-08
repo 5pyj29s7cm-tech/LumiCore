@@ -1,5 +1,5 @@
 import { readSettingJson, writeSetting } from '../persistence/settings_repository';
-import { findProviderRuntimeObservation } from './model_routing_receipts';
+import { createProviderRuntimeObservationReader, findProviderRuntimeObservation } from './model_routing_receipts';
 import { getCircuitStatus, getProviderConfigurationEpoch, type CircuitState } from '../cloud/circuit_breaker';
 
 export interface ProviderProbeRecord {
@@ -88,20 +88,32 @@ export function getProviderCircuitState(provider: string, model = ''): CircuitSt
  * Separate configuration from observed health. A key/client is necessary to
  * attempt a provider, but it is not proof that the provider can answer.
  */
-export function assessProviderAvailability(input: {
+type ProviderAvailabilityInput = {
   provider: string;
   model: string;
   configured: boolean;
   runtimeHealthy?: boolean;
   now?: number;
-}): ProviderAvailability {
+};
+
+/** A fresh request-scoped snapshot; never cache health across configuration changes. */
+export function createProviderAvailabilityReader(): (input: ProviderAvailabilityInput) => ProviderAvailability {
+  const readObservation = createProviderRuntimeObservationReader();
+  return input => assessProviderAvailabilityFromSnapshot(input, readObservation);
+}
+
+export function assessProviderAvailability(input: ProviderAvailabilityInput): ProviderAvailability {
+  return createProviderAvailabilityReader()(input);
+}
+
+function assessProviderAvailabilityFromSnapshot(input: ProviderAvailabilityInput, readObservation: typeof findProviderRuntimeObservation): ProviderAvailability {
   const now = input.now ?? Date.now();
   const lastProbe = readProviderProbe(input.provider);
-  const lastObservation = readProviderRuntimeObservation(input.provider, input.model);
+  const lastObservation = readObservation(input.provider, input.model);
   const applicableProbe = probeAppliesToModel(lastProbe, input.model) ? lastProbe : null;
   const configurationEpoch = getProviderConfigurationEpoch(input.provider);
   const observation = lastObservation?.configurationEpoch === configurationEpoch ? lastObservation
-    : findProviderRuntimeObservation(input.provider, input.model, configurationEpoch);
+    : readObservation(input.provider, input.model, configurationEpoch);
   const circuitState = getProviderCircuitState(input.provider, input.model);
 
   if (!input.configured) {
