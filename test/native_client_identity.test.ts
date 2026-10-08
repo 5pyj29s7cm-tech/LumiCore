@@ -146,7 +146,9 @@ describe('native client process identity', () => {
       nativeClientIdentity: claim,
     });
 
-    expect(emitted).toEqual([]);
+    expect(emitted).toEqual([{ event: 'device:registered', payload: {
+      socketId: socket.id, deviceId: deviceRegistry.getUserDevices(userId)[0].id, executable: true,
+    } }]);
     expect(socket.join).toHaveBeenCalledTimes(1);
     expect(deviceRegistry.getUserDevices(userId)).toHaveLength(1);
     expect(deviceRegistry.getUserDevices(userId)[0].nativeClientIdentity).toEqual(bound);
@@ -160,6 +162,19 @@ describe('native client process identity', () => {
       executionSessionId: '9'.repeat(64),
       nativeClientIdentitySha256: nativeClientIdentitySha256(bound),
     });
+  });
+
+  it('reports internal registration failure without issuing an accepted receipt', () => {
+    const userId = 'native-register-failure-' + Date.now();
+    const browser = socketHarness({ id: 'register-failure', userId });
+    const failure = vi.spyOn(deviceRegistry, 'register').mockImplementationOnce(() => { throw new Error('synthetic registry failure'); });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      browser.handlers.get('device:register')?.({ type: 'web' });
+      expect(browser.emitted).toEqual([{ event: 'device:registration_error', payload: {
+        socketId: browser.socket.id, code: 'REGISTRATION_FAILED', message: 'Device registration could not be completed.',
+      } }]);
+    } finally { failure.mockRestore(); log.mockRestore(); }
   });
 
   it('never emits a native request binding before exact trusted Tauri registration', () => {

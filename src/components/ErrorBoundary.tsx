@@ -14,6 +14,7 @@ function getT() {
 interface ErrorBoundaryProps {
   children: React.ReactNode;
   fallback?: React.ReactNode;
+  surfaceId?: string;
 }
 
 interface ErrorBoundaryState {
@@ -49,7 +50,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="flex items-center justify-center min-h-[60vh]"
+          data-lumi-failed-surface={this.props.surfaceId}
+          className={`flex items-center justify-center ${this.props.surfaceId ? 'min-h-[180px]' : 'min-h-[60vh]'}`}
         >
           <div className="glass-dark rounded-[2.5rem] p-8 border border-white/10 max-w-sm text-center space-y-5">
             <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
@@ -70,13 +72,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 <RefreshCw size={12} />
                 {t.errorRetry || 'Retry'}
               </button>
-              <button
+              {!this.props.surfaceId && <button
                 onClick={() => window.location.reload()}
                 className="px-5 py-2.5 rounded-xl bg-celestial-saturn/10 border border-celestial-saturn/20 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-celestial-saturn hover:bg-celestial-saturn/20 transition-colors"
               >
                 <Home size={12} />
                 {t.errorReload || 'Reload'}
-              </button>
+              </button>}
             </div>
           </div>
         </motion.div>

@@ -172,6 +172,7 @@ struct WindowActivationDiagnosticsState {
 #[derive(Default)]
 struct DesktopWidgetState {
     enabled: bool,
+    transitioning: bool,
     previous_size: Option<tauri::PhysicalSize<u32>>,
     previous_position: Option<tauri::PhysicalPosition<i32>>,
     was_fullscreen: bool,

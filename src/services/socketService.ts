@@ -164,6 +164,14 @@ function startWatchdog(socket: Socket) {
   };
 }
 
+export interface DeviceRegistration {
+  status: 'disconnected' | 'pending' | 'registered' | 'rejected';
+  socketId?: string;
+  deviceId?: string;
+  executable?: boolean;
+  code?: string;
+}
+
 class SocketService {
   private socket: Socket | null = null;
   private token: string | null = null;
@@ -171,6 +179,35 @@ class SocketService {
   private watchdogCleanup: (() => void) | null = null;
   private nativeProofRefreshInFlight = false;
   private lastNativeProofRefreshAt = 0;
+  private registration: DeviceRegistration = { status: 'disconnected' };
+  private registrationListeners = new Set<() => void>();
+  private registrationTimer: ReturnType<typeof setTimeout> | null = null;
+
+  getDeviceRegistration = () => this.registration;
+  subscribeDeviceRegistration = (listener: () => void) => {
+    this.registrationListeners.add(listener);
+    return () => { this.registrationListeners.delete(listener); };
+  };
+
+  private setDeviceRegistration(value: DeviceRegistration) {
+    if (this.registrationTimer) clearTimeout(this.registrationTimer);
+    this.registrationTimer = null;
+    this.registration = value;
+    for (const listener of this.registrationListeners) listener();
+  }
+
+  beginDeviceRegistration(socketId: string) {
+    if (!this.socket?.connected || this.socket.id !== socketId) return false;
+    this.setDeviceRegistration({ status: 'pending', socketId });
+    this.registrationTimer = setTimeout(() => this.rejectDeviceRegistration(socketId, 'REGISTRATION_TIMEOUT'), 8_000);
+    return true;
+  }
+
+  rejectDeviceRegistration(socketId: string, code: string) {
+    if (!this.socket?.connected || this.socket.id !== socketId) return;
+    this.setDeviceRegistration({ status: 'rejected', socketId, code });
+    recordRuntimeEvent('device_registration_rejected', { code });
+  }
 
   private async refreshExpiredNativeProof(reason: string) {
     if (!isNativeDesktopRuntime() || this.nativeProofRefreshInFlight) return;
@@ -219,10 +256,12 @@ class SocketService {
 
       this.socket.on("connect", () => {
         console.log("[SocketService] Connected, id:", this.socket?.id);
+        this.beginDeviceRegistration(this.socket!.id!);
       });
 
       this.socket.on("disconnect", (reason) => {
         console.log("[SocketService] Disconnected:", reason);
+        this.setDeviceRegistration({ status: 'disconnected' });
       });
 
       this.socket.on("connect_error", (err) => {
@@ -230,6 +269,18 @@ class SocketService {
         if ((err as any)?.data?.code === 'DESKTOP_SESSION_PROOF_REQUIRED') {
           void this.refreshExpiredNativeProof('socket_connect_error');
         }
+      });
+
+      this.socket.on('device:registered', (receipt: any) => {
+        if (!this.socket?.connected || receipt?.socketId !== this.socket.id
+          || typeof receipt.deviceId !== 'string' || !receipt.deviceId
+          || typeof receipt.executable !== 'boolean') return;
+        this.setDeviceRegistration({ status: 'registered', socketId: receipt.socketId, deviceId: receipt.deviceId, executable: receipt.executable });
+      });
+      this.socket.on('device:registration_error', (error: any) => {
+        if (error?.socketId !== this.socket?.id || typeof error?.code !== 'string') return;
+        this.rejectDeviceRegistration(error.socketId, error.code);
+        if (error.code === 'DESKTOP_SESSION_PROOF_REQUIRED') void this.refreshExpiredNativeProof('device_registration_error');
       });
 
       this.socket.on('runtime:execution_boundary', (boundary: any) => {
@@ -270,6 +321,7 @@ class SocketService {
   }
 
   disconnect() {
+    this.setDeviceRegistration({ status: 'disconnected' });
     if (this.watchdogCleanup) {
       this.watchdogCleanup();
       this.watchdogCleanup = null;

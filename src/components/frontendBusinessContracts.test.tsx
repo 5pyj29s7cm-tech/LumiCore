@@ -28,12 +28,16 @@ import { LUMI_OFFICIAL_BASE_URL, normalizeLumiOfficialBaseUrl } from '../../shar
 import { extractSourceExpression } from '../../test/source_expression';
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), error: vi.fn(), success: vi.fn(), on: vi.fn(), off: vi.fn() }));
-const socketState = vi.hoisted(() => ({ enabled: true }));
+const socketState = vi.hoisted(() => ({ enabled: true, registration: { status: 'disconnected' } }));
 const account = vi.hoisted(() => ({ user: { uid: 'synthetic-user', role: 'admin' } as { uid: string; role: string; orgId?: string } | null, workDomain: 'personal' as 'personal' | 'work', orgConnection: null as { orgId: string } | null }));
 vi.mock('@/contexts/AppContext', () => ({ useApp: () => account }));
 vi.mock('sonner', () => ({ toast: { error: mocks.error, success: mocks.success, info: vi.fn() } }));
 vi.mock('@/hooks/useSocket', () => ({ useSocket: () => socketState.enabled ? mocks : null }));
-vi.mock('@/services/socketService', () => ({ socketService: { getSocket: () => mocks } }));
+vi.mock('@/services/socketService', () => ({ socketService: {
+  getSocket: () => mocks,
+  getDeviceRegistration: () => socketState.registration,
+  subscribeDeviceRegistration: () => () => {},
+} }));
 vi.mock('./NodeDetailPanel', () => ({ NodeDetailPanel: () => null }));
 vi.mock('./PersonalityEvolution', () => ({ PersonalityEvolution: ({ personalityId }: any) => <div data-testid="evolution-owner">{personalityId}</div> }));
 vi.mock('./MemoryTree', () => ({
@@ -566,7 +570,7 @@ describe('business views wait for the owning backend result', () => {
     }));
     const view = render(<DeviceSyncCenter t={{}} />); await screen.findByText('Old device');
     const reads = () => mocks.fetch.mock.calls.filter(([url]) => url.endsWith('/devices')).length;
-    next = true; act(() => { for (const event of ['devices:update', 'device:removed', 'connect']) mocks.on.mock.calls.find(([name]) => name === event)![1]({ name: 'Untrusted event device' }); });
+    next = true; act(() => { for (const event of ['device:registered', 'devices:update', 'device:removed', 'connect']) mocks.on.mock.calls.find(([name]) => name === event)![1]({ name: 'Untrusted event device' }); });
     await screen.findByText('New device'); expect(reads()).toBe(2); await waitFor(() => expect(screen.queryByText('Old device')).toBeNull());
     expect(screen.getByText('2 online · Audio: yes · Video: yes')).toBeTruthy(); expect(screen.getByRole('button', { name: 'PAIRED' })).toBeTruthy();
     const timers = vi.spyOn(globalThis, 'setTimeout'), cancel = vi.spyOn(globalThis, 'clearTimeout');

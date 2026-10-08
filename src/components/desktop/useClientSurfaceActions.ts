@@ -15,8 +15,8 @@ type ClientActionRuntime = Pick<ReturnType<typeof useApp>, 'orgConnection' | 'wo
   openSurface: (target: string) => void;
   closeSurface: (target: string) => void;
   openCommandCenter: (view: CommandCenterView) => void;
-  enterDesktopWidgetMode: () => Promise<void>;
-  exitDesktopWidgetMode: (target?: string) => Promise<void>;
+  enterDesktopWidgetMode: () => Promise<boolean>;
+  exitDesktopWidgetMode: (target?: string) => Promise<boolean>;
   endMeetingAndReport: () => Promise<void>;
   resetMeetingCapture: () => void;
   setMeetingPaused: (paused: boolean) => void;
@@ -32,8 +32,7 @@ type ClientActionRuntime = Pick<ReturnType<typeof useApp>, 'orgConnection' | 'wo
 import { normalizeClientActionTarget as normalizeDesktopSurfaceTarget } from '../../../shared/client_surface_target';
 export { normalizeDesktopSurfaceTarget };
 
-async function waitForSurfaceCommit(target: string): Promise<true | undefined> {
-  if (['home', 'nexus', 'app-launcher', 'org', 'knowledge', 'notifications', 'memory-avatar'].includes(target)) return;
+async function waitForSurfaceCommit(target: string): Promise<true> {
   if (!await waitForClientSurfaceRendered(target)) {
     throw new Error(target === 'command-center'
       ? 'Lumi command center state changed, but the visible surface did not render.'
@@ -58,8 +57,10 @@ export function useClientSurfaceActions({
       const reject = typeof detail.reject === 'function' ? detail.reject : () => {};
 
       const openClientSurface = async (value: string) => {
-        if (isDesktopWidgetMode) void exitDesktopWidgetMode(normalizeDesktopSurfaceTarget(value));
-        else openSurface(value);
+        if (isDesktopWidgetMode && !await exitDesktopWidgetMode(normalizeDesktopSurfaceTarget(value))) {
+          throw new Error('Desktop widget could not expand.');
+        }
+        else if (!isDesktopWidgetMode) openSurface(value);
         return waitForSurfaceCommit(normalizeDesktopSurfaceTarget(value));
       };
 
@@ -169,13 +170,15 @@ export function useClientSurfaceActions({
           return;
         }
         if (action === 'enter_widget_mode' || action === 'show_desktop_widget') {
-          void enterDesktopWidgetMode();
-          respond({ ok: true, action, widgetMode: true });
+          if (!await enterDesktopWidgetMode()) throw new Error('Desktop widget could not open.');
+          await waitForSurfaceCommit('widget');
+          respond({ ok: true, action, widgetMode: true, rendered: true });
           return;
         }
         if (action === 'exit_widget_mode' || action === 'expand_from_widget') {
-          void exitDesktopWidgetMode(target || undefined);
-          respond({ ok: true, action, widgetMode: false, target: target || undefined });
+          if (!await exitDesktopWidgetMode(target || undefined)) throw new Error('Desktop widget could not expand.');
+          await waitForSurfaceCommit(normalizeDesktopSurfaceTarget(target) || 'home');
+          respond({ ok: true, action, widgetMode: false, target: target || undefined, rendered: true });
           return;
         }
         if (action === 'demo_open_surface') {

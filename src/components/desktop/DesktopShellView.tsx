@@ -1,3 +1,4 @@
+import { ClientSurface } from '../ClientSurface';
 import { renderShellChrome } from './shell_chrome_view';
 import { renderDesktopCoreStage } from './core_stage_view';
 import { renderDesktopGrid } from './desktop_grid_view';
@@ -11,7 +12,7 @@ import { type DesktopIconDefinition } from "./launcher";
 import { type MeetingNote } from "./runtime_state";
 import { type ProactiveChatDetail } from "./proactive_presentation";
 
-import React, { Suspense } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -97,7 +98,7 @@ toggleMute: () => void;
 isMuted: boolean;
 toggleWallpaperMode: () => void;
 time: Date;
-enterDesktopWidgetMode: () => Promise<void>;
+enterDesktopWidgetMode: () => Promise<boolean>;
 handleWindowMinimize: () => Promise<void>;
 handleWindowMaximize: () => Promise<void>;
 isCompactWindowMode: boolean;
@@ -310,7 +311,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             transition={{ duration: 1.2 }}
             className="lumi-ink-view fixed inset-0 z-0 overflow-hidden"
           >
-            <Suspense fallback={null}><InkWorldLazy syncRate={syncRate} /></Suspense>
+            <ClientSurface id="nexus"><InkWorldLazy syncRate={syncRate} /></ClientSurface>
           </motion.div>
         )}
       </AnimatePresence>
@@ -349,10 +350,10 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             </div>
 
             <div className="absolute left-8 top-24 flex flex-col gap-3 pointer-events-auto">
-              <Suspense fallback={null}>
+              <ClientSurface id="nexus-devices">
                 <MeshSyncSelector t={t} syncRate={syncRate} onSyncRateChange={setSyncRate} />
                 <ContributorNodePanel t={t} />
-              </Suspense>
+              </ClientSurface>
             </div>
           </motion.div>
         )}
@@ -372,6 +373,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
         className={`lumi-personal-surface absolute inset-0 z-[15] flex flex-col ${viewMode === 'world' ? 'pointer-events-none' : ''}`}
       >
         <div className="relative w-full h-full pointer-events-auto">
+          <ClientSurface id="home" active={viewMode !== 'world' && activeTab === 'home' && !chatOpen && !knowledgeOpen && !sanctuaryOpen && !memoryLabOpen}>
           {/* Central Interactive Entity */}
           {renderDesktopCoreStage(input)}
 
@@ -483,7 +485,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
         )}
       </AnimatePresence>
       {renderDesktopWindows(input)}
-
+          </ClientSurface>
         </div>
       </motion.div>
 
@@ -500,7 +502,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
 
       {/* Chat fullscreen overlay */}
       {chatLoaded && (
-        <Suspense fallback={null}>
+        <ClientSurface id="command-center" active={chatOpen}>
           <AgentChatPage
             t={t}
             user={user}
@@ -531,7 +533,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
               setChatAttachmentRequest(current => current?.requestId === requestId ? null : current);
             }}
           />
-        </Suspense>
+        </ClientSurface>
       )}
       {chatOpen && typeof document !== 'undefined' && createPortal(
         <AnimatePresence>
@@ -606,19 +608,19 @@ export function DesktopShellView(input: DesktopShellViewInput) {
             transition={{ duration: 0.3 }}
             className={`lumi-organization-fullscreen-surface lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep overflow-auto ${isWallpaperWorkbench ? 'lumi-organization-wallpaper' : ''}`}
           >
-            <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+            <ClientSurface id="org" fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <OrgPortal
                 initialMode={orgConnection?.connected ? 'select' : 'create'}
                 onBack={() => setActiveTab('home')}
               />
-            </Suspense>
+            </ClientSurface>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Sanctuary — fullscreen private Memory Avatar conversation */}
       {sanctuaryLoaded && (
-        <Suspense fallback={null}>
+        <ClientSurface id="memory-avatar" active={sanctuaryOpen}>
           <Sanctuary
             agent={sanctuaryAgent}
             lang={lang}
@@ -638,7 +640,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
               if (remaining.length === 0) { setSanctuaryOpen(false); setMemoryLabOpen(true); }
             }}
           />
-        </Suspense>
+        </ClientSurface>
       )}
 
       {/* Memory Avatar Lab fullscreen overlay */}
@@ -660,13 +662,13 @@ export function DesktopShellView(input: DesktopShellViewInput) {
                 <ArrowLeft size={18} />
               </button>
             </div>
-            <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+            <ClientSurface id="memory-avatar" fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
               <MemoryAvatarLab
                 t={t}
                 lang={lang}
                 onEnterSanctuary={enterCreatedMemoryAvatar}
               />
-            </Suspense>
+            </ClientSurface>
           </motion.div>
         )}
       </AnimatePresence>

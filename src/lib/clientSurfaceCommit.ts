@@ -1,5 +1,6 @@
 export interface ClientSurfaceQueryRoot {
   querySelector(selectors: string): Element | null;
+  querySelectorAll?(selectors: string): NodeListOf<Element>;
 }
 
 export interface WaitForClientSurfaceOptions {
@@ -25,7 +26,11 @@ export function isClientSurfaceRendered(
   surfaceId: string,
   root: ClientSurfaceQueryRoot = document,
 ): boolean {
-  return Boolean(root.querySelector(getRenderedClientSurfaceSelector(surfaceId)));
+  const selector = getRenderedClientSurfaceSelector(surfaceId);
+  const elements = root.querySelectorAll?.(selector) ?? [root.querySelector(selector)];
+  return Array.from(elements).some(element => element && !element.closest?.(
+    '[aria-hidden="true"], [inert], [data-lumi-surface-inactive="' + normalizeSurfaceId(surfaceId) + '"]',
+  ));
 }
 
 export function waitForClientSurfaceRendered(

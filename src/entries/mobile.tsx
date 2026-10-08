@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy } from 'react';
 import { motion } from 'motion/react';
 import { Rocket } from 'lucide-react';
 import { Toaster } from 'sonner';
@@ -28,9 +28,9 @@ export function MobileApp() {
   const renderTabContent = (tab: string) => {
     switch (tab) {
       case 'generate':
-        return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} initialTab="generate" /></Suspense>;
+        return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <SkillCenter t={shell.t} lang={shell.lang} initialTab="generate" />;
       case 'skills':
-        return <Suspense fallback={null}><SkillCenter t={shell.t} lang={shell.lang} /></Suspense>;
+        return <SkillCenter t={shell.t} lang={shell.lang} />;
       case 'profile':
         return !shell.user ? <LoginRequired t={shell.t} onLogin={shell.handleLogin} /> : <Profile t={shell.t} />;
       default:

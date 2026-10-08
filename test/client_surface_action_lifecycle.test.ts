@@ -15,7 +15,7 @@ function client(overrides: Record<string, unknown> = {}) {
     activeTab: 'home', openWindows: [], workDomain: 'personal', orgConnection: null,
     isDesktopWidgetMode: false, operationMode: 'assistant',
     openSurface: vi.fn(), closeSurface: vi.fn(), openCommandCenter: vi.fn(),
-    enterDesktopWidgetMode: vi.fn(async () => {}), exitDesktopWidgetMode: vi.fn(async () => {}),
+    enterDesktopWidgetMode: vi.fn(async () => true), exitDesktopWidgetMode: vi.fn(async () => true),
     endMeetingAndReport: vi.fn(async () => {}), resetMeetingCapture: vi.fn(),
     setMeetingPaused: vi.fn(), setMeetingNotesOpen: vi.fn(), setLegalMeetingCaseTitle: vi.fn(),
     setSettingsSection: vi.fn(), setPersonalizationSection: vi.fn(), setOperationMode: vi.fn(),
@@ -101,4 +101,26 @@ it('expands widget mode through its existing owner and still waits for the reque
 });
 it('removes its listener on cleanup so a retained hook cannot process another action', () => {
   const c = client(); cleanups.pop()!(); c.send({ action: 'open_tools' }); expect(c.runtime.openSurface).not.toHaveBeenCalled();
+});
+
+it.each(['enter_widget_mode', 'exit_widget_mode'])('awaits native completion and then rendered content for %s', async action => {
+  let finish!: (ok: boolean) => void;
+  const transition = vi.fn(() => new Promise<boolean>(resolve => finish = resolve));
+  const c = client({ enterDesktopWidgetMode: transition, exitDesktopWidgetMode: transition });
+  const reply = c.send({ action }); await settle();
+  expect(reply.respond).not.toHaveBeenCalled(); expect(c.commit).not.toHaveBeenCalled();
+  finish(true); await settle();
+  expect(c.commit).toHaveBeenCalledWith(action === 'enter_widget_mode' ? 'widget' : 'home');
+  expect(reply.respond).toHaveBeenCalledWith(expect.objectContaining({ ok: true, rendered: true }));
+});
+it.each(['enter_widget_mode', 'exit_widget_mode'])('rejects %s if the mode transition fails', async action => {
+  const c = client({ enterDesktopWidgetMode: vi.fn(async () => false), exitDesktopWidgetMode: vi.fn(async () => false) });
+  const reply = c.send({ action }); await settle();
+  expect(reply.respond).not.toHaveBeenCalled(); expect(reply.reject).toHaveBeenCalled(); expect(c.commit).not.toHaveBeenCalled();
+});
+it.each(['home', 'nexus', 'app-launcher', 'org', 'knowledge', 'notifications', 'memory-avatar'])('requires a real commit for %s', async target => {
+  const c = client(); c.commit.mockResolvedValueOnce(false);
+  const action = surfaces.PERSONAL_CLIENT_SURFACES.find(surface => surface.target === target)!.actions[0];
+  const reply = c.send({ action, target }); await settle();
+  expect(c.commit).toHaveBeenCalledWith(target); expect(reply.respond).not.toHaveBeenCalled(); expect(reply.reject).toHaveBeenCalled();
 });

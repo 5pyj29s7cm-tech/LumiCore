@@ -2,7 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ socket: null as any, invoke: vi.fn(), gate: Promise.resolve() as Promise<void>, toast: Object.assign(vi.fn(), { warning: vi.fn(), dismiss: vi.fn() }), confirm: vi.fn() }));
 vi.mock('@/services/apiBridge', () => ({ isTauriRuntime: () => true }));
-vi.mock('@/services/socketService', () => ({ socketService: { connect: () => mock.socket } }));
+vi.mock('@/services/socketService', () => ({ socketService: {
+ connect: () => mock.socket,
+ beginDeviceRegistration: () => { mock.socket.registration = { status: 'pending' }; return true; },
+ rejectDeviceRegistration: (_id: string, code: string) => { mock.socket.registration = { status: 'rejected', code }; },
+ getDeviceRegistration: () => mock.socket.registration,
+ subscribeDeviceRegistration: (listener: Function) => { mock.socket.registrationListener = listener; return () => { mock.socket.registrationListener = null; }; },
+} }));
 vi.mock('@/services/nativeClientIdentity', () => ({ getNativeClientIdentity: async () => ({ synthetic: true }) }));
 vi.mock('@/services/desktopAutomationActivity', () => ({ beginDesktopAutomationActivity() {}, endDesktopAutomationActivity() {} }));
 vi.mock('sonner', () => ({ toast: mock.toast }));
@@ -10,10 +16,11 @@ vi.mock('@/lib/appConfirm', () => ({ appConfirm: mock.confirm }));
 vi.mock('@/i18n/runtime', () => ({ getLocale: () => 'en' }));
 function socket() {
  const handlers = new Map<string, Function>(); const emitted: any[] = [];
- const s: any = { id: 'connection-a', connected: true, resume: [] as any[], drains: [] as any[], autoAck: false,
+ const s: any = { id: 'connection-a', connected: true, resume: [] as any[], drains: [] as any[], autoAck: false, autoRegister: true, registration: { status: 'pending' },
   on: (event: string, fn: Function) => handlers.set(event, fn), off: (event: string, fn: Function) => { if (handlers.get(event) === fn) handlers.delete(event); },
-  emit: (event: string, payload: any, ack?: Function) => { emitted.push({ event, payload, ack }); if (event === 'tool:desktop_resume') { if (s.holdNormal) s.normalReply = () => ack?.({ ok: true, executions: s.resume }); else ack?.({ ok: true, executions: s.resume }); } if (event === 'tool:desktop_drain_resume') { if (s.holdDrain) s.drainReply = () => ack?.({ ok: true, executions: s.drains }); else ack?.({ ok: true, executions: s.drains }); } if (event === 'tool:desktop_authorize_stop_ack') ack?.(s.stopAuthorization || { ok: true, nativeCommand: false }); if (event.startsWith('tool:desktop_result:') && s.autoAck) ack?.({ accepted: true }); },
-  fire: (event: string, payload?: any) => handlers.get(event)?.(payload), emitted,
+  emit: (event: string, payload: any, ack?: Function) => { emitted.push({ event, payload, ack }); if (event === 'device:register' && s.autoRegister) s.acceptRegistration(); if (event === 'tool:desktop_resume') { if (s.holdNormal) s.normalReply = () => ack?.({ ok: true, executions: s.resume }); else ack?.({ ok: true, executions: s.resume }); } if (event === 'tool:desktop_drain_resume') { if (s.holdDrain) s.drainReply = () => ack?.({ ok: true, executions: s.drains }); else ack?.({ ok: true, executions: s.drains }); } if (event === 'tool:desktop_authorize_stop_ack') ack?.(s.stopAuthorization || { ok: true, nativeCommand: false }); if (event.startsWith('tool:desktop_result:') && s.autoAck) ack?.({ accepted: true }); },
+  fire: (event: string, ...args: any[]) => handlers.get(event)?.(...args), emitted,
+  acceptRegistration: () => { s.registration = { status: 'registered', socketId: s.id, deviceId: 'synthetic-device', executable: true }; s.registrationListener?.(); },
  }; return s;
 }
 async function mount() { const module = await import('../src/hooks/useSocket'); module.initializeSharedSocketRuntime(); await vi.advanceTimersByTimeAsync(0); return mock.socket; }
@@ -87,4 +94,20 @@ describe('native WebView command lifecycle', () => {
   expect(s.emitted.find((e: any) => e.event === 'tool:desktop_drain_result').payload).toEqual({ correlationId: 'old-scope', stopped: true });
   expect(JSON.stringify(s.emitted)).not.toContain('PRIVATE OLD SCOPE'); expect(mock.invoke.mock.calls.some(c => c[0] === 'run_command')).toBe(false);
  });
+});
+
+it('does not resume or accept execution before device registration is accepted', async () => {
+ const s = mock.socket; s.autoRegister = false; await mount();
+ await vi.advanceTimersByTimeAsync(5000);
+ expect(s.emitted.some((e: any) => e.event === 'tool:desktop_resume')).toBe(false);
+ const offered = vi.fn(); s.fire('tool:desktop_offer', { correlationId: 'pending', name: 'desktop_run_command', arguments: {} }, offered);
+ s.fire('tool:desktop_exec', { correlationId: 'pending', name: 'desktop_run_command', arguments: {} }); await vi.advanceTimersByTimeAsync(0);
+ expect(offered).toHaveBeenCalledWith(expect.objectContaining({ accepted: false })); expect(mock.invoke).not.toHaveBeenCalled();
+ s.acceptRegistration();
+ expect(s.emitted.some((e: any) => e.event === 'tool:desktop_resume')).toBe(true);
+});
+it('requires the new connection registration before recovering after reconnect', async () => {
+ const s = await mount(); s.emitted.length = 0; s.autoRegister = false; s.id = 'connection-b'; s.fire('connect'); await vi.advanceTimersByTimeAsync(5000);
+ expect(s.emitted.some((e: any) => e.event === 'tool:desktop_resume')).toBe(false);
+ s.acceptRegistration(); expect(s.emitted.some((e: any) => e.event === 'tool:desktop_resume')).toBe(true);
 });

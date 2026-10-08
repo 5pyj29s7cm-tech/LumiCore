@@ -1,6 +1,6 @@
+import { ClientSurface } from '../ClientSurface';
 import { LazyPanelFallback } from "./window_shell";
 import { Spotlight } from "./launcher";
-import { Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Rocket, Zap, X, User as UserIcon, Search, Volume2, VolumeX, Minimize2, Minus, Square, Bell, Sparkles } from 'lucide-react';
 import { BatteryIndicator } from "../DesktopShellAuxiliary";
@@ -166,11 +166,11 @@ export function renderShellChrome({ viewMode, isWallpaperMode, handleTopbarPoint
                 }`}
                 onClick={(e) => e.stopPropagation()}
               >
-                <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+                <ClientSurface id="notifications" fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   <NotificationCenter
                     onChatMessage={openProactiveChat}
                   />
-                </Suspense>
+                </ClientSurface>
               </motion.div>
             </>
           )}
@@ -179,13 +179,13 @@ export function renderShellChrome({ viewMode, isWallpaperMode, handleTopbarPoint
         {/* Global Search */}
         <AnimatePresence>
           {isSearchOpen && !isWallpaperMode && (
-            <Spotlight
+            <ClientSurface id="app-launcher"><Spotlight
               isOpen={isSearchOpen}
               onClose={() => setIsSearchOpen(false)}
               onSelect={toggleWindow}
               apps={allAppEntries}
               t={t}
-            />
+            /></ClientSurface>
           )}
         </AnimatePresence>
 

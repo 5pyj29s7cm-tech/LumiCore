@@ -1,6 +1,5 @@
 import { useDesktopWindows } from "../useDesktopWindows";
 import { useViewportSize } from "../window_shell";
-import type { DesktopWidgetFallbackState } from "../widget";
 import { type ClientKnowledgeRuntimeState, emptyKnowledgeRuntimeState, resolvePetPreference, serializePetPreference, type ClientPermissionSnapshot, type ClientRuntimeSnapshot } from "../runtime_state";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useMotionValue, useTransform } from "motion/react";
@@ -230,7 +229,6 @@ export function useDesktopSurfaceState({
   useEffect(() => () => {
     void systemService.setAlwaysOnTop(false).catch(() => {});
   }, []);
-  const desktopWidgetFallbackRef = useRef<DesktopWidgetFallbackState | null>(null);
   const wallpaperAutomationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wallpaperBeforeAutomationRef = useRef<{
     enabled: boolean;
@@ -451,7 +449,7 @@ export function useDesktopSurfaceState({
     triggerPetReaction, petPrefsSavingRef, setSelectedPet, petStorageKeys, setEquippedAccessories, sanctuaryOpen,
     memoryLabOpen, closeKnowledgeBase, isWallpaperWorkbench, isSearchOpen, setTime, canCustomizeLumiAppearance,
     savePetPrefsToServer, equippedAccessories, setPersonalizationSection, openKnowledgeBase, setNexusReturnTarget,
-    nexusReturnTarget, activeTab, desktopWidgetFallbackRef, openWindows, switchDomain, setSettingsSection,
+    nexusReturnTarget, activeTab, openWindows, switchDomain, setSettingsSection,
     clientRuntime, viewMode, focusedWindow, settingsSection, commandCenterView, isNotificationPanelOpen,
     organizationWorkspaceView, clientPermissions, availableOrganizationWorkspaceViews, reportedKnowledgeRuntimeState,
     minimizedWindows, wallpaperPresentation, wallpaperWorkspace, selectedPet, petReaction, resolvedAppearanceMode,

@@ -1,3 +1,4 @@
+import { ClientSurface } from '../ClientSurface';
 import { RefreshCw, Minus, Minimize2, Maximize2, X } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import { type ViewportSize, getDesktopChromeMetrics, resolveDesktopWindowBounds } from "@/lib/desktopLayout";
@@ -114,7 +115,6 @@ export function OSWindow({
       {/* Invisible drag boundary fills the viewport so windows can be dragged freely */}
       <div ref={constrainRef} className="fixed inset-0 pointer-events-none z-0" />
       <motion.div
-        data-lumi-rendered-surface={isMinimized ? undefined : id}
         drag={!isMaximized && !isMinimized}
         dragListener={false}
         dragControls={dragControls}
@@ -222,7 +222,9 @@ export function OSWindow({
           className="os-window-content bg-[#05050a]/98 backdrop-blur-3xl"
           style={isDragging ? { backdropFilter: 'none' } : undefined}
         >
-          {children}
+          <ClientSurface id={id} active={!isMinimized} fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
+            {children}
+          </ClientSurface>
         </div>
       </motion.div>
     </>

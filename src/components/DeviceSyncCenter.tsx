@@ -19,6 +19,7 @@ import { usePlatform } from '@/hooks/usePlatform';
 import { useSocket } from '@/hooks/useSocket';
 import { GlassCard } from './SharedUI';
 import { RemoteMCPSettings } from './RemoteMCPSettings';
+import { ClientConnectionStatus } from './ClientConnectionStatus';
 import { apiJson } from '@/services/apiClient';
 import { useApp } from '@/contexts/AppContext';
 import { getDomainReconciliation } from '@/lib/domainSession';
@@ -91,7 +92,7 @@ function DeviceSyncView({ t }: { t: any }) {
       setLastSync(data.timestamp);
       syncTimer = setTimeout(() => setLastSync(null), 5000);
     };
-    const events = ['connect', 'devices:update', 'device:removed'];
+    const events = ['connect', 'device:registered', 'devices:update', 'device:removed'];
     for (const event of events) socket?.on(event, refresh);
     socket?.on('memories:changed', onSync);
     void fetchDevices();
@@ -157,6 +158,7 @@ function DeviceSyncView({ t }: { t: any }) {
           </button>
         </div>
 
+        <ClientConnectionStatus />
         {loadError && <p role="alert" className="text-sm text-red-400">{loadError}</p>}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <AnimatePresence>

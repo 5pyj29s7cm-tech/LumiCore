@@ -82,15 +82,10 @@ function faceResultKey(result: FaceRecognitionResult): string {
 
 interface UseFaceRecognitionOptions {
   enabled?: boolean;
-  socket?: any;
 }
 
 export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
   const enabled = options?.enabled ?? true;
-  const socketRef = useRef(options?.socket);
-
-  useEffect(() => { socketRef.current = options?.socket; }, [options?.socket]);
-
   const [result, setResult] = useState<FaceRecognitionResult>(() => emptyFaceRecognitionResult());
   const [hasTemplates, setHasTemplates] = useState(false);
   const [templateRevision, setTemplateRevision] = useState(0);
@@ -164,12 +159,6 @@ export function useFaceRecognition(options?: UseFaceRecognitionOptions) {
       lastResultKeyRef.current = nextKey;
       lastKnownFaceResult.current = nextResult;
       setResult(nextResult);
-      socketRef.current?.emit('face:result', {
-        facePresent: nextResult.facePresent,
-        ownerPresent: nextResult.ownerPresent,
-        confidence: nextResult.confidence,
-        faceCount: nextResult.faceCount,
-      });
     };
 
     const start = async () => {

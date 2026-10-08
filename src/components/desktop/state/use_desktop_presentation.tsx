@@ -1,5 +1,6 @@
 import { DesktopShellView } from "../DesktopShellView";
 import { DesktopWidgetPanel } from "../widget";
+import { ClientSurface } from "../../ClientSurface";
 import React, { useCallback } from "react";
 import { Cpu, Settings as SettingsIcon, User as UserIcon, FileText, Activity, Volume2, Bell, BrainCircuit, Wrench, Brush, Terminal as TerminalIcon, RefreshCw, Circle, Calendar } from "lucide-react";
 import { uiMessage } from "../../../i18n/uiMessages";
@@ -97,7 +98,7 @@ export function useDesktopPresentation(previousBindings: ReturnType<typeof useDe
 
   if (isDesktopWidgetMode) {
     return (
-      <DesktopWidgetPanel
+      <ClientSurface id="widget"><DesktopWidgetPanel
         t={t}
         lang={lang}
         selectedPet={selectedPet}
@@ -115,8 +116,8 @@ export function useDesktopPresentation(previousBindings: ReturnType<typeof useDe
         onEndVoice={endVoiceCallFromUI}
         onExpand={() => void exitDesktopWidgetMode()}
         onHide={() => void hideDesktopWidgetMode()}
-          onOpenPersonalization={() => void exitDesktopWidgetMode('personalization')}
-      />
+        onOpenPersonalization={() => void exitDesktopWidgetMode('personalization')}
+      /></ClientSurface>
     );
   }
   return <DesktopShellView {...{

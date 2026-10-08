@@ -11,15 +11,6 @@ import { PetAvatar } from "../SpriteAnimator";
 export const LumiCoreAvatar = lazy(() => import("../LumiCoreAvatar").then(m => ({ default: m.LumiCoreAvatar })));
 
 
-export type DesktopWidgetFallbackState = {
-  active: boolean;
-  size?: { width: number; height: number };
-  position?: { x: number; y: number };
-  fullscreen?: boolean;
-  maximized?: boolean;
-};
-
-
 export function DesktopWidgetPanel({
   t,
   lang,

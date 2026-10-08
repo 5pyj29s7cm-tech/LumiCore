@@ -40,6 +40,7 @@ type SharedDesktopSocketRuntime = {
   terminals: Map<string, DesktopTerminal>;
   completed: Map<string, number>;
   recoveryTimer?: ReturnType<typeof setInterval>;
+  registrationCleanup?: () => void;
   recoveryToasts?: Set<string>;
   unknownExecutions?: Set<string>;
   normalUnknown?: Set<string>;
@@ -169,8 +170,12 @@ function recoverDesktopDrains(socket: Socket) {
     }
   });
 }
+function isRegisteredDesktop(socket: Socket) {
+  const registration = socketService.getDeviceRegistration();
+  return registration.status === 'registered' && registration.socketId === socket.id && registration.executable === true;
+}
 function recoverDesktopExecutions(socket: Socket) {
-  if (!isTauri || !socket.connected || sharedDesktopSocketRuntime.socket !== socket) return;
+  if (!isTauri || !socket.connected || sharedDesktopSocketRuntime.socket !== socket || !isRegisteredDesktop(socket)) return;
   const connectionId = socket.id;
   recoverDesktopDrains(socket);
   socket.emit('tool:desktop_resume', {}, async (result?: any) => {
@@ -244,16 +249,20 @@ function registerSharedSocketHandlers(socket: Socket) {
     }
   }
 
+  sharedDesktopSocketRuntime.registrationCleanup?.();
   const registerDevice = async () => {
+    const connectionId = socket.id;
+    if (!connectionId || !socketService.beginDeviceRegistration(connectionId)) return;
     let nativeClientIdentity = null;
     if (isTauri) {
       try {
         nativeClientIdentity = await getNativeClientIdentity();
       } catch (error) {
         console.error('[Device] Native process identity unavailable; desktop registration stopped', error);
+        socketService.rejectDeviceRegistration(connectionId, 'NATIVE_CLIENT_IDENTITY_UNAVAILABLE');
         return;
       }
-      if (sharedDesktopSocketRuntime.socket !== socket || !socket.connected) return;
+      if (sharedDesktopSocketRuntime.socket !== socket || !socket.connected || socket.id !== connectionId) return;
     }
     socket.emit('device:register', {
       name: navigator.platform || 'Unknown Device',
@@ -268,7 +277,6 @@ function registerSharedSocketHandlers(socket: Socket) {
       osInfo: navigator.platform || '',
       ...(nativeClientIdentity ? { nativeClientIdentity } : {}),
     });
-    recoverDesktopExecutions(socket);
   };
 
   const onConnect = () => { clearRecoveryPrompts(); void registerDevice(); };
@@ -282,6 +290,7 @@ function registerSharedSocketHandlers(socket: Socket) {
       && correlationId
       && sharedDesktopSocketRuntime.socket === socket
       && socket.connected
+      && isRegisteredDesktop(socket)
       && !activeDesktopExecutions.has(correlationId)
       && !cancelledDesktopExecutions.has(correlationId)
       && !sharedDesktopSocketRuntime.completed.has(correlationId)
@@ -295,6 +304,7 @@ function registerSharedSocketHandlers(socket: Socket) {
       !correlationId
       || sharedDesktopSocketRuntime.socket !== socket
       || !socket.connected
+      || !isRegisteredDesktop(socket)
       || activeDesktopExecutions.has(correlationId)
       || cancelledDesktopExecutions.has(correlationId)
       || sharedDesktopSocketRuntime.completed.has(correlationId)
@@ -309,6 +319,7 @@ function registerSharedSocketHandlers(socket: Socket) {
 
   sharedDesktopSocketRuntime.socket = socket;
   sharedDesktopSocketRuntime.connectHandler = onConnect;
+  sharedDesktopSocketRuntime.registrationCleanup = socketService.subscribeDeviceRegistration(() => recoverDesktopExecutions(socket));
   sharedDesktopSocketRuntime.offerHandler = onDesktopOffer;
   sharedDesktopSocketRuntime.execHandler = onDesktopExec;
   sharedDesktopSocketRuntime.cancelHandler = desktopCancelHandler;

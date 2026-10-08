@@ -1,4 +1,4 @@
-import { LazyPanelFallback, OSWindow } from "./window_shell";
+import { OSWindow } from "./window_shell";
 import { SensorPrimer } from "./sensor_primer";
 import { KernelMonitorApp } from "./kernel_monitor";
 import { ExecutionWorkQueue } from "./daily_plans";
@@ -66,7 +66,6 @@ export function renderDesktopWindows({ isWallpaperMode, sensorPrimerSeen, finish
                 t={t}
               >
                 <div className="os-window-body custom-scrollbar">
-                  <Suspense fallback={<LazyPanelFallback label={t.loading || 'Loading'} />}>
                   {windowId === 'business' ? (
                     <BusinessWorkbench lang={lang} domain={workDomain} onOpenSettings={() => toggleWindow('settings')} onOpenKnowledge={openKnowledgeBase} onOpenSkills={() => toggleWindow('skills')}
                       onOpenCreation={() => { setCreationRequestId(crypto.randomUUID()); openCommandCenter('office'); }}
@@ -173,7 +172,6 @@ export function renderDesktopWindows({ isWallpaperMode, sensorPrimerSeen, finish
                     // Chat is now fullscreen overlay — this case should not be reached
                     null
                   ) : renderTabContent(windowId)}
-                  </Suspense>
                 </div>
               </OSWindow>
             );

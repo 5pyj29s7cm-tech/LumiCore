@@ -8,20 +8,20 @@ import { registerUserSocket, unregisterUserSocket } from "../memory";
 import { isDesktopDeviceType, joinDesktopRelayRoom } from "./desktop_relay";
 import { resolveSocketScope } from './scope';
 
-function socketGuard(fn: (...args: any[]) => void | Promise<void>) {
+function socketGuard(fn: (...args: any[]) => void | Promise<void>, onError?: () => void) {
+  const report = (error: any) => {
+    console.error('[Device] Handler error:', error.message || String(error));
+    onError?.();
+  };
   return (...args: any[]) => {
-    try {
-      const ret = fn(...args);
-      if (ret && typeof (ret as any).catch === 'function') {
-        (ret as any).catch((e: any) => console.error('[Device] Handler error:', e.message || String(e)));
-      }
-    } catch (e: any) {
-      console.error('[Device] Handler error:', e.message || String(e));
-    }
+    try { Promise.resolve(fn(...args)).catch(report); } catch (error) { report(error); }
   };
 }
 
 export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) => string, io: Server) {
+  const rejectRegistration = (code: string, message: string) => {
+    socket.emit('device:registration_error', { socketId: socket.id, code, message });
+  };
   socket.on("device:register", socketGuard((data: {
     name?: string;
     type?: string;
@@ -38,17 +38,11 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
       && socket.data?.nativeClientIdentity?.clientKind === 'tauri'
       && !desktopDevice
     ) {
-      socket.emit('device:registration_error', {
-        code: 'NATIVE_DESKTOP_REGISTRATION_REQUIRED',
-        message: 'A proof-bound native client may register only its desktop execution target.',
-      });
+      rejectRegistration('NATIVE_DESKTOP_REGISTRATION_REQUIRED', 'A proof-bound native client may register only its desktop execution target.');
       return;
     }
     if (desktopDevice && socket.data?.trustedLocalExecution !== true) {
-      socket.emit('device:registration_error', {
-        code: 'DESKTOP_SESSION_PROOF_REQUIRED',
-        message: 'A verified native desktop session is required to register a desktop execution target.',
-      });
+      rejectRegistration('DESKTOP_SESSION_PROOF_REQUIRED', 'A verified native desktop session is required to register a desktop execution target.');
       return;
     }
     let nativeClientIdentity = null;
@@ -60,17 +54,11 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
         || nativeClientIdentity.clientKind !== 'tauri'
         || !nativeClientIdentitiesEqual(nativeClientIdentity, proofBoundIdentity)
       ) {
-        socket.emit('device:registration_error', {
-          code: 'NATIVE_CLIENT_IDENTITY_MISMATCH',
-          message: 'The native client process identity did not match the verified desktop session.',
-        });
+        rejectRegistration('NATIVE_CLIENT_IDENTITY_MISMATCH', 'The native client process identity did not match the verified desktop session.');
         return;
       }
     } else if (payload.nativeClientIdentity !== undefined) {
-      socket.emit('device:registration_error', {
-        code: 'NATIVE_CLIENT_IDENTITY_NOT_ALLOWED',
-        message: 'Native process identity is accepted only from a verified desktop session.',
-      });
+      rejectRegistration('NATIVE_CLIENT_IDENTITY_NOT_ALLOWED', 'Native process identity is accepted only from a verified desktop session.');
       return;
     }
     const fingerprint = (socket.handshake.auth as any)?.fingerprint || socket.id;
@@ -87,8 +75,9 @@ export function registerDeviceHandlers(socket: Socket, getUserId: (s: Socket) =>
     });
     socket.data.lumiDeviceId = registeredDevice.id;
     registerUserSocket(uid, socket.id);
-    joinDesktopRelayRoom(socket, uid, payload.type, scope.domain, scope.orgId);
-  }));
+    const executable = joinDesktopRelayRoom(socket, uid, payload.type, scope.domain, scope.orgId);
+    socket.emit('device:registered', { socketId: socket.id, deviceId: registeredDevice.id, executable });
+  }, () => rejectRegistration('REGISTRATION_FAILED', 'Device registration could not be completed.')));
 
   socket.on("disconnect", socketGuard(() => {
     deviceRegistry.disconnect(socket.id);

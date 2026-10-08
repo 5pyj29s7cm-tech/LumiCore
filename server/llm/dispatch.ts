@@ -1,11 +1,7 @@
 import { type ProviderGetters as SharedProviderGetters, providerGetterArguments as getterArguments } from "./provider_getters";
-import {
-  NormalizedMessage,
-  makeLLMCallDirect,
-  makeLLMCallStreamingDirect,
-  StreamCallback,
-  type LLMCallConfig,
-} from './providers';
+import type { NormalizedMessage, StreamCallback, LLMCallConfig } from './provider/contracts';
+import { makeLLMCallDirect } from './provider/buffered';
+import { makeLLMCallStreamingDirect } from './provider/streaming';
 import { NormalizedLLMResponse } from '../tools/types';
 import {
   resolveAutoLocalModelCandidates,

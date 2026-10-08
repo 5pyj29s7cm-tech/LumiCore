@@ -148,7 +148,6 @@ export function useDesktopRuntimeAndPreferences(previousBindings: ReturnType<typ
   );
   const faceRecognition = useFaceRecognition({
     enabled: facePresenceRequested && callState === 'idle',
-    socket,
   });
   const presence = usePresence({
     enabled: facePresenceRequested && faceRecognition.hasTemplates,
