@@ -82,8 +82,25 @@ export function listConversationHeaders(owner: ConversationOwner, limit?: number
 /** Stable request history with receipt projection; duplicate legacy pairs use indexed lookup. */
 export function listConversationReceiptHistory(conversationId: string, limit = 1000): any[] {
   const db = readDatabaseTables(["interactions","conversations","conversationActionTasks","conversationActionTurns","conversationActionReceipts"]);
-  const rows = (db.interactions || []).map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
-    .filter(({ row }: any) => row.conversationId === conversationId)
+  const visible = selectVisibleConversationHistory((db.interactions || []).filter((row: any) => row.conversationId === conversationId), limit);
+  return cloneDatabaseValue(projectConversationReceiptHistory(db, visible));
+}
+
+/** History rail previews use transcript text, without loading or projecting execution receipts. */
+export function listConversationPreviewMessages(conversationIds: readonly string[], limit = 12): Map<string, any[]> {
+  const selected = new Set(conversationIds.filter(Boolean));
+  const result = new Map<string, any[]>([...selected].map(id => [id, []]));
+  if (!selected.size) return result;
+  for (const row of readDatabaseTables(["interactions"]).interactions || []) {
+    const rows = result.get(row.conversationId);
+    if (rows) rows.push(row);
+  }
+  for (const [id, rows] of result) result.set(id, selectVisibleConversationHistory(rows, limit));
+  return cloneDatabaseValue(result);
+}
+
+function selectVisibleConversationHistory(input: any[], limit: number): any[] {
+  const rows = input.map((row: any, insertionOrder: number) => ({ row, insertionOrder }))
     .sort((a: any, b: any) => {
       const timestampDelta = new Date(a.row.timestamp).getTime() - new Date(b.row.timestamp).getTime();
       if (timestampDelta) return timestampDelta;
@@ -116,5 +133,5 @@ export function listConversationReceiptHistory(conversationId: string, limit = 1
     return !hasSibling(splitUsers, String(row.message || row.content || '').trim(), time)
       && !hasSibling(assistants, response, time);
   }).slice(-limit);
-  return cloneDatabaseValue(projectConversationReceiptHistory(db, visible));
+  return visible;
 }

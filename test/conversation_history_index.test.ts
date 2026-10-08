@@ -1,11 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as database from '../db_layer';
-import { listConversationReceiptHistory } from '../server/conversation/history_repository';
+import { listConversationReceiptHistory, listConversationPreviewMessages } from '../server/conversation/history_repository';
 afterEach(() => vi.restoreAllMocks());
 const origin = Date.parse('2026-10-04T00:00:00Z');
 const row = (id: string, role: string, message: string, offset: number, extra = {}) => ({ id, userId: 'owner', conversationId: 'scope', role, message, timestamp: new Date(origin + offset).toISOString(), ...extra });
 
 describe('indexed legacy conversation history', () => {
+  it('loads a full history page from one snapshot while retaining per-conversation limits and detachment', () => {
+    const rows: any[] = Array.from({ length: 40 }, (_, n) => ['a', 'b', 'foreign'].map(conversationId => row(conversationId + n, 'user', conversationId, n * 3000, { conversationId, nested: { value: n } }))).flat();
+    const read = vi.spyOn(database, 'readDatabaseTables').mockReturnValue({ interactions: rows } as any);
+    const page = listConversationPreviewMessages(['a', 'b', 'empty'], 12);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(['interactions']);
+    expect([...page.keys()]).toEqual(['a', 'b', 'empty']);
+    expect(page.get('a')!.map(row => row.id)).toEqual(Array.from({ length: 12 }, (_, n) => 'a' + (n + 28)));
+    expect(page.get('b')).toHaveLength(12);
+    expect(page.get('empty')).toEqual([]);
+    page.get('a')![0].nested.value = 99;
+    expect(rows.find(row => row.id === 'a28')!.nested.value).toBe(28);
+    read.mockClear();
+    expect(listConversationPreviewMessages([]).size).toBe(0);
+    expect(read).not.toHaveBeenCalled();
+  });
   it('preserves the strict two-second boundary, user/assistant role rules and foreign conversation isolation', () => {
     const rows = [row('combined', 'user', 'question', 0, { response: 'answer' }), row('outside', 'assistant', 'answer', 2000), row('foreign', 'user', 'question', 1, { conversationId: 'other' })];
     vi.spyOn(database, 'readDatabaseTables').mockReturnValue({ interactions: rows } as any);

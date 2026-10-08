@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { sendDurableMutation } from './durable_mutation';
 import { flushDBOrThrow } from "../../db_layer";
-import { conversationAccessStatus, listConversationHeaders, listUserInteractions } from '../conversation/history_repository';
+import { conversationAccessStatus, listConversationHeaders, listUserInteractions, listConversationPreviewMessages } from '../conversation/history_repository';
 import { forgetConversationChatExecutionsDurably } from '../socket/chat_execution_registry';
 import { mutationScopeKey, runSerializedMutation, readScopedDeletionReceipt, recordScopedDeletionReceipt } from '../persistence/durable_scope_mutation';
 import {
@@ -80,9 +80,11 @@ export function mountConversationRoutes(router: Router, _jwtSecret: string) {
     // client whether another page exists.
     const page = getUserConversations(req.user!.uid, limit + 1, offset, scope.domain, scope.orgId, agentId);
     const hasMore = page.length > limit;
-    const conversations = page.slice(0, limit)
+    const visiblePage = page.slice(0, limit);
+    const histories = listConversationPreviewMessages(visiblePage.map(conversation => conversation.id), 12);
+    const conversations = visiblePage
       .map(conversation => {
-        const recent = getMessages(conversation.id, 12).filter(message => message.role !== 'tool');
+        const recent = (histories.get(conversation.id) || []).filter(message => message.role !== 'tool');
         const lastUser = [...recent].reverse().find(message => message.role !== 'assistant' && String(message.message || '').trim());
         const lastVisible = [...recent].reverse().find(message => (
           String(message.role === 'assistant' ? message.message : (message.response || message.message) || '').trim()

@@ -502,7 +502,7 @@ export function DesktopShellView(input: DesktopShellViewInput) {
 
       {/* Chat fullscreen overlay */}
       {chatLoaded && (
-        <ClientSurface id="command-center" active={chatOpen}>
+        <ClientSurface id="command-center" active={chatOpen} fallback={<div className="lumi-below-topbar fixed inset-x-0 bottom-0 z-[90] bg-celestial-deep"><LazyPanelFallback label={t.loading || 'Loading'} /></div>}>
           <AgentChatPage
             t={t}
             user={user}
