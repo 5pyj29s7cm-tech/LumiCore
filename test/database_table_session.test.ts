@@ -2,6 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { createTableSession, prepareTableCommit } from '../server/db/table_session';
 const apply = (session: any, root: any) => { const staged = prepareTableCommit(session, root); Object.assign(root, staged.changes); staged.accept(); };
 describe('selected table transactions', () => {
+  it('does not read untouched selected tables during commits or no-op checkpoints', () => {
+    let reads = 0;
+    const root = { rows: [{ id: 'a', value: 1 }], get unused() { reads++; throw new Error('unused table was materialized'); } };
+    const session = createTableSession(root, ['rows', 'unused']);
+    apply(session, root);
+    session.rows[0].value = 2; apply(session, root); apply(session, root);
+    expect(reads).toBe(0); expect(root.rows[0].value).toBe(2);
+  });
+  it('keeps untouched row identities while applying edits, appends and explicit order changes', () => {
+    const root = { rows: [{ id: 'a', value: 1 }, { id: 'b', value: 1 }] };
+    const first = root.rows[0], second = root.rows[1];
+    const session = createTableSession(root, ['rows']);
+    session.rows[1].value = 2; session.rows.unshift({ id: 'c', value: 3 }); session.rows.reverse();
+    apply(session, root);
+    expect(root.rows.map(row => row.id)).toEqual(['b', 'a', 'c']);
+    expect(root.rows[1]).toBe(first); expect(root.rows[0]).not.toBe(second);
+    const unchanged = root.rows[0]; session.rows[2].value = 4; apply(session, root);
+    expect(root.rows[0]).toBe(unchanged);
+  });
   it('never exposes unselected tables or live nested rows', () => {
     const root = { users: [{ uid: 'a', name: 'A', tags: ['old'] }], secrets: [{ key: 'secret' }] };
     const session = createTableSession(root, ['users']);

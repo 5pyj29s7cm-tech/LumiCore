@@ -8,25 +8,26 @@ export class DatabaseWriteConflict extends Error {
 const plain = (value: any): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const copy = <T>(value: T): T => cloneDatabaseValue(value);
 const sessionKey = Symbol('bounded-database-session');
-interface Session { keys: Set<string>; before: Record<string, any>; draft: Record<string, any>; root: Record<string, any>; }
+interface Session { keys: Set<string>; before: Record<string, any>; draft: Record<string, any>; view?: object; }
 
 /** Detached, lazy table snapshots. No live rows or unselected root fields escape. */
 export function createTableSession<T extends string>(root: Record<string, any>, keys: readonly T[]): Record<T, any> {
   if (!keys.length || new Set(keys).size !== keys.length) throw new Error('Select distinct database tables');
-  const session: Session = { keys: new Set(keys), before: Object.create(null), draft: Object.create(null), root };
+  const session: Session = { keys: new Set(keys), before: Object.create(null), draft: Object.create(null) };
   const target = Object.create(null);
   Object.defineProperty(target, sessionKey, { value: session, enumerable: true });
   for (const key of keys) Object.defineProperty(target, key, { enumerable: true, configurable: true,
     get() { if (!Object.hasOwn(session.draft, key)) { session.before[key] = copy(root[key]); session.draft[key] = copy(session.before[key]); } return session.draft[key]; },
     set(value) { if (!Object.hasOwn(session.before, key)) session.before[key] = copy(root[key]); session.draft[key] = value; },
   });
-  return new Proxy(target, {
+  session.view = new Proxy(target, {
     get(obj, key, receiver) { if (typeof key === 'string' && !session.keys.has(key)) { if (key === 'toJSON') return undefined; throw new Error('Database table is outside selected scope: ' + key); } return Reflect.get(obj, key, receiver); },
     set(obj, key, value, receiver) { if (typeof key !== 'string' || !session.keys.has(key)) throw new Error('Database write is outside selected scope: ' + String(key)); return Reflect.set(obj, key, value, receiver); },
     deleteProperty() { throw new Error('Database table fields cannot be deleted; stage a replacement'); },
     defineProperty() { throw new Error('Database table scope cannot be extended'); },
     setPrototypeOf() { throw new Error('Database table scope cannot be extended'); },
   });
+  return session.view as Record<T, any>;
 }
 
 function rowKey(groups: any[][], location: string): ((row: any) => string) | undefined {
@@ -43,7 +44,6 @@ function rowKey(groups: any[][], location: string): ((row: any) => string) | und
 /** Three-way merge: independent fields survive; competing edits fail before acceptance. */
 function merge(before: any, next: any, current: any, location: string): any {
   if (isDeepStrictEqual(before, next)) return current;
-  if (isDeepStrictEqual(current, before) || isDeepStrictEqual(current, next)) return copy(next);
   if (plain(before) && plain(next) && plain(current)) {
     const result = { ...current };
     for (const key of new Set([...Object.keys(before), ...Object.keys(next)])) {
@@ -74,11 +74,19 @@ function merge(before: any, next: any, current: any, location: string): any {
           updates.set(id, merge(old, staged, live, location + '[' + id + ']'));
         }
       }
-      const result = current.flatMap(row => updates.has(key(row)) ? updates.get(key(row)) ? [updates.get(key(row))] : [] : [row]);
-      for (const [id, value] of updates) if (value && !currentRows.has(id)) result.push(value);
+      // Preserve untouched row identities so persistence only compares changed rows.
+      // A non-concurrent replacement still applies the caller's requested order.
+      const ordered = isDeepStrictEqual(current, before) ? next : current;
+      const result = ordered.flatMap(row => {
+        const id = key(row), value = updates.has(id) ? updates.get(id) : currentRows.get(id);
+        return value ? [value] : [];
+      });
+      const included = new Set(result.map(key));
+      for (const [id, value] of updates) if (value && !included.has(id)) result.push(value);
       return result;
     }
   }
+  if (isDeepStrictEqual(current, before) || isDeepStrictEqual(current, next)) return copy(next);
   throw new DatabaseWriteConflict(location);
 }
 
@@ -90,12 +98,15 @@ export function prepareTableCommit(value: any, current: Record<string, any>): { 
   if (!session) throw new Error('Database commit requires a selected-table session');
   for (const key of Object.keys(value)) if (!session.keys.has(key)) throw new Error('Database write is outside selected scope: ' + key);
   const changes: Record<string, any> = Object.create(null), accepted: Record<string, any> = Object.create(null);
-  for (const key of Object.keys(value)) {
-    // Accessor evaluation makes spread replacements and ordinary sessions obey the same fence.
-    const staged = copy(value[key]);
+  // Ordinary sessions must not materialize selected tables that were never read.
+  // Spreads already evaluate the accessors and retain their explicit replacements.
+  for (const key of value === session.view ? Object.keys(session.draft) : Object.keys(value)) {
+    const draft = value[key];
     if (!Object.hasOwn(session.before, key)) throw new Error('Database table was not staged: ' + key);
-    if (!isDeepStrictEqual(session.before[key], staged)) changes[key] = merge(session.before[key], staged, current[key], key);
+    if (isDeepStrictEqual(session.before[key], draft)) continue;
+    const staged = copy(draft);
+    changes[key] = merge(session.before[key], staged, current[key], key);
     accepted[key] = staged;
   }
-  return { changes, accept() { for (const key of Object.keys(accepted)) session.before[key] = copy(accepted[key]); } };
+  return { changes, accept() { for (const key of Object.keys(accepted)) session.before[key] = accepted[key]; } };
 }

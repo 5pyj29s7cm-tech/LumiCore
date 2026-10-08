@@ -1,7 +1,7 @@
 import './helpers';
 import sqlite3 from 'sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDatabase, flushDBOrThrow, getDatabasePersistenceStatus, initDatabase, querySQL, readDB, writeDB } from '../db_layer';
+import { closeDatabase, commitDatabaseTables, readDatabaseTables, flushDBOrThrow, getDatabasePersistenceStatus, initDatabase, querySQL, readDB, writeDB } from '../db_layer';
 import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 
 const stamp = '2026-10-01T00:00:00.000Z';
@@ -14,6 +14,33 @@ describe.sequential('tracked database writes', () => {
     writeDB(state); await flushDBOrThrow(); await closeDatabase(); await initDatabase();
   });
   afterEach(async () => { vi.restoreAllMocks(); await closeDatabase(); });
+
+  it('persists selected-table edits sparsely without retaining draft aliases', async () => {
+    const staged = readDatabaseTables(['memories', 'settings']);
+    const row = staged.memories[512]; row.content = 'bounded edit';
+    commitDatabaseTables(staged); await flushDBOrThrow();
+    expect(getDatabasePersistenceStatus().lastComparedRows).toBe(1);
+    expect(getDatabasePersistenceStatus().lastFlushTables).toEqual(['memories']);
+    row.content = 'uncommitted caller alias';
+    writeDB(readDB()); await flushDBOrThrow();
+    expect(getDatabasePersistenceStatus().lastComparedRows).toBe(0);
+    expect(getDatabasePersistenceStatus().lastScannedRows).toBe(0);
+    expect(await querySQL('SELECT content FROM memories WHERE id=?', [row.id])).toEqual([{ content: 'bounded edit' }]);
+    staged.memories.push({ ...row, id: 'bounded-new', content: 'new row' });
+    commitDatabaseTables(staged); await flushDBOrThrow();
+    expect(getDatabasePersistenceStatus().lastComparedRows).toBe(2);
+    await closeDatabase(); await initDatabase();
+    expect(readDB().memories.find((item: any) => item.id === 'bounded-new').content).toBe('new row');
+  });
+
+  it('retains tracking for adopted raw root aliases after bounded commits', async () => {
+    const raw = cloneDatabaseValue(readDB()); writeDB(raw); await flushDBOrThrow();
+    const staged = readDatabaseTables(['memories']); staged.memories[512].content = 'bounded edit';
+    commitDatabaseTables(staged); await flushDBOrThrow();
+    raw.memories[512].content = 'retained raw root alias';
+    writeDB(readDB()); await flushDBOrThrow();
+    expect(await querySQL('SELECT content FROM memories WHERE id=?', ['tracked-512'])).toEqual([{ content: 'retained raw root alias' }]);
+  });
 
   it('compares no unchanged rows, one edited nested row, and one edited setting', async () => {
     const state = readDB();

@@ -6,6 +6,12 @@ const plain = (value: any) => value && typeof value === 'object' && (Array.isArr
 
 /** Native structuredClone cannot accept a Proxy; preserve clone semantics for database views. */
 export function cloneDatabaseValue<T>(input: T): T {
+  // Loaded and detached tables are ordinary values. Clone them once, without
+  // first allocating another full copy of embeddings and conversation history.
+  try { return globalThis.structuredClone(databaseTarget(input)); } catch (error) {
+    if (!(error instanceof Error) || error.name !== 'DataCloneError') throw error;
+  }
+  // Nested tracked views require unwrapping before the native clone.
   const seen = new Map<any, any>();
   const copy = (value: any): any => {
     value = databaseTarget(value);
@@ -159,6 +165,12 @@ export class DatabaseSnapshots {
     this.raw = root; this.externalRoot = true;
     for (const [source, table] of this.sourceTables) table.assign(source, root[source]);
     this.view = this.rootView();
+  }
+
+  /** Install detached session results; unlike caller-owned aliases, these are tracked. */
+  acceptOwnedTable(source: string, value: any): void {
+    this.raw[source] = value;
+    this.sourceTables.get(source)?.assign(source, value, !this.externalRoot);
   }
 
   capture() {

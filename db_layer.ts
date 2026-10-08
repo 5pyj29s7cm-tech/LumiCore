@@ -142,9 +142,9 @@ export function readDatabaseTables<T extends DatabaseTableName>(tables: readonly
 export function commitDatabaseTables(data: unknown): void {
   if (databaseClosing) throw new Error('Database is closing; new writes are not accepted.');
   if (!db || !memoryDB) throw new Error('Database not initialized.');
-  const staged = prepareTableCommit(data, databaseSnapshots!.view);
+  const staged = prepareTableCommit(data, memoryDB);
   if (!Object.keys(staged.changes).length) return;
-  for (const [key, value] of Object.entries(staged.changes)) databaseSnapshots!.view[key] = value;
+  for (const [key, value] of Object.entries(staged.changes)) databaseSnapshots!.acceptOwnedTable(key, value);
   staged.accept();
   recordDatabaseDirty();
   writeRevision += 1;
