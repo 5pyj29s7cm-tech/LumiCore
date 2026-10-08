@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB } from '../db_layer';
@@ -148,7 +149,7 @@ describe('manifest-bound stale receipt evidence', () => {
     const sourceBefore = (readDB().conversationActionReceipts || []).find((row: any) => (
       row.id === sourceReceiptId
     ));
-    const sourceAssistantBefore = structuredClone(
+    const sourceAssistantBefore = cloneDatabaseValue(
       (readDB().interactions || []).find((row: any) => row.id === sourceAssistantMessageId),
     );
     const interactionCountBefore = (readDB().interactions || []).length;

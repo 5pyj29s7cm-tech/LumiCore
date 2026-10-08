@@ -1,3 +1,4 @@
+import { cloneDatabaseValue } from '../server/db/snapshot_changes';
 import './helpers';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initDatabase, readDB, writeDB } from '../db_layer';
@@ -296,7 +297,7 @@ describe('conversation action continuation state', () => {
       activeRequestId: undefined,
       goal: firstText,
     });
-    const taskBefore = structuredClone(
+    const taskBefore = cloneDatabaseValue(
       (readDB().conversationActionTasks || []).find((row: any) => row.id === taskId),
     );
     expect(taskBefore).toBeDefined();
@@ -949,7 +950,7 @@ describe('conversation action continuation state', () => {
       { requestId: taskRequestId, assistantState: 'Waiting for confirmation.' },
     );
 
-    const before = structuredClone(
+    const before = cloneDatabaseValue(
       (readDB().conversationActionTasks || []).find((row: any) => row.id === prepared.state?.taskId),
     );
     expect(before).toBeDefined();
