@@ -98,7 +98,8 @@ export function useVoiceCallControls(previousBindings: ReturnType<typeof useVoic
         voiceId: preferredVoiceIdRef.current || requestedVoiceId,
         personalityId,
         agentId,
-        conversationId: options.conversationId,
+        // UI callbacks must never place a React event or other object on the wire.
+        conversationId: typeof options.conversationId === 'string' ? options.conversationId.trim() || undefined : undefined,
         transcriptionOnly: options.transcriptionOnly === true,
         meetingId: options.transcriptionOnly ? options.meetingId : undefined,
         domain: options.domain || 'personal',

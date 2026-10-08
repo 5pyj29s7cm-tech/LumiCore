@@ -91,7 +91,7 @@ export function LumiCoreAvatar({
           )}
 
           <Button
-            onClick={callState === 'idle' ? onStartCall : onEndCall}
+            onClick={() => (callState === 'idle' ? onStartCall?.() : onEndCall?.())}
             className={`flex h-16 w-16 items-center justify-center rounded-full transition-all duration-500 ${callState !== 'idle' ? 'scale-110 bg-red-500 text-white shadow-[0_0_30px_rgba(239,68,68,0.5)]' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
           >
             {callState !== 'idle' ? <Mic size={24} className="animate-pulse" /> : <MicOff size={24} />}

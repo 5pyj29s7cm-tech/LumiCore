@@ -333,7 +333,7 @@ export function DesktopWidgetPanel({
           </button>
           <button
             data-widget-action="true"
-            onClick={isCallActive ? onEndVoice : onStartVoice}
+            onClick={() => (isCallActive ? onEndVoice() : onStartVoice())}
             className={`flex h-12 w-12 items-center justify-center rounded-full border shadow-xl backdrop-blur-lg transition-colors ${
               isCallActive
                 ? 'border-red-300/32 bg-red-500/20 text-red-100 hover:bg-red-500/28'
