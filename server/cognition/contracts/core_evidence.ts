@@ -1,3 +1,4 @@
+import { evaluateMediaGenerationEvidence } from './media_contract';
 import type { ToolExecutionRecord } from "../../tools/types";
 import { normalizeActionIntent } from "../normalized_action_intent";
 import type { ActionIntentAnalysis } from "../normalized_action_intent";
@@ -5,13 +6,12 @@ import { artifactRecordMatchesTurn } from "../../tools/artifact_evidence";
 import { isExternalCliDelegation, requestedCliProviders } from "../external_cli_intent";
 import { classifyRuntimeWorkIntent } from "../runtime_work_intent";
 import { evaluateDesktopObservationEvidence, requiresActiveWindowObservation, requiresDesktopFileListingObservation } from "../desktop_observation";
-import { isMediaPauseRequest } from "../media_intent";
 import type { TaskCapsuleV1 } from "../../conversation/task_capsule";
 import type { AcceptedTaskTarget } from "../../conversation/task_target_anchor";
 import { verifiedSkillAuthoringReceipt } from "../../skills/authoring_receipt";
 import { verifiedExternalCliStatus } from "../external_cli_status";
 import { compact, parseRecordJson, expandSuccessfulRecords, hasVisualModelAvailabilityEvidence } from "../action_contract_support";
-import { requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresCurrentAuthoringDocumentInspection, requiresDesktopAiAnswerReadback, requiresMediaPlaybackAction, isSimpleDesktopOpenRequest, requiresCadGeometryExtractionOnly, requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requestedDesktopWindowAction, requiresSourceGrounding, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, isDesktopAppInventoryRequest, isRunningSoftwareInspectionRequest } from "../action_request";
+import { requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresCurrentAuthoringDocumentInspection, requiresDesktopAiAnswerReadback, isSimpleDesktopOpenRequest, requiresCadGeometryExtractionOnly, requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requestedDesktopWindowAction, requiresSourceGrounding, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, isDesktopAppInventoryRequest, isRunningSoftwareInspectionRequest } from "../action_request";
 import { hasRequestedDesktopOpenEvidence, requestsExactReadOnlyArtifactInspection, hasVisibleAutoCadExecutionEvidence, hasBlankAutoCadDocumentEvidence, hasVerifiedExactReadOnlyArtifactEvidence, hasCurrentAppUiMutationEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence, hasMatchingDesktopObservationEvidence } from "../action_desktop_evidence";
 import { hasMediaPauseEvidence, hasMediaPlaybackEvidence } from "../action_media_evidence";
 import type { LumiActionContract } from './contracts';
@@ -31,6 +31,7 @@ export function hasCoreActionEvidence(
   acceptedTaskTarget?: AcceptedTaskTarget, analysis?: ActionIntentAnalysis
 ): boolean {
   if (!contract.applies) return true;
+  if (contract.kind === 'media_generation') return evaluateMediaGenerationEvidence(contract, records, currentTurn).complete;
   if (contract.components?.length) return contract.components.every(item => hasCoreActionEvidence(item.contract, records, item.text, taskCapsule, currentTurn, acceptedTaskTarget, analysis));
   if (contract.kind === 'skill_authoring') return Boolean(verifiedSkillAuthoringReceipt(taskText, records, currentTurn));
   const successful = expandSuccessfulRecords(records);
@@ -241,8 +242,8 @@ export function hasCoreActionEvidence(
     if (requiresVisualModelAvailabilityCheck(taskText)) {
       return hasVisualModelAvailabilityEvidence(records);
     }
-    if (isMediaPauseRequest(taskText)) return hasMediaPauseEvidence(records, taskText, currentTurn, analysis);
-    if (requiresMediaPlaybackAction(taskText)) {
+    if (contract.mediaPlayback === 'pause') return hasMediaPauseEvidence(records, taskText, currentTurn, analysis);
+    if (contract.mediaPlayback === 'play') {
       return hasMediaPlaybackEvidence(records, taskText, currentTurn, analysis);
     }
     const windowAction = requestedDesktopWindowAction(taskText);

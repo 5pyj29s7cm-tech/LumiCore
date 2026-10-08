@@ -65,6 +65,8 @@ export interface LumiTurnFlowInput {
 }
 
 export interface LumiTurnFlow {
+  /** Server-owned contract for the exact routed instruction, shared by execution and completion. */
+  acceptedActionContract?: { taskText: string; contract: import('./action_contract').LumiActionContract };
   actionFollowupIntent?: import('./action_continuation').RecentActionFollowupIntent;
   currentAppEditTarget?: string;
   /** User-authored root goal from the exact server-bound continuation task. */

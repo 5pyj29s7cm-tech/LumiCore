@@ -1,3 +1,4 @@
+import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent, withoutChatReplyDestination } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
@@ -77,6 +78,9 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
   if (authoringContract) return authoringContract;
   const runtimeContract = buildRuntimeControlContract(rawInput, text, primaryTaskText);
   if (runtimeContract) return runtimeContract;
+  if (normalizedIntent.kind === 'media_generation') {
+    return buildMediaGenerationContract(normalizedIntent.target as 'generate_image' | 'ai_edit_image' | 'generate_video', primaryTaskText || rawInput);
+  }
   // Preserve a narrow local-file inspection candidate across the generic
   // question/status guards below. Domain-specific contracts still get first
   // refusal, and the candidate is materialized only near the artifact branch.
@@ -308,7 +312,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
 
   if (isMediaPauseRequest(text)) {
     const contract = buildMediaPlaybackContract();
-    return { ...contract, label: 'Verified media pause',
+    return { ...contract, mediaPlayback: 'pause', label: 'Verified media pause',
       coreAction: 'Pause the requested player and verify that its current playback state is paused.',
       requiredEvidence: ['current-turn observation of the requested player with an explicit paused state'],
       nextStep: 'Observe the player first; if it is already paused, stop. Otherwise pause once, then observe the paused state without toggling again.' };

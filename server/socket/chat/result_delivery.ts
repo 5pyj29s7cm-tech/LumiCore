@@ -57,8 +57,7 @@ export async function completeChatTurn(context: completeChatTurnInput) {
             taskId: context.durableTaskId,
             taskLabel: context.completionTaskText,
             toolRecords: context.taskAwareRecords(context.allToolRecords),
-            blocked: finalResponse.blocked,
-            reason: finalResponse.reason,
+            finalization: finalResponse,
             status: context.pendingConfirmationCreatedThisTurn || finalResponse.reason === 'waiting_confirmation'
               ? 'waiting_confirmation' : finalResponse.reason === 'workflow_running' ? 'executing' : undefined,
           })

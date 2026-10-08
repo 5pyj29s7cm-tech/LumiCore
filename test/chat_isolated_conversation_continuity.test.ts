@@ -1,3 +1,4 @@
+import liveVideoReplays from './fixtures/live_video_completion_20261008.json';
 import './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,6 +87,7 @@ describe('closed isolated Chat conversation continuity', () => {
   const secondRequestId = `chat-isolated-continuity-second-${suffix}`;
   const statusOwnerRequestId = `chat-isolated-status-owner-${suffix}`;
   const statusSidecarRequestId = `chat-isolated-status-sidecar-${suffix}`;
+  const liveVideoText = '生成30秒可播放的宣传视频，画面里打开礼盒，1920x1080横版。';
   const videoResumeText = '继续完成原任务';
   const videoChoiceText = '按上面的“非拼写错误版”来';
   let mediaInvocation: any;
@@ -159,6 +161,17 @@ describe('closed isolated Chat conversation continuity', () => {
       const currentUserText = [...messages]
         .reverse()
         .find((message: any) => message?.role === 'user')?.content || '';
+      if (currentUserText.startsWith(liveVideoText)) {
+        const toolContext = args[11];
+        mediaInvocation = toolContext;
+        const call = toolContext.runtimeOwnedDeterministicRecoveryCall;
+        expect(call?.name).toBe('generate_video');
+        const captured = liveVideoReplays[0].record;
+        const record = { ...captured, id: 'live-socket-' + toolContext.requestId,
+          taskId: toolContext.taskId, requestId: toolContext.requestId, arguments: call.arguments };
+        await args[3]?.(record);
+        return { text: '视频已生成。', toolCalls: [record], usageRecords: [] };
+      }
       if (currentUserText.startsWith(videoChoiceText) || currentUserText.startsWith(videoResumeText) || /^(?:确认|继续)(?:\n|$)/u.test(currentUserText)) {
         const toolContext = args[11];
         mediaInvocation = toolContext;
@@ -579,6 +592,31 @@ describe('closed isolated Chat conversation continuity', () => {
     }
     fs.unlinkSync(source);
     wrongVideoDocument = false;
+  });
+
+  it.each(['chat', 'ai-creation'] as const)('keeps accepted media, terminal feedback and persisted task consistent through %s', async source => {
+    const selected = startIsolatedConversation(userId, 'lumi', 'personal', '', source === 'ai-creation' ? 'creation' : undefined);
+    const reference = path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), 'live-product-' + source + '.png');
+    fs.writeFileSync(reference, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=', 'base64'));
+    const requestId = 'live-media-contract-' + source + '-' + suffix;
+    const result = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
+    expect(await client.timeout(5_000).emitWithAck('agent:chat', {
+      requestId, conversationId: selected.id, source, text: liveVideoText, domain: 'personal', operationMode: 'assistant',
+      ...(source === 'chat'
+        ? { attachments: [{ kind: 'image', fileName: 'product.png', path: reference }] }
+        : { mediaRequest: { operation: 'image_to_video', prompt: liveVideoText, duration: 30, size: '1920x1080', referenceImage: reference } }),
+    })).toMatchObject({ ok: true });
+    const delivered = await result;
+    expect(delivered).toMatchObject({ blocked: false, finalized: true, completionFeedback: { status: 'completed', blockers: [], incomplete: [] } });
+    expect(delivered.text).toContain('不含音轨');
+    expect(delivered.artifactReceipt).toMatchObject({ verified: true, settings: { duration: 30, size: '1920x1080', hasAudio: false } });
+    expect(readDB().conversationActionTasks.find((task: any) => task.id === mediaInvocation.taskId)?.status).toBe('completed');
+    const assistant = readDB().interactions.find(row => row.role === 'assistant' && row.requestId === requestId);
+    expect(assistant?.completionFeedback).toMatchObject({ status: 'completed', blockers: [] });
+    expect(mediaInvocation.modelToolProjection.toolNames).toEqual(['generate_video']);
+    expect(getActiveConversation(userId, 'lumi', 'personal', '')?.id).toBe(activeConversationId);
+    expect(readDB().interactions.some(row => row.conversationId === activeConversationId && row.requestId === requestId)).toBe(false);
+    fs.unlinkSync(reference);
   });
 
   it('ignores client supplied UI history when the accepted server conversation is empty', async () => {

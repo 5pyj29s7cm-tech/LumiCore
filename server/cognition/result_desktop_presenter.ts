@@ -1,4 +1,4 @@
-import { buildActionContract, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresMediaPlaybackAction, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
+import { buildActionContract, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { evaluateDesktopObservationEvidence, requiresActiveWindowObservation } from './desktop_observation';
@@ -427,7 +427,7 @@ export function formatGoalSpecificDesktopResult(
     };
   }
 
-  if (requiresMediaPlaybackAction(taskText)) {
+  if (taskActionContract(input).mediaPlayback === 'play') {
     const label = requestedMediaPlayerLabel(taskText, records);
     const video = isVideoPlaybackRequest(taskText);
     const opened = hasRequestedDesktopOpenEvidence(records, taskText, label);

@@ -1,0 +1,54 @@
+[
+  {
+    "lane": "chat",
+    "taskText": "用这张参考图片生成一个30秒的TikTok圣诞玩具宣传视频，16:9横版，1920x1080，纯英文推广。保持参考图中的红色圣诞礼盒、红色蛋壳、木制小锤、可爱的彩色软胶玩具和暖色圣诞树场景，产品外观一致。镜头缓慢推进，展示轻敲蛋壳、打开惊喜、轻捏软胶玩具、节日送礼和最后产品英雄镜头，动作温柔自然、镜头流畅、温暖有趣。若显示宣传文字，仅使用准确英文：Holiday Fun; 24 Days of Surprises; Soft Squishy Toys; Great Gift for Kids; Make every day a little surprise. 参考包装上不清晰的小字不作为宣传文案。请直接生成可播放的视频成片。",
+    "requestId": "live-chat-request",
+    "taskId": "live-chat-task",
+    "record": {
+      "id": "live-chat-receipt",
+      "taskId": "live-chat-task",
+      "requestId": "live-chat-request",
+      "name": "generate_video",
+      "arguments": {
+        "operation": "image_to_video",
+        "prompt": "用这张参考图片生成一个30秒的TikTok圣诞玩具宣传视频，16:9横版，1920x1080，纯英文推广。保持参考图中的红色圣诞礼盒、红色蛋壳、木制小锤、可爱的彩色软胶玩具和暖色圣诞树场景，产品外观一致。镜头缓慢推进，展示轻敲蛋壳、打开惊喜、轻捏软胶玩具、节日送礼和最后产品英雄镜头，动作温柔自然、镜头流畅、温暖有趣。若显示宣传文字，仅使用准确英文：Holiday Fun; 24 Days of Surprises; Soft Squishy Toys; Great Gift for Kids; Make every day a little surprise. 参考包装上不清晰的小字不作为宣传文案。请直接生成可播放的视频成片。",
+        "size": "1920x1080",
+        "duration": 30,
+        "hasSource": false,
+        "hasReference": true
+      },
+      "result": "{\"ok\":true,\"status\":\"generated\",\"success\":true,\"verified\":true,\"verificationStatus\":\"verified\",\"actualSettings\":{\"size\":\"1920x1080\",\"duration\":30,\"hasAudio\":false},\"settingsMatch\":true,\"requestedSettings\":{\"size\":\"1920x1080\",\"duration\":30},\"provider\":\"relay\",\"model\":\"aliyun/Wan2.2-I2V-A14B\",\"generationMode\":\"image_to_video\",\"inputReferenceAccepted\":true,\"outputPath\":\"D:/generated/live-chat-30s.mp4\",\"artifacts\":[{\"type\":\"video\",\"path\":\"D:/generated/live-chat-30s.mp4\"}],\"composition\":{\"strategy\":\"sequential_clips_with_end_frame_continuation\",\"clipDuration\":5,\"clipCount\":6,\"models\":[\"aliyun/Wan2.2-I2V-A14B\"]}}",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "artifact",
+        "reason": "The declared artifact exists and is non-empty."
+      }
+    }
+  },
+  {
+    "lane": "creation",
+    "taskText": "用这张参考图片生成一个30秒的TikTok圣诞玩具宣传视频，16:9横版，1920x1080，纯英文推广。保持参考图中的红色圣诞礼盒、红色蛋壳、木制小锤、可爱的彩色软胶玩具和暖色圣诞树场景，产品外观一致。镜头缓慢推进，展示轻敲蛋壳、打开惊喜、轻捏软胶玩具、节日送礼和最后产品英雄镜头，动作温柔自然、镜头流畅、温暖有趣。若显示宣传文字，仅使用准确英文：Holiday Fun; 24 Days of Surprises; Soft Squishy Toys; Great Gift for Kids; Make every day a little surprise. 参考包装上不清晰的小字不作为宣传文案。请直接生成可播放的视频成片。",
+    "requestId": "live-creation-request",
+    "taskId": "live-creation-task",
+    "record": {
+      "id": "live-creation-receipt",
+      "taskId": "live-creation-task",
+      "requestId": "live-creation-request",
+      "name": "generate_video",
+      "arguments": {
+        "operation": "image_to_video",
+        "prompt": "用这张参考图片生成一个30秒的TikTok圣诞玩具宣传视频，16:9横版，1920x1080，纯英文推广。保持参考图中的红色圣诞礼盒、红色蛋壳、木制小锤、可爱的彩色软胶玩具和暖色圣诞树场景，产品外观一致。镜头缓慢推进，展示轻敲蛋壳、打开惊喜、轻捏软胶玩具、节日送礼和最后产品英雄镜头，动作温柔自然、镜头流畅、温暖有趣。若显示宣传文字，仅使用准确英文：Holiday Fun; 24 Days of Surprises; Soft Squishy Toys; Great Gift for Kids; Make every day a little surprise. 参考包装上不清晰的小字不作为宣传文案。请直接生成可播放的视频成片。",
+        "size": "1920x1080",
+        "duration": 30,
+        "hasSource": false,
+        "hasReference": true
+      },
+      "result": "{\"ok\":true,\"status\":\"generated\",\"success\":true,\"verified\":true,\"verificationStatus\":\"verified\",\"actualSettings\":{\"size\":\"1920x1080\",\"duration\":30,\"hasAudio\":false},\"settingsMatch\":true,\"requestedSettings\":{\"size\":\"1920x1080\",\"duration\":30},\"provider\":\"relay\",\"model\":\"aliyun/Wan2.2-I2V-A14B\",\"generationMode\":\"image_to_video\",\"inputReferenceAccepted\":true,\"outputPath\":\"D:/generated/live-creation-30s.mp4\",\"artifacts\":[{\"type\":\"video\",\"path\":\"D:/generated/live-creation-30s.mp4\"}],\"composition\":{\"strategy\":\"sequential_clips_with_end_frame_continuation\",\"clipDuration\":5,\"clipCount\":6,\"models\":[\"aliyun/Wan2.2-I2V-A14B\"]}}",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "artifact",
+        "reason": "The declared artifact exists and is non-empty."
+      }
+    }
+  }
+]

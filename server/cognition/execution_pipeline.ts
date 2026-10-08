@@ -1,3 +1,4 @@
+import { mediaContractForRequest } from './contracts/media_contract';
 import { TurnAnalysis } from './turn_analysis';
 import { resolveUserTurn, type TurnResolution } from './turn_resolution';
 import { restrictToolPolicyForExecutionBoundary, restrictVisibleToolRouteForExecutionBoundary } from '../tools/remote_policy';
@@ -250,6 +251,8 @@ export function buildLumiExecutionPipeline(
   if (input.acceptedResolution && (resolution.userText !== (input.userText ?? input.dispatch.text)
     || input.requestId && resolution.requestId !== input.requestId)) throw new Error('Accepted turn resolution does not match this request');
   const analysis = new TurnAnalysis(resolution);
+  // Admit the structured requirements before dispatch first reads the shared contract.
+  if (mediaRequest) analysis.contract(effectiveText, mediaContractForRequest(mediaRequest));
   const taskRelation = acceptedPlan || mediaRequest
     ? resolveActiveTaskMessageRelation(effectiveText, null)
     : revalidateAcceptedTaskRelation(input.taskRelation || resolution.taskRelation, input.actionTaskState);
@@ -322,6 +325,10 @@ export function buildLumiExecutionPipeline(
   if (resumesMediaGoal && input.actionTaskState?.goal) {
     turnIntent.flow.routeText = [input.actionTaskState.goal, turnIntent.flow.routeText].join('\n\n');
   }
+  turnIntent.flow.acceptedActionContract = Object.freeze({
+    taskText: turnIntent.flow.routeText,
+    contract: analysis.contract(turnIntent.flow.routeText, mediaRequest ? mediaContractForRequest(mediaRequest) : undefined),
+  });
   const visibilityContext = {
     executionBoundary: input.executionBoundary,
     userId: input.dispatch.userId,

@@ -2,6 +2,7 @@ import type { CapabilityLane, CapabilityOperation } from "../../tools/types";
 import { unique } from "../action_contract_support";
 
 export type LumiActionContractKind =
+  | 'media_generation'
   | 'avatar_authoring'
   | 'skill_authoring'
   | 'none'
@@ -26,6 +27,8 @@ export type LumiActionContractKind =
   | 'artifact_work';
 
 export interface LumiActionContract {
+  mediaPlayback?: 'play' | 'pause';
+  mediaGeneration?: { toolName: 'generate_image' | 'ai_edit_image' | 'generate_video'; standalone: boolean; duration?: number; size?: string; count: number; audioRequired: boolean };
   components?: Array<{ text: string; contract: LumiActionContract }>;
   applies: boolean;
   kind: LumiActionContractKind;
@@ -48,6 +51,7 @@ export interface ActionCapabilityRequirement {
 }
 
 const ACTION_CAPABILITY_REQUIREMENTS: Partial<Record<LumiActionContractKind, ActionCapabilityRequirement[]>> = {
+  media_generation: [{ lanes: ['media'], operations: ['create', 'test'], terms: ['generate', 'image', 'video', 'artifact'] }],
   messaging_read: [{ lanes: ['messaging', 'desktop'], operations: ['observe'], terms: ['message', 'wechat', 'chat', 'window', 'screen', 'ocr'] }],
   messaging_send: [{ lanes: ['messaging', 'desktop'], operations: ['communicate', 'mutate'], terms: ['message', 'wechat', 'send', 'file', 'desktop'] }],
   browser_account: [{ lanes: ['web', 'desktop'], operations: ['observe', 'mutate'], terms: ['login', 'session', 'account', 'browser', 'page'] }],

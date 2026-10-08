@@ -32,3 +32,17 @@ it('prevents downstream contract mutations from changing later planning decision
   expect(analysis.contract('打开电脑上的 WPS').verificationTools).toEqual(expected);
   expect(analysis.contract('不要调用工具，只解释 WPS 是什么。').applies).toBe(false);
 });
+
+it.each(['chat', 'ai-creation', 'voice'] as const)('carries the frozen accepted media contract into %s finalization', source => {
+  const registry = new ToolRegistry(); registerAllTools(registry);
+  const pipeline = buildLumiExecutionPipeline({ dispatch: { userId: 'accepted-media-contract', channel: source === 'voice' ? 'voice' : 'chat', source,
+    text: '生成30秒可播放的视频，画面里打开礼盒。', operationMode: 'assistant' }, registry,
+    ...(source === 'ai-creation' ? { structuredMediaRequest: { operation: 'text_to_video' as const, prompt: 'Open the product box. English voiceover and background music.', duration: 30, size: '1920x1080' } } : {}) });
+  const accepted = pipeline.turnIntent.flow.acceptedActionContract!;
+  expect(accepted.taskText).toBe(pipeline.turnIntent.flow.routeText);
+  expect(accepted.contract).toMatchObject({ kind: 'media_generation', mediaGeneration: { duration: 30, standalone: true } });
+  expect(accepted.contract.mediaPlayback).toBeUndefined();
+  expect(accepted.contract.mediaGeneration!.audioRequired).toBe(source === 'ai-creation');
+  expect(() => accepted.contract.mediaGeneration!.duration = 5).toThrow();
+  expect(() => accepted.contract.preferredTools.push('desktop_open')).toThrow();
+});

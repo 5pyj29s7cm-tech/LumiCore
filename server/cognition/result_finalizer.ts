@@ -22,7 +22,6 @@ import { missingTaskInputResult } from './missing_task_input';
 import { getArtifactTaskProgress } from './action_contract';
 import { formatArtifactProgress } from './artifact_progress';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
-import { isMediaPauseRequest } from './media_intent';
 import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 import { buildOperationModeMetaResponse } from './capability_meta';
 import { formatGroundedKnowledgeObservation } from './knowledge_result';
@@ -160,7 +159,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation', 'artifact_work'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation', 'artifact_work', 'media_generation'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
@@ -702,7 +701,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       : `The workbook was saved, but these requested features are not verified: ${missingSpreadsheet.join(', ')}. The task is incomplete.`,
     blocked: true, reason: `spreadsheet_requirements_missing:${missingSpreadsheet.join(',')}`,
   };
-  if (isMediaPauseRequest(actionText)) {
+  if (actionContract.mediaPlayback === 'pause') {
     const verified = hasMediaPauseEvidence(input.toolRecords || [], actionText, { requestId: input.requestId, taskId: input.taskId });
     const zh = isChineseText(actionText);
     return { text: verified

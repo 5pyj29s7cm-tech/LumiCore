@@ -26,8 +26,8 @@ export class TurnAnalysis {
     return this.intents.get(text)!;
   }
 
-  contract(text: string): LumiActionContract {
-    if (!this.contracts.has(text)) this.contracts.set(text, freeze(buildActionContract(text, this.intent(text), this)));
+  contract(text: string, acceptedContract?: LumiActionContract): LumiActionContract {
+    if (!this.contracts.has(text)) this.contracts.set(text, freeze(acceptedContract ?? buildActionContract(text, this.intent(text), this)));
     return this.contracts.get(text)!;
   }
 

@@ -20,6 +20,8 @@ export const CN_EXECUTION_EVIDENCE_MESSAGES = {
   formulaResultsHeading: '公式计算结果：',
   spreadsheetIncomplete: (missing: string[]) => `表格文件已保存，但${missing.map(key => ({ formulas: '可计算的公式', calculation: '公式计算结果', chart: '图表', grand_total_formula: '总计公式' }[key] || key)).join('、')}还未核实完成，这项任务尚未全部完成。`,
   imageGenerated: '图片已生成。',
+  mediaDeliverableMismatch: '已保留现有文件，但产物类型与请求不符，这项生成任务尚未完成，不会自动重复生成。',
+  imageSettingsReview: '已保留现有图片，但图片数量或参数尚未满足请求，这项任务尚未全部完成。',
   videoDeliverableMismatch: (files: string[]) => `这次保存的是文档或图片素材${files.length ? '（' + files.join('、') + '）' : ''}，没有交付你要求的视频。视频任务尚未完成，已有文件会保留，不会自动重复生成。`,
   videoAudioIncomplete: (hasAudio?: boolean) => hasAudio === false
     ? '视频画面已保存，但文件不含音轨，未满足你要求的声音。这项任务尚未全部完成，现有视频已保留，不会自动重复生成。'

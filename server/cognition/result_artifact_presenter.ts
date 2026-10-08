@@ -1,5 +1,3 @@
-import { mediaGenerationIntent } from './normalized_action_intent';
-import { requestedVideoDuration, requestedVideoAudio } from '../../shared/video_generation_options';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
@@ -15,7 +13,7 @@ import fs from 'node:fs';
 import { CN_RESULT_GROUNDING_MESSAGES } from "../regions/messages/voice_fast_path_messages";
 import { CN_CAD_MESSAGES } from "../regions/messages/cad_messages";
 import { CN_EXTERNAL_AI_MESSAGES } from "../regions/messages/external_ai_messages";
-import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
+import { evaluateMediaGenerationEvidence } from './contracts/media_contract';
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
 import { recordMatchesCurrentTurnIdentity, isChineseText, resultTaskText, taskActionContract, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, findUnresolvedArtifactPlaceholder } from "./result_finalizer_support";
 
@@ -858,48 +856,32 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   const mediaRequest = input.flow?.structuredMediaRequest;
   const task = resultTaskText(input);
   const languageText = mediaRequest ? input.taskText : task;
-  // A generator receipt proves generation only, not a requested publication,
-  // document, delivery or subsequent application action.
-  // i18n-allow: Media creation versus compound external-work input recognition.
-  if ((!mediaRequest && !/(?:生成|创建|制作|绘制|画).{0,90}(?:图片|图像|插画|海报|视频)|\b(?:generate|create|draw|make).{0,80}(?:image|picture|video)\b/iu.test(task))
-    || /(?:发送|发给|上传|发布|打开|导出|写入|保存到|CAD|图纸|文档|PPT)|\b(?:send|upload|publish|open|export|document|save to|cad)\b/iu.test(task)) return null; // i18n-allow: Compound task boundaries.
-  // i18n-allow: Requested media kind, excluding covers and document-only briefs.
-  const videoRequested = mediaRequest ? ['text_to_video', 'image_to_video'].includes(mediaRequest.operation) : mediaGenerationIntent(task)?.target === 'generate_video';
-  const record = [...(input.toolRecords || [])].reverse().find(item => /^(?:generate_image|get_image_generation_status|ai_edit_image|generate_video)$/u.test(item.name));
-  const receipt = record && isVerifiedCurrentTurnRecord(input, record) ? buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error) : null;
-  if (videoRequested && !receipt?.artifacts.some(artifact => artifact.kind === 'video')) {
-    const outputs = (input.toolRecords || []).filter(item => isArtifactProducerRecord(item) && isVerifiedCurrentTurnRecord(input, item))
-      .map(artifactPathFromRecord).filter(file => /\.(?:docx?|pdf|txt|md|pptx?|xlsx?|png|jpe?g|webp)$/iu.test(file));
-    const files = [...new Set(outputs.map(file => file.split(/[\\/]/u).at(-1)!))].slice(0, 5);
-    if (files.length || receipt?.artifacts.some(artifact => artifact.kind !== 'video')) return {
-      text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoDeliverableMismatch(files)
-        : `The saved output ${files.length ? '(' + files.join(', ') + ')' : ''} is supporting material, not the requested video. Video creation is incomplete; existing files are preserved and generation will not be retried automatically.`,
-      blocked: true, reason: 'media_output_type_mismatch',
-    };
+  const contract = taskActionContract(input);
+  if (contract.kind !== 'media_generation') return null;
+  const verdict = evaluateMediaGenerationEvidence(contract, input.toolRecords || [], input);
+  if (verdict.reason === 'media_followup_unverified') return null;
+  const receipt = verdict.receipt;
+  if (verdict.reason === 'media_output_type_mismatch') {
+    const files = [...new Set((input.toolRecords || []).filter(item => isArtifactProducerRecord(item) && isVerifiedCurrentTurnRecord(input, item))
+      .map(artifactPathFromRecord).filter(Boolean).map(file => file.split(/[\\/]/u).at(-1)!))].slice(0, 5);
+    if (!files.length && !(input.toolRecords || []).some(item => isVerifiedCurrentTurnRecord(input, item) && /^(?:generate_image|ai_edit_image|generate_video)$/u.test(item.name))) return null;
+    return { text: isChineseText(languageText) ? contract.mediaGeneration?.toolName === 'generate_video'
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.videoDeliverableMismatch(files) : CN_EXECUTION_EVIDENCE_MESSAGES.mediaDeliverableMismatch
+      : 'The existing output does not match the requested media. It is preserved; generation will not be retried automatically.',
+      blocked: true, reason: verdict.reason };
   }
   if (!receipt) return null;
-  if (receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedVideoAudio(mediaRequest?.prompt || task) && receipt.settings.hasAudio !== true) return {
+  if (verdict.reason === 'media_audio_requirement_unmet') return {
     text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoAudioIncomplete(receipt.settings.hasAudio)
       : 'The video file was saved, but the requested audio is missing or unverified. The task is incomplete; the existing video is preserved and generation will not be retried automatically.',
-    blocked: true, reason: 'media_audio_requirement_unmet',
+    blocked: true, reason: verdict.reason,
   };
-  const requestedDuration = mediaRequest?.duration ?? requestedVideoDuration(task);
-  const durationMismatch = receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedDuration !== undefined
-    && (!Number.isFinite(receipt.settings.duration) || Math.abs(Number(receipt.settings.duration) - requestedDuration) > 0.35);
-  if (receipt.settingsMatch === false || durationMismatch) return {
-    text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoSettingsReview(receipt.settings.size, receipt.settings.duration)
-      : `The video was saved, but its measured settings (${receipt.settings.size || 'unknown size'}, ${receipt.settings.duration ?? 'unknown'} seconds) do not match the request or could not be verified. Review the existing file before generating again.`,
-    blocked: true, reason: 'media_settings_mismatch',
+  if (!verdict.complete) return {
+    text: isChineseText(languageText) ? contract.mediaGeneration?.toolName === 'generate_video'
+      ? CN_EXECUTION_EVIDENCE_MESSAGES.videoSettingsReview(receipt.settings.size, receipt.settings.duration) : CN_EXECUTION_EVIDENCE_MESSAGES.imageSettingsReview
+      : 'The saved media does not match the accepted settings. Review the existing file before generating again.',
+    blocked: true, reason: verdict.reason,
   };
-  const requestedKind = videoRequested ? 'video' : 'image';
-  if (receipt.artifacts.some(artifact => artifact.kind !== requestedKind)) return null;
-  // i18n-allow: Multiple distinct media deliverables cannot share one receipt.
-  if (/(?:图片|图像).{0,12}(?:和|以及|再|并).{0,12}视频|\b(?:image|picture).{0,12}(?:and|then).{0,12}video\b/iu.test(task)) return null;
-  // i18n-allow: Explicit image counts are completion requirements.
-  const countText = task.match(/(?:生成|创建|制作|画|绘制)\s*([一二两三四五六七八九十\d]+)\s*张/u)?.[1];
-  const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }; // i18n-allow: Number recognition.
-  const requestedCount = countText ? chineseCounts[countText] || Number(countText) : 1;
-  if (!Number.isSafeInteger(requestedCount) || receipt.artifacts.length < requestedCount) return null;
   const zh = isChineseText(languageText);
   const text = receipt.artifacts[0].kind === 'video'
     ? zh ? CN_EXECUTION_EVIDENCE_MESSAGES.videoGenerated(receipt.settings.hasAudio)

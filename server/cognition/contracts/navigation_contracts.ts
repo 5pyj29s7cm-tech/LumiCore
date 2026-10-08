@@ -70,6 +70,7 @@ export function buildMediaPlaybackContract(): LumiActionContract {
   return withDefaults({
     kind: 'desktop_operation',
     label: 'Verified music playback',
+    mediaPlayback: 'play',
     coreAction: 'Open or focus the requested music player and start playback in that exact player.',
     preparationIsNotCompletion: [
       'listing installed applications',

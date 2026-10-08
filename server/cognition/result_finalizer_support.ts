@@ -1,3 +1,4 @@
+import { mediaContractForRequest } from './contracts/media_contract';
 import { buildActionEvidenceContract, extractPrimaryTaskText, hasCoreActionEvidence } from './action_contract';
 import type { ToolExecutionRecord } from '../tools/types';
 import { toolRecordSucceeded } from './task_execution_ledger';
@@ -73,7 +74,9 @@ export function isVerifiedCurrentTurnRecord(
 
 export function taskActionContract(input: LumiResultFinalizerInput) {
   const text = resultTaskText(input);
-  const contract = buildActionEvidenceContract(text);
+  const accepted = input.flow?.acceptedActionContract;
+  const contract = accepted?.taskText === text ? accepted.contract : input.flow?.structuredMediaRequest
+    ? mediaContractForRequest(input.flow.structuredMediaRequest) : buildActionEvidenceContract(text);
   if (!input.flow?.preparationRootText) return contract;
   const root = input.flow.preparationRootText;
   return { ...contract, components: [

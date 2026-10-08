@@ -175,8 +175,7 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
           taskId: context.durableTaskId!,
           taskLabel: confirmedTask,
           toolRecords: context.taskAwareRecords(confirmationRecords),
-          blocked: finalized.blocked,
-          reason: finalized.reason,
+          finalization: finalized,
           status: context.pendingConfirmationCreatedThisTurn ? 'waiting_confirmation' : undefined,
         });
         const confirmationTerminalPayload = context.normalizeAgentPayload('agent:response', {

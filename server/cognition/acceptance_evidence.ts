@@ -11,15 +11,12 @@ import {
 import {
   parseReceiptObject,
   toolRecordHasTerminalPayload,
-  toolRecordTerminalPayload,
 } from '../tools/receipt_payload';
-import { buildActionEvidenceContract, hasCoreActionEvidence, hasMediaPlaybackEvidence, requiresMediaPlaybackAction } from './action_contract';
+import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { getArtifactTaskProgress } from './action_contract';
 import { artifactProgressFeedback } from './artifact_progress';
 import { isExternalCliRequest } from './external_cli_intent';
-import { normalizeActionIntent } from './normalized_action_intent';
-import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 
 export type AcceptanceStage = 'registered' | 'available' | 'exercised' | 'verified';
 export type RuntimeSampleStatus = 'not_exercised' | 'unknown' | 'degraded' | 'verified';
@@ -416,6 +413,8 @@ export function buildTaskCompletionFeedback(
  * explicit task lifecycle status produces feedback.
  */
 export function buildForegroundTaskCompletionFeedback(input: {
+  /** The finalizer already adjudicated this turn. Feedback only projects that verdict. */
+  finalization?: Pick<import('./result_finalizer_types').LumiResultFinalizerResult, 'blocked' | 'reason'>;
   taskId: string;
   taskLabel: string;
   toolRecords?: ToolExecutionRecord[];
@@ -443,36 +442,25 @@ export function buildForegroundTaskCompletionFeedback(input: {
       nextSteps: ['Approve or reject the pending action to continue.'],
     };
   }
-  if (records.length === 0 && !input.blocked && !input.status) return undefined;
-  const contract = buildActionEvidenceContract(input.taskLabel);
-  // Runtime task control has a single exact ledger contract. Do not allow a
-  // successful file/process observation to promote a failed cancellation or
-  // status probe into completed foreground feedback. Broader action kinds are
-  // adjudicated by the result finalizer, whose target rules are richer than
-  // this compact cross-runtime summary layer.
-  const mediaIntent = normalizeActionIntent(input.taskLabel);
-  const missingMediaEvidence = mediaIntent.kind === 'media_generation' && !records.some(record => (
-    record.name === mediaIntent.target
-    && record.terminalVerification?.status === 'verified'
-    && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error)
-  ));
+  if (records.length === 0 && !input.finalization?.blocked && !input.blocked && !input.status) return undefined;
+  const contract = input.finalization ? undefined : buildActionEvidenceContract(input.taskLabel);
   const requestIds = [...new Set(records.map(record => record.requestId || record.envelope?.requestId).filter(Boolean))];
-  const artifactProgress = contract.kind === 'artifact_work'
-    ? getArtifactTaskProgress(input.taskLabel, records, { taskId: input.taskId,
-      ...(requestIds.length === 1 ? { requestId: requestIds[0] } : {}) }) : null;
-  const missingPlayback = requiresMediaPlaybackAction(input.taskLabel) && !hasMediaPlaybackEvidence(records, input.taskLabel,
-    requestIds.length === 1 ? { requestId: requestIds[0], taskId: input.taskId } : undefined);
-  const missingRequestedActionEvidence = missingMediaEvidence || missingPlayback
-    || Boolean(artifactProgress && !artifactProgress.complete)
-    || missingSpreadsheetRequirements(input.taskLabel, records).length > 0 || ((contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
-    && !hasCoreActionEvidence(contract, records, input.taskLabel, undefined, { taskId: input.taskId }));
+  const scope = { taskId: input.taskId, ...(requestIds.length === 1 ? { requestId: requestIds[0] } : {}) };
+  const artifactProgress = contract?.kind === 'artifact_work'
+    ? getArtifactTaskProgress(input.taskLabel, records, scope) : null;
+  const missingRequestedActionEvidence = Boolean(contract && (
+    Boolean(artifactProgress && !artifactProgress.complete)
+    || missingSpreadsheetRequirements(input.taskLabel, records).length > 0
+    || ((contract.kind === 'media_generation' || contract.mediaPlayback || contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
+      && !hasCoreActionEvidence(contract, records, input.taskLabel, undefined, scope))
+  ));
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
-    : input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence
+    : input.finalization?.blocked || input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence
       ? 'blocked'
       : 'completed';
-  const terminalReason = input.reason || (missingRequestedActionEvidence
-    ? `The tool receipts do not verify the requested ${contract.label.toLowerCase()}.`
+  const terminalReason = input.finalization?.reason || input.reason || (missingRequestedActionEvidence
+    ? `The tool receipts do not verify the requested ${contract!.label.toLowerCase()}.`
     : undefined);
   const receipt = buildTaskTerminalReceipt({
     taskId: input.taskId,
@@ -483,7 +471,7 @@ export function buildForegroundTaskCompletionFeedback(input: {
       ? 'terminal_persistence_unknown'
       : input.status === 'cancelled'
         ? 'task_cancelled'
-        : input.blocked
+        : input.finalization?.blocked || input.blocked
           ? 'foreground_execution_blocked'
           : undefined,
     reason: terminalReason,
