@@ -39,6 +39,7 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
       finalized?: boolean;
       blocked?: boolean;
       reason?: string;
+      status?: string;
       sidecar?: boolean;
       taskRelation?: unknown;
       completionFeedback?: unknown;
@@ -167,6 +168,7 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
         finalized: data.finalized,
         blocked: data.blocked,
         reason: data.reason,
+        status: data.status,
       };
       currentTurnUiMetaRef.current = turnMeta || currentTurnUiMetaRef.current;
       currentTurnUiMetaRef.current.finalization = finalization;
@@ -174,8 +176,6 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
         setWorkflowStatus('error');
         const rejected = describeTurnCompletionProgress(
           isZh,
-          turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
-          true,
           { finalized: false, blocked: true, reason: data.reason },
         );
         finishChatProgress(rejected.text, rejected.tone);
@@ -183,17 +183,12 @@ export function useChatSocketEvents(previousBindings: ReturnType<typeof useChatS
         return;
       }
       const finalizedSuccess = isFinalizedSuccessfulResponse(data);
+      const completion = describeTurnCompletionProgress(isZh, finalization);
       const wasCancelled = responseWasCancelled;
       setWorkflowStatus(
         wasCancelled
           ? 'cancelled'
-          : data.blocked ? 'error' : finalizedSuccess ? 'done' : 'idle'
-      );
-      const completion = describeTurnCompletionProgress(
-        isZh,
-        turnMeta?.hadTool ?? currentTurnUiMetaRef.current.hadTool,
-        turnMeta?.needsEvidence ?? currentTurnUiMetaRef.current.needsEvidence,
-        finalization,
+          : completion.tone === 'confirmation' ? 'waiting_confirmation' : data.blocked ? 'error' : finalizedSuccess ? 'done' : 'idle'
       );
       finishChatProgress(completion.text, completion.tone);
       if (data.blocked || finalizedSuccess) scheduleWorkflowReset(data.requestId);

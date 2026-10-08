@@ -20,7 +20,7 @@ import { withoutLocationLiterals } from './location_literals';
 import { buildTaskTargetAnchorProjection, isVerifiedProducedDocumentTarget } from '../conversation/task_target_anchor';
 import { missingTaskInputResult } from './missing_task_input';
 import { getArtifactTaskProgress } from './action_contract';
-import { formatArtifactProgress } from './artifact_progress';
+import { formatArtifactProgress, artifactProgressFeedback } from './artifact_progress';
 import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 import { buildOperationModeMetaResponse } from './capability_meta';
@@ -687,6 +687,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (artifactProgress && !artifactProgress.complete) return {
     text: formatArtifactProgress(artifactProgress, actionText), blocked: true,
     reason: `artifact_step_pending:${artifactProgress.next}`,
+    progress: artifactProgressFeedback(artifactProgress, actionText),
   };
   if (!artifactProgress && input.completionGuard?.blocked && ['model_failed_before_tool_execution', 'media_generation_failed'].includes(input.completionGuard.reason || '')) {
     return { text: input.completionGuard.text, blocked: true, reason: input.completionGuard.reason };
@@ -906,6 +907,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         requestId: input.requestId,
         taskId: input.taskId,
         acceptedTaskTarget: input.flow?.acceptedTaskTarget,
+        acceptedActionContract: input.flow?.acceptedActionContract,
       });
   const unsupportedDiagnostic = unsupportedPriorDiagnosticClaim(input);
   if (unsupportedDiagnostic) {
@@ -1018,7 +1020,8 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const groundedSkillDraft = formatGroundedSkillDraft(input);
   if (groundedSkillDraft) return groundedSkillDraft;
   const groundedArtifact = formatGroundedArtifactResult(input);
-  if (groundedArtifact) return preserveModelWordingOnGroundedSuccess(input, groundedArtifact);
+  if (groundedArtifact) return { ...preserveModelWordingOnGroundedSuccess(input, groundedArtifact),
+    ...(artifactProgress ? { progress: artifactProgressFeedback(artifactProgress, actionText) } : {}) };
   const groundedCadGeometry = formatGroundedCadGeometryExtractionResult(input);
   if (groundedCadGeometry) return preserveModelWordingOnGroundedSuccess(input, groundedCadGeometry);
   const groundedExternalAiHistory = formatExternalAiHistoryResult(input);

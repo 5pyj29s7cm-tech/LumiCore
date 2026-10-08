@@ -9,7 +9,6 @@ export type WorkflowStatus = 'idle' | 'thinking' | 'background' | 'executing' | 
 
 export type ChatTurnUiMeta = {
   hadTool: boolean;
-  needsEvidence: boolean;
   finalization: ChatResponseFinalization | null;
 };
 

@@ -1,6 +1,6 @@
 import { finalizeLumiResponse, type LumiResultFinalizerInput, type LumiResultFinalizerResult } from './result_finalizer';
 import { finalizeExecutionForOutboundDelivery, type OutboundExecutionFinalizationInput } from './execution_guard_recovery';
-import { buildActionContract } from './action_contract';
+import { buildActionEvidenceContract } from './action_contract';
 import { needsRecentActionContinuationContext } from './action_continuation';
 import type { LumiTurnFlow } from './turn_flow';
 import { isOperationModeMetaQuestion } from './capability_meta';
@@ -48,6 +48,7 @@ export interface FinalizedOutputGateInput {
   allowToolUse?: boolean;
   flow: Pick<
     LumiTurnFlow,
+    | 'acceptedActionContract'
     | 'allowToolUseForTurn'
     | 'selfRepairTurn'
     | 'clientActionOnlyTurn'
@@ -69,7 +70,7 @@ export function shouldDeferModelOutputUntilFinalized(
 ): boolean {
   const taskText = String(input.taskText || '').trim();
   const routeText = String(input.flow.routeText || taskText).trim();
-  const contract = buildActionContract(routeText);
+  const contract = buildActionEvidenceContract(routeText, undefined, input.flow.acceptedActionContract);
 
   return Boolean(
     input.allowToolUse

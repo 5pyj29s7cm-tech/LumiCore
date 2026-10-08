@@ -1,4 +1,4 @@
-import { buildActionContract, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
+import { extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, requestedMediaPlayerTarget, hasMediaPlaybackEvidence, hasRequestedDesktopOpenEvidence, hasVisualModelAvailabilityEvidence, requiresCurrentAuthoringDocumentInspection, requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresVisibleAutoCadExecution, resolveVerifiedCurrentAuthoringDocumentEvidence } from './action_contract';
 import { parseReceiptObject, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { evaluateDesktopObservationEvidence, requiresActiveWindowObservation } from './desktop_observation';
@@ -134,7 +134,7 @@ export function formatGroundedSimpleDesktopOpenResult(
       ? String([...(input.toolRecords || [])].reverse().find(record => /^(?:desktop_open|browser_open_task)$/i.test(record.name))?.arguments?.target || '')
       : '');
   if (!requestedTarget) return null;
-  const contract = buildActionContract(actionText);
+  const contract = taskActionContract(input);
   if (contract.kind !== 'desktop_operation') return null;
   const records = input.toolRecords || [];
   let openIndex = -1;

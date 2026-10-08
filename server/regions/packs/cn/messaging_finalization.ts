@@ -6,7 +6,7 @@ import { finalizeLumiResponseForDelivery, type LumiResponseDeliveryInput } from 
 import type { DesktopRelay, DesktopRelayOptions } from '../../../socket/desktop_relay';
 import type { IncomingMessage, MessageHandler } from '../../../messaging/types';
 import type { personalityRegistry } from '../../../personality/registry';
-import { parseNestedJson } from '../../../tools/receipt_payload';
+import { parseNestedJson, parseStoredArray } from '../../../tools/receipt_payload';
 
 export class MessagingReplyDurabilityError extends Error {
   readonly stage: 'accepted_turn' | 'terminal_reply';
@@ -120,18 +120,6 @@ export interface MessagingConversationUpdate {
 export interface IncomingMessageTransport {
   enrich: (message: IncomingMessage) => Promise<IncomingMessage>;
   reply: (message: IncomingMessage, text: string) => Promise<string | void>;
-}
-
-function parsePersistedToolRecords(value: unknown): any[] {
-  let current = value;
-  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
-    try {
-      current = JSON.parse(current);
-    } catch {
-      return [];
-    }
-  }
-  return Array.isArray(current) ? current : [];
 }
 
 function isFileReceiptToolName(name: string): boolean {
@@ -318,7 +306,7 @@ function summarizeRemoteToolRecord(record: any, message?: any): string {
 export function buildRemoteRuntimeEvidenceContext(messages: any[]): string {
   const lines = messages
     .slice(-12)
-    .flatMap(message => parsePersistedToolRecords(message?.toolCalls)
+    .flatMap(message => parseStoredArray(message?.toolCalls, 2)
       .map(record => summarizeRemoteToolRecord(record, message)))
     .filter(Boolean)
     .slice(-10);

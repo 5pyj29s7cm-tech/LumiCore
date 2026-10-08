@@ -1,3 +1,4 @@
+import { canonicalJson } from '../../shared/stable_json';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type {
@@ -194,14 +195,6 @@ function normalizeStoredNativeClientIdentity(value: unknown): NativeClientIdenti
   return normalized;
 }
 
-function stableIdentityValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableIdentityValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map(key => [key, stableIdentityValue((value as Record<string, unknown>)[key])]));
-}
-
 /** Non-secret fingerprint used to bind persisted request evidence to one claim. */
 export function nativeClientIdentitySha256(value: unknown): string {
   // Socket state and the device registry contain the normalized identity,
@@ -212,7 +205,7 @@ export function nativeClientIdentitySha256(value: unknown): string {
   const identity = normalizeStoredNativeClientIdentity(value);
   if (!identity) return '';
   return crypto.createHash('sha256')
-    .update(JSON.stringify(stableIdentityValue(identity)), 'utf8')
+    .update(canonicalJson(identity), 'utf8')
     .digest('hex');
 }
 

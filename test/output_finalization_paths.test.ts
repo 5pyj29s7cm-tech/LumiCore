@@ -106,7 +106,7 @@ describe('finalized output paths', () => {
     ]) {
       expect(component).toContain('currentTurnUiMetaRef');
       expect(component).toContain('currentTurnUiMetaRef.current.finalization = finalization');
-      expect(component).toContain('currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null }');
+      expect(component).toContain('currentTurnUiMetaRef.current = { hadTool: false, finalization: null }');
       expect(component).not.toContain('currentResponseFinalizationRef');
     }
   });

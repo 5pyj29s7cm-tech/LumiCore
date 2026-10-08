@@ -427,7 +427,7 @@ export function useChatIdentityAndState({
   const lastChatProgressTextRef = useRef('');
   const chatProgressClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The foreground view points to the request's metadata instead of copying its fields.
-  const currentTurnUiMetaRef = useRef<ChatTurnUiMeta>({ hadTool: false, needsEvidence: false, finalization: null });
+  const currentTurnUiMetaRef = useRef<ChatTurnUiMeta>({ hadTool: false, finalization: null });
   const terminalReceiptsRef = useRef(new ChatTerminalReceiptLedger());
   const chatRequestLedgerRef = useRef(new ChatRequestLedger());
   const taskRelationLedgerRef = useRef(new ChatTaskRelationLedger());

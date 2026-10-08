@@ -60,6 +60,7 @@ export function runResolvedLumiTurn(input: ResolvedTurnModelInput): Promise<LLMR
       toolPolicy: execution.authorizationPolicy,
       modelToolProjection: execution.modelToolProjection,
       currentTurnExecutionRequested: true,
+      acceptedActionContract: execution.turnIntent.flow.acceptedActionContract,
       trustedActionContinuation: execution.trustedActionContinuation,
       actionIntent: toolSession.context?.actionIntent ?? execution.resolution.userText,
       routedTaskText: toolSession.context?.routedTaskText ?? execution.turnIntent.flow.routeText,

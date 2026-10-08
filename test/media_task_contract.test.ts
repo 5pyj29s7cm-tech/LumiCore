@@ -2,12 +2,15 @@ import './helpers';
 import { describe, expect, it } from 'vitest';
 import replays from './fixtures/live_video_completion_20261008.json';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
-import { buildActionContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
+import { buildActionContract, buildActionEvidenceContract, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { evaluateMediaGenerationEvidence, mediaContractForRequest } from '../server/cognition/contracts/media_contract';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { buildForegroundTaskCompletionFeedback } from '../server/cognition/acceptance_evidence';
 import { recordsToTaskReceipts, taskCompletionFromReceipts } from '../server/cognition/task_execution_ledger';
-import type { ToolExecutionRecord } from '../server/tools/types';
+import type { ToolContext, ToolExecutionRecord } from '../server/tools/types';
+import { hasCompletedCoreAction, guardToolResponseIfNeeded } from '../server/llm/tool_loop/projection';
+import { hasPendingVerificationObligation } from '../server/llm/tool_loop/recovery';
+import { shouldBlockForDesktopControlPause } from '../server/cognition/desktop_control_pause';
 import type { LumiTurnFlow } from '../server/cognition/turn_flow';
 
 describe('one completion contract across the media task lifecycle', () => {
@@ -79,6 +82,28 @@ describe('one completion contract across the media task lifecycle', () => {
     const request = { operation: 'text_to_video' as const, prompt: 'Open the product box. A customer sends a gift, then plays with the toy.', duration: 30, size: '1920x1080' };
     const contract = mediaContractForRequest(request);
     expect(contract).toMatchObject({ kind: 'media_generation', mediaGeneration: { standalone: true, toolName: 'generate_video' } });
+  });
+
+  it('keeps the accepted creative operation through the tool loop, verification and desktop pause', () => {
+    const replay = replays[0];
+    const taskText = 'Generate a 30 second video. Open the product box. A customer sends a gift, then plays with the toy.';
+    const contract = mediaContractForRequest({ operation: 'text_to_video', prompt: taskText, duration: 30, size: '1920x1080' });
+    const record = replay.record as ToolExecutionRecord;
+    const context = { taskId: replay.taskId, requestId: replay.requestId, acceptedActionContract: { taskText, contract } } as ToolContext;
+    expect(buildActionEvidenceContract(taskText, undefined, context.acceptedActionContract)).toBe(contract);
+    expect(hasCompletedCoreAction(taskText, [record], context)).toBe(true);
+    expect(hasPendingVerificationObligation(taskText, [record], context)).toBe(false);
+    const guarded = guardToolResponseIfNeeded({ task: taskText, response: 'Generated.', toolCalls: [record], ...context });
+    expect(guarded.blocked, guarded.reason).toBe(false);
+    expect(shouldBlockForDesktopControlPause({ taskText, toolRecords: [record], pauseReason: 'desktop_control_paused_for_user_activity', ...context })).toBe(false);
+    for (const stale of [{ ...record, requestId: 'old-request' }, { ...record, taskId: 'old-task' }]) {
+      expect(hasCompletedCoreAction(taskText, [stale], context)).toBe(false);
+      expect(shouldBlockForDesktopControlPause({ taskText, toolRecords: [stale], pauseReason: 'desktop_control_paused_for_user_activity', ...context })).toBe(true);
+    }
+    expect(buildActionEvidenceContract('Play this video', undefined, context.acceptedActionContract)).not.toBe(contract);
+    const audioContract = mediaContractForRequest({ operation: 'text_to_video', prompt: '生成30秒带英文配音的视频', duration: 30, size: '1920x1080' });
+    expect(hasCompletedCoreAction(taskText, [record], { ...context, acceptedActionContract: { taskText, contract: audioContract } })).toBe(false);
+    expect(hasPendingVerificationObligation(taskText, [record], { ...context, acceptedActionContract: { taskText, contract: audioContract } })).toBe(true);
   });
 
   it('reports an incomplete image count as an image requirement', () => {

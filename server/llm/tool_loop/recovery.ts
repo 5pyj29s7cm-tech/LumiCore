@@ -1,8 +1,9 @@
+import { canonicalJson } from '../../../shared/stable_json';
 import { promptBlockMessage } from "../prompt_blocks";
 import type { ToolRegistry } from "../../tools/registry";
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import type { NormalizedMessage } from "../providers";
-import { buildActionContract, formatActionContractPrompt } from "../../cognition/action_contract";
+import { buildActionEvidenceContract, formatActionContractPrompt } from "../../cognition/action_contract";
 import { buildConfirmedStepContinuationNote } from "../../cognition/task_execution_ledger";
 import { getArtifactTaskProgress } from "../../cognition/action_contract";
 import { formatToolRecordForModel } from './receipts';
@@ -64,18 +65,8 @@ export function buildConfirmedStepContinuationMessages(
   ];
 }
 
-export function stableToolCallValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableToolCallValue);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map(key => [key, stableToolCallValue((value as Record<string, unknown>)[key])]),
-  );
-}
-
 export function toolCallSignature(call: Pick<ToolExecutionRecord, 'name' | 'arguments'>): string {
-  return `${call.name}\u0000${JSON.stringify(stableToolCallValue(call.arguments || {}))}`;
+  return `${call.name}\u0000${canonicalJson(call.arguments || {})}`;
 }
 
 export function withoutRuntimeOwnedRecoveryCall(context?: ToolContext): ToolContext | undefined {
@@ -145,7 +136,7 @@ export function hasPendingVerificationObligation(
   records: ToolExecutionRecord[],
   context?: ToolContext,
 ): boolean {
-  const contract = buildActionContract(task);
+  const contract = buildActionEvidenceContract(task, undefined, context?.acceptedActionContract);
   if (!contract.applies || records.length === 0 || hasCompletedCoreAction(task, records, context)) return false;
   return records.some(record => (
     !record.error
@@ -163,7 +154,7 @@ export function buildMissingVerificationObligationPrompt(
   policy?: ToolContext['toolPolicy'],
   context?: ToolContext,
 ): string {
-  const contract = buildActionContract(task);
+  const contract = buildActionEvidenceContract(task, undefined, context?.acceptedActionContract);
   if (!hasPendingVerificationObligation(task, records, context)) return '';
   const artifactProgress = getArtifactTaskProgress(task, records, { requestId: context?.requestId, taskId: context?.taskId });
   if (artifactProgress && !artifactProgress.complete) return 'Declarative verification obligation:\n'

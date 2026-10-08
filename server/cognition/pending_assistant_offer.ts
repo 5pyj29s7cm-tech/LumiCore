@@ -1,3 +1,4 @@
+import { parseStoredArray, parseNestedJson } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
 
 export const PENDING_ASSISTANT_OFFER_SCHEMA_VERSION = 1 as const;
@@ -72,24 +73,10 @@ function normalizeTargetTaskIds(value: unknown): string[] {
     .slice(0, 64);
 }
 
-function parsedToolCalls(value: unknown): any[] {
-  let current = value;
-  for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
-    try { current = JSON.parse(current); } catch { return []; }
-  }
-  return Array.isArray(current) ? current : [];
-}
-
 function verifiedRuntimeStatusResult(record: any): any | null {
   const candidates = [record?.receipt, record?.result, record?.envelope?.result];
   for (const candidate of candidates) {
-    let current = candidate;
-    for (let depth = 0; depth < 2 && typeof current === 'string' && current.trim(); depth += 1) {
-      try { current = JSON.parse(current); } catch {
-        current = null;
-        break;
-      }
-    }
+    const current = parseNestedJson(candidate, 2) as any;
     if (current && typeof current === 'object' && current.ok === true && Array.isArray(current.items)) {
       return current;
     }
@@ -105,7 +92,7 @@ function verifiedRuntimeStatusResult(record: any): any | null {
 export function runtimeCleanupTargetTaskIdsFromAssistantTurn(
   message: AssistantOfferTranscriptMessage | undefined,
 ): string[] {
-  const records = parsedToolCalls(message?.toolCalls);
+  const records = parseStoredArray(message?.toolCalls, 2);
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     if (!record || typeof record !== 'object' || record.name !== 'runtime_work_status') continue;

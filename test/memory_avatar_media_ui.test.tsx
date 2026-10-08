@@ -200,7 +200,7 @@ it('refreshes only active processing and stops polling after a terminal result i
   });
   const clear = vi.spyOn(window, 'clearInterval');
   rows = [media({ status: 'processing' })];
-  const h = panel(); await screen.findByText('Extracting records'); expect(poll).toBeTypeOf('function');
+  const h = panel(); await screen.findByText('Extracting records'); await waitFor(() => expect(poll).toBeTypeOf('function'));
   record = makeAvatar({ revision: 2, memoryCount: 1 }); rows = [media({ status: 'ready', materialId: 'material-a' })];
   await act(async () => poll?.());
   await screen.findByText('Records extracted');

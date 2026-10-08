@@ -11,7 +11,7 @@ vi.mock('../server/memory_avatar/lifecycle', () => ({ captureMemoryAvatarAuthori
 vi.mock('../server/llm/adapter', () => ({ analyzeScreen: fixture.scan }));
 vi.mock('../server/llm/providers', () => ({ makeLLMCall: fixture.model }));
 vi.mock('../server/llm/user_preferences', () => ({ getUserPreferredLLMConfig: (userId: string) => ({ userId, provider: 'relay', model: 'configured-current-text' }) }));
-vi.mock('../server/llm/vision_preferences', () => ({ getUserPreferredVisionConfig: (userId: string) => ({ userId, provider: 'relay', model: 'configured-current-vision' }) }));
+vi.mock('../server/llm/vision_preferences', async importOriginal => ({ ...await importOriginal<typeof import('../server/llm/vision_preferences')>(), getUserPreferredVisionConfig: (userId: string) => ({ userId, provider: 'relay', model: 'configured-current-vision' }) }));
 vi.mock('../server/tts/adapter', () => ({ getActiveProvider: () => 'relay', listVoices: async () => [{ voiceId: 'voice' }], synthesizeSpeech: fixture.speech }));
 vi.mock('../server/tts/profile_store', () => ({ voiceProfileScope: () => ({}), isVoiceProfileAccessible: () => true, listScopedVoiceProfiles: () => [] }));
 vi.mock('../server/config/voice_preference', () => ({ getConfiguredVoiceModel: () => 'configured-current-tts' }));

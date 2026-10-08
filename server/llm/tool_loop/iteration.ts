@@ -115,13 +115,14 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
       if (coreActionCompleted) {
         recordWorkflowIfToolsUsed(state.executionLog, state.messages, state.config);
         const guarded = guardToolResponseIfNeeded({
-          task: getPrimaryUserText(state.messages),
+          task: state.primaryTask,
           response: response.text || '',
           toolCalls: state.executionLog,
           source: state.context?.source,
           requestId: state.toolExecutionContext?.requestId,
           taskId: state.toolExecutionContext?.taskId,
           acceptedTaskTarget: state.toolExecutionContext?.acceptedTaskTarget,
+        acceptedActionContract: state.toolExecutionContext?.acceptedActionContract,
         });
         return state.finish(guarded.text, guarded);
       }
@@ -173,13 +174,14 @@ export async function executeToolLoopIteration(state: ToolLoopState, iteration: 
       }
       recordWorkflowIfToolsUsed(state.executionLog, state.messages, state.config);
       const guarded = guardToolResponseIfNeeded({
-        task: getPrimaryUserText(state.messages),
+        task: state.primaryTask,
         response: response.text || 'No response.',
         toolCalls: state.executionLog,
         source: state.context?.source,
         requestId: state.toolExecutionContext?.requestId,
         taskId: state.toolExecutionContext?.taskId,
         acceptedTaskTarget: state.toolExecutionContext?.acceptedTaskTarget,
+          acceptedActionContract: state.toolExecutionContext?.acceptedActionContract,
       });
       return state.finish(guarded.text, guarded);
     }

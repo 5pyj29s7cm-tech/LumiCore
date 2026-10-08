@@ -41,6 +41,10 @@ export function isAgentResponseBlocked(data: AgentResponseDelivery): boolean {
   return data.blocked === true || FAILURE_STATUS_RE.test(String(data.status || '').trim());
 }
 
+export function isAgentResponseWaitingConfirmation(data: AgentResponseDelivery): boolean {
+  return WAITING_STATUS_RE.test(String(data.status || '').trim()) || WAITING_STATUS_RE.test(String(data.reason || '').trim());
+}
+
 /**
  * A terminal notice must remain visible even when it quotes the part of an
  * operation that did succeed. For example, "the file was written, but its
@@ -49,11 +53,7 @@ export function isAgentResponseBlocked(data: AgentResponseDelivery): boolean {
  * strands the request in a perpetual-looking busy state.
  */
 export function isAgentResponseTerminalNotice(data: AgentResponseDelivery): boolean {
-  const status = String(data.status || '').trim();
-  const reason = String(data.reason || '').trim();
-  return isAgentResponseBlocked(data)
-    || WAITING_STATUS_RE.test(status)
-    || WAITING_STATUS_RE.test(reason);
+  return isAgentResponseBlocked(data) || isAgentResponseWaitingConfirmation(data);
 }
 
 export function isUnverifiedActionClaim(data: AgentResponseDelivery): boolean {
@@ -113,7 +113,7 @@ export function hasInternalAgentExecutionDetail(value: unknown): boolean {
 }
 
 export function isFinalizedSuccessfulResponse(data: AgentResponseDelivery): boolean {
-  return data.finalized === true && !isAgentResponseBlocked(data);
+  return data.finalized === true && !isAgentResponseTerminalNotice(data);
 }
 
 export function isTerminalAgentStatus(status: string): boolean {
@@ -130,7 +130,7 @@ export function describeAgentResponseDelivery(
 ): string {
   const copy = executionFeedbackCopy(isZh ? 'zh' : 'en');
   const reason = String(data.reason || '').trim().toLowerCase();
-  if (WAITING_STATUS_RE.test(reason) || WAITING_STATUS_RE.test(String(data.status || ''))) {
+  if (isAgentResponseWaitingConfirmation(data)) {
     return copy.confirmation;
   }
   if (/^(?:cancelled|canceled|request_cancelled)$/.test(reason)) {

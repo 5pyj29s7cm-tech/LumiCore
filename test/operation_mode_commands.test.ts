@@ -40,10 +40,11 @@ describe('shared Lumi operation mode commands', () => {
   });
 
   it('allows only safe client-state tools for an explicit page inspection request', async () => {
-    const { traceToolIntentDecision } = await import('../server/cognition/tool_intent');
+    const { traceToolIntentDecision, shouldAllowToolUseForTurn } = await import('../server/cognition/tool_intent');
     const trace = traceToolIntentDecision('为我介绍一下客户端里的每一个页面是干什么用的。', 'voice', 'autonomous');
 
     expect(trace.allowToolUse).toBe(true);
+    expect(shouldAllowToolUseForTurn('为我介绍一下客户端里的每一个页面是干什么用的。', 'voice')).toBe(trace.allowToolUse);
     expect(trace.signals.clientActionIntent).toBe(true);
     expect(trace.signals.clientActionOnlyIntent).toBe(true);
     expect(trace.matchedRules.some(rule => rule.layer === 'client_action_only')).toBe(true);

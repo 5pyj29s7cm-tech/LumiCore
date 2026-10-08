@@ -16,7 +16,10 @@ export function createTurnResponseFinalizer(input: Pick<FinalizerInput, 'taskTex
   const isDesktopPaused = (toolRecords: ToolExecutionRecord[]) => shouldBlockForDesktopControlPause({
     pauseReason: controlPauseReason(),
     waitingForConfirmation: Boolean(pendingConfirmation()),
-    taskText: input.taskText,
+    taskText: input.flow?.routeText || input.taskText,
+    acceptedActionContract: input.flow?.acceptedActionContract,
+    acceptedTaskTarget: input.flow?.acceptedTaskTarget,
+    requestId: input.requestId, taskId: input.taskId,
     toolRecords,
   });
   return {

@@ -3,7 +3,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { isStrictPrivacy } from '../config/privacy';
 import fs from "fs";
 import { activateInstalledSkill, mcpManager } from "../mcp";
-import { getMarketplaceSkills, getSkillById, searchSkills, getCategories, recordInstall, publishSkill, rateSkill, getSkillRatings } from "../marketplace/registry";
+import { getMarketplaceSkills, getSkillById, searchSkills, getCategories, recordMarketplaceInstallBestEffort, publishSkill, rateSkill, getSkillRatings } from "../marketplace/registry";
 import { translateSkills } from "../skills/translations";
 import { makeLLMCall, type NormalizedMessage } from "../llm/providers";
 import { getUserPreferredLLMConfig } from "../llm/user_preferences";
@@ -148,14 +148,6 @@ function marketplaceInstallMessage(displayName: string, activation: { usable: bo
   return activation.usable
     ? `Skill "${displayName}" installed, registered, and ready to use.`
     : `Skill "${displayName}" is installed but still needs its required configuration before Lumi can use it.`;
-}
-
-function recordMarketplaceInstallBestEffort(skillId: string): void {
-  try {
-    recordInstall(skillId);
-  } catch (error: any) {
-    console.warn(`[SkillHall] Runtime activation succeeded, but install analytics could not be recorded for ${skillId}:`, error?.message || error);
-  }
 }
 
 export function mountMarketplaceRoutes(

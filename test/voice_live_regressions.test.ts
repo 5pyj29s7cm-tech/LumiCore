@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeActionIntent } from '../server/cognition/normalized_action_intent';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildRecentActionContinuationBridge } from '../server/cognition/action_continuation';
-import { traceToolIntentDecision } from '../server/cognition/tool_intent';
+import { traceToolIntentDecision, shouldAllowToolUseForTurn } from '../server/cognition/tool_intent';
 import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { parseWeChatConversationReadyVerification } from '../server/tools/definitions/external_app_tools';
 import { describeRecentActionsFromHistory } from '../server/socket/voice_action_history';
@@ -60,6 +60,7 @@ describe('live voice regression cases', () => {
   it('treats criticism of client navigation as feedback, not another navigation command', () => {
     const trace = traceToolIntentDecision('你能不能不要动不动就进入介绍客户端的界面啊', 'voice', 'assistant');
     expect(trace.allowToolUse).toBe(false);
+    expect(shouldAllowToolUseForTurn('你能不能不要动不动就进入介绍客户端的界面啊', 'voice', 'assistant')).toBe(false);
     expect(trace.signals.clientActionOnlyIntent).toBe(false);
   });
 

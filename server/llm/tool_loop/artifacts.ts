@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
-import type { ToolExecutionRecord } from "../../tools/types";
-import { buildActionContract } from "../../cognition/action_contract";
+import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
+import { buildActionEvidenceContract } from "../../cognition/action_contract";
 import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery, artifactRecordMatchesTurn, sameArtifactPath } from "../../tools/artifact_evidence";
 import { requestedSingleArtifact } from "../../cognition/artifact_write_scope";
 import { getArtifactTaskProgress } from "../../cognition/action_contract";
@@ -22,8 +22,8 @@ export function buildArtifactProgressPrompt(task: string, records: ToolExecution
 
 /** Bind an explicitly requested readback to this turn's actual saved output. */
 export function resolveArtifactReadbackCall(task: string, records: ToolExecutionRecord[],
-  exposed: Set<string>, turn: { requestId?: string; taskId?: string }) {
-  if (!turn.requestId || buildActionContract(task).kind !== 'artifact_work') return null;
+  exposed: Set<string>, turn: Pick<ToolContext, 'requestId' | 'taskId' | 'acceptedActionContract'>) {
+  if (!turn.requestId || buildActionEvidenceContract(task, undefined, turn.acceptedActionContract).kind !== 'artifact_work') return null;
   const progress = getArtifactTaskProgress(task, records, turn);
   if (progress?.next !== 'readback') return null;
   const requested = requestedSingleArtifact(task);

@@ -47,18 +47,17 @@ function switchingHarness() {
 }
 
 describe('conversation transition send barrier', () => {
-  it('calculates evidence intent once and points the foreground view at the request metadata', async () => {
+  it('keeps server-owned finalization metadata for the foreground request', async () => {
     const h = switchingHarness();
-    h.deps.needsVisibleToolEvidence = vi.fn(() => true);
     h.send();
     const requestId = h.emitted[0].payload.requestId;
     const metadata = h.deps.chatTurnUiMetaRef.current.get(requestId);
-    expect(h.deps.needsVisibleToolEvidence).toHaveBeenCalledTimes(1);
+    expect(metadata).toEqual({ hadTool: false, finalization: null });
     expect(h.deps.currentTurnUiMetaRef.current).toBe(metadata);
     metadata.hadTool = true;
     expect(h.deps.currentTurnUiMetaRef.current.hadTool).toBe(true);
     const pending = h.restore(); h.finish(); await pending;
-    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, needsEvidence: false, finalization: null });
+    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, finalization: null });
     expect(h.deps.chatTurnUiMetaRef.current.size).toBe(0);
   });
 
@@ -194,7 +193,7 @@ describe('scope detachment ownership', () => {
     initialHistoryEffect(h.deps);
     expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
     expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0);
-    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, needsEvidence: false, finalization: null });
+    expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, finalization: null });
     expect(h.deps.setIsTyping).toHaveBeenCalledWith(false);
     expect(h.deps.clearPersistedExecution).not.toHaveBeenCalled();
   });

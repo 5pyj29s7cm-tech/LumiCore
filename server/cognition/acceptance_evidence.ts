@@ -409,7 +409,7 @@ export function buildTaskCompletionFeedback(
  */
 export function buildForegroundTaskCompletionFeedback(input: {
   /** The finalizer already adjudicated this turn. Feedback only projects that verdict. */
-  finalization?: Pick<import('./result_finalizer_types').LumiResultFinalizerResult, 'blocked' | 'reason'>;
+  finalization?: Pick<import('./result_finalizer_types').LumiResultFinalizerResult, 'blocked' | 'reason' | 'progress'>;
   taskId: string;
   taskLabel: string;
   toolRecords?: ToolExecutionRecord[];
@@ -463,7 +463,10 @@ export function buildForegroundTaskCompletionFeedback(input: {
     reason: terminalReason,
     accepted: outcome === 'completed' && receipt.verification === 'verified',
   });
-  return feedback;
+  const progress = input.finalization?.progress;
+  return progress ? { ...feedback, ...progress,
+    incomplete: outcome === 'completed' ? [] : progress.incomplete.length ? progress.incomplete : feedback.incomplete,
+  } : feedback;
 }
 
 function receiptVerification(

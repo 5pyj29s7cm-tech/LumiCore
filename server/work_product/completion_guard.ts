@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ToolExecutionRecord, type ToolContext } from '../tools/types';
 import {
-  buildActionContract,
+  buildActionEvidenceContract,
   claimsCurrentAppSaveCompletion,
   hasCoreActionEvidence,
   hasRequestedDesktopOpenEvidence,
@@ -71,6 +71,7 @@ interface CompletionGuardInput {
   requestId?: string;
   taskId?: string;
   acceptedTaskTarget?: ToolContext['acceptedTaskTarget'];
+  acceptedActionContract?: ToolContext['acceptedActionContract'];
 }
 
 const EXTERNAL_WORK_TASK_RE =
@@ -561,7 +562,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
     };
   }
 
-  const actionContract = buildActionContract(task);
+  const actionContract = buildActionEvidenceContract(task, undefined, input.acceptedActionContract);
   const hasDomainCompletionEvidence = actionContract.applies
     && hasCoreActionEvidence(actionContract, toolCalls, task, undefined,
       { requestId: input.requestId, taskId: input.taskId }, input.acceptedTaskTarget);
@@ -589,7 +590,7 @@ export function guardCompletionClaims(input: CompletionGuardInput): CompletionGu
 
   const hasAnySuccess = successful.length > 0;
   const hasActionTool = successful.some(call => !INSPECTION_ONLY_TOOL_RE.test(call.name));
-  const hasFileProducer = successful.some(call =>
+  const hasFileProducer = (hasDomainCompletionEvidence && actionContract.kind === 'media_generation') || successful.some(call =>
     (
       call.terminalVerification?.status === 'verified'
       && call.terminalVerification.strategy === 'artifact'

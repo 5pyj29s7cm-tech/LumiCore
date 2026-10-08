@@ -10,6 +10,7 @@ const COPY = {
     retainedBlocker: 'This did not finish. Check the reason above, then try again when ready.',
     progressConfirmation: 'Waiting for your confirmation; execution will continue afterward.',
     progressBlocked: 'This did not finish. See the reply above for what to do next.',
+    progressUnverified: 'The reply has arrived; task completion has not been verified.',
   },
   zh: {
     confirmation: '请确认上方列出的具体操作；确认后会从当前步骤继续。',
@@ -20,6 +21,7 @@ const COPY = {
     retainedBlocker: '这次还没有完成。请根据上方原因处理后重试。',
     progressConfirmation: '等待你确认具体操作，确认后会继续。',
     progressBlocked: '这次还没有完成，请以上方回复中的原因和下一步为准。',
+    progressUnverified: '已收到回复，任务完成状态尚未核实。',
   },
 } as const;
 

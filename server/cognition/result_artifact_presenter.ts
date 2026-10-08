@@ -272,31 +272,7 @@ export function formatGroundedArtifactResult(
               reason: 'Grounded artifact completion with exact same-path post-write readback.',
             };
           }
-          if (/(?:编码|总行数|行数|全文|encoding|line\s*count|full\s*text)/iu.test(actionText)) {
-            const normalizedText = actualText.replace(/\n$/, '');
-            const lineCount = normalizedText ? normalizedText.split('\n').length : 0;
-            return {
-              text: zh
-                ? [
-                    '已完成本地文件创建与回读核验。',
-                    `路径：${path}`,
-                    '编码：UTF-8',
-                    `总行数：${lineCount}`,
-                    '全文：',
-                    normalizedText,
-                  ].join('\n')
-                : [
-                    'Completed the local file and verified it by reading it back.',
-                    `Path: ${path}`,
-                    'Encoding: UTF-8',
-                    `Line count: ${lineCount}`,
-                    'Full text:',
-                    normalizedText,
-                  ].join('\n'),
-              blocked: false,
-              reason: 'Grounded artifact completion with exact same-path post-write readback.',
-            };
-          }
+
         }
         if (requestsComputedAnswer && calculationEvidence) {
           return {

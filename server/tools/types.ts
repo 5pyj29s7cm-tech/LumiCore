@@ -334,6 +334,8 @@ export interface ToolContext extends ToolExecutionIdentity {
    * visible user message, but it must not replace actionIntent for risk checks.
    */
   routedTaskText?: string;
+  /** Immutable completion requirements accepted by the shared turn pipeline. */
+  acceptedActionContract?: import('../cognition/turn_flow').LumiTurnFlow['acceptedActionContract'];
   /** Resolved once by the shared pipeline from authorized server state. */
   acceptedTaskTarget?: import('../conversation/task_target_anchor').AcceptedTaskTarget;
   /** Server-resolved application reference; this does not grant execution authority. */

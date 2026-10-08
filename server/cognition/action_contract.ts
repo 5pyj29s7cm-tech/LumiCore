@@ -536,7 +536,9 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
  * from directory/search receipts. Evidence adjudicators use this projection;
  * planners and routers must continue using buildActionContract.
  */
-export function buildActionEvidenceContract(input: string, analysis?: ActionIntentAnalysis): LumiActionContract {
+export function buildActionEvidenceContract(input: string, analysis?: ActionIntentAnalysis,
+  accepted?: { readonly taskText: string; readonly contract: LumiActionContract }): LumiActionContract {
+  if (accepted?.taskText === input) return accepted.contract;
   const contract = buildActionContract(input, undefined, analysis);
   if (contract.applies || !isRuntimeCleanupOfferAcceptanceText(compact(input))) {
     return contract;

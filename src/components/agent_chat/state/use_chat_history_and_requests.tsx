@@ -331,7 +331,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
     streamingMsgIdsRef.current.clear();
     streamingRawTextRef.current.clear();
     chatTurnTimerGuardRef.current.invalidate();
-    currentTurnUiMetaRef.current = { hadTool: false, needsEvidence: false, finalization: null };
+    currentTurnUiMetaRef.current = { hadTool: false, finalization: null };
     resetMediaGenerationSurface();
     setIsTyping(false);
     setWorkflowStatus('idle');
@@ -345,7 +345,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
   }, [setMessages]);
   const resumeForegroundRequest = useCallback((requestId: string) => {
     const nextMeta = chatTurnUiMetaRef.current.get(requestId);
-    currentTurnUiMetaRef.current = nextMeta || { hadTool: false, needsEvidence: false, finalization: null };
+    currentTurnUiMetaRef.current = nextMeta || { hadTool: false, finalization: null };
     setWorkflowStatus('thinking');
   }, [chatTurnUiMetaRef, currentTurnUiMetaRef, setWorkflowStatus]);
 

@@ -5,7 +5,6 @@ import type { ChatAttachment, ChatSendOptions } from "../contracts";
 import { makeChatMessageId, buildChatHistoryPayload } from "../history";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import { needsVisibleToolEvidence } from "@/lib/chatProgress";
 import { formatUiMessage, uiMessage } from "../../../i18n/uiMessages";
 import { MAX_CHAT_ATTACHMENTS, serializeChatAttachment, mergeChatAttachmentReferences } from "@/lib/chatAttachmentReferences";
 import { ownedPendingChatExecutions } from "@/lib/chatExecutionRecovery";
@@ -223,7 +222,6 @@ export function useChatRequestControls(previousBindings: ReturnType<typeof useCh
     const wasIdle = chatRequestLedgerRef.current.size === 0;
     chatTurnUiMetaRef.current.set(requestId, {
       hadTool: false,
-      needsEvidence: needsVisibleToolEvidence(outgoingText, outgoingAttachments.length > 0),
       finalization: null,
     });
     if (wasIdle) {

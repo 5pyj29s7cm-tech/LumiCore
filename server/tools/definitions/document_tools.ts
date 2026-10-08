@@ -121,13 +121,6 @@ function documentArtifactEvidence(
   });
 }
 
-function ensureOutputDir(): string {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
-  return OUTPUT_DIR;
-}
-
 function esc(s: string): string {
   return s.replace(/'/g, "''");
 }
@@ -143,7 +136,7 @@ function safeOutputBaseName(value: string, fallback = 'audio_transcript'): strin
 }
 
 function uniqueOutputPath(baseName: string, extension: '.txt' | '.md'): string {
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   let candidate = path.join(outDir, `${baseName}_${stamp}${extension}`);
   let counter = 1;
@@ -406,7 +399,7 @@ async function createXlsx(args: Record<string, any>): Promise<string> {
     }
   }
 
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const safeName = (filename || 'spreadsheet').replace(/[\\/:*?"<>|]/g, '_');
   const outPath = resolveExplicitSpreadsheetOutput(args.outputPath)
     || path.join(outDir, `${safeName}_${Date.now()}.xlsx`);
@@ -541,7 +534,7 @@ async function createDocx(args: Record<string, any>): Promise<string> {
   const doc = new Document({ sections: [{ properties: {}, children }] });
   const buffer = await Packer.toBuffer(doc);
 
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const safeName = (filename || title || 'document').replace(/[\\/:*?"<>|]/g, '_');
   const outPath = resolveExplicitDocumentOutput(args.outputPath, 'docx') || path.join(outDir, `${safeName}_${Date.now()}.docx`);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -635,7 +628,7 @@ async function diffDocuments(args: Record<string, any>): Promise<string> {
 
   if (format === 'unified') {
     const patch = diffLib.createPatch('comparison', text1, text2, path.basename(filePath1), path.basename(filePath2));
-    const outDir = ensureOutputDir();
+    const outDir = getGeneratedOutputDir();
     const outPath = path.join(outDir, `diff_${Date.now()}.diff`);
     fs.writeFileSync(outPath, patch, 'utf-8');
     const truncated = patch.length > 8000 ? patch.slice(0, 8000) + '\n\n[Truncated — see file for full diff]' : patch;
@@ -657,7 +650,7 @@ async function diffDocuments(args: Record<string, any>): Promise<string> {
       }
     }
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Document Comparison</title></head><body style="font-family:monospace;white-space:pre-wrap;max-width:900px;margin:2rem auto;padding:1rem;line-height:1.6"><div>${htmlParts.join('')}</div></body></html>`;
-    const outDir = ensureOutputDir();
+    const outDir = getGeneratedOutputDir();
     const outPath = path.join(outDir, `diff_${Date.now()}.html`);
     fs.writeFileSync(outPath, html, 'utf-8');
     return `HTML redline comparison saved to: ${outPath}`;

@@ -410,7 +410,7 @@ export function isInformationOnlyQuestion(text: string, analysis?: ActionIntentA
   if (/(?:我问你)?(?:刚刚|刚才|之前|上一轮|上一次).{0,80}(?:干了什么|做了什么|操作了什么|打开.{0,24}干了什么|为什么.{0,40}(?:打开|操作|执行|回复))/u.test(text)) return true;
   if (/^(?:为什么|为何|怎么).{0,80}(?:没有|没|未能|不能).{0,40}(?:打开|启动|运行|执行|发送)/u.test(text)) return true; // i18n-allow: input recognition
   if (isUserCorrectionOrExplanationQuestion(text, analysis)) return true;
-  if (isDiagnosticOrRepairRequest(text, analysis)) return false;
+  if (CLIENT_STATE_INSPECTION_REQUEST.test(text) || isDiagnosticOrRepairRequest(text, analysis)) return false;
   if (hasExplicitActionRequest(text)) return false;
   if (
     CLIENT_NAVIGATION_VERBS.test(text) &&
@@ -495,45 +495,25 @@ export function hasExplicitToolIntent(text: string, analysis?: ActionIntentAnaly
   return TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function hasClientActionIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
+export function hasClientActionIntent(text: string, analysis?: ActionIntentAnalysis, only = false): boolean {
   const normalized = withoutNegatedLookupClauses(text).trim();
-  if (!normalized) return false;
-  if (hasExplicitNoToolInstruction(normalized)) return false;
-  if (isExternalAiHistoryActionRequest(normalized)) return false;
-  if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
+  if (!normalized || hasExplicitNoToolInstruction(normalized)
+    || isExternalAiHistoryActionRequest(normalized) || isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized, analysis);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
-  // Once the shared normalizer has identified a concrete non-client action,
-  // broad legacy surface words must not steal the turn.  This matters for
-  // payloads such as "Open WPS and type: Lumi ...": the word Lumi describes
-  // document content, not a request to navigate the Lumi client.
-  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
-  if (isInformationOnlyQuestion(normalized, analysis)) return false;
-  if (isDesktopMusicControlRequest(normalized)) return false;
-  if (detectRequestedOperationMode(normalized)) return true;
+  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)
+    || isInformationOnlyQuestion(normalized, analysis) || isDesktopMusicControlRequest(normalized)) return false;
+  if (only && hasExternalDesktopExecutionIntent(normalized)) return false;
+  const requestedMode = detectRequestedOperationMode(normalized);
+  if (requestedMode && (!only || isPureOperationModeSwitchRequest(normalized, requestedMode))) return true;
   if (hasExternalDesktopExecutionIntent(normalized)) return false;
   if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
-  if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
-  return CLIENT_ACTION_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+  return matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)
+    || (only ? CLIENT_ACTION_ONLY_PATTERNS : CLIENT_ACTION_INTENT_PATTERNS).some(pattern => pattern.test(normalized));
 }
 
 export function hasClientActionOnlyIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
-  const normalized = withoutNegatedLookupClauses(text).trim();
-  if (!normalized) return false;
-  if (hasExplicitNoToolInstruction(normalized)) return false;
-  if (isExternalAiHistoryActionRequest(normalized)) return false;
-  if (isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
-  const canonical = normalizeActionIntent(normalized, analysis);
-  if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
-  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)) return false;
-  if (isInformationOnlyQuestion(normalized, analysis)) return false;
-  if (isDesktopMusicControlRequest(normalized)) return false;
-  if (hasExternalDesktopExecutionIntent(normalized)) return false;
-  const requestedMode = detectRequestedOperationMode(normalized);
-  if (requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode)) return true;
-  if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
-  if (matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)) return true;
-  return CLIENT_ACTION_ONLY_PATTERNS.some((pattern) => pattern.test(normalized));
+  return hasClientActionIntent(text, analysis, true);
 }
 
 export function isDiagnosticOrRepairRequest(text: string, analysis?: ActionIntentAnalysis): boolean {
@@ -564,7 +544,7 @@ export function shouldAllowToolUseForTurn(text: string, source?: string, operati
   if (mode === 'meeting') return hasClientActionIntent(text, analysis);
   if (hasVisionIntent(text)) return true;
   if (AUTONOMOUS_TASK_PATTERNS.some((pattern) => pattern.test(text.trim()))) return true;
-  if (hasExplicitToolIntent(text, analysis)) return true;
+  if (hasClientActionIntent(text, analysis) || hasExplicitToolIntent(text, analysis)) return true;
   return false;
 }
 
@@ -578,15 +558,13 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   if (requestedMode) pushRule(matchedRules, 'client_action', `operation-mode-request:${requestedMode}`);
   const explicitNoToolInstruction = normalized ? hasExplicitNoToolInstruction(normalized) : false;
 
-  const clientStateInspectionRequest = normalized ? CLIENT_STATE_INSPECTION_REQUEST.test(normalized) : false;
-  const externalAiHistoryAction = normalized ? isExternalAiHistoryActionRequest(normalized) : false;
   const correctionOrExplanation = normalized
     ? canonical.kind === 'correction_explanation' || isUserCorrectionOrExplanationQuestion(normalized, analysis)
     : false;
   const informationOnlyQuestion = normalized
     ? correctionOrExplanation
       || canonical.kind === 'status_query'
-      || (isInformationOnlyQuestion(normalized, analysis) && !clientStateInspectionRequest && !externalAiHistoryAction)
+      || isInformationOnlyQuestion(normalized, analysis)
     : false;
   const externalDesktopExecution = normalized
     ? (
@@ -595,7 +573,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
       )
     : false;
   const desktopMusicControl = normalized ? isDesktopMusicControlRequest(normalized) : false;
-  const diagnosticOrRepair = normalized && !informationOnlyQuestion
+  const diagnosticOrRepair = normalized
     ? isDiagnosticOrRepairRequest(normalized, analysis)
     : false;
   const diagnosticRules = diagnosticOrRepair
@@ -604,7 +582,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   const matchedStructuredToolRules = !informationOnlyQuestion && normalized
     ? matchIntentGrammarRuleNames(normalized, STRUCTURED_TOOL_INTENT_RULES)
     : [];
-  const structuredToolRules = externalAiHistoryAction
+  const structuredToolRules = isExternalAiHistoryActionRequest(normalized)
     ? ['external-ai-history']
     : canonical.kind === 'messaging_read'
       ? ['messaging-read']
@@ -644,55 +622,20 @@ export function traceToolIntentDecision(text: string, source?: string, operation
   for (const name of autonomousTaskRules) pushRule(matchedRules, 'mode', name);
   if (visionIntent) pushRule(matchedRules, 'vision', 'vision-intent');
 
-  const explicitToolIntent = structuredToolRules.length > 0 || legacyToolRules.length > 0;
-  const clientActionIntent = canonical.kind === 'client_navigation'
-    || canonical.kind === 'client_state'
-    || Boolean(requestedMode)
-    || structuredClientRules.length > 0
-    || clientActionRules.length > 0;
-  const pureOperationModeSwitch = Boolean(
-    requestedMode && isPureOperationModeSwitchRequest(normalized, requestedMode),
-  );
-  const clientActionOnlyIntent = !externalDesktopExecution
-    && (
-      canonical.kind === 'client_navigation'
-      || canonical.kind === 'client_state'
-      || pureOperationModeSwitch
-      || structuredClientRules.length > 0
-      || clientActionOnlyRules.length > 0
-    );
+  // Trace observes the execution predicates; it never runs a second classifier.
+  const explicitToolIntent = hasExplicitToolIntent(text, analysis);
+  const clientActionIntent = hasClientActionIntent(text, analysis);
+  const clientActionOnlyIntent = hasClientActionOnlyIntent(text, analysis);
   const autonomousTask = autonomousTaskRules.length > 0;
-
-  let allowToolUse = false;
-  let decisionReason = 'no action signal matched';
-  if (!normalized) {
-    decisionReason = 'empty turn';
-  } else if (explicitNoToolInstruction) {
-    allowToolUse = false;
-    decisionReason = 'explicit current-turn no-tool instruction';
-  } else if (diagnosticOrRepair) {
-    allowToolUse = true;
-    decisionReason = 'diagnostic or repair wording enables self-inspection tools';
-  } else if (mode === 'meeting') {
-    allowToolUse = clientActionIntent;
-    decisionReason = allowToolUse
-      ? 'meeting mode allows client control action'
-      : 'meeting mode only allows client control action';
-  } else if (clientActionIntent) {
-    allowToolUse = true;
-    decisionReason = clientActionOnlyIntent
-      ? 'safe Lumi client-state/action request matched'
-      : 'Lumi client action request matched';
-  } else if (visionIntent) {
-    allowToolUse = true;
-    decisionReason = 'vision wording asks Lumi to inspect visible content';
-  } else if (autonomousTask) {
-    allowToolUse = true;
-    decisionReason = 'explicit continuing-task intent matched';
-  } else if (explicitToolIntent) {
-    allowToolUse = true;
-    decisionReason = 'explicit tool or work action matched';
-  }
+  const allowToolUse = shouldAllowToolUseForTurn(text, source, mode, analysis);
+  const decisionReason = !normalized ? 'empty turn'
+    : explicitNoToolInstruction ? 'explicit current-turn no-tool instruction'
+    : !allowToolUse ? mode === 'meeting' ? 'meeting mode only allows client control action' : 'no action signal matched'
+    : diagnosticOrRepair ? 'diagnostic or repair wording enables self-inspection tools'
+    : clientActionIntent ? clientActionOnlyIntent ? 'safe Lumi client-state/action request matched' : 'Lumi client action request matched'
+    : visionIntent ? 'vision wording asks Lumi to inspect visible content'
+    : autonomousTask ? 'explicit continuing-task intent matched'
+    : 'explicit tool or work action matched';
 
   const blockedBy: string[] = [];
   if (!allowToolUse) {

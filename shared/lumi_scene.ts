@@ -1,3 +1,4 @@
+import { canonicalJson } from './stable_json';
 export const LUMI_SCENE_PROTOCOL = 'lumi-scene/1' as const;
 export const LUMI_SCENE_SCHEMA_VERSION = 1 as const;
 
@@ -55,20 +56,11 @@ function compact(value: unknown, limit: number): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
-    key,
-    stable((value as Record<string, unknown>)[key]),
-  ]));
-}
-
 export function lumiSceneDigest(nodes: LumiSceneNode[]): string {
   // Synchronous and runtime-neutral (browser + Node). This digest detects
   // revision gaps/corruption; transport authentication remains responsible
   // for adversarial integrity.
-  const input = JSON.stringify(stable(nodes));
+  const input = canonicalJson(nodes);
   const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
   return seeds.map(seed => {
     let hash = seed >>> 0;
@@ -179,7 +171,7 @@ export function diffLumiSceneSnapshots(previous: LumiSceneSnapshot, next: LumiSc
   const operations: LumiScenePatchOperation[] = [];
   for (const node of next.nodes) {
     const prior = previousById.get(node.id);
-    if (!prior || JSON.stringify(stable(prior)) !== JSON.stringify(stable(node))) operations.push({ op: 'upsert_node', node });
+    if (!prior || canonicalJson(prior) !== canonicalJson(node)) operations.push({ op: 'upsert_node', node });
   }
   for (const node of previous.nodes) if (!nextById.has(node.id)) operations.push({ op: 'remove_node', nodeId: node.id });
   if (operations.length > Math.max(8, next.nodes.length)) {

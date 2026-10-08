@@ -1,7 +1,7 @@
 import type { ToolRegistry } from "../../tools/registry";
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import { executionBeforeWorkflowSave } from "../../skills/authoring_intent";
-import { buildActionContract, requiresArtifactOpen } from "../../cognition/action_contract";
+import { buildActionEvidenceContract, requiresArtifactOpen } from "../../cognition/action_contract";
 import { requestedSingleArtifact } from "../../cognition/artifact_write_scope";
 import { getExactRegisteredExtensionToolNames } from "../../extensions/registry";
 
@@ -303,7 +303,7 @@ export function resolveRequiredToolNamesForModel(
     const name = String(record?.name || '').trim();
     if (declared.has(name)) required.add(name);
   }
-  for (const name of buildActionContract(primaryTask).verificationTools || []) {
+  for (const name of buildActionEvidenceContract(primaryTask, undefined, context?.acceptedActionContract).verificationTools || []) {
     if (declared.has(name)) required.add(name);
   }
   // Opening a generated deliverable is a requested execution step, not an

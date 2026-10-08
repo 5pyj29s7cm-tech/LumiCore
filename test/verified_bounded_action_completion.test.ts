@@ -75,7 +75,8 @@ describe('verified bounded actions in the real shared tool loop', () => {
       requestId: value.context.requestId, taskId: value.context.taskId };
     expect(finalizeLumiResponse(input)).toMatchObject({ blocked: false, text: '图片已生成。' });
     expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText: '生成一张蓝色杯子的图片并发送邮件。' })).toBeNull();
-    expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText: '生成两张蓝色杯子的图片。' })).toBeNull();
+    expect(tryFinalizeVerifiedBoundedAction({ ...input, taskText: '生成两张蓝色杯子的图片。' }))
+      .toMatchObject({ blocked: true, reason: 'media_settings_mismatch' });
     expect(tryFinalizeVerifiedBoundedAction({ ...input, requestId: 'other-turn' })).toBeNull();
   });
 

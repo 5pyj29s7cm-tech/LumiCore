@@ -26,7 +26,7 @@ import { capabilityContract, capabilityEvidence } from '../capability_contracts'
 import {
   getMarketplaceSkills,
   getSkillById,
-  recordInstall,
+  recordMarketplaceInstallBestEffort,
   searchSkills,
 } from '../../marketplace/registry';
 import { getExtensionRuntimeStates } from '../../skills/runtime_state';
@@ -52,14 +52,6 @@ function hostSkillMutationBlocked(context?: ToolContext): string | null {
     return 'Host-level skill changes are not performed from an organization workspace. A local system administrator can install or generate the skill in desktop settings; the organization workspace can then use the approved capability.';
   }
   return null;
-}
-
-function recordMarketplaceInstallBestEffort(skillId: string): void {
-  try {
-    recordInstall(skillId);
-  } catch (error: any) {
-    console.warn(`[SkillHall] Runtime activation succeeded, but install analytics could not be recorded for ${skillId}:`, error?.message || error);
-  }
 }
 
 async function generateSkillHandler(args: Record<string, any>, context?: ToolContext): Promise<string> {

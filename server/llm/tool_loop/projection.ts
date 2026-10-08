@@ -1,6 +1,6 @@
 import type { ToolExecutionRecord, ToolContext } from "../../tools/types";
 import { guardCompletionClaims, needsCompletionEvidence } from "../../work_product/completion_guard";
-import { buildActionContract, hasCoreActionEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence } from "../../cognition/action_contract";
+import { buildActionEvidenceContract, hasCoreActionEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence } from "../../cognition/action_contract";
 import { formatDesktopControlPausePresentation } from "../../regions/messages/desktop_control_messages";
 import { buildTaskTargetAnchorProjection } from "../../conversation/task_target_anchor";
 import { localizeInternalStatusLeak } from './summaries';
@@ -17,6 +17,7 @@ export function guardToolResponseIfNeeded(input: {
   requestId?: string;
   taskId?: string;
   acceptedTaskTarget?: ToolContext['acceptedTaskTarget'];
+  acceptedActionContract?: ToolContext['acceptedActionContract'];
 }) {
   const task = input.task || '';
   if (!hasCompletionGuardEvidence(input.toolCalls) && !needsCompletionEvidence(input.task)) {
@@ -43,7 +44,7 @@ export function buildDesktopControlPausedSummary(task: string): string {
 }
 
 export function hasCompletedCoreAction(task: string, records: ToolExecutionRecord[], context?: ToolContext): boolean {
-  const contract = buildActionContract(task);
+  const contract = buildActionEvidenceContract(task, undefined, context?.acceptedActionContract);
   return contract.applies && hasCoreActionEvidence(contract, records, task, undefined,
     { taskId: context?.taskId, requestId: context?.requestId }, context?.acceptedTaskTarget);
 }
@@ -53,7 +54,7 @@ export function compactCurrentDocumentTargetStateForModel(
   records: ToolExecutionRecord[],
   context?: ToolContext,
 ): string {
-  const contract = buildActionContract(task);
+  const contract = buildActionEvidenceContract(task, undefined, context?.acceptedActionContract);
   if (contract.label !== 'Current authoring document inspection') return '';
   const projection = buildTaskTargetAnchorProjection({
     taskText: task,

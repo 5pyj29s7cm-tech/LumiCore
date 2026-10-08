@@ -2,7 +2,7 @@ import type { ToolExecutionRecord } from "../../tools/types";
 import type { AutonomousTask } from "../task_queue";
 import { finalizeLumiResponse, type LumiResultFinalizerInput } from "../../cognition/result_finalizer";
 import { finalizeExecutionForOutboundDelivery } from "../../cognition/execution_guard_recovery";
-import { buildActionContract, hasCoreActionEvidence } from "../../cognition/action_contract";
+import { taskActionContract, resultTaskText, hasResultCoreActionEvidence } from "../../cognition/result_finalizer_support";
 import { parseStructuredToolResult, isSuccessfulAutonomousToolRecord } from './receipts';
 import type { AutonomousTaskOutcome } from './contracts';
 
@@ -112,13 +112,14 @@ export function evaluateAutonomousTaskOutcome(
     source: 'autonomous',
   });
   const successfulToolRecords = toolRecords.filter(isSuccessfulAutonomousToolRecord);
-  const actionContract = buildActionContract(taskText);
+  const contractInput = { ...evaluation, taskText, responseText: candidateText, source: 'autonomous' };
+  const actionContract = taskActionContract(contractInput);
   const missingSummary = !candidateText;
   const reportedIncomplete = !verifiedSelfImprovementStage
     && autonomousResponseReportsIncomplete(candidateText);
   const missingEvidence = successfulToolRecords.length === 0;
   const missingCoreEvidence = !selfImprovementTask && actionContract.applies
-    && !hasCoreActionEvidence(actionContract, toolRecords, taskText);
+    && !hasResultCoreActionEvidence(contractInput, actionContract, toolRecords, resultTaskText(contractInput));
   const selfImprovementEvidenceMissing = selfImprovementTask && !verifiedSelfImprovementStage;
   const verified = (
     !modelBlocked

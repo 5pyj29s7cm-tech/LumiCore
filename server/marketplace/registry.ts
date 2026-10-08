@@ -310,3 +310,11 @@ function toDisplayName(dirName: string): string {
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 }
+
+export function recordMarketplaceInstallBestEffort(skillId: string): void {
+  try {
+    recordInstall(skillId);
+  } catch (error: any) {
+    console.warn(`[SkillHall] Runtime activation succeeded, but install analytics could not be recorded for ${skillId}:`, error?.message || error);
+  }
+}

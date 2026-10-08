@@ -10,7 +10,6 @@ import { capabilityContract, capabilityEvidence } from '../capability_contracts'
 import type { ToolCapabilityMetadata, ToolDefinition } from '../types';
 import { getGeneratedOutputDir } from '../../config/data_path';
 
-const OUTPUT_DIR = getGeneratedOutputDir();
 const require = createRequire(import.meta.url);
 
 function pdfArtifactCapability(
@@ -43,13 +42,6 @@ function pdfArtifactEvidence(
   subjectArgument: string,
 ): NonNullable<ToolDefinition['evidence']> {
   return capabilityEvidence({ id, operation: 'create', subjectArgument });
-}
-
-function ensureOutputDir(): string {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
-  return OUTPUT_DIR;
 }
 
 // ── Handlers ──
@@ -225,7 +217,7 @@ async function createPdf(args: Record<string, any>): Promise<string> {
 
   if (title) doc.setTitle(title);
 
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const fileName = `${String(title || 'document').replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.pdf`;
   const outPath = path.join(outDir, fileName);
   const pdfBytes = await doc.save();
@@ -250,7 +242,7 @@ async function mergePdf(args: Record<string, any>): Promise<string> {
     }
   }
 
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const outPath = path.join(outDir, `merged_${Date.now()}.pdf`);
   const pdfBytes = await merged.save();
   fs.writeFileSync(outPath, pdfBytes);
@@ -265,7 +257,7 @@ async function splitPdf(args: Record<string, any>): Promise<string> {
   const bytes = fs.readFileSync(filePath);
   const srcDoc = await PDFDocument.load(bytes);
   const pageCount = srcDoc.getPageIndices().length;
-  const outDir = ensureOutputDir();
+  const outDir = getGeneratedOutputDir();
   const baseName = path.basename(filePath, '.pdf');
   const results: string[] = [];
 
@@ -311,7 +303,7 @@ async function convertToPdf(args: Record<string, any>): Promise<string> {
     const page = doc.addPage([image.width, image.height]);
     page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
 
-    const outDir = ensureOutputDir();
+    const outDir = getGeneratedOutputDir();
     const outPath = path.join(outDir, path.basename(filePath, ext) + '.pdf');
     fs.writeFileSync(outPath, await doc.save());
     return JSON.stringify({ ok: true, status: 'converted', path: outPath, sourcePath: filePath, size: fs.statSync(outPath).size }, null, 2);

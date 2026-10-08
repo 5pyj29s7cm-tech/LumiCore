@@ -35,6 +35,7 @@ export function buildVerifiedToolCheckpoint(executionLog: ToolExecutionRecord[],
     requestId: context?.requestId,
     taskId: context?.taskId,
     acceptedTaskTarget: context?.acceptedTaskTarget,
+    acceptedActionContract: context?.acceptedActionContract,
   });
 }
 

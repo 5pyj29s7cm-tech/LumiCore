@@ -180,13 +180,7 @@ export function parseStoredObject(value: unknown): Record<string, any> {
   }
 }
 
-export function parseStoredArray(value: unknown): any[] {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string' || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+export function parseStoredArray(value: unknown, maxDepth = 1): any[] {
+  const parsed = parseNestedJson(value, maxDepth);
+  return Array.isArray(parsed) ? parsed : [];
 }

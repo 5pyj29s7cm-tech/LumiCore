@@ -18,6 +18,8 @@ export interface LumiResultFinalizerResult {
   text: string;
   blocked: boolean;
   reason?: string;
+  /** Receipt-derived progress already adjudicated by this finalizer. */
+  progress?: ReturnType<typeof import('./artifact_progress').artifactProgressFeedback>;
   notification?: {
     type: 'work_product_guard';
     level: 'warning';

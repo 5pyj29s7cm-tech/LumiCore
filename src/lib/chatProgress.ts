@@ -1,6 +1,6 @@
-
 import { uiMessage } from '../i18n/uiMessages';
 import { executionFeedbackCopy } from '../i18n/locales/executionFeedback';
+import { isAgentResponseWaitingConfirmation, isAgentResponseTerminalNotice, type AgentResponseDelivery } from './agentResponseDelivery';
 
 export type ChatProgressTone = 'thinking' | 'tool' | 'done' | 'error' | 'confirmation';
 
@@ -13,37 +13,23 @@ export type ChatProgressLine = {
 
 export type ToolProgressPhase = 'start' | 'result' | 'error';
 
-export type ChatResponseFinalization = {
-  finalized?: boolean;
-  blocked?: boolean;
-  reason?: string;
-};
-
-const VISIBLE_TOOL_EVIDENCE_RE =
-  /\b(?:file|document|docx|pdf|attachment|desktop|screen|open|read|review|inspect|analy[sz]e|contract|agreement|transcribe|audio)\b|(?:文件|文档|资料|附件|合同|协议|打开|读取|查看|看看|审查|分析|检查|桌面|屏幕|录音|音频|转写|生成|保存|导出)/iu;
-
-export function needsVisibleToolEvidence(text: string, hasAttachments = false): boolean {
-  if (hasAttachments) return true;
-  return VISIBLE_TOOL_EVIDENCE_RE.test(String(text || ''));
-}
+export type ChatResponseFinalization = Pick<AgentResponseDelivery, 'finalized' | 'blocked' | 'reason' | 'status'>;
 
 export function describeTurnCompletionProgress(
   isZh: boolean,
-  _usedTool: boolean,
-  needsEvidence: boolean,
   finalization?: ChatResponseFinalization | null,
 ): {
   text: string;
   tone: ChatProgressTone;
 } {
-  if (finalization?.blocked) {
-    const reason = String(finalization.reason || '').trim().toLowerCase();
+  if (finalization && isAgentResponseTerminalNotice(finalization)) {
+    const waiting = isAgentResponseWaitingConfirmation(finalization);
     const copy = executionFeedbackCopy(isZh ? 'zh' : 'en');
     return {
-      text: reason === 'waiting_confirmation'
+      text: waiting
         ? copy.progressConfirmation
         : copy.progressBlocked,
-      tone: reason === 'waiting_confirmation' ? 'confirmation' : 'error',
+      tone: waiting ? 'confirmation' : 'error',
     };
   }
   // A tool event only proves that a step was attempted. It does not prove the
@@ -55,16 +41,7 @@ export function describeTurnCompletionProgress(
       tone: 'done',
     };
   }
-  if (needsEvidence) {
-    return {
-      text: uiMessage('chat-progress.no-actual-tool-execution-was.c2d57b608a', (isZh) ? 'zh' : 'en'),
-      tone: 'error',
-    };
-  }
-  return {
-    text: uiMessage('chat-progress.reply-sent.5f1b4522d2', (isZh) ? 'zh' : 'en'),
-    tone: 'tool',
-  };
+  return { text: executionFeedbackCopy(isZh ? 'zh' : 'en').progressUnverified, tone: 'tool' };
 }
 
 export function describeToolProgress(toolName: string, phase: ToolProgressPhase, isZh: boolean): string {
