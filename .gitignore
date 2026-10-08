@@ -37,3 +37,5 @@ artifacts/runtime-reliability/*.json
 agent_shutdown_snapshot_*
 Lumi*_个人版_部署服务方案.pdf
 lumi_output/
+# Windows runtime caches can appear here when a native child lacks SystemDrive.
+/src-tauri/%SystemDrive%/

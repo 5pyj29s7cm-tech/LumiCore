@@ -86,157 +86,6 @@ function dxfPolyline(points: Array<{ x: number; y: number }>, layer = 'CUT', clo
   return out;
 }
 
-function dxfRect(x: number, y: number, width: number, height: number, layer = 'CUT'): string[] {
-  return dxfPolyline([
-    { x, y },
-    { x: x + width, y },
-    { x: x + width, y: y + height },
-    { x, y: y + height },
-  ], layer, true);
-}
-
-function dxfWallSegment(x1: number, y1: number, x2: number, y2: number, thickness: number, layer = 'WALL'): string[] {
-  if (!Number.isFinite(thickness) || thickness <= 0) return dxfLine(x1, y1, x2, y2, layer);
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy);
-  if (len <= 0) return [];
-  const nx = (-dy / len) * (thickness / 2);
-  const ny = (dx / len) * (thickness / 2);
-  return dxfPolyline([
-    { x: x1 + nx, y: y1 + ny },
-    { x: x2 + nx, y: y2 + ny },
-    { x: x2 - nx, y: y2 - ny },
-    { x: x1 - nx, y: y1 - ny },
-  ], layer, true);
-}
-
-function dxfDoor(door: Record<string, any>, fallbackWidth = 900): string[] {
-  const hingeX = maybeNumber(door?.hingeX ?? door?.x ?? door?.x1);
-  const hingeY = maybeNumber(door?.hingeY ?? door?.y ?? door?.y1);
-  if (hingeX === null || hingeY === null) return [];
-  const width = Math.max(1, asFiniteNumber(door?.width ?? door?.w, fallbackWidth));
-  const angle = orientationToDegrees(door?.angle ?? door?.orientation, 0);
-  const swingRaw = String(door?.swing || door?.hand || '').toLowerCase();
-  const sign = /left|ccw|out|\u5de6|\u5916/.test(swingRaw) ? 1 : -1;
-  const endX = maybeNumber(door?.leafX);
-  const endY = maybeNumber(door?.leafY);
-  const leafX = endX ?? hingeX + Math.cos(angle * Math.PI / 180) * width;
-  const leafY = endY ?? hingeY + Math.sin(angle * Math.PI / 180) * width;
-  const openAngle = Math.max(20, Math.min(135, asFiniteNumber(door?.openAngle, 90)));
-  const start = normalizeDegrees(angle);
-  const end = normalizeDegrees(angle + sign * openAngle);
-  const entities = [
-    ...dxfLine(hingeX, hingeY, leafX, leafY, safeLayer(door?.layer, 'DOOR')),
-  ];
-  if (sign >= 0) {
-    entities.push(...dxfArc(hingeX, hingeY, width, start, end, safeLayer(door?.swingLayer, 'DOOR_SWING')));
-  } else {
-    entities.push(...dxfArc(hingeX, hingeY, width, end, start, safeLayer(door?.swingLayer, 'DOOR_SWING')));
-  }
-  if (door?.label || door?.name) {
-    entities.push(...dxfText(hingeX + 80, hingeY + 80, String(door.label || door.name), asFiniteNumber(door?.textHeight, 180), 'TEXT'));
-  }
-  return entities;
-}
-
-function dxfWindow(windowItem: Record<string, any>, fallbackWidth = 120): string[] {
-  let x1 = maybeNumber(windowItem?.x1 ?? windowItem?.from?.x);
-  let y1 = maybeNumber(windowItem?.y1 ?? windowItem?.from?.y);
-  let x2 = maybeNumber(windowItem?.x2 ?? windowItem?.to?.x);
-  let y2 = maybeNumber(windowItem?.y2 ?? windowItem?.to?.y);
-  const width = Math.max(1, asFiniteNumber(windowItem?.width ?? windowItem?.w, fallbackWidth));
-  if (x1 === null || y1 === null || x2 === null || y2 === null) {
-    const x = maybeNumber(windowItem?.x);
-    const y = maybeNumber(windowItem?.y);
-    const length = maybeNumber(windowItem?.length ?? windowItem?.l);
-    if (x === null || y === null || length === null) return [];
-    const angle = orientationToDegrees(windowItem?.angle ?? windowItem?.orientation, 0) * Math.PI / 180;
-    x1 = x;
-    y1 = y;
-    x2 = x + Math.cos(angle) * length;
-    y2 = y + Math.sin(angle) * length;
-  }
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy);
-  if (len <= 0) return [];
-  const nx = (-dy / len) * (width / 2);
-  const ny = (dx / len) * (width / 2);
-  const layer = safeLayer(windowItem?.layer, 'WINDOW');
-  const entities = [
-    ...dxfLine(x1 + nx, y1 + ny, x2 + nx, y2 + ny, layer),
-    ...dxfLine(x1, y1, x2, y2, layer),
-    ...dxfLine(x1 - nx, y1 - ny, x2 - nx, y2 - ny, layer),
-  ];
-  if (windowItem?.label || windowItem?.name) {
-    entities.push(...dxfText((x1 + x2) / 2, (y1 + y2) / 2 + width, String(windowItem.label || windowItem.name), asFiniteNumber(windowItem?.textHeight, 180), 'TEXT'));
-  }
-  return entities;
-}
-
-function dxfDimension(dimension: Record<string, any>): string[] {
-  const x1 = maybeNumber(dimension?.x1 ?? dimension?.from?.x);
-  const y1 = maybeNumber(dimension?.y1 ?? dimension?.from?.y);
-  const x2 = maybeNumber(dimension?.x2 ?? dimension?.to?.x);
-  const y2 = maybeNumber(dimension?.y2 ?? dimension?.to?.y);
-  if (x1 === null || y1 === null || x2 === null || y2 === null) return [];
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy);
-  if (len <= 0) return [];
-  const offset = asFiniteNumber(dimension?.offset, 450);
-  const tick = asFiniteNumber(dimension?.tick, 120);
-  const nx = (-dy / len) * offset;
-  const ny = (dx / len) * offset;
-  const tx = (-dy / len) * tick;
-  const ty = (dx / len) * tick;
-  const ax = x1 + nx;
-  const ay = y1 + ny;
-  const bx = x2 + nx;
-  const by = y2 + ny;
-  const text = String(dimension?.text || dimension?.label || `${Math.round(len)}`).trim();
-  return [
-    ...dxfLine(x1, y1, ax, ay, 'DIM'),
-    ...dxfLine(x2, y2, bx, by, 'DIM'),
-    ...dxfLine(ax, ay, bx, by, 'DIM'),
-    ...dxfLine(ax - tx, ay - ty, ax + tx, ay + ty, 'DIM'),
-    ...dxfLine(bx - tx, by - ty, bx + tx, by + ty, 'DIM'),
-    ...dxfText((ax + bx) / 2, (ay + by) / 2, text, asFiniteNumber(dimension?.textHeight, 180), 'DIM_TEXT'),
-  ];
-}
-
-function dxfFurniture(item: Record<string, any>): string[] {
-  const x = maybeNumber(item?.x);
-  const y = maybeNumber(item?.y);
-  if (x === null || y === null) return [];
-  const layer = safeLayer(item?.layer, 'FURNITURE');
-  const entities: string[] = [];
-  const radius = maybeNumber(item?.r ?? item?.radius);
-  if (radius !== null && radius > 0) {
-    entities.push(...dxfCircle(x, y, radius, layer));
-  } else {
-    const w = Math.max(1, asFiniteNumber(item?.width ?? item?.w, 800));
-    const h = Math.max(1, asFiniteNumber(item?.height ?? item?.h, 600));
-    entities.push(...dxfRect(x, y, w, h, layer));
-  }
-  if (item?.label || item?.name || item?.type) {
-    entities.push(...dxfText(x + 60, y + 220, String(item.label || item.name || item.type), asFiniteNumber(item?.textHeight, 180), 'TEXT'));
-  }
-  return entities;
-}
-
-function dxfColumn(item: Record<string, any>): string[] {
-  const x = maybeNumber(item?.x);
-  const y = maybeNumber(item?.y);
-  if (x === null || y === null) return [];
-  const radius = maybeNumber(item?.r ?? item?.radius);
-  if (radius !== null && radius > 0) return dxfCircle(x, y, radius, safeLayer(item?.layer, 'COLUMN'));
-  const w = Math.max(1, asFiniteNumber(item?.width ?? item?.w, 300));
-  const h = Math.max(1, asFiniteNumber(item?.height ?? item?.h, w));
-  return dxfRect(x - w / 2, y - h / 2, w, h, safeLayer(item?.layer, 'COLUMN'));
-}
-
 function svgEscape(value: any): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -245,379 +94,71 @@ function svgEscape(value: any): string {
     .replace(/"/g, '&quot;');
 }
 
-function buildRoundedRectEntities(width: number, height: number, radius: number): string[] {
-  const w = Math.max(1, width);
-  const h = Math.max(1, height);
-  const r = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
-  if (r <= 0) {
-    return [
-      ...dxfLine(0, 0, w, 0),
-      ...dxfLine(w, 0, w, h),
-      ...dxfLine(w, h, 0, h),
-      ...dxfLine(0, h, 0, 0),
-    ];
-  }
-  return [
-    ...dxfLine(r, 0, w - r, 0),
-    ...dxfLine(w, r, w, h - r),
-    ...dxfLine(w - r, h, r, h),
-    ...dxfLine(0, h - r, 0, r),
-    ...dxfArc(w - r, r, r, 270, 360),
-    ...dxfArc(w - r, h - r, r, 0, 90),
-    ...dxfArc(r, h - r, r, 90, 180),
-    ...dxfArc(r, r, r, 180, 270),
-  ];
-}
-
-function buildDxf(args: Record<string, any>): string {
-  const width = Math.max(1, Number(args.width) || 100);
-  const height = Math.max(1, Number(args.height) || 60);
-  const radius = Math.max(0, Number(args.cornerRadius) || 0);
-  const holes = Array.isArray(args.holes) ? args.holes : [];
-  const walls = Array.isArray(args.walls) ? args.walls : Array.isArray(args.lines) ? args.lines : [];
-  const rooms = Array.isArray(args.rooms) ? args.rooms : [];
-  const labels = Array.isArray(args.labels) ? args.labels : [];
-  const doors = Array.isArray(args.doors) ? args.doors : [];
-  const windows = Array.isArray(args.windows) ? args.windows : [];
-  const dimensions = Array.isArray(args.dimensions) ? args.dimensions : [];
-  const furniture = Array.isArray(args.furniture) ? args.furniture : [];
-  const columns = Array.isArray(args.columns) ? args.columns : [];
-  const polylines = Array.isArray(args.polylines) ? args.polylines : [];
-  const wallThickness = asFiniteNumber(args.wallThickness, 0);
-  const outerBoundary = normalizeCadBoundary(args);
-  const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
-  const entities: string[] = [
-    '0', 'SECTION', '2', 'ENTITIES',
-  ];
-  if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
-    entities.push(...dxfPolyline(outerBoundary, 'OUTLINE', true));
-  } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
-    entities.push(...buildRoundedRectEntities(width, height, radius));
-  }
-
-  for (const polyline of polylines.slice(0, 240)) {
-    const points = pointList(polyline?.points || polyline);
-    if (points.length >= 2) {
-      entities.push(...dxfPolyline(points, safeLayer(polyline?.layer, 'POLYLINE'), Boolean(polyline?.closed)));
+function buildDxf(geometry: CadEntity[]): string {
+  const entities: string[] = ['0', 'SECTION', '2', 'ENTITIES'];
+  for (const entity of geometry) {
+    switch (entity.kind) {
+      case 'line': entities.push(...dxfLine(entity.x1, entity.y1, entity.x2, entity.y2, entity.layer)); break;
+      case 'circle': entities.push(...dxfCircle(entity.x, entity.y, entity.r, entity.layer)); break;
+      case 'arc': entities.push(...dxfArc(entity.cx, entity.cy, entity.r, entity.start, entity.end, entity.layer)); break;
+      case 'text': entities.push(...dxfText(entity.x, entity.y, entity.text, entity.height, entity.layer)); break;
+      case 'polyline': entities.push(...dxfPolyline(entity.points, entity.layer, entity.closed)); break;
     }
   }
-
-  for (const wall of walls.slice(0, 500)) {
-    const x1 = Number(wall?.x1 ?? wall?.from?.x);
-    const y1 = Number(wall?.y1 ?? wall?.from?.y);
-    const x2 = Number(wall?.x2 ?? wall?.to?.x);
-    const y2 = Number(wall?.y2 ?? wall?.to?.y);
-    if ([x1, y1, x2, y2].every(Number.isFinite)) {
-      entities.push(...dxfWallSegment(x1, y1, x2, y2, asFiniteNumber(wall?.thickness, wallThickness), safeLayer(wall?.layer, 'WALL')));
-    }
-  }
-
-  for (const room of rooms.slice(0, 120)) {
-    const points = pointList(room?.points || room?.polygon);
-    if (points.length >= 3) {
-      entities.push(...dxfPolyline(points, safeLayer(room?.layer, 'ROOM'), true));
-      const first = points[0];
-      if (room?.name && first) {
-        entities.push(...dxfText(asFiniteNumber(room?.labelX, first.x + 120), asFiniteNumber(room?.labelY, first.y + 240), String(room.name), Number(room?.textHeight) || 220, 'TEXT'));
-      }
-      continue;
-    }
-    const x = Number(room?.x);
-    const y = Number(room?.y);
-    const w = Number(room?.width ?? room?.w);
-    const h = Number(room?.height ?? room?.h);
-    if ([x, y, w, h].every(Number.isFinite) && w > 0 && h > 0) {
-      const layer = safeLayer(room?.layer, 'ROOM');
-      entities.push(...dxfRect(x, y, w, h, layer));
-      if (room?.name) {
-        entities.push(...dxfText(x + 120, y + Math.min(h / 2, 600), String(room.name), Number(room?.textHeight) || 220, 'TEXT'));
-      }
-    }
-  }
-
-  for (const hole of holes.slice(0, 40)) {
-    const x = Number(hole?.x);
-    const y = Number(hole?.y);
-    const r = Number(hole?.r ?? hole?.radius);
-    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(r) && r > 0) {
-      entities.push(...dxfCircle(x, y, r));
-    }
-  }
-
-  for (const column of columns.slice(0, 120)) {
-    entities.push(...dxfColumn(column));
-  }
-
-  for (const windowItem of windows.slice(0, 160)) {
-    entities.push(...dxfWindow(windowItem));
-  }
-
-  for (const door of doors.slice(0, 160)) {
-    entities.push(...dxfDoor(door));
-  }
-
-  for (const item of furniture.slice(0, 240)) {
-    entities.push(...dxfFurniture(item));
-  }
-
-  for (const dimension of dimensions.slice(0, 240)) {
-    entities.push(...dxfDimension(dimension));
-  }
-
-  for (const label of labels.slice(0, 160)) {
-    const x = Number(label?.x);
-    const y = Number(label?.y);
-    const text = String(label?.text || label?.name || '').trim();
-    if (Number.isFinite(x) && Number.isFinite(y) && text) {
-      entities.push(...dxfText(x, y, text, Number(label?.height) || 220, safeLayer(label?.layer, 'TEXT')));
-    }
-  }
-
-  if (args.titleBlock !== false) {
-    const title = String(args.title || 'Lumi CAD Draft');
-    const unit = String(args.unit || 'unit');
-    const note = String(args.precisionNote || args.note || 'Draft generated by Lumi. Verify site dimensions before production.').slice(0, 120);
-    const blockW = Math.max(1800, width * 0.28);
-    const blockH = Math.max(900, height * 0.12);
-    const x = Math.max(0, width - blockW);
-    const y = Math.max(0, height + Math.max(400, blockH * 0.2));
-    entities.push(...dxfRect(x, y, blockW, blockH, 'TITLE'));
-    entities.push(...dxfText(x + 120, y + blockH - 220, title, 220, 'TITLE_TEXT'));
-    entities.push(...dxfText(x + 120, y + blockH - 500, `Unit: ${unit}`, 160, 'TITLE_TEXT'));
-    entities.push(...dxfText(x + 120, y + blockH - 760, note, 140, 'TITLE_TEXT'));
-  }
-
-  if (args.northArrow) {
-    const x = asFiniteNumber(args.northArrow?.x, width - 700);
-    const y = asFiniteNumber(args.northArrow?.y, 700);
-    entities.push(...dxfLine(x, y, x, y + 500, 'ANNOTATION'));
-    entities.push(...dxfLine(x, y + 500, x - 120, y + 330, 'ANNOTATION'));
-    entities.push(...dxfLine(x, y + 500, x + 120, y + 330, 'ANNOTATION'));
-    entities.push(...dxfText(x + 80, y + 520, 'N', 180, 'ANNOTATION'));
-  }
-
   entities.push('0', 'ENDSEC', '0', 'EOF');
-  return `${entities.join('\n')}\n`;
+  return entities.join('\n') + '\n';
 }
 
-function buildCadPreviewSvg(args: Record<string, any>, title: string): string {
+function buildCadPreviewSvg(args: Record<string, any>, title: string, geometry: CadEntity[]): string {
   const width = Math.max(1, Number(args.width) || 100);
   const height = Math.max(1, Number(args.height) || 60);
-  const radius = Math.max(0, Number(args.cornerRadius) || 0);
-  const holes = Array.isArray(args.holes) ? args.holes : [];
-  const walls = Array.isArray(args.walls) ? args.walls : Array.isArray(args.lines) ? args.lines : [];
-  const rooms = Array.isArray(args.rooms) ? args.rooms : [];
-  const labels = Array.isArray(args.labels) ? args.labels : [];
-  const doors = Array.isArray(args.doors) ? args.doors : [];
-  const windows = Array.isArray(args.windows) ? args.windows : [];
-  const dimensions = Array.isArray(args.dimensions) ? args.dimensions : [];
-  const furniture = Array.isArray(args.furniture) ? args.furniture : [];
-  const columns = Array.isArray(args.columns) ? args.columns : [];
-  const polylines = Array.isArray(args.polylines) ? args.polylines : [];
-  const wallThickness = asFiniteNumber(args.wallThickness, 0);
-  const outerBoundary = normalizeCadBoundary(args);
-  const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
   const margin = Math.max(width, height) * 0.05;
-  const titleBlockMargin = args.titleBlock === false ? 0 : Math.max(900, height * 0.12);
-  const viewBox = `${-margin} ${-margin} ${width + margin * 2} ${height + margin * 2 + titleBlockMargin}`;
+  const titleBlockHeight = Math.max(900, height * 0.12);
+  const titleBlockMargin = args.titleBlock === false ? 0 : titleBlockHeight + Math.max(400, titleBlockHeight * 0.2);
+  const previewWidth = args.titleBlock === false ? width : Math.max(width, 1800);
   const strokeWidth = Math.max(1, Math.min(width, height) / 260);
   const textSize = Math.max(180, Math.min(width, height) / 32);
-  const pointAttr = (points: Array<{ x: number; y: number }>) => points.map(point => `${point.x},${point.y}`).join(' ');
-  const svgLine = (x1: number, y1: number, x2: number, y2: number, color: string, sw = strokeWidth, dash = '') =>
-    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
-  const svgText = (x: number, y: number, text: any, size = textSize, color = '#e5e7eb') =>
-    `<text x="${x}" y="${y}" fill="${color}" font-size="${size}" font-family="Arial, sans-serif">${svgEscape(text)}</text>`;
-  const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="960" height="640">`,
+  const colors: Record<string, string> = { OUTLINE: '#38bdf8', ROOM: '#2dd4bf', WALL: '#fbbf24', HOLE: '#f472b6',
+    COLUMN: '#cbd5e1', WINDOW: '#60a5fa', DOOR: '#34d399', DOOR_SWING: '#86efac', FURNITURE: '#fde68a',
+    DIM: '#a78bfa', DIM_TEXT: '#ddd6fe', TITLE: '#64748b', TITLE_TEXT: '#dbeafe', ANNOTATION: '#f8fafc', TEXT: '#e5e7eb' };
+  const fills: Record<string, string> = { ROOM: 'rgba(45,212,191,0.08)', COLUMN: 'rgba(148,163,184,0.18)',
+    FURNITURE: 'rgba(251,191,36,0.08)', TITLE: 'rgba(15,23,42,0.78)' };
+  const parts = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + [-margin, -margin, previewWidth + margin * 2, height + margin * 2 + titleBlockMargin].join(' ') + '" width="960" height="640">',
     '<rect x="-100000" y="-100000" width="200000" height="200000" fill="#08111f"/>',
-    svgText(0, -margin * 0.35, title, textSize, '#9fb7d8'),
+    '<text x="0" y="' + (-margin * 0.35) + '" fill="#9fb7d8" font-size="' + textSize + '" font-family="Arial, sans-serif">' + svgEscape(title) + '</text>',
   ];
-  if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
-    parts.push(`<polygon points="${pointAttr(outerBoundary)}" fill="none" stroke="#38bdf8" stroke-width="${strokeWidth * 1.4}"/>`);
-  } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
-    parts.push(`<rect x="0" y="0" width="${width}" height="${height}" rx="${radius}" ry="${radius}" fill="none" stroke="#38bdf8" stroke-width="${strokeWidth * 1.4}"/>`);
-  }
-
-  for (const polyline of polylines.slice(0, 240)) {
-    const points = pointList(polyline?.points || polyline);
-    if (points.length >= 2) {
-      parts.push(`<polyline points="${pointAttr(points)}" fill="none" stroke="#94a3b8" stroke-width="${strokeWidth}"${polyline?.closed ? ' data-closed="true"' : ''}/>`);
-    }
-  }
-
-  for (const room of rooms.slice(0, 120)) {
-    const points = pointList(room?.points || room?.polygon);
-    if (points.length >= 3) {
-      parts.push(`<polygon points="${pointAttr(points)}" fill="rgba(45,212,191,0.08)" stroke="#2dd4bf" stroke-width="${strokeWidth}"/>`);
-      const first = points[0];
-      if (room?.name && first) {
-        parts.push(svgText(asFiniteNumber(room?.labelX, first.x + 120), asFiniteNumber(room?.labelY, first.y + 240), room.name, Number(room?.textHeight) || textSize, '#d8f3ff'));
+  for (const entity of geometry) {
+    const color = colors[entity.layer] || '#94a3b8';
+    const fill = fills[entity.layer] || 'none';
+    const stroke = ' stroke="' + color + '" stroke-width="' + strokeWidth + '"';
+    switch (entity.kind) {
+      case 'line':
+        parts.push('<line x1="' + entity.x1 + '" y1="' + entity.y1 + '" x2="' + entity.x2 + '" y2="' + entity.y2 + '"' + stroke + ' stroke-linecap="round"/>');
+        break;
+      case 'circle':
+        parts.push('<circle cx="' + entity.x + '" cy="' + entity.y + '" r="' + entity.r + '" fill="' + fill + '"' + stroke + '/>');
+        break;
+      case 'arc': {
+        const radians = Math.PI / 180;
+        const startX = entity.cx + Math.cos(entity.start * radians) * entity.r;
+        const startY = entity.cy + Math.sin(entity.start * radians) * entity.r;
+        const endX = entity.cx + Math.cos(entity.end * radians) * entity.r;
+        const endY = entity.cy + Math.sin(entity.end * radians) * entity.r;
+        const largeArc = ((entity.end - entity.start + 360) % 360) > 180 ? 1 : 0;
+        parts.push('<path d="M ' + startX + ' ' + startY + ' A ' + entity.r + ' ' + entity.r + ' 0 ' + largeArc + ' 1 ' + endX + ' ' + endY + '" fill="none"' + stroke + '/>');
+        break;
       }
-      continue;
-    }
-    const x = Number(room?.x);
-    const y = Number(room?.y);
-    const w = Number(room?.width ?? room?.w);
-    const h = Number(room?.height ?? room?.h);
-    if ([x, y, w, h].every(Number.isFinite) && w > 0 && h > 0) {
-      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="rgba(45,212,191,0.08)" stroke="#2dd4bf" stroke-width="${strokeWidth}"/>`);
-      if (room?.name) {
-        parts.push(svgText(x + 120, y + Math.min(h / 2, 600), room.name, Number(room?.textHeight) || textSize, '#d8f3ff'));
+      case 'text':
+        parts.push('<text x="' + entity.x + '" y="' + entity.y + '" fill="' + color + '" font-size="' + entity.height + '" font-family="Arial, sans-serif">' + svgEscape(entity.text) + '</text>');
+        break;
+      case 'polyline': {
+        const tag = entity.closed ? 'polygon' : 'polyline';
+        parts.push('<' + tag + ' points="' + entity.points.map(point => point.x + ',' + point.y).join(' ') + '" fill="' + fill + '"' + stroke + '/>');
+        break;
       }
     }
   }
-
-  for (const wall of walls.slice(0, 500)) {
-    const x1 = Number(wall?.x1 ?? wall?.from?.x);
-    const y1 = Number(wall?.y1 ?? wall?.from?.y);
-    const x2 = Number(wall?.x2 ?? wall?.to?.x);
-    const y2 = Number(wall?.y2 ?? wall?.to?.y);
-    if ([x1, y1, x2, y2].every(Number.isFinite)) {
-      const thickness = asFiniteNumber(wall?.thickness, wallThickness);
-      parts.push(svgLine(x1, y1, x2, y2, '#fbbf24', thickness > 0 ? Math.max(strokeWidth * 2, thickness) : strokeWidth * 1.8));
-    }
-  }
-
-  for (const hole of holes.slice(0, 40)) {
-    const x = Number(hole?.x);
-    const y = Number(hole?.y);
-    const r = Number(hole?.r ?? hole?.radius);
-    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(r) && r > 0) {
-      parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="#f472b6" stroke-width="${strokeWidth}"/>`);
-    }
-  }
-
-  for (const column of columns.slice(0, 120)) {
-    const x = maybeNumber(column?.x);
-    const y = maybeNumber(column?.y);
-    if (x === null || y === null) continue;
-    const r = maybeNumber(column?.r ?? column?.radius);
-    if (r !== null && r > 0) {
-      parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="rgba(148,163,184,0.18)" stroke="#cbd5e1" stroke-width="${strokeWidth}"/>`);
-    } else {
-      const w = Math.max(1, asFiniteNumber(column?.width ?? column?.w, 300));
-      const h = Math.max(1, asFiniteNumber(column?.height ?? column?.h, w));
-      parts.push(`<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" fill="rgba(148,163,184,0.18)" stroke="#cbd5e1" stroke-width="${strokeWidth}"/>`);
-    }
-  }
-
-  for (const windowItem of windows.slice(0, 160)) {
-    let x1 = maybeNumber(windowItem?.x1 ?? windowItem?.from?.x);
-    let y1 = maybeNumber(windowItem?.y1 ?? windowItem?.from?.y);
-    let x2 = maybeNumber(windowItem?.x2 ?? windowItem?.to?.x);
-    let y2 = maybeNumber(windowItem?.y2 ?? windowItem?.to?.y);
-    const winWidth = Math.max(1, asFiniteNumber(windowItem?.width ?? windowItem?.w, Math.max(strokeWidth * 8, 120)));
-    if (x1 === null || y1 === null || x2 === null || y2 === null) {
-      const x = maybeNumber(windowItem?.x);
-      const y = maybeNumber(windowItem?.y);
-      const length = maybeNumber(windowItem?.length ?? windowItem?.l);
-      if (x === null || y === null || length === null) continue;
-      const angle = orientationToDegrees(windowItem?.angle ?? windowItem?.orientation, 0) * Math.PI / 180;
-      x1 = x;
-      y1 = y;
-      x2 = x + Math.cos(angle) * length;
-      y2 = y + Math.sin(angle) * length;
-    }
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.hypot(dx, dy);
-    if (len <= 0) continue;
-    const nx = (-dy / len) * (winWidth / 2);
-    const ny = (dx / len) * (winWidth / 2);
-    parts.push(svgLine(x1 + nx, y1 + ny, x2 + nx, y2 + ny, '#60a5fa', strokeWidth));
-    parts.push(svgLine(x1, y1, x2, y2, '#93c5fd', strokeWidth));
-    parts.push(svgLine(x1 - nx, y1 - ny, x2 - nx, y2 - ny, '#60a5fa', strokeWidth));
-  }
-
-  for (const door of doors.slice(0, 160)) {
-    const hingeX = maybeNumber(door?.hingeX ?? door?.x ?? door?.x1);
-    const hingeY = maybeNumber(door?.hingeY ?? door?.y ?? door?.y1);
-    if (hingeX === null || hingeY === null) continue;
-    const doorWidth = Math.max(1, asFiniteNumber(door?.width ?? door?.w, 900));
-    const angle = orientationToDegrees(door?.angle ?? door?.orientation, 0);
-    const swingRaw = String(door?.swing || door?.hand || '').toLowerCase();
-    const sign = /left|ccw|out|\u5de6|\u5916/.test(swingRaw) ? 1 : -1;
-    const leafX = maybeNumber(door?.leafX) ?? hingeX + Math.cos(angle * Math.PI / 180) * doorWidth;
-    const leafY = maybeNumber(door?.leafY) ?? hingeY + Math.sin(angle * Math.PI / 180) * doorWidth;
-    parts.push(svgLine(hingeX, hingeY, leafX, leafY, '#34d399', strokeWidth * 1.2));
-    const sweep = sign > 0 ? 0 : 1;
-    const endAngle = (angle + sign * Math.max(20, Math.min(135, asFiniteNumber(door?.openAngle, 90)))) * Math.PI / 180;
-    const arcX = hingeX + Math.cos(endAngle) * doorWidth;
-    const arcY = hingeY + Math.sin(endAngle) * doorWidth;
-    parts.push(`<path d="M ${leafX} ${leafY} A ${doorWidth} ${doorWidth} 0 0 ${sweep} ${arcX} ${arcY}" fill="none" stroke="#86efac" stroke-width="${strokeWidth}" stroke-dasharray="${strokeWidth * 4},${strokeWidth * 3}"/>`);
-  }
-
-  for (const item of furniture.slice(0, 240)) {
-    const x = maybeNumber(item?.x);
-    const y = maybeNumber(item?.y);
-    if (x === null || y === null) continue;
-    const r = maybeNumber(item?.r ?? item?.radius);
-    if (r !== null && r > 0) {
-      parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="rgba(251,191,36,0.08)" stroke="#fde68a" stroke-width="${strokeWidth}"/>`);
-    } else {
-      const w = Math.max(1, asFiniteNumber(item?.width ?? item?.w, 800));
-      const h = Math.max(1, asFiniteNumber(item?.height ?? item?.h, 600));
-      parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="rgba(251,191,36,0.08)" stroke="#fde68a" stroke-width="${strokeWidth}"/>`);
-    }
-    if (item?.label || item?.name || item?.type) {
-      parts.push(svgText(x + 60, y + 220, item.label || item.name || item.type, Math.max(140, textSize * 0.65), '#fef3c7'));
-    }
-  }
-
-  for (const dimension of dimensions.slice(0, 240)) {
-    const x1 = maybeNumber(dimension?.x1 ?? dimension?.from?.x);
-    const y1 = maybeNumber(dimension?.y1 ?? dimension?.from?.y);
-    const x2 = maybeNumber(dimension?.x2 ?? dimension?.to?.x);
-    const y2 = maybeNumber(dimension?.y2 ?? dimension?.to?.y);
-    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.hypot(dx, dy);
-    if (len <= 0) continue;
-    const offset = asFiniteNumber(dimension?.offset, 450);
-    const nx = (-dy / len) * offset;
-    const ny = (dx / len) * offset;
-    const ax = x1 + nx;
-    const ay = y1 + ny;
-    const bx = x2 + nx;
-    const by = y2 + ny;
-    parts.push(svgLine(x1, y1, ax, ay, '#a78bfa', strokeWidth * 0.8));
-    parts.push(svgLine(x2, y2, bx, by, '#a78bfa', strokeWidth * 0.8));
-    parts.push(svgLine(ax, ay, bx, by, '#a78bfa', strokeWidth, `${strokeWidth * 4},${strokeWidth * 3}`));
-    parts.push(svgText((ax + bx) / 2, (ay + by) / 2, dimension?.text || dimension?.label || Math.round(len), asFiniteNumber(dimension?.textHeight, 180), '#ddd6fe'));
-  }
-
-  for (const label of labels.slice(0, 160)) {
-    const x = Number(label?.x);
-    const y = Number(label?.y);
-    const text = String(label?.text || label?.name || '').trim();
-    if (Number.isFinite(x) && Number.isFinite(y) && text) {
-      parts.push(svgText(x, y, text, Number(label?.height) || textSize, '#e5e7eb'));
-    }
-  }
-
-  if (args.titleBlock !== false) {
-    const unit = String(args.unit || 'unit');
-    const note = String(args.precisionNote || args.note || 'Draft generated by Lumi. Verify site dimensions before production.').slice(0, 120);
-    const blockW = Math.max(1800, width * 0.28);
-    const blockH = Math.max(900, height * 0.12);
-    const x = Math.max(0, width - blockW);
-    const y = Math.max(0, height + Math.max(400, blockH * 0.2));
-    parts.push(`<rect x="${x}" y="${y}" width="${blockW}" height="${blockH}" fill="rgba(15,23,42,0.78)" stroke="#64748b" stroke-width="${strokeWidth}"/>`);
-    parts.push(svgText(x + 120, y + blockH - 220, title, 220, '#dbeafe'));
-    parts.push(svgText(x + 120, y + blockH - 500, `Unit: ${unit}`, 160, '#cbd5e1'));
-    parts.push(svgText(x + 120, y + blockH - 760, note, 140, '#94a3b8'));
-  }
-
-  if (args.northArrow) {
-    const x = asFiniteNumber(args.northArrow?.x, width - 700);
-    const y = asFiniteNumber(args.northArrow?.y, 700);
-    parts.push(svgLine(x, y, x, y + 500, '#f8fafc', strokeWidth));
-    parts.push(svgLine(x, y + 500, x - 120, y + 330, '#f8fafc', strokeWidth));
-    parts.push(svgLine(x, y + 500, x + 120, y + 330, '#f8fafc', strokeWidth));
-    parts.push(svgText(x + 80, y + 520, 'N', 180, '#f8fafc'));
-  }
-
   parts.push('</svg>');
   return parts.join('');
 }
@@ -676,6 +217,9 @@ type AutocadDrawOperation =
   | { kind: 'arc'; layer: string; cx: number; cy: number; r: number; start: number; end: number; label?: string }
   | { kind: 'text'; layer: string; x: number; y: number; text: string; height: number; label?: string };
 
+type CadEntity = AutocadDrawOperation
+  | { kind: 'polyline'; layer: string; points: Array<{ x: number; y: number }>; closed: boolean; label?: string };
+
 function validateCadDraftArgs(args: Record<string, any>): Record<string, any> {
   const width = Number(args.width);
   const height = Number(args.height);
@@ -721,7 +265,7 @@ function enforceCadGeometryGrounding(
   return { validation, receipt, geometryVerified: true };
 }
 
-function pushLineOp(ops: AutocadDrawOperation[], layer: string, x1: any, y1: any, x2: any, y2: any, label?: string) {
+function pushLineOp(ops: CadEntity[], layer: string, x1: any, y1: any, x2: any, y2: any, label?: string) {
   const a = maybeNumber(x1);
   const b = maybeNumber(y1);
   const c = maybeNumber(x2);
@@ -730,27 +274,16 @@ function pushLineOp(ops: AutocadDrawOperation[], layer: string, x1: any, y1: any
   ops.push({ kind: 'line', layer: safeLayer(layer, 'CUT'), x1: a, y1: b, x2: c, y2: d, label });
 }
 
-function pushRectOps(ops: AutocadDrawOperation[], x: number, y: number, width: number, height: number, layer = 'CUT', label?: string) {
+function pushRectOps(ops: CadEntity[], x: number, y: number, width: number, height: number, layer = 'CUT', label?: string) {
   if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return;
-  pushLineOp(ops, layer, x, y, x + width, y, label);
-  pushLineOp(ops, layer, x + width, y, x + width, y + height, label);
-  pushLineOp(ops, layer, x + width, y + height, x, y + height, label);
-  pushLineOp(ops, layer, x, y + height, x, y, label);
+  pushPolylineOps(ops, [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }], layer, true, label);
 }
 
-function pushPolylineOps(ops: AutocadDrawOperation[], points: Array<{ x: number; y: number }>, layer = 'POLYLINE', closed = false, label?: string) {
-  if (points.length < 2) return;
-  for (let i = 0; i < points.length - 1; i++) {
-    pushLineOp(ops, layer, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, label);
-  }
-  if (closed) {
-    const first = points[0];
-    const last = points[points.length - 1];
-    pushLineOp(ops, layer, last.x, last.y, first.x, first.y, label);
-  }
+function pushPolylineOps(ops: CadEntity[], points: Array<{ x: number; y: number }>, layer = 'POLYLINE', closed = false, label?: string) {
+  if (points.length >= 2) ops.push({ kind: 'polyline', layer: safeLayer(layer, 'POLYLINE'), points, closed, label });
 }
 
-function pushWallOps(ops: AutocadDrawOperation[], wall: Record<string, any>, fallbackThickness = 0) {
+function pushWallOps(ops: CadEntity[], wall: Record<string, any>, fallbackThickness = 0) {
   const x1 = maybeNumber(wall?.x1 ?? wall?.from?.x);
   const y1 = maybeNumber(wall?.y1 ?? wall?.from?.y);
   const x2 = maybeNumber(wall?.x2 ?? wall?.to?.x);
@@ -776,7 +309,7 @@ function pushWallOps(ops: AutocadDrawOperation[], wall: Record<string, any>, fal
   ], layer, true, wall?.label || 'wall');
 }
 
-function pushTextOp(ops: AutocadDrawOperation[], x: any, y: any, text: any, height = 220, layer = 'TEXT', label?: string) {
+function pushTextOp(ops: CadEntity[], x: any, y: any, text: any, height = 220, layer = 'TEXT', label?: string) {
   const px = maybeNumber(x);
   const py = maybeNumber(y);
   const value = String(text || '').trim();
@@ -784,38 +317,56 @@ function pushTextOp(ops: AutocadDrawOperation[], x: any, y: any, text: any, heig
   ops.push({ kind: 'text', layer: safeLayer(layer, 'TEXT'), x: px, y: py, text: value, height: Math.max(1, asFiniteNumber(height, 220)), label });
 }
 
-function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOperation[] {
+const CAD_COLLECTION_LIMITS = {
+  walls: 500, rooms: 120, labels: 160, doors: 160, windows: 160,
+  dimensions: 240, furniture: 240, columns: 120, polylines: 240, holes: 40,
+} as const;
+
+function cadCollections(args: Record<string, any>) {
+  return Object.fromEntries(Object.entries(CAD_COLLECTION_LIMITS).map(([key, limit]) => {
+    const value = key === 'walls' && !Array.isArray(args.walls) ? args.lines : args[key];
+    const items = Array.isArray(value) ? value : [];
+    if (items.length > limit) throw new Error(
+      `CAD ${key} limit exceeded (${limit}). Simplify or split the geometry; no partial drawing was emitted.`,
+    );
+    return [key, items];
+  })) as Record<keyof typeof CAD_COLLECTION_LIMITS, any[]>;
+}
+
+/** Normalize geometry once for DXF, preview and native playback. */
+function collectCadEntities(args: Record<string, any>): CadEntity[] {
   const width = Math.max(1, Number(args.width) || 100);
   const height = Math.max(1, Number(args.height) || 60);
-  const walls = Array.isArray(args.walls) ? args.walls : Array.isArray(args.lines) ? args.lines : [];
-  const rooms = Array.isArray(args.rooms) ? args.rooms : [];
-  const labels = Array.isArray(args.labels) ? args.labels : [];
-  const doors = Array.isArray(args.doors) ? args.doors : [];
-  const windows = Array.isArray(args.windows) ? args.windows : [];
-  const dimensions = Array.isArray(args.dimensions) ? args.dimensions : [];
-  const furniture = Array.isArray(args.furniture) ? args.furniture : [];
-  const columns = Array.isArray(args.columns) ? args.columns : [];
-  const polylines = Array.isArray(args.polylines) ? args.polylines : [];
-  const holes = Array.isArray(args.holes) ? args.holes : [];
+  const { walls, rooms, labels, doors, windows, dimensions, furniture, columns, polylines, holes } = cadCollections(args);
   const wallThickness = asFiniteNumber(args.wallThickness, 0);
-  const ops: AutocadDrawOperation[] = [];
+  const ops: CadEntity[] = [];
   const outerBoundary = normalizeCadBoundary(args);
   const sourceLineworkOwnsOutline = args?.sourceTopology?.traceMode === 'opencv_source_linework';
 
   if (outerBoundary.length >= 3 && !sourceLineworkOwnsOutline) {
     pushPolylineOps(ops, outerBoundary, 'OUTLINE', true, 'source outer boundary');
   } else if (!isImageCadSource(args.sourcePath) && args.rectangularOutline !== false) {
-    pushRectOps(ops, 0, 0, width, height, 'OUTLINE', 'explicit rectangular outline');
+    const radius = Math.max(0, Math.min(Number(args.cornerRadius) || 0, Math.min(width, height) / 2));
+    if (!radius) pushRectOps(ops, 0, 0, width, height, 'OUTLINE', 'explicit rectangular outline');
+    else {
+      pushLineOp(ops, 'OUTLINE', radius, 0, width - radius, 0);
+      pushLineOp(ops, 'OUTLINE', width, radius, width, height - radius);
+      pushLineOp(ops, 'OUTLINE', width - radius, height, radius, height);
+      pushLineOp(ops, 'OUTLINE', 0, height - radius, 0, radius);
+      for (const [cx, cy, start, end] of [[width - radius, radius, 270, 360], [width - radius, height - radius, 0, 90], [radius, height - radius, 90, 180], [radius, radius, 180, 270]]) {
+        ops.push({ kind: 'arc', layer: 'OUTLINE', cx, cy, r: radius, start, end, label: 'rounded outline' });
+      }
+    }
   }
 
-  for (const polyline of polylines.slice(0, 240)) {
+  for (const polyline of polylines) {
     const points = pointList(polyline?.points || polyline);
     pushPolylineOps(ops, points, safeLayer(polyline?.layer, 'POLYLINE'), Boolean(polyline?.closed), polyline?.label || 'polyline');
   }
 
-  for (const wall of walls.slice(0, 500)) pushWallOps(ops, wall, wallThickness);
+  for (const wall of walls) pushWallOps(ops, wall, wallThickness);
 
-  for (const room of rooms.slice(0, 120)) {
+  for (const room of rooms) {
     const points = pointList(room?.points || room?.polygon);
     if (points.length >= 3) {
       pushPolylineOps(ops, points, safeLayer(room?.layer, 'ROOM'), true, room?.name || 'room');
@@ -833,14 +384,14 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     }
   }
 
-  for (const hole of holes.slice(0, 40)) {
+  for (const hole of holes) {
     const x = maybeNumber(hole?.x);
     const y = maybeNumber(hole?.y);
     const r = maybeNumber(hole?.r ?? hole?.radius);
     if (x !== null && y !== null && r !== null && r > 0) ops.push({ kind: 'circle', layer: safeLayer(hole?.layer, 'HOLE'), x, y, r, label: hole?.label || 'hole' });
   }
 
-  for (const column of columns.slice(0, 120)) {
+  for (const column of columns) {
     const x = maybeNumber(column?.x);
     const y = maybeNumber(column?.y);
     if (x === null || y === null) continue;
@@ -853,7 +404,7 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     }
   }
 
-  for (const windowItem of windows.slice(0, 160)) {
+  for (const windowItem of windows) {
     let x1 = maybeNumber(windowItem?.x1 ?? windowItem?.from?.x);
     let y1 = maybeNumber(windowItem?.y1 ?? windowItem?.from?.y);
     let x2 = maybeNumber(windowItem?.x2 ?? windowItem?.to?.x);
@@ -882,7 +433,7 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     pushLineOp(ops, layer, x1 - nx, y1 - ny, x2 - nx, y2 - ny, windowItem?.label || 'window');
   }
 
-  for (const door of doors.slice(0, 160)) {
+  for (const door of doors) {
     const hingeX = maybeNumber(door?.hingeX ?? door?.x ?? door?.x1);
     const hingeY = maybeNumber(door?.hingeY ?? door?.y ?? door?.y1);
     if (hingeX === null || hingeY === null) continue;
@@ -900,14 +451,14 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
       cx: hingeX,
       cy: hingeY,
       r: doorWidth,
-      start: normalizeDegrees(angle),
-      end: normalizeDegrees(angle + sign * openAngle),
+      start: normalizeDegrees(sign >= 0 ? angle : angle + sign * openAngle),
+      end: normalizeDegrees(sign >= 0 ? angle + sign * openAngle : angle),
       label: door?.label || 'door swing',
     });
     pushTextOp(ops, hingeX + 80, hingeY + 80, door?.label || door?.name, door?.textHeight || 180, 'TEXT', 'door label');
   }
 
-  for (const item of furniture.slice(0, 240)) {
+  for (const item of furniture) {
     const x = maybeNumber(item?.x);
     const y = maybeNumber(item?.y);
     if (x === null || y === null) continue;
@@ -918,7 +469,7 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     pushTextOp(ops, x + 60, y + 220, item?.label || item?.name || item?.type, item?.textHeight || 180, 'TEXT', 'furniture label');
   }
 
-  for (const dimension of dimensions.slice(0, 240)) {
+  for (const dimension of dimensions) {
     const x1 = maybeNumber(dimension?.x1 ?? dimension?.from?.x);
     const y1 = maybeNumber(dimension?.y1 ?? dimension?.from?.y);
     const x2 = maybeNumber(dimension?.x2 ?? dimension?.to?.x);
@@ -946,7 +497,7 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     pushTextOp(ops, (ax + bx) / 2, (ay + by) / 2, dimension?.text || dimension?.label || `${Math.round(len)}`, dimension?.textHeight || 180, 'DIM_TEXT', 'dimension text');
   }
 
-  for (const label of labels.slice(0, 160)) {
+  for (const label of labels) {
     pushTextOp(ops, label?.x, label?.y, label?.text || label?.name, label?.height || 220, safeLayer(label?.layer, 'TEXT'), 'label');
   }
 
@@ -970,7 +521,23 @@ function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOpe
     pushTextOp(ops, x + 80, y + 520, 'N', 180, 'ANNOTATION', 'north label');
   }
 
-  return ops.slice(0, 2500);
+  return ops;
+}
+
+function collectAutocadDrawOperations(args: Record<string, any>): AutocadDrawOperation[] {
+  const ops: AutocadDrawOperation[] = [];
+  for (const entity of collectCadEntities(args)) {
+    if (entity.kind !== 'polyline') { ops.push(entity); continue; }
+    const { points, closed, layer, label } = entity;
+    const segments = closed ? points.length : points.length - 1;
+    for (let i = 0; i < segments; i++) {
+      const from = points[i];
+      const to = points[(i + 1) % points.length];
+      pushLineOp(ops, layer, from.x, from.y, to.x, to.y, label);
+    }
+  }
+  if (ops.length > 2500) throw new Error('AutoCAD operation limit exceeded (2500). Simplify or split the geometry; no partial operation set was emitted.');
+  return ops;
 }
 
 function resolveAutocadOperationPaths(args: Record<string, any>, title: string): {
@@ -1003,7 +570,23 @@ function resolveAutocadOperationPaths(args: Record<string, any>, title: string):
 }
 
 function cadGeometryParameters() {
-  return {
+  const properties: Record<string, any> = {
+    cornerRadius: { type: 'number', description: 'Optional rounded corner radius; all output formats use the same explicit geometry.' },
+    sourcePath: { type: 'string', description: 'Optional source image/drawing path used for traceability.' },
+    geometryReceiptPath: { type: 'string', description: 'Required for image-grounded CAD. Use the verified receipt returned by floorplan_extract_geometry; the server loads exact geometry from it.' },
+    geometryHash: { type: 'string', description: 'Verified geometry hash; checked against the source receipt.' },
+    sourceTopology: { type: 'object', description: 'Verified source topology, including whether the exterior is rectangular.' },
+    outerBoundary: {
+      type: 'array',
+      description: 'Ordered source exterior polygon [{x,y}, ...]. Image-grounded geometry must preserve every notch and projection.',
+      items: { type: 'object' },
+    },
+    rectangularOutline: { type: 'boolean', description: 'For manual geometry only. Set false to avoid an automatic rectangular outline when no outerBoundary is supplied.' },
+    polylines: {
+      type: 'array',
+      description: 'Open/closed polylines: {points:[{x,y}],closed,layer}; native playback draws each segment.',
+      items: { type: 'object' },
+    },
     title: { type: 'string', description: 'Drawing title / output filename.' },
     width: { type: 'number', description: 'Outer width in chosen units.' },
     height: { type: 'number', description: 'Outer height in chosen units.' },
@@ -1063,6 +646,8 @@ function cadGeometryParameters() {
       items: { type: 'object' },
     },
   };
+  for (const [key, limit] of Object.entries(CAD_COLLECTION_LIMITS)) properties[key].maxItems = limit;
+  return properties;
 }
 
 export function registerCadDeliveryTools(registry: ToolRegistry): void {
@@ -1073,25 +658,9 @@ registry.register({
       type: 'object',
       properties: {
         ...cadGeometryParameters(),
-        cornerRadius: { type: 'number', description: 'Reserved for geometry compatibility; AutoCAD operations use explicit entities.' },
-        sourcePath: { type: 'string', description: 'Optional source image/drawing path used for traceability.' },
-        geometryReceiptPath: { type: 'string', description: 'Required for image-grounded CAD. Use the receipt path returned by successful floorplan_extract_geometry verification.' },
-        geometryHash: { type: 'string', description: 'Geometry hash returned with the verified extraction. It is checked against the receipt.' },
-        sourceTopology: { type: 'object', description: 'Source shape facts returned by extraction, including whether the exterior is rectangular.' },
-        outerBoundary: {
-          type: 'array',
-          description: 'Ordered source exterior polygon [{x,y}, ...]. Required for image-grounded CAD and must preserve every notch and projection.',
-          items: { type: 'object' },
-        },
-        rectangularOutline: { type: 'boolean', description: 'For manually specified CAD only. Set false to avoid an automatic rectangular envelope when no outerBoundary is supplied.' },
         outputDirectory: { type: 'string', description: 'Optional directory for the operations JSON, manifest, and completion marker.' },
         outputPath: { type: 'string', description: 'Optional output base path. The tool writes _operations.json and _manifest.json beside it.' },
         strokeDelayMs: { type: 'number', description: 'Requested delay in milliseconds between visible MCP operations. Defaults to 450, minimum 100, maximum 5000.' },
-        polylines: {
-          type: 'array',
-          description: 'Optional open/closed polylines: {points:[{x,y}],closed,layer}. MCP playback draws each segment one by one.',
-          items: { type: 'object' },
-        },
       },
     },
     handler: async (args, context) => {
@@ -1112,27 +681,17 @@ registry.register({
         .digest('hex');
       const geometryVerificationRequired = isImageCadSource(draftArgs.sourcePath);
 
-      fs.writeFileSync(paths.operationsPath, JSON.stringify({
-        version: 2,
-        generatedAt: new Date().toISOString(),
+      const geometryReceipt = {
         title,
         unit: draftArgs.unit || 'unit',
-        sourcePath: draftArgs.sourcePath || '',
         geometryReceiptPath: draftArgs.geometryReceiptPath || '',
         geometryHash,
         geometryVerified: grounding.geometryVerified,
         geometryVerificationRequired,
         geometryValidation: grounding.validation,
         operationSetId,
-        expectedEntityCount: operations.length,
-        operations,
-      }, null, 2), 'utf-8');
-      const manifest = {
-        version: 2,
-        generatedAt: new Date().toISOString(),
-        title,
-        sourcePath: draftArgs.sourcePath || '',
-        unit: draftArgs.unit || 'unit',
+      };
+      const draftMetadata = {
         width: draftArgs.width,
         height: draftArgs.height,
         inferredScale: draftArgs.inferredScale,
@@ -1141,12 +700,8 @@ registry.register({
         missingForPrecision: draftArgs.missingForPrecision,
         precisionStatus: draftArgs.precisionStatus,
         outerBoundaryPointCount: normalizeCadBoundary(draftArgs).length,
-        geometryReceiptPath: draftArgs.geometryReceiptPath || '',
-        geometryHash,
-        geometryVerified: grounding.geometryVerified,
-        geometryVerificationRequired,
-        geometryValidation: grounding.validation,
-        operationSetId,
+      };
+      const playbackMetadata = {
         strokeDelayMs: delay,
         operationCount: operations.length,
         operationsPath: paths.operationsPath,
@@ -1154,6 +709,15 @@ registry.register({
         requiredPlaybackTool: 'mcp_cad-drafting_autocad_playback_file',
         fallbackAllowed: false,
       };
+      const artifactIdentity = {
+        version: 2,
+        generatedAt: new Date().toISOString(),
+        sourcePath: draftArgs.sourcePath || '',
+      };
+      fs.writeFileSync(paths.operationsPath, JSON.stringify({
+        ...artifactIdentity, ...geometryReceipt, expectedEntityCount: operations.length, operations,
+      }, null, 2), 'utf-8');
+      const manifest = { ...artifactIdentity, ...geometryReceipt, ...draftMetadata, ...playbackMetadata };
       fs.writeFileSync(paths.manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
       try { fs.rmSync(paths.markerPath, { force: true }); } catch {}
 
@@ -1167,31 +731,8 @@ registry.register({
       }, {});
 
       return JSON.stringify({
-        title,
-        unit: draftArgs.unit || 'unit',
-        width: draftArgs.width,
-        height: draftArgs.height,
-        inferredScale: draftArgs.inferredScale,
-        confidence: manifest.confidence,
-        assumptions: draftArgs.assumptions,
-        missingForPrecision: draftArgs.missingForPrecision,
-        precisionStatus: draftArgs.precisionStatus,
-        outerBoundaryPointCount: manifest.outerBoundaryPointCount,
-        geometryReceiptPath: manifest.geometryReceiptPath,
-        geometryHash,
-        geometryVerified: grounding.geometryVerified,
-        geometryVerificationRequired,
-        geometryValidation: grounding.validation,
-        operationSetId,
-        strokeDelayMs: delay,
-        operationCount: operations.length,
-        typeCounts,
-        layerCounts,
-        operationsPath: paths.operationsPath,
-        completionMarkerPath: paths.markerPath,
+        ...geometryReceipt, ...draftMetadata, ...playbackMetadata, typeCounts, layerCounts,
         manifestPath: paths.manifestPath,
-        requiredPlaybackTool: 'mcp_cad-drafting_autocad_playback_file',
-        fallbackAllowed: false,
         preview: operations.slice(0, 20).map((op, index) => ({ index: index + 1, ...op })),
         note: 'Prepared source-validated AutoCAD operations only. Visible drawing is incomplete until MCP/COM playback verifies both the completion marker and the exact entity-count delta. No script or finished-file fallback is allowed.',
       }, null, 2);
@@ -1230,24 +771,8 @@ registry.register({
       type: 'object',
       properties: {
         ...cadGeometryParameters(),
-        cornerRadius: { type: 'number', description: 'Optional rounded corner radius.' },
         outputDirectory: { type: 'string', description: 'Optional directory to save the DXF, e.g. C:\\Users\\name\\Desktop. Use when the user asks to put the file somewhere visible.' },
         outputPath: { type: 'string', description: 'Optional exact DXF output path. Relative paths are resolved under outputDirectory or Lumi CAD data directory.' },
-        sourcePath: { type: 'string', description: 'Optional source drawing/image path used for traceability.' },
-        geometryReceiptPath: { type: 'string', description: 'Required for image-grounded DXF. Use the verified receipt from floorplan_extract_geometry.' },
-        geometryHash: { type: 'string', description: 'Verified geometry hash returned by floorplan_extract_geometry.' },
-        sourceTopology: { type: 'object', description: 'Verified source topology metadata.' },
-        outerBoundary: {
-          type: 'array',
-          description: 'Ordered exterior polygon [{x,y}, ...]. Required when tracing an image with an irregular boundary.',
-          items: { type: 'object' },
-        },
-        rectangularOutline: { type: 'boolean', description: 'For manual geometry only. Controls automatic rectangular outline when outerBoundary is absent.' },
-        polylines: {
-          type: 'array',
-          description: 'Optional open/closed polylines: {points:[{x,y}],closed,layer}. Useful for irregular boundaries.',
-          items: { type: 'object' },
-        },
         openPreview: { type: 'boolean', description: 'Open the generated DXF with the system default app. Requires foreground confirmation, or an approved autonomous workflow when used in the background.' },
       },
     },
@@ -1256,8 +781,9 @@ registry.register({
       const grounding = enforceCadGeometryGrounding(draftArgs, context);
       const title = safeFileName(String(draftArgs.title || 'lumi_cad_draft'));
       const outPath = resolveCadOutputPath(draftArgs, title);
-      fs.writeFileSync(outPath, buildDxf(draftArgs), 'utf-8');
-      const previewSvg = buildCadPreviewSvg(draftArgs, title);
+      const geometry = collectCadEntities(draftArgs);
+      fs.writeFileSync(outPath, buildDxf(geometry), 'utf-8');
+      const previewSvg = buildCadPreviewSvg(draftArgs, title, geometry);
       const previewPath = getCadPreviewPath(outPath);
       fs.writeFileSync(previewPath, previewSvg, 'utf-8');
       const stat = fs.statSync(outPath);
