@@ -83,3 +83,28 @@ it('does not infer a paid generation from a question, veto or unrelated stale pr
   expect(resolveChatVideoRequest('好', images(), scope, [...videoBriefHistory.slice(0, 1), { role: 'assistant', message: '视频已生成。' }])).toBeNull();
   expect(resolveChatVideoRequest('按上面的版本来', images(), scope, [...videoBriefHistory, {role:'user',message:'生成一份Word报告'}, {role:'assistant',message:'报告可以插入视频，按这个版本吗？'}])).toBeNull();
 });
+
+const interruptedVideoHistory = [...videoBriefHistory,
+  { role: 'user', message: '按上面的“非拼写错误版”来' },
+  { role: 'tool', message: '[Tool: client_get_state] Done' },
+  { role: 'assistant', message: '自检完成。', cognitiveIntent: 'work_product_guard', toolCalls: [{ name: 'client_get_state', result: '{"ok":true}' }] },
+  { role: 'user', message: '继续完成原任务' },
+  { role: 'assistant', message: '目前没有可核实的执行结果。', cognitiveIntent: 'work_product_guard', toolCalls: [{ name: 'work_takeover_task_create', result: '{"ok":true,"status":"created"}' }] },
+];
+it('recovers the selected video brief through incidental diagnostic and task-registration guard replies', () => {
+  const request = resolveChatVideoRequest('继续完成原任务', images(), scope, interruptedVideoHistory)!;
+  expect(request).toMatchObject({ operation: 'image_to_video', duration: 30, size: '1080x1920', referenceImage: fs.realpathSync(sourcePath) });
+  expect(request.prompt).toContain('纯英文版');
+  expect(request.prompt).toContain('0–3秒展示产品');
+  expect(request.prompt).toContain('按上面的“非拼写错误版”来');
+  expect(request.prompt).not.toMatch(/client_get_state|自检完成|work_takeover|没有可核实/);
+});
+it('does not revive old media through unrelated turns, a veto, casual assent or a verified deliverable', () => {
+  for (const text of ['好的', '继续之前先告诉我做到哪了', '继续完成原任务，暂时不要执行', '继续原任务，生成Word报告']) {
+    expect(resolveChatVideoRequest(text, images(), scope, interruptedVideoHistory)).toBeNull();
+  }
+  expect(resolveChatVideoRequest('继续完成原任务', images(), scope, [...interruptedVideoHistory, { role: 'user', message: '不要生成了' }, { role: 'assistant', message: '好的。' }])).toBeNull();
+  expect(resolveChatVideoRequest('继续完成原任务', images(), scope, [...interruptedVideoHistory, { role: 'user', message: '生成Word报告' }, { role: 'assistant', message: '目前没有可核实的执行结果。', cognitiveIntent: 'work_product_guard' }])).toBeNull();
+  const delivered = { role: 'assistant', message: 'guard reply', cognitiveIntent: 'work_product_guard', toolCalls: [{ name: 'generate_video', arguments: { duration: 30 }, result: JSON.stringify({ ok: true, verified: true, verificationStatus: 'verified', outputPath: 'D:/generated/finished.mp4', settingsMatch: true, actualSettings: { duration: 30 } }) }] };
+  expect(resolveChatVideoRequest('继续完成原任务', images(), scope, [...interruptedVideoHistory, delivered])).toBeNull();
+});

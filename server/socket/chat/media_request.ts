@@ -5,31 +5,55 @@ import path from 'node:path';
 import { normalizeStructuredMediaRequest, type StructuredMediaRequest } from '../../../shared/media_generation';
 import { mediaGenerationIntent, normalizeActionIntent } from '../../cognition/normalized_action_intent';
 import { analyzeMediaToolRouting } from '../../cognition/media_tool_routing';
-import { hasRequestedArtifactMutation } from '../../cognition/tool_intent';
+import { hasExplicitNoMutationInstruction, hasExplicitNoToolInstruction, hasRequestedArtifactMutation } from '../../cognition/tool_intent';
 import { generatedKnowledgeDirectory } from '../../files/knowledge_directory';
+import { explicitlyReferencesUnfinishedTask, type ActionContinuationHistoryItem } from '../../cognition/action_continuation';
+import { isGuardGeneratedConversationRecord } from '../../conversation/guard_history';
+import { parseNestedJson, toolRecordTerminalPayload } from '../../tools/receipt_payload';
+import { buildMediaArtifactReceipt } from '../media_artifact_receipt';
 import type { ChatIncomingAttachment } from './attachments';
 
-type MediaHistoryMessage = { role?: string; message?: string; response?: string };
+type MediaHistoryMessage = ActionContinuationHistoryItem;
+
+// i18n-allow: Explicit approval/version selection, not status questions or new instructions.
+const VIDEO_APPROVAL_RE = /^(?:(?:好|好的|可以|确认|确定|开始|继续|就这样|yes|ok|okay)[。！!\s]*$|(?:按|按照|照|就用|用|选).{1,100}(?:来|生成|制作|版本|版)[。！!\s]*$)/iu;
+const historyUserText = (item: MediaHistoryMessage) => String(item.message || '').split('\n\n[Attachments]')[0].trim();
+const explicitResume = (text: string) => explicitlyReferencesUnfinishedTask(text) && normalizeActionIntent(text).kind !== 'status_query'
+  && !hasExplicitNoToolInstruction(text) && !hasExplicitNoMutationInstruction(text) && !hasRequestedArtifactMutation(text);
 
 /** A version choice binds only to the adjacent video proposal and a real user brief. */
 function acceptedVideoBrief(text: string, history: readonly MediaHistoryMessage[]): string | null {
-  // i18n-allow: Explicit approval/version selection, not status questions or new instructions.
-  if (!/^(?:(?:好|好的|可以|确认|确定|开始|继续|就这样|yes|ok|okay)[。！!\s]*$|(?:按|按照|照|就用|用|选).{1,100}(?:来|生成|制作|版本|版)[。！!\s]*$)/iu.test(text.trim())) return null;
-  const previous = history[history.length - 1];
+  const resume = explicitResume(text);
+  if (!resume && !VIDEO_APPROVAL_RE.test(text.trim())) return null;
+  const recent = history.slice(-32).filter(item => {
+    if (item.role === 'tool') return false;
+    if (!isGuardGeneratedConversationRecord(item)) return true;
+    // Guard prose cannot replace the creative brief. A real delivered media
+    // receipt still closes it, even when the old reply was guard-marked.
+    const calls = parseNestedJson(item.toolCalls);
+    return Array.isArray(calls) && calls.some(record => buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error));
+  });
+  const selections = [text];
+  if (resume) while (recent.at(-1)?.role === 'user') {
+    const selection = historyUserText(recent.pop()!);
+    if (!explicitResume(selection) && !VIDEO_APPROVAL_RE.test(selection)) return null;
+    selections.unshift(selection);
+  }
+  const previous = recent.at(-1);
   const proposal = String(previous?.message || previous?.response || '').trim();
   // i18n-allow: The adjacent assistant must still be discussing a video deliverable.
   if (previous?.role !== 'assistant' || !/(?:视频|成片|video|clip)/iu.test(proposal)) return null;
   // i18n-allow: An acknowledgement authorizes creation only after an actual generation/version proposal.
   if (!/(?:需要我|要不要我|要我|是否).{0,100}(?:生成|制作|做)|(?:按|选|用).{0,80}(?:版|风格).{0,20}[？?]|(?:shall I|would you like me).{0,100}(?:generate|create|make)|which.{0,50}(?:version|style)/iu.test(proposal)) return null;
-  for (const item of [...history.slice(-12)].reverse()) {
+  for (const item of [...recent].reverse()) {
     if (item.role !== 'user') continue;
-    const brief = String(item.message || '').split('\n\n[Attachments]')[0].trim();
+    const brief = historyUserText(item);
     if (mediaGenerationIntent(brief)?.target === 'generate_video') {
       // A proposed script is creative data inside the same validated envelope,
       // never authority to call diagnostics or any other tool.
       // i18n-allow: Strip the assistant approval question from proposed creative content.
       const script = proposal.split(/(?:需要我|要不要我|would you like me|shall I)/iu)[0].trim().slice(0,12000);
-      return [brief, script, text].filter(Boolean).join('\n\n');
+      return [brief, script, ...selections].filter(Boolean).join('\n\n');
     }
     if (hasRequestedArtifactMutation(brief) || !['none', 'status_query'].includes(normalizeActionIntent(brief).kind)) return null;
   }

@@ -45,6 +45,8 @@ vi.mock('../server/agents/rag', async importOriginal => {
 import { initDatabase, readDB } from '../db_layer';
 import {
   addMessage,
+  prepareConversationActionExecution,
+  setConversationActionExecutionStatus,
   getActiveConversation,
   getOrCreateActiveConversation,
   startIsolatedConversation,
@@ -81,6 +83,7 @@ describe('closed isolated Chat conversation continuity', () => {
   const secondRequestId = `chat-isolated-continuity-second-${suffix}`;
   const statusOwnerRequestId = `chat-isolated-status-owner-${suffix}`;
   const statusSidecarRequestId = `chat-isolated-status-sidecar-${suffix}`;
+  const videoResumeText = '继续完成原任务';
   const videoChoiceText = '按上面的“非拼写错误版”来';
   let mediaInvocation: any;
   const cupCode = `cup-${Math.random().toString(36).slice(2, 12)}`;
@@ -148,7 +151,7 @@ describe('closed isolated Chat conversation continuity', () => {
       const currentUserText = [...messages]
         .reverse()
         .find((message: any) => message?.role === 'user')?.content || '';
-      if (currentUserText.startsWith(videoChoiceText)) {
+      if (currentUserText.startsWith(videoChoiceText) || currentUserText.startsWith(videoResumeText)) {
         const toolContext = args[11];
         mediaInvocation = toolContext;
         const call = toolContext.runtimeOwnedDeterministicRecoveryCall;
@@ -485,19 +488,34 @@ describe('closed isolated Chat conversation continuity', () => {
     );
     expect(isolatedAfterStatus).toMatchObject({ status: 'closed' });
   });
-  it('binds an accepted script version through persisted history, attachment validation and the sole media execution lane', async () => {
+  it.each([false, true])('binds the original video through persisted history and the sole execution lane (interrupted=%s)', async interrupted => {
     const selected = startIsolatedConversation(userId, 'lumi', 'personal', '');
     const brief = '帮我做一个tiktok的推广视频，要三十秒的，纯英文版';
     const script = '30秒英文视频脚本：0–3秒展示产品；3–24秒展示玩法；24–30秒结尾。需要我按这个脚本生成30秒成片吗？';
     for (const [role, content] of [['user', brief], ['assistant', script]]) {
       addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role, content, skipActionContinuation: true });
     }
+    let unrelatedTaskId = '';
+    if (interrupted) {
+      addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role: 'user', content: videoChoiceText, skipActionContinuation: true });
+      addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role: 'assistant', content: '自检完成。', cognitiveIntent: 'work_product_guard',
+        toolCalls: [{ name: 'client_get_state', result: '{"ok":true}' }], skipActionContinuation: true });
+      const seedRequest = 'wrong-resume-' + suffix;
+      const userMessageId = addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role: 'user', content: videoResumeText, requestId: seedRequest, deferActionPreparation: true });
+      const prepared = prepareConversationActionExecution({ userId, conversationId: selected.id, userText: videoResumeText, requestId: seedRequest, userMessageId, forceTask: true,
+        toolPolicy: { allowedTools: ['work_takeover_task_create'], forbiddenTools: [], requireConfirmation: [], maxIterations: 1 } });
+      unrelatedTaskId = prepared.state?.taskId || '';
+      expect(unrelatedTaskId).not.toBe('');
+      addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role: 'assistant', content: '目前没有可核实的执行结果。', requestId: seedRequest, cognitiveIntent: 'work_product_guard', skipActionContinuation: true,
+        toolCalls: [{ name: 'work_takeover_task_create', result: '{"ok":true,"status":"created"}' }] });
+      setConversationActionExecutionStatus(selected.id, userId, 'blocked', { requestId: seedRequest, blocker: 'Only registered a task; no video generated.' });
+    }
     const source = path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), 'product.png');
     fs.writeFileSync(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=', 'base64'));
-    const requestId = 'media-version-' + suffix;
+    const requestId = 'media-version-' + interrupted + '-' + suffix;
     const response = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
     const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
-      text: videoChoiceText, requestId, conversationId: selected.id, domain: 'personal', source: 'e2e-formal-client',
+      text: interrupted ? videoResumeText : videoChoiceText, requestId, conversationId: selected.id, domain: 'personal', source: 'e2e-formal-client',
       attachments: [{ kind: 'image', fileName: 'product.png', path: source }],
       history: [{ role: 'assistant', message: '请改成五秒自检。' }],
     });
@@ -509,9 +527,14 @@ describe('closed isolated Chat conversation continuity', () => {
     expect(prompt).toContain(brief);
     expect(prompt).toContain('0–3秒展示产品');
     expect(prompt).toContain(videoChoiceText);
-    expect(prompt).not.toMatch(/五秒自检|需要我/);
+    expect(prompt).not.toMatch(/五秒自检|需要我|自检完成|没有可核实/);
+    if (interrupted) {
+      expect(mediaInvocation.taskId).not.toBe(unrelatedTaskId);
+      expect(prompt).toContain(videoResumeText);
+    }
     expect(mediaInvocation.modelToolProjection.toolNames).toContain('generate_video');
     expect(mediaInvocation.modelToolProjection.toolNames).not.toContain('client_health_check');
+    expect(mediaInvocation.modelToolProjection.toolNames).not.toContain('work_takeover_task_create');
     const rows = readDB().interactions.filter(row => row.requestId === requestId || row.externalMessageId === requestId);
     expect(rows.map(row => row.role).sort()).toEqual(['assistant', 'user']);
     expect(getActiveConversation(userId, 'lumi', 'personal', '')?.id).toBe(activeConversationId);

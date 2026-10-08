@@ -145,7 +145,7 @@ export function isActionBearingGoal(goal: string, analysis?: ActionIntentAnalysi
   return contract.applies && contract.kind !== 'none';
 }
 
-function explicitlyReferencesUnfinishedTask(text: string): boolean {
+export function explicitlyReferencesUnfinishedTask(text: string): boolean {
   const value = compact(text, 700);
   // i18n-allow: referential task resumption, not arbitrary continuation verbs.
   return /(?:^|[，,。；;！!？?])\s*(?:(?:请|现在|那就)\s*)?(?:继续|接着)(?:完成|处理|执行|做)?(?:刚才|之前|上述|当前|这个|上次|上一个|上个|原)(?:的)?(?:未完成的|没完成的|剩余的)?(?:任务|工作|操作|流程|步骤)?|(?:^|[,.!?;])\s*(?:please\s+)?(?:continue|resume|finish)\s+(?:(?:the|this|that)\s+)?(?:(?:previous|current|original|unfinished|remaining)\s+)(?:task|work|workflow|step)\b/iu.test(value);

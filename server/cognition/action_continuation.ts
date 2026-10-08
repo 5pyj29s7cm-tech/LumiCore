@@ -29,6 +29,7 @@ export { extractRecentActionContinuationState } from './continuation/history_pro
 export { normalizeConversationActionState } from './continuation/state_normalization';
 export { pendingRuntimeCancellationRecheck } from './continuation/runtime_cancellation';
 export { isCurrentContinuationTask } from './continuation/followup';
+export { explicitlyReferencesUnfinishedTask } from './continuation/followup';
 export { isExplicitUnfinishedTaskContinuation } from './continuation/followup';
 export { isTaskPreparationContinuation } from './continuation/followup';
 export { isReferentialArtifactEdit } from './continuation/followup';
