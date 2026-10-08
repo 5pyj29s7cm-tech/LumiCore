@@ -52,7 +52,7 @@ it.each(['wechat_send_message', 'wechat_send_file'])('%s rejects an unresolved r
     expect(desktopRelay).not.toHaveBeenCalled();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
-it('preserves tool-specific CAD descriptions and gives each tool independent parameter objects', () => {
+it('shares CAD geometry parameters without aliasing mutable objects or mixing output contracts', () => {
   const registry = new ToolRegistry(); registerExternalAppTools(registry);
   const operations = registry.get('cad_prepare_autocad_operations')!.parameters.properties;
   const dxf = registry.get('cad_generate_dxf')!.parameters.properties;
@@ -60,7 +60,8 @@ it('preserves tool-specific CAD descriptions and gives each tool independent par
   expect(operations.walls).toEqual(dxf.walls);
   expect(operations.walls).not.toBe(dxf.walls);
   expect(operations.walls.items).not.toBe(dxf.walls.items);
-  expect(operations.geometryReceiptPath.description).toContain('successful floorplan_extract_geometry');
-  expect(dxf.geometryReceiptPath.description).toContain('image-grounded DXF');
-  expect(operations.cornerRadius.description).not.toBe(dxf.cornerRadius.description);
+  expect(operations.geometryReceiptPath).toEqual(dxf.geometryReceiptPath);
+  expect(operations.cornerRadius).toEqual(dxf.cornerRadius);
+  expect(registry.get('cad_prepare_autocad_operations')!.description).toContain('does not launch AutoCAD');
+  expect(registry.get('cad_generate_dxf')!.description).toContain('explicitly requested DXF');
 });
