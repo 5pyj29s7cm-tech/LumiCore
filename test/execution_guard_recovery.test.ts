@@ -868,6 +868,18 @@ describe('execution guard recovery', () => {
     expect(JSON.parse(records?.[0].result || '{}')).not.toHaveProperty('inputPath');
   });
 
+  it.each([
+    ['generate_video', { first_frame_image: 'C:/private/product.png' }, { operation: 'image_to_video', hasReference: true }],
+    ['generate_image', { referencePaths: ['C:/private/product.png'] }, { operation: 'text_to_image', hasReference: true, referenceCount: 1 }],
+    ['ai_edit_image', { filePath: 'C:/private/product.png' }, { operation: 'image_edit', hasSource: true }],
+  ])('preserves %s media source evidence across repeated persistence projection', (name, args, expected) => {
+    const once = sanitizeToolRecordsForPersistence([record({ name, arguments: { ...args, prompt: 'product', duration: 30 }, result: '{"ok":true}' })]);
+    const twice = sanitizeToolRecordsForPersistence(once);
+    expect(twice).toEqual(once);
+    expect(twice?.[0].arguments).toMatchObject(expected);
+    expect(JSON.stringify(twice)).not.toContain('private/product.png');
+  });
+
   it('returns only a human-readable blocker when the single recovery remains blocked', async () => {
     let attempts = 0;
     const recovered = await recoverBlockedExecutionOnce<ExecutionGuardRecoveryFinalization>({

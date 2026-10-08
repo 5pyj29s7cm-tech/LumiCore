@@ -808,3 +808,12 @@ describe('Lumi turn flow', () => {
     expect(cadContinuation.routeText).toContain('AutoCAD');
   });
 });
+
+it.each(['按上面的“非拼写错误版”来', '按上面的非拼写错误版来'])('keeps a creative version choice out of runtime self-repair: %s', async text => {
+  const { isDiagnosticOrRepairRequest } = await import('../server/cognition/tool_intent');
+  const { buildLumiTurnFlow } = await import('../server/cognition/turn_flow');
+  expect(isDiagnosticOrRepairRequest(text)).toBe(false);
+  const flow = buildLumiTurnFlow({userId:'creative-version-selection',text,channel:'chat',targetIsLumi:true});
+  expect(flow.selfRepairTurn).toBe(false);
+  expect(isDiagnosticOrRepairRequest('客户端启动错误，请检查')).toBe(true);
+});

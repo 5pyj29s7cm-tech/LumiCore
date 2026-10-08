@@ -75,6 +75,8 @@ export interface LumiTurnFlow {
   acceptedTaskTarget?: import('../conversation/task_target_anchor').AcceptedTaskTarget;
   /** Current upload metadata, separate from untrusted extracted file contents. */
   currentAttachmentPaths?: string[];
+  /** Validated media arguments shared by execution and completion; routing prose is not the brief. */
+  structuredMediaRequest?: import('../../shared/media_generation').StructuredMediaRequest;
   channel: LumiTurnChannel;
   source?: string;
   surface: WorkTakeoverTurnSurface;

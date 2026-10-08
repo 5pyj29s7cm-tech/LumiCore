@@ -275,7 +275,7 @@ export function buildLumiExecutionPipeline(
   });
   const turnIntent = {
     ...dispatched,
-    flow: { ...dispatched.flow, acceptedTaskTarget },
+    flow: { ...dispatched.flow, acceptedTaskTarget, ...(mediaRequest ? { structuredMediaRequest: mediaRequest } : {}) },
     promptOverlay: [dispatched.promptOverlay, acceptedPlan
       ? 'The current user accepted this immediately preceding user-authored file plan: ' + JSON.stringify(acceptedPlan)
         + '. Execute this goal using current file evidence. Do not merge older task revisions or ask the user to choose an older version. Normal tool authorization and confirmation boundaries still apply.'

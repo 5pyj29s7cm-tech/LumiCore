@@ -1,3 +1,4 @@
+import { requestedVideoDuration } from '../../shared/video_generation_options';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
 import { resolveArtifactDelivery } from '../tools/artifact_evidence';
@@ -853,23 +854,28 @@ export function formatExternalAiHistoryResult(
 }
 
 export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
+  const mediaRequest = input.flow?.structuredMediaRequest;
   const task = resultTaskText(input);
+  const languageText = mediaRequest ? input.taskText : task;
   // A generator receipt proves generation only, not a requested publication,
   // document, delivery or subsequent application action.
   // i18n-allow: Media creation versus compound external-work input recognition.
-  if (!/(?:生成|创建|制作|绘制|画).{0,90}(?:图片|图像|插画|海报|视频)|\b(?:generate|create|draw|make).{0,80}(?:image|picture|video)\b/iu.test(task)
+  if ((!mediaRequest && !/(?:生成|创建|制作|绘制|画).{0,90}(?:图片|图像|插画|海报|视频)|\b(?:generate|create|draw|make).{0,80}(?:image|picture|video)\b/iu.test(task))
     || /(?:发送|发给|上传|发布|打开|导出|写入|保存到|CAD|图纸|文档|PPT)|\b(?:send|upload|publish|open|export|document|save to|cad)\b/iu.test(task)) return null; // i18n-allow: Compound task boundaries.
   const record = [...(input.toolRecords || [])].reverse().find(item => /^(?:generate_image|get_image_generation_status|ai_edit_image|generate_video)$/u.test(item.name));
   if (!record || !isVerifiedCurrentTurnRecord(input, record)) return null;
   const receipt = buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error);
   if (!receipt) return null;
-  if (receipt.settingsMatch === false) return {
-    text: isChineseText(task) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoSettingsReview(receipt.settings.size, receipt.settings.duration)
+  const requestedDuration = mediaRequest?.duration ?? requestedVideoDuration(task);
+  const durationMismatch = receipt.artifacts.some(artifact => artifact.kind === 'video') && requestedDuration !== undefined
+    && (!Number.isFinite(receipt.settings.duration) || Math.abs(Number(receipt.settings.duration) - requestedDuration) > 0.35);
+  if (receipt.settingsMatch === false || durationMismatch) return {
+    text: isChineseText(languageText) ? CN_EXECUTION_EVIDENCE_MESSAGES.videoSettingsReview(receipt.settings.size, receipt.settings.duration)
       : `The video was saved, but its measured settings (${receipt.settings.size || 'unknown size'}, ${receipt.settings.duration ?? 'unknown'} seconds) do not match the request or could not be verified. Review the existing file before generating again.`,
     blocked: true, reason: 'media_settings_mismatch',
   };
   // i18n-allow: Requested media kind and count, not output copy.
-  const videoRequested = /(?:视频(?![^。\n]*(?:封面|图片|图像|海报|缩略图))|\bvideo\b(?![^.\n]*\b(?:cover|image|thumbnail|poster)\b))/iu.test(task);
+  const videoRequested = mediaRequest ? ['text_to_video', 'image_to_video'].includes(mediaRequest.operation) : /(?:视频(?![^。\n]*(?:封面|图片|图像|海报|缩略图))|\bvideo\b(?![^.\n]*\b(?:cover|image|thumbnail|poster)\b))/iu.test(task);
   const requestedKind = videoRequested ? 'video' : 'image';
   if (receipt.artifacts.some(artifact => artifact.kind !== requestedKind)) return null;
   // i18n-allow: Multiple distinct media deliverables cannot share one receipt.
@@ -879,7 +885,7 @@ export function groundedMediaGeneration(input: LumiResultFinalizerInput): LumiRe
   const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }; // i18n-allow: Number recognition.
   const requestedCount = countText ? chineseCounts[countText] || Number(countText) : 1;
   if (!Number.isSafeInteger(requestedCount) || receipt.artifacts.length < requestedCount) return null;
-  const zh = isChineseText(task);
+  const zh = isChineseText(languageText);
   // i18n-allow: Verified media completion copy; the authenticated media card carries the artifact paths.
   return { text: zh ? (receipt.artifacts[0].kind === 'video' ? '视频已生成。' : '图片已生成。') : 'The requested media was generated.', blocked: false, reason: 'Grounded verified generated-media artifact.' };
 }

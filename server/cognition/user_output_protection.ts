@@ -165,10 +165,16 @@ function compactMediaToolRecordForPersistence(candidate: Record<string, any>, to
   const rawArgs = candidate.arguments && typeof candidate.arguments === 'object'
     ? candidate.arguments as Record<string, unknown>
     : {};
+  // Compaction is a projection: applying it again must preserve source evidence.
+  const hasSource = Boolean(String(rawArgs.filePath || '').trim()) || rawArgs.hasSource === true;
+  const hasReference = (toolName === 'generate_video'
+    ? Boolean(String(rawArgs.first_frame_image || '').trim())
+    : Array.isArray(rawArgs.referencePaths) && rawArgs.referencePaths.length > 0) || rawArgs.hasReference === true;
+  const referenceCount = Array.isArray(rawArgs.referencePaths) ? rawArgs.referencePaths.length : rawArgs.referenceCount;
   const operation = toolName === 'ai_edit_image'
     ? 'image_edit'
     : toolName === 'generate_video'
-      ? (String(rawArgs.first_frame_image || '').trim() ? 'image_to_video' : 'text_to_video')
+      ? (hasReference ? 'image_to_video' : 'text_to_video')
       : 'text_to_image';
   const safeArguments = compactMediaValue({
     operation,
@@ -179,11 +185,9 @@ function compactMediaToolRecordForPersistence(candidate: Record<string, any>, to
     ...(rawArgs.model !== undefined ? { model: rawArgs.model } : {}),
     ...(rawArgs.seed !== undefined ? { seed: rawArgs.seed } : {}),
     ...(rawArgs.negative_prompt !== undefined ? { negative_prompt: rawArgs.negative_prompt } : {}),
-    hasSource: toolName === 'ai_edit_image' && Boolean(String(rawArgs.filePath || '').trim()),
-    hasReference: toolName === 'generate_video'
-      ? Boolean(String(rawArgs.first_frame_image || '').trim())
-      : Array.isArray(rawArgs.referencePaths) && rawArgs.referencePaths.length > 0,
-    ...(Array.isArray(rawArgs.referencePaths) ? { referenceCount: rawArgs.referencePaths.length } : {}),
+    hasSource: toolName === 'ai_edit_image' && hasSource,
+    hasReference,
+    ...(Number.isSafeInteger(referenceCount) && Number(referenceCount) >= 0 ? { referenceCount } : {}),
   }) as Record<string, unknown>;
   const parsedResult = parseJson(candidate.result);
   const compactedResult = parsedResult === null

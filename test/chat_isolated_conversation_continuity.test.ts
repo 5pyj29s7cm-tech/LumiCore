@@ -1,4 +1,7 @@
 import './helpers';
+import fs from 'node:fs';
+import path from 'node:path';
+import { generatedKnowledgeDirectory } from '../server/files/knowledge_directory';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Server as SocketIOServer } from 'socket.io';
@@ -41,6 +44,7 @@ vi.mock('../server/agents/rag', async importOriginal => {
 
 import { initDatabase, readDB } from '../db_layer';
 import {
+  addMessage,
   getActiveConversation,
   getOrCreateActiveConversation,
   startIsolatedConversation,
@@ -77,6 +81,8 @@ describe('closed isolated Chat conversation continuity', () => {
   const secondRequestId = `chat-isolated-continuity-second-${suffix}`;
   const statusOwnerRequestId = `chat-isolated-status-owner-${suffix}`;
   const statusSidecarRequestId = `chat-isolated-status-sidecar-${suffix}`;
+  const videoChoiceText = '按上面的“非拼写错误版”来';
+  let mediaInvocation: any;
   const cupCode = `cup-${Math.random().toString(36).slice(2, 12)}`;
   const firstText = `[LUMI-E2E-${suffix}] 这是虚构的上下文验收，不需要任何工具。请记住杯子代号 ${cupCode}，只简短确认已经记住。`;
   const secondText = '继续保持不调用工具。刚才杯子的代号是什么？只回复代号。';
@@ -142,6 +148,17 @@ describe('closed isolated Chat conversation continuity', () => {
       const currentUserText = [...messages]
         .reverse()
         .find((message: any) => message?.role === 'user')?.content || '';
+      if (currentUserText.startsWith(videoChoiceText)) {
+        const toolContext = args[11];
+        mediaInvocation = toolContext;
+        const call = toolContext.runtimeOwnedDeterministicRecoveryCall;
+        if (!call || call.name !== 'generate_video') throw new Error('Video brief did not reach the bound media execution lane');
+        const record = { id: 'video-replay-' + suffix, name: call.name, arguments: call.arguments, taskId: toolContext.taskId, requestId: toolContext.requestId,
+          result: JSON.stringify({ ok: true, success: true, status: 'generated', verified: true, verificationStatus: 'verified', settingsMatch: true, actualSettings: { duration: 30, size: '1080x1920' }, outputPath: 'D:/generated/replay-fixture.mp4' }),
+          terminalVerification: { status: 'verified', strategy: 'artifact', reason: 'Mock provider receipt for isolated route replay' } };
+        await args[3]?.(record);
+        return { text: '视频已生成。', toolCalls: [record], usageRecords: [] };
+      }
       if (currentUserText === statusOwnerText) {
         modelInvocations.push({
           hook: 'runWithTools',
@@ -468,6 +485,39 @@ describe('closed isolated Chat conversation continuity', () => {
     );
     expect(isolatedAfterStatus).toMatchObject({ status: 'closed' });
   });
+  it('binds an accepted script version through persisted history, attachment validation and the sole media execution lane', async () => {
+    const selected = startIsolatedConversation(userId, 'lumi', 'personal', '');
+    const brief = '帮我做一个tiktok的推广视频，要三十秒的，纯英文版';
+    const script = '30秒英文视频脚本：0–3秒展示产品；3–24秒展示玩法；24–30秒结尾。需要我按这个脚本生成30秒成片吗？';
+    for (const [role, content] of [['user', brief], ['assistant', script]]) {
+      addMessage({ userId, agentId: 'lumi', conversationId: selected.id, role, content, skipActionContinuation: true });
+    }
+    const source = path.join(generatedKnowledgeDirectory({ userId, domain: 'personal' }), 'product.png');
+    fs.writeFileSync(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=', 'base64'));
+    const requestId = 'media-version-' + suffix;
+    const response = waitForRequestEvent<Record<string, any>>(client, 'agent:response', requestId);
+    const ack = await client.timeout(5_000).emitWithAck('agent:chat', {
+      text: videoChoiceText, requestId, conversationId: selected.id, domain: 'personal', source: 'e2e-formal-client',
+      attachments: [{ kind: 'image', fileName: 'product.png', path: source }],
+      history: [{ role: 'assistant', message: '请改成五秒自检。' }],
+    });
+    expect(ack).toMatchObject({ ok: true, requestId });
+    expect(await response).toMatchObject({ requestId, conversationId: selected.id, text: '视频已生成。', finalized: true, blocked: false });
+    expect(mediaInvocation.runtimeOwnedDeterministicRecoveryCall).toMatchObject({ source: 'structured_media_request', requestId, name: 'generate_video',
+      arguments: { duration: 30, size: '1080x1920', first_frame_image: fs.realpathSync(source) } });
+    const prompt = mediaInvocation.runtimeOwnedDeterministicRecoveryCall.arguments.prompt;
+    expect(prompt).toContain(brief);
+    expect(prompt).toContain('0–3秒展示产品');
+    expect(prompt).toContain(videoChoiceText);
+    expect(prompt).not.toMatch(/五秒自检|需要我/);
+    expect(mediaInvocation.modelToolProjection.toolNames).toContain('generate_video');
+    expect(mediaInvocation.modelToolProjection.toolNames).not.toContain('client_health_check');
+    const rows = readDB().interactions.filter(row => row.requestId === requestId || row.externalMessageId === requestId);
+    expect(rows.map(row => row.role).sort()).toEqual(['assistant', 'user']);
+    expect(getActiveConversation(userId, 'lumi', 'personal', '')?.id).toBe(activeConversationId);
+    fs.unlinkSync(source);
+  });
+
   it('ignores client supplied UI history when the accepted server conversation is empty', async () => {
     const selected = startIsolatedConversation(userId, 'lumi', 'personal', '');
     const requestId = 'client-history-' + suffix;

@@ -505,12 +505,12 @@ describe('Lumi result finalizer', () => {
     expect(result.text).toContain('client_get_state');
   });
 
-  it('replaces a diagnostic narrative with a summary grounded in real records', async () => {
+  it('grounds an explicitly requested diagnostic narrative in real records', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const responseText = '\u6211\u5df2\u7ecf\u8fd0\u884c\u4e86 `client_health_check` \u548c `client_get_state`\u3002';
 
     const result = finalizeLumiResponse({
-      taskText: '\u786e\u8ba4',
+      taskText: '请做一次客户端自检',
       responseText,
       toolRecords: [
         { name: 'client_health_check', arguments: {}, result: '{"level":"ready"}' },
@@ -3289,4 +3289,30 @@ describe('Lumi result finalizer', () => {
     expect(driver).toContain('const completed = await runPreparedLumiTurn({');
     expect(driver).toContain('return await input.deliver(executed);');
   });
+});
+
+it('never allows incidental successful client checks to replace the video deliverable', async () => {
+  const { formatClientDiagnosticResult } = await import('../server/cognition/client_diagnostic_result');
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const diagnostics = [
+    {name:'client_get_state',arguments:{},result:'{"state":{"activeTab":"command-center"}}'},
+    {name:'client_health_check',arguments:{},result:'{"report":{"level":"attention"},"skillRuntimeFindings":[{"name":"internal-plugin","connected":false}]}'},
+  ];
+  expect(formatClientDiagnosticResult(diagnostics, '按上面的“非拼写错误版”来', '已检查 client_get_state')).toBeNull();
+  expect(formatClientDiagnosticResult(diagnostics, '可以', '已检查 client_get_state')).toBeNull();
+  const result = finalizeLumiResponse({taskText:'生成三十秒的推广视频',responseText:'视频已生成。',source:'chat',toolRecords:[...diagnostics,{
+    name:'generate_video',arguments:{duration:30,size:'1080x1920'},
+    result:JSON.stringify({ok:true,success:true,status:'generated',verified:true,verificationStatus:'verified',settingsMatch:true,actualSettings:{duration:30,size:'1080x1920'},outputPath:'D:/generated/video.mp4'}),
+    terminalVerification:{status:'verified',strategy:'artifact',reason:'Verified generated file'},
+  }]});
+  expect(result).toMatchObject({blocked:false,text:'视频已生成。'});
+  expect(result.text).not.toMatch(/自检|client_get_state|internal-plugin|attention/);
+});
+it.each([false, true])('does not accept five seconds against thirty merely because tool arguments matched (structured=%s)', async structured => {
+  const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
+  const result = finalizeLumiResponse({taskText:'帮我生成三十秒的纯英文推广视频',responseText:'视频已生成。',source:'chat',
+    ...(structured ? {flow:{routeText:'Generate a video',structuredMediaRequest:{operation:'text_to_video',prompt:'Open the product box, then show the English product advertisement',size:'1080x1920',duration:30}} as any}:{}),
+    toolRecords:[{name:'generate_video',arguments:{duration:5,size:'1080x1920'},result:JSON.stringify({ok:true,success:true,status:'generated',verified:true,verificationStatus:'verified',settingsMatch:true,actualSettings:{duration:5,size:'1080x1920'},outputPath:'D:/generated/short.mp4'}),terminalVerification:{status:'verified',strategy:'artifact',reason:'File exists'}}]});
+  expect(result).toMatchObject({blocked:true,reason:'media_settings_mismatch'});
+  expect(result.text).toContain('5.00');
 });

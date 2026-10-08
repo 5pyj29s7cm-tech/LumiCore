@@ -1,3 +1,5 @@
+import { resolveChatVideoRequest } from '../media_request';
+import { structuredMediaRoutingEnvelope } from '../../../../shared/media_generation';
 import { extendTurnBindings } from "../../../cognition/turn_bindings";
 import { answerPriorTaskStatus } from "../prior_task_status";
 import { prepareChatPromptContext } from "../prompt_context";
@@ -121,6 +123,10 @@ export async function prepareChatConversationContext(context: NonNullable<Awaite
               )
             )
           ));
+      // Resolve natural creation once, after server-owned history is available.
+      context.structuredMediaRequest ||= resolveChatVideoRequest(context.visibleUserText, context.attachments,
+        { userId: context.uid, domain: context.resolvedDomain, orgId: context.resolvedOrgId }, persistedConversationHistory);
+      context.mediaRoutingEnvelope = context.structuredMediaRequest ? structuredMediaRoutingEnvelope(context.structuredMediaRequest) : '';
       if (!context.chatContextBridge && conversationId && isShortClientContinuation(context.visibleUserText)) {
         const dbHistoryItems = persistedConversationHistory.slice(-12)
           .map(record => ({ role: record.role, message: record.message, response: record.response }));

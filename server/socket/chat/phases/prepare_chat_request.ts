@@ -1,4 +1,3 @@
-import { resolveChatVideoRequest } from '../media_request';
 import { runResolvedLumiTurn, type ResolvedTurnModelInput } from "../../../cognition/turn_model";
 import { createChatMessageWriter } from "../message_writer";
 import { normalizeIncomingAttachments, buildChatAttachmentContext, buildStoredAttachmentSummary, shouldAllowLocalFileWriteForTurn } from "../attachments";
@@ -10,7 +9,7 @@ import type { ToolExecutionRecord } from "../../../tools/types";
 import { buildMediaArtifactReceipt, type MediaArtifactReceipt } from "../../media_artifact_receipt";
 import { captureChatAuthorization } from "../../chat_authorization";
 import { captureConversationAuthorization, combineRequestAuthorizations } from "../../../conversation/lifecycle";
-import { normalizeStructuredMediaRequest, structuredMediaRoutingEnvelope } from "../../../../shared/media_generation";
+import { normalizeStructuredMediaRequest } from "../../../../shared/media_generation";
 import { createModelTurnState } from "../../../llm/model_turn_state";
 import { shouldPersistPostTurnLearningSource } from "../../../cognition/post_turn_learning";
 import type { getPendingConfirmationDurably } from "../../../tools/pending_confirmation";
@@ -53,7 +52,7 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     const requestId = typeof data.requestId === 'string' && data.requestId.trim()
       ? data.requestId.trim().slice(0, 120)
       : `chat_${crypto.randomUUID()}`;
-    let structuredMediaRequest = normalizeStructuredMediaRequest(data.mediaRequest);
+    const structuredMediaRequest = normalizeStructuredMediaRequest(data.mediaRequest);
     if (data.mediaRequest !== undefined && !structuredMediaRequest) {
       try { ack?.({ ok: false, requestId, error: 'Invalid media workbench request' }); } catch {}
       { return { terminal: true as const, context: undefined }; }
@@ -124,8 +123,6 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
       : socketScope;
     const resolvedDomain = requestScope.domain;
     const resolvedOrgId = requestScope.orgId;
-    structuredMediaRequest ||= resolveChatVideoRequest(visibleUserText, attachments, { userId: uid, ...requestScope });
-    const mediaRoutingEnvelope = structuredMediaRequest ? structuredMediaRoutingEnvelope(structuredMediaRequest) : '';
 
     const addMessageIdempotent = createChatMessageWriter({
       userId: uid, agentId: conversationAgentId, domain: resolvedDomain, orgId: resolvedOrgId,
@@ -219,7 +216,7 @@ export async function prepareChatRequest(socket: Socket, llmGetters: SharedProvi
     get actionContinuationBridge(): typeof actionContinuationBridge { return actionContinuationBridge; },
     set actionContinuationBridge(value: typeof actionContinuationBridge) { actionContinuationBridge = value; },
     sensoryFn,
-    mediaRoutingEnvelope,
+    mediaRoutingEnvelope: '',
     structuredMediaRequest,
     category,
     get requestTaskId(): typeof requestTaskId { return requestTaskId; },

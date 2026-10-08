@@ -47,3 +47,39 @@ describe('natural chat video execution', () => {
     expect(resolveChatVideoRequest('帮我做个视频', [{ ...images()[0], path: path.join(process.env.LUMI_DATA_DIR!, 'data/lumi.db') }], scope)).toBeNull();
   });
 });
+
+it.each([['三十秒', 30], ['六十秒', 60], ['一百二十秒', 120], ['一分钟', 60], ['半分钟', 30]])('honors the user duration %s through the same video request', (duration, expected) => {
+  expect(resolveChatVideoRequest('帮我做一个tiktok的推广视频，要'+duration+'的，纯英文版', images(), scope)).toMatchObject({ operation: 'image_to_video', duration: expected });
+});
+
+const videoBriefHistory = [
+  { role: 'user', message: '帮我做一个tiktok的推广视频，要三十秒的，纯英文版\n\n[Attachments]\n- product.png (image)' },
+  { role: 'assistant', message: '视频已生成。' },
+  { role: 'user', message: '不是三十秒吗' },
+  { role: 'assistant', message: '正确的30秒纯英文脚本：0–3秒展示产品；3–24秒展示玩法；24–30秒结尾。需要我按这个脚本直接生成30秒成片吗？文案按上面的非拼写错误版来，还是保留错拼风格？' },
+];
+it('binds a version choice to the adjacent script and original video goal', () => {
+  const text = '按上面的“非拼写错误版”来';
+  const request = resolveChatVideoRequest(text, images(), scope, videoBriefHistory)!;
+  expect(request).toMatchObject({ operation: 'image_to_video', duration: 30, size: '1080x1920' });
+  expect(request.prompt).toContain('纯英文版');
+  expect(request.prompt).toContain('0–3秒展示产品');
+  expect(request.prompt).toContain(text);
+  expect(request.prompt).not.toContain('需要我');
+  const pipeline = buildLumiExecutionPipeline({ structuredMediaRequest: request, registry,
+    dispatch: { userId: scope.userId, channel: 'chat', text, targetIsLumi: true },
+    personalityToolPolicy: { allowedTools: ['*'], forbiddenTools: [], requireConfirmation: [], maxIterations: 3 },
+  });
+  expect(pipeline.normalizedIntent.kind).toBe('media_generation');
+  expect(pipeline.executionRequested).toBe(true);
+  expect(pipeline.modelToolProjection.toolNames).toContain('generate_video');
+  expect(pipeline.turnIntent.flow.selfRepairTurn).toBe(false);
+});
+it('does not infer a paid generation from a question, veto or unrelated stale proposal', () => {
+  for (const text of ['不是三十秒吗', '为什么没生成', '不要生成，按上面的版本来']) {
+    expect(resolveChatVideoRequest(text, images(), scope, videoBriefHistory)).toBeNull();
+  }
+  expect(resolveChatVideoRequest('按上面的版本来', images(), scope)).toBeNull();
+  expect(resolveChatVideoRequest('好', images(), scope, [...videoBriefHistory.slice(0, 1), { role: 'assistant', message: '视频已生成。' }])).toBeNull();
+  expect(resolveChatVideoRequest('按上面的版本来', images(), scope, [...videoBriefHistory, {role:'user',message:'生成一份Word报告'}, {role:'assistant',message:'报告可以插入视频，按这个版本吗？'}])).toBeNull();
+});
