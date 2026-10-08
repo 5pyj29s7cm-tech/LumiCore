@@ -3656,3 +3656,8 @@ html[data-mode="light"] [data-wallpaper-presentation="workbench"][data-wallpaper
     transition-duration: .01ms !important;
   }
 }
+
+/* Media expansion belongs to VideoPlayer, never the native application window. */
+[data-video-player] video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
+}
