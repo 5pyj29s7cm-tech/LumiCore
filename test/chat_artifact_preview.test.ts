@@ -2,13 +2,16 @@ import { makeApp, JWT_SECRET } from './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { collectChatArtifacts } from '../server/conversation/chat_artifacts';
 import { projectConversationMessageForCustomer } from '../server/routes/conversations';
 import { readDocumentPreview } from '../server/files/document_preview';
 import { startIsolatedConversation, addMessage } from '../server/conversation/manager';
 import { createXlsxWorkbook, writeXlsxWorkbook } from '../server/utils/spreadsheet';
 import type { ToolExecutionRecord } from '../server/tools/types';
+
+const opener = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../server/files/knowledge/paths', async original => ({ ...await original<typeof import('../server/files/knowledge/paths')>(), openPathWithDefaultApp: opener }));
 
 let app: Awaited<ReturnType<typeof makeApp>>;
 let conversationId: string;
@@ -126,4 +129,18 @@ it('extracts Word, PDF and presentation content locally for inline previews', as
   const presentation = new PptxGenJS(); presentation.addSlide().addText('Preview report 72', { x: 1, y: 1, w: 5, h: 1 });
   const pptx = path.join(root, 'preview.pptx'); await presentation.writeFile({ fileName: pptx });
   expect(await readDocumentPreview(pptx)).toMatchObject({ kind: 'text', extracted: true, text: expect.stringContaining('Preview report 72') });
+});
+
+
+it('opens a conversation output folder only with the matching owned receipt', async () => {
+  const endpoint = app.url + '/api/files/open?conversationId=' + conversationId;
+  const request = (headers: Record<string, string>) => fetch(endpoint, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: output, reveal: true }) });
+  const response = await request(auth);
+  expect(response.status).toBe(200);
+  expect((await response.json()).path).toBe(fs.realpathSync.native(path.dirname(output)));
+  expect(opener).toHaveBeenLastCalledWith(fs.realpathSync.native(path.dirname(output)));
+  opener.mockClear();
+  const other = { Cookie: 'token=' + jwt.sign({ uid: 'someone-else', role: 'admin' }, JWT_SECRET) };
+  expect((await request(other)).status).toBe(403);
+  expect(opener).not.toHaveBeenCalled();
 });

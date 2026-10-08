@@ -6,6 +6,7 @@ import { localFileResourcePath, saveFileResource } from '@/services/fileResource
 import { useFileResource } from '@/hooks/useFileResource';
 import { chatArtifactKind, type ChatDocumentPreview } from '../../shared/chat_artifacts';
 import { chatPreviewCopy } from '@/i18n/locales/chatPreview';
+import { FileLocationActions } from './FileLocationActions';
 
 export type ChatPreviewFile = { fileName: string; url: string; path?: string; kind?: string };
 
@@ -74,6 +75,7 @@ export function ChatFilePreview({ file, isZh, onClose, onOpenSystem }: {
           {onOpenSystem && <button type="button" className="flex items-center gap-1 rounded-lg border border-slate-500/25 px-3 py-2 text-xs" onClick={() => { void onOpenSystem().catch(() => setError(true)); }}><ExternalLink size={14} />{copy.open}</button>}
           <button type="button" className="rounded-lg p-2 hover:bg-slate-500/15" aria-label={copy.close} onClick={onClose}><X size={20} /></button>
         </div>
+        <div className="border-b border-slate-500/20 px-4 pb-3"><FileLocationActions url={file.url} path={file.path} isZh={isZh} /></div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {(error || resource.error) && <div role="alert" className="mb-4 rounded-xl bg-amber-500/10 p-4 text-sm">{media && !resource.error ? copy.mediaFailed : copy.failed}
             {!media && <button type="button" onClick={() => setAttempt(value => value + 1)} className="ml-3 underline">{copy.retry}</button>}

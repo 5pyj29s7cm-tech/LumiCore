@@ -1,9 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { makeApp, JWT_SECRET } from './helpers';
+
+const opener = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../server/files/knowledge/paths', async original => ({ ...await original<typeof import('../server/files/knowledge/paths')>(), openPathWithDefaultApp: opener }));
 
 let cleanup = () => {};
 let testUrl = '';
@@ -217,4 +220,33 @@ describe('Generated-output route security boundary', () => {
       fs.rmSync(linkedDir, { force: true });
     }
   });
+
+  describe('generated file folder opener', () => {
+  it('opens the verified parent while preserving normal file opening', async () => {
+    for (const reveal of [true, false]) {
+      const response = await fetch(testUrl + '/api/files/open', { method: 'POST', headers: { Cookie: adminCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: artifactPath, reveal }) });
+      expect(response.status).toBe(200);
+      const expected = fs.realpathSync.native(reveal ? path.dirname(artifactPath) : artifactPath);
+      expect((await response.json()).path).toBe(expected);
+      expect(opener).toHaveBeenLastCalledWith(expected);
+    }
+  });
+  it('opens an owned archived file by ID using its actual knowledge directory', async () => {
+    const { getPersonalKnowledgeDirectory } = await import('../server/files/knowledge_directory');
+    const { dir } = getPersonalKnowledgeDirectory('generated-output-user');
+    fs.writeFileSync(path.join(dir, 'archived-image.png'), 'image');
+    const response = await fetch(testUrl + '/api/files/open?domain=personal', { method: 'POST', headers: { Cookie: userCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'archived-image.png', reveal: true }) });
+    expect(response.status).toBe(200);
+    expect((await response.json()).path).toBe(fs.realpathSync.native(dir));
+    expect(opener).toHaveBeenLastCalledWith(fs.realpathSync.native(dir));
+  });
+  it('refuses secret paths, missing files, anonymous requests and ordinary-user raw paths', async () => {
+    for (const [cookie, target, status] of [[adminCookie, keysPath, 403], [adminCookie, path.join(generatedDir, 'missing.png'), 404], [userCookie, artifactPath, 403], ['', artifactPath, 401]] as const) {
+      opener.mockClear();
+      const response = await fetch(testUrl + '/api/files/open', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: target, reveal: true }) });
+      expect(response.status).toBe(status);
+      expect(opener).not.toHaveBeenCalled();
+    }
+  });
+});
 });

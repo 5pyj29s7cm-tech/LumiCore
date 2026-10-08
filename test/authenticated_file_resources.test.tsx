@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FileLocationActions } from '../src/components/FileLocationActions';
 import { FileResourceImage, FileResourceVideo } from '../src/components/FileResourceMedia';
-import { loadFileResource, localFileResourcePath, saveFileResource } from '../src/services/fileResource';
+import { loadFileResource, localFileResourcePath, saveFileResource, fileResourceOpenTarget, openFileResourceFolder } from '../src/services/fileResource';
 
+const nativeFolder = vi.hoisted(() => ({ downloadDir: vi.fn().mockResolvedValue('D:/Redirected Downloads'), invoke: vi.fn().mockResolvedValue({ success: true }) }));
+vi.mock('@tauri-apps/api/path', () => ({ downloadDir: nativeFolder.downloadDir }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeFolder.invoke }));
 const externalOpen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../src/lib/externalNavigation', () => ({ openExternalHttpUrl: externalOpen }));
 
@@ -38,6 +42,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   delete (window as any).__LUMI_DESKTOP__;
+  delete (window as any).__TAURI_INTERNALS__;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -146,4 +151,50 @@ describe('authenticated desktop file resources', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(revokeObjectURL).toHaveBeenCalledTimes(1);
   });
+});
+
+
+describe('file folder actions', () => {
+  it('retains organization and conversation ownership when opening folders', async () => {
+    const value = '/api/files/download/archived%20image.png?domain=work&orgId=org-a&inline=1';
+    expect(fileResourceOpenTarget(value)).toEqual({ route: '/api/files/open?domain=work&orgId=org-a', body: { id: 'archived image.png', reveal: true } });
+    expect(fileResourceOpenTarget('/api/files/generated?path=D%3A%2Foutput%2Fclip.mp4&conversationId=owned-chat&inline=1')).toEqual({ route: '/api/files/open?conversationId=owned-chat', body: { path: 'D:/output/clip.mp4', reveal: true } });
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ success: true, path: 'D:/output' }) });
+    await expect(openFileResourceFolder(value)).resolves.toBe('D:/output');
+    const [url, request] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:3000/api/files/open?domain=work&orgId=org-a');
+    expect(request.method).toBe('POST');
+    expect(JSON.parse(request.body)).toEqual({ id: 'archived image.png', reveal: true });
+    expect(new Headers(request.headers).get('Authorization')).toBe('Bearer synthetic-session-token');
+  });
+  it('does not send credentials or folder actions to external or malformed targets', async () => {
+    for (const value of ['https://other.test/api/files/generated?path=C:/secret.txt', '/api/files/open-folder', '/api/files/download/%E0%A4', '/api/files/download/a%2Fb.png', 'blob:fake']) {
+      expect(fileResourceOpenTarget(value)).toBeNull();
+      await expect(openFileResourceFolder(value)).rejects.toThrow();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('surfaces missing files and unconfirmed opens instead of showing success', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'File not found' }) });
+    await expect(openFileResourceFolder('/lumi_output/gone.mp4')).rejects.toThrow('File not found');
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    await expect(openFileResourceFolder('/lumi_output/gone.mp4')).rejects.toThrow('not confirmed');
+  });
+});
+
+
+it('shows the original path and opens the actual system Downloads directory in desktop mode', async () => {
+  (window as any).__TAURI_INTERNALS__ = {};
+  render(<FileLocationActions url="/lumi_output/image.png" path="C:/LumiCore/data/generated/image.png" isZh />);
+  expect(screen.getByText('C:/LumiCore/data/generated/image.png')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '打开下载文件夹' }));
+  await waitFor(() => expect(nativeFolder.invoke).toHaveBeenCalledWith('open_item', { target: 'D:/Redirected Downloads' }));
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+it('surfaces a failed folder open independently from preview availability', async () => {
+  fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'File not found' }) });
+  render(<FileLocationActions url="/lumi_output/gone.mp4" isZh />);
+  expect(screen.queryByRole('button', { name: '打开下载文件夹' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '打开所在文件夹' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('无法打开文件夹');
 });

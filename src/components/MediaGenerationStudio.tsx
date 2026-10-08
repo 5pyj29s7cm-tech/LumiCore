@@ -2,6 +2,7 @@ import type { VideoGenerationOptions } from '../../shared/video_generation_optio
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { FileResourceImage, FileResourceVideo } from './FileResourceMedia';
+import { FileLocationActions } from './FileLocationActions';
 import { saveFileResource } from '@/services/fileResource';
 import {
   CheckCircle2,
@@ -475,7 +476,7 @@ function useMediaGenerationStudioState({
     : activeKind === 'image'
       ? copy.generateImage
       : copy.generateVideo;
-  return { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
+  return { isZh: locale === 'zh', activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference };
 }
 
 export function MediaGenerationStudio(props: Parameters<typeof useMediaGenerationStudioState>[0]) {
@@ -483,7 +484,7 @@ export function MediaGenerationStudio(props: Parameters<typeof useMediaGeneratio
 }
 
 function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGenerationStudioState>) {
-  const { activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
+  const { isZh, activeKind, activeOperation, copy, onClose, onOpenChatSong, chatSongActive, isWorking, switchOperation, onSelectMedia, chatSongVisited, chatSongContent, submit, operationOptions, promptRef, prompt, setPrompt, promptPlaceholder, size, setSize, options, count, setCount, duration, setDuration, videoDurations, selectedVideoOptions, primaryImage, selectableImageArtifacts, primaryArtifactId, setPrimarySource, onUploadSourceImage, editReferenceImage, referenceArtifactIds, setEditReferenceSource, referenceImage, referenceArtifactId, setVideoReferenceSource, hasRequiredSource, status, actionLabel, onCancel, requestToRetry, retry, gallery, setGallery, onRefreshLibrary, library, libraryLoading, libraryFailed, librarySearch, setLibrarySearch, statusCopy, displayedArtifacts, onArtifactReady, onArtifactError, onReferenceArtifact, onOpenArtifact, saveArtifact, continueEditing, selectAsVideoReference } = input;
 
 
   return (
@@ -809,6 +810,7 @@ function renderMediaGenerationStudio(input: ReturnType<typeof useMediaGeneration
                         )}
                       </div>
                     </div>
+                    <div className="px-3 pb-3 text-white/65"><FileLocationActions url={artifact.url} path={artifact.path} isZh={isZh} /></div>
                   </article>
                 ))}
               </div>

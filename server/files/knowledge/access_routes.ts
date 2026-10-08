@@ -50,9 +50,10 @@ router.post('/files/open', requireAuth, async (req: Request, res: Response) => {
     }
     const filePath = id
       ? resolveKnowledgeFilePath(req, id)
-      : resolveGeneratedDownloadPath(rawPath);
-    await openPathWithDefaultApp(filePath);
-    res.json({ success: true, path: filePath, fileName: repairFilename(path.basename(filePath)) });
+      : resolveGeneratedDownloadPath(rawPath, req);
+    const target = req.body?.reveal === true ? path.dirname(filePath) : filePath;
+    await openPathWithDefaultApp(target);
+    res.json({ success: true, path: target, fileName: repairFilename(path.basename(filePath)) });
   } catch (err: any) {
     sendRouteError(res, err);
   }

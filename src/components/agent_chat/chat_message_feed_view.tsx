@@ -10,6 +10,7 @@ import { TaskCompletionFeedbackDetails } from "../TaskCompletionFeedbackDetails"
 import { formatUiMessage, uiMessage } from "../../i18n/uiMessages";
 import { extractMediaGenerationArtifacts } from '@/lib/mediaGenerationArtifacts';
 import type { AgentChatViewInput } from './AgentChatView';
+import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
 
 export function renderChatMessageFeed({ scrollRef, isOfficeCommandCenter, messages, searchQuery, t, visibleSuggestions, sendText, searchError, isSearchingHistory, searchDisplayMessages, hiddenMessageCount, displayMessages, isZh, openMediaGenerationArtifact, renderGeneratedFiles, openChatFile, chatAccentTheme, resolvedAppearanceMode, attachmentConversationIdRef, setPreviewFile, handleCopyMessage, copiedId, isTyping, chatProgressLines, workflowStatus }: Pick<AgentChatViewInput, "scrollRef" | "isOfficeCommandCenter" | "messages" | "searchQuery" | "t" | "visibleSuggestions" | "sendText" | "searchError" | "isSearchingHistory" | "searchDisplayMessages" | "hiddenMessageCount" | "displayMessages" | "isZh" | "openMediaGenerationArtifact" | "renderGeneratedFiles" | "openChatFile" | "chatAccentTheme" | "resolvedAppearanceMode" | "attachmentConversationIdRef" | "setPreviewFile" | "handleCopyMessage" | "copiedId" | "isTyping" | "chatProgressLines" | "workflowStatus">) {
   return (
@@ -107,13 +108,15 @@ export function renderChatMessageFeed({ scrollRef, isOfficeCommandCenter, messag
                           </div>
                         )}
                         {embeddedVideos.map(artifact => (
+                          <div key={artifact.id} className="max-w-md space-y-2">
                           <FileResourceVideo
-                            key={artifact.id}
                             src={artifact.url}
                             controls
                             preload="metadata"
                             className="aspect-video w-full max-w-md rounded-2xl border-2 border-white/10 bg-black/45 object-contain shadow-lg"
                           />
+                          <button type="button" onClick={() => openMediaGenerationArtifact(artifact)} className="rounded-lg border border-current/20 px-3 py-1.5 text-xs">{mediaGenerationCopy(isZh ? 'zh' : 'en').viewVideo}</button>
+                          </div>
                         ))}
                         {renderGeneratedFiles(generatedFiles, msg.type === 'agent' ? 'start' : 'end')}
                       </div>

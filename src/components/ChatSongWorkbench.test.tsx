@@ -6,7 +6,7 @@ import ChatSongWorkbench, { type ChatSongWorkbenchHandle } from './ChatSongWorkb
 import { CHAT_SONG_DEFAULT_BRIEF, type ChatSongProject } from '../../shared/chat_song';
 const mock = vi.hoisted(() => ({ api: vi.fn(), save: vi.fn() }));
 vi.mock('@/services/apiClient', () => ({ apiJson: (...args: any[]) => mock.api(...args), apiFetch: vi.fn() }));
-vi.mock('@/services/fileResource', () => ({ saveFileResource: (...args: any[]) => mock.save(...args) }));
+vi.mock('@/services/fileResource', async original => ({ ...await original<typeof import('@/services/fileResource')>(), saveFileResource: (...args: any[]) => mock.save(...args) }));
 vi.mock('@/hooks/useFileResource', () => ({ useFileResource: () => ({ url: 'blob:test' }) }));
 vi.mock('./FileResourceMedia', () => ({ FileResourceImage: (props: any) => <img {...props} />, FileResourceVideo: (props: any) => <video {...props} /> }));
 const project: ChatSongProject = {
