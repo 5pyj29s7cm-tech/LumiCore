@@ -18,11 +18,37 @@ it('distinguishes an acknowledgement delay from a terminal rejection', () => {
   vi.advanceTimersByTime(115000); expect(w.probe).toHaveBeenCalledOnce();
   w.watcher.dispose(); expect(vi.getTimerCount()).toBe(0);
 });
-it.each([120000, 180000])('settles missing acknowledgement after %i without probing another execution', delay => {
+it.each([120000, 180000])('probes even without an acknowledgement after %i and waits for admission before declaring loss', delay => {
   const w = watch(delay);
-  vi.advanceTimersByTime(delay); expect(w.onEvent).toHaveBeenLastCalledWith('no_ack', undefined);
-  expect(w.probe).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
-  w.watcher.acknowledge({ ok: true }); expect(w.onEvent).toHaveBeenCalledTimes(2);
+  vi.advanceTimersByTime(delay); expect(w.probe).toHaveBeenCalledOnce();
+  for (let i = 0; i < 3; i++) {
+    w.probe.mock.calls[i][0]({ ok: false, code: 'EXECUTION_NOT_FOUND' });
+    if (i < 2) { expect(w.onEvent).toHaveBeenLastCalledWith('probe_timeout'); vi.advanceTimersByTime(15000); }
+  }
+  expect(w.onEvent).toHaveBeenLastCalledWith('no_ack', undefined);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('keeps a buffered request after a reconnect miss and accepts its late admission and terminal replay', () => {
+  const w = watch();
+  vi.advanceTimersByTime(5000); w.watcher.resume();
+  w.probe.mock.calls[0][0]({ ok: false, code: 'EXECUTION_NOT_FOUND' });
+  expect(w.onEvent).toHaveBeenLastCalledWith('probe_timeout');
+  w.watcher.acknowledge({ ok: true });
+  vi.advanceTimersByTime(15000); w.probe.mock.calls[1][0](snapshot());
+  expect(w.onEvent).toHaveBeenLastCalledWith('working');
+  expect(w.onEvent.mock.calls.some(call => ['lost', 'no_ack', 'rejected'].includes(call[0]))).toBe(false);
+  w.watcher.dispose(); expect(vi.getTimerCount()).toBe(0);
+});
+it('does not turn unavailable or malformed recovery acknowledgements into terminal failures', () => {
+  const w = watch(); w.watcher.resume();
+  for (let i = 0; i < 4; i++) { w.probe.mock.calls[i][0](undefined); vi.advanceTimersByTime(15000); }
+  expect(w.onEvent.mock.calls.some(call => ['lost', 'no_ack', 'rejected'].includes(call[0]))).toBe(false);
+  w.watcher.dispose();
+});
+it('shares a single in-flight probe between reconnect and transport timers', () => {
+  const w = watch(); w.watcher.resume(); w.watcher.resume();
+  expect(w.probe).toHaveBeenCalledOnce();
+  w.probe.mock.calls[0][0](snapshot()); w.watcher.dispose();
 });
 it('clears all timers on rejection and ignores a late positive acknowledgement', () => {
   const w = watch(); w.watcher.acknowledge({ ok: false, error: 'Synthetic rejected' });

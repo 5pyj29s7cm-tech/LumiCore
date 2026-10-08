@@ -18,7 +18,7 @@ import type { useChatAttachmentsAndPresentation } from './use_chat_attachments_a
 import { CHAT_SEARCH_LIMIT } from './shared';
 
 export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof useChatAttachmentsAndPresentation>) {
-  const { pendingAttachments, chatFileSections, agentId, agentCategory, agentName, isOpen, refreshKnowledgeFiles, activeDomain, activeOrgId, socket, agentNameRef, recognition, setDraftText, setIsListening, t, setCopiedId, mediaGenerationText, openChatFile, searchQuery, messages, searchResults, user, isZh, setSearchResults, setIsSearchingHistory, setSearchError, scopedConversationUrl, chatExecutionSource, attachmentConversationIdRef, activeMediaGenerationRef, activeChatViewDetachersRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setMessages, bindAttachmentContextToConversation } = previousBindings;
+  const { pendingAttachments, chatFileSections, agentId, agentCategory, agentName, isOpen, refreshKnowledgeFiles, activeDomain, activeOrgId, socket, agentNameRef, recognition, setDraftText, setIsListening, t, setCopiedId, mediaGenerationText, openChatFile, searchQuery, messages, searchResults, user, isZh, setSearchResults, setIsSearchingHistory, setSearchError, scopedConversationUrl, chatExecutionSource, attachmentConversationIdRef, activeMediaGenerationRef, chatExecutionWatchesRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents, setMessages, bindAttachmentContextToConversation } = previousBindings;
 
   const pendingAttachmentKeys = useMemo(
     () => new Set(pendingAttachments.map(chatAttachmentIdentity)),
@@ -321,8 +321,8 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
     } catch {}
   }, [activeExecutionStorageKey]);
   const detachPreviousExecution = useCallback((clearStored = true, clearReceipts = false) => {
-    for (const detach of activeChatViewDetachersRef.current.values()) detach();
-    activeChatViewDetachersRef.current.clear();
+    for (const watch of chatExecutionWatchesRef.current.values()) watch.dispose();
+    chatExecutionWatchesRef.current.clear();
     if (clearStored) clearPersistedExecution();
     if (clearReceipts) terminalReceiptsRef.current.clear();
     chatRequestLedgerRef.current.clear();
@@ -337,7 +337,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
     setWorkflowStatus('idle');
     clearChatProgress();
     seenWorkflowToolEvents.current.clear();
-  }, [activeChatViewDetachersRef, clearPersistedExecution, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents]);
+  }, [chatExecutionWatchesRef, clearPersistedExecution, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef, chatTurnTimerGuardRef, currentTurnUiMetaRef, resetMediaGenerationSurface, setIsTyping, setWorkflowStatus, clearChatProgress, seenWorkflowToolEvents]);
 
   const dropRequestStream = useCallback((requestId?: string) => {
     const id = takeChatStreamBucket(streamingMsgIdsRef.current, streamingRawTextRef.current, requestId);
@@ -352,8 +352,8 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
 
   const settleTrackedChatRequest = useCallback((requestId?: string) => {
     const normalizedRequestId = String(requestId || '').trim();
-    activeChatViewDetachersRef.current.get(normalizedRequestId)?.();
-    activeChatViewDetachersRef.current.delete(normalizedRequestId);
+    chatExecutionWatchesRef.current.get(normalizedRequestId)?.dispose();
+    chatExecutionWatchesRef.current.delete(normalizedRequestId);
     const previousForeground = chatRequestLedgerRef.current.foreground;
     chatTurnUiMetaRef.current.delete(normalizedRequestId);
     const result = chatRequestLedgerRef.current.settle(normalizedRequestId);
@@ -363,7 +363,7 @@ export function useChatHistoryAndRequests(previousBindings: ReturnType<typeof us
       resumeForegroundRequest(result.foregroundRequestId);
     }
     return result;
-  }, [activeChatViewDetachersRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, resumeForegroundRequest]);
+  }, [chatExecutionWatchesRef, chatRequestLedgerRef, chatTurnTimerGuardRef, chatTurnUiMetaRef, clearPersistedExecution, resumeForegroundRequest]);
   const acceptChatExecutionEvent = useCallback((
     data?: { requestId?: string; source?: string; conversationId?: string },
     expectedRequestId?: string | null,

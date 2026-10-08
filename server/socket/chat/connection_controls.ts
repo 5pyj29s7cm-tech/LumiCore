@@ -8,7 +8,7 @@ export function registerChatExecutionControls(socket: Socket, userIdFn: (socket:
 
   socket.on("agent:execution_resume", (
     data: { requestId?: string; source?: string; domain?: string; orgId?: string | null; conversationId?: string } = {},
-    ack?: (payload: { ok: boolean; snapshot?: ReturnType<typeof getChatExecution>; error?: string }) => void,
+    ack?: (payload: { ok: boolean; snapshot?: ReturnType<typeof getChatExecution>; code?: string; error?: string }) => void,
   ) => {
     const uid = userIdFn(socket);
     const requestScope = resolveAuthorizedSocketScope(socket, uid);
@@ -27,7 +27,7 @@ export function registerChatExecutionControls(socket: Socket, userIdFn: (socket:
     try {
       ack?.(snapshot
         ? { ok: true, snapshot }
-        : { ok: false, error: 'Execution not found or no longer recoverable' });
+        : { ok: false, code: 'EXECUTION_NOT_FOUND', error: 'Execution not found or no longer recoverable' });
     } catch {}
     if (snapshot?.terminalEvent) {
       socket.emit(snapshot.terminalEvent.event, {

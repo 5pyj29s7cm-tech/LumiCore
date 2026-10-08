@@ -10,6 +10,7 @@ import { TaskCompletionFeedbackDetails } from "../TaskCompletionFeedbackDetails"
 import { formatUiMessage, uiMessage } from "../../i18n/uiMessages";
 import { extractMediaGenerationArtifacts } from '@/lib/mediaGenerationArtifacts';
 import type { AgentChatViewInput } from './AgentChatView';
+import { chatRecoveryCopy } from '@/i18n/locales/chatRecovery';
 import { mediaGenerationCopy } from '@/i18n/locales/mediaGeneration';
 
 export function renderChatMessageFeed({ scrollRef, isOfficeCommandCenter, messages, searchQuery, t, visibleSuggestions, sendText, searchError, isSearchingHistory, searchDisplayMessages, hiddenMessageCount, displayMessages, isZh, openMediaGenerationArtifact, renderGeneratedFiles, openChatFile, chatAccentTheme, resolvedAppearanceMode, attachmentConversationIdRef, setPreviewFile, handleCopyMessage, copiedId, isTyping, chatProgressLines, workflowStatus }: Pick<AgentChatViewInput, "scrollRef" | "isOfficeCommandCenter" | "messages" | "searchQuery" | "t" | "visibleSuggestions" | "sendText" | "searchError" | "isSearchingHistory" | "searchDisplayMessages" | "hiddenMessageCount" | "displayMessages" | "isZh" | "openMediaGenerationArtifact" | "renderGeneratedFiles" | "openChatFile" | "chatAccentTheme" | "resolvedAppearanceMode" | "attachmentConversationIdRef" | "setPreviewFile" | "handleCopyMessage" | "copiedId" | "isTyping" | "chatProgressLines" | "workflowStatus">) {
@@ -230,7 +231,7 @@ export function renderChatMessageFeed({ scrollRef, isOfficeCommandCenter, messag
                     ) : (
                       <Loader2 size={13} className="animate-spin text-celestial-saturn" />
                     )}
-                    {uiMessage('agent-chat-page.lumi-is-working.98a841ddde', (isZh) ? 'zh' : 'en')}
+                    {workflowStatus === 'error' ? chatRecoveryCopy(isZh).errorTitle : workflowStatus === 'done' ? chatRecoveryCopy(isZh).doneTitle : workflowStatus === 'cancelled' ? chatRecoveryCopy(isZh).cancelledTitle : chatRecoveryCopy(isZh).workingTitle}
                   </div>
                   <div className="mt-2 space-y-1.5">
                     {(chatProgressLines.length > 0

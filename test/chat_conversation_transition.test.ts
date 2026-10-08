@@ -193,7 +193,7 @@ describe('scope detachment ownership', () => {
     const h = scopeHarness(false); h.deps.user = { ...h.deps.user, uid: 'second-owner' };
     initialHistoryEffect(h.deps);
     expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
-    expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0);
+    expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0);
     expect(h.deps.currentTurnUiMetaRef.current).toEqual({ hadTool: false, needsEvidence: false, finalization: null });
     expect(h.deps.setIsTyping).toHaveBeenCalledWith(false);
     expect(h.deps.clearPersistedExecution).not.toHaveBeenCalled();
@@ -202,7 +202,7 @@ describe('scope detachment ownership', () => {
     const h = scopeHarness(true); h.deps.agentId = 'founder';
     initialHistoryEffect(h.deps);
     expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
-    expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0);
+    expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0);
     expect(h.deps.fetch).not.toHaveBeenCalled();
   });
 });

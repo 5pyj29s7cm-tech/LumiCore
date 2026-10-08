@@ -68,8 +68,7 @@ it.each(['agent:tool', 'agent:progress'])('%s for a queued request preserves its
 });
 it('terminal delivery releases the exact watcher once and blocks a late rejected acknowledgement', () => {
   const h = listenerHarness(); const id = h.send();
-  const release = h.deps.activeChatViewDetachersRef.current.get(id); const spy = vi.fn(release);
-  h.deps.activeChatViewDetachersRef.current.set(id, spy);
+  const watcher = h.deps.chatExecutionWatchesRef.current.get(id); const spy = vi.spyOn(watcher, 'dispose');
   const response = { requestId: id, source: 'command-center-chat', text: 'Synthetic finalized reply', agentName: 'Lumi', finalized: true };
   h.listeners.get('agent:response')!(response);
   h.acknowledgements[0]({ ok: false, error: 'Late rejection' });
@@ -77,7 +76,7 @@ it('terminal delivery releases the exact watcher once and blocks a late rejected
   expect(spy).toHaveBeenCalledOnce(); expect(h.status()).toBe('done');
   expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
   expect(h.deps.messages.filter((m: any) => m.text === response.text)).toHaveLength(1);
-  expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0); h.cleanup();
+  expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0); h.cleanup();
 });
 it('foreground rejection promotes the next metadata owner while preserving the queued watcher', () => {
   const h = listenerHarness(); const first = h.send();
@@ -86,8 +85,8 @@ it('foreground rejection promotes the next metadata owner while preserving the q
   h.acknowledgements[0]({ ok: false, error: 'Foreground rejected' });
   expect(h.deps.chatRequestLedgerRef.current.foreground).toBe(next);
   expect(h.deps.currentTurnUiMetaRef.current).toBe(meta); expect(h.status()).toBe('thinking');
-  expect(h.deps.activeChatViewDetachersRef.current.has(first)).toBe(false);
-  expect(h.deps.activeChatViewDetachersRef.current.has(next)).toBe(true); h.cleanup();
+  expect(h.deps.chatExecutionWatchesRef.current.has(first)).toBe(false);
+  expect(h.deps.chatExecutionWatchesRef.current.has(next)).toBe(true); h.cleanup();
 });
 it('sending twice does not create extra terminal socket listeners', () => {
   const h = listenerHarness(); const count = h.listeners.size;
@@ -111,7 +110,38 @@ it('unmount disposes transport watches before any late acknowledgement can updat
   const count = h.deps.setWorkflowStatus.mock.calls.length;
   h.acknowledgements[0]({ ok: false, error: 'Late after unmount' });
   expect(h.deps.setWorkflowStatus).toHaveBeenCalledTimes(count);
-  expect(h.deps.activeChatViewDetachersRef.current.size).toBe(0);
+  expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0);
   expect(h.registry.capture()()).toBe(true); // The registry can capture fresh work after invalidation.
   h.cleanup();
+});
+
+it('keeps a buffered request across an early reconnect miss and delivers its eventual result exactly once', () => {
+  vi.useFakeTimers();
+  const h = listenerHarness();
+  try {
+    h.deps.setTimeout = setTimeout; h.deps.clearTimeout = clearTimeout;
+    const id = h.send();
+    const watcher = h.deps.chatExecutionWatchesRef.current.get(id);
+    watcher.resume(); watcher.resume();
+    expect(h.acknowledgements).toHaveLength(2);
+    h.acknowledgements[1]({ ok: false, code: 'EXECUTION_NOT_FOUND', error: 'Execution not found or no longer recoverable' });
+    expect(h.deps.chatRequestLedgerRef.current.has(id)).toBe(true);
+    expect(h.status()).toBe('thinking');
+    h.acknowledgements[0]({ ok: true });
+    vi.advanceTimersByTime(15000);
+    h.acknowledgements[2]({ ok: true, snapshot: {
+      requestId: id, source: 'command-center-chat', conversationId: 'synthetic-conversation', terminal: false, status: 'executing',
+    } });
+    expect(h.status()).toBe('executing');
+    const response = { requestId: id, source: 'command-center-chat', text: 'Video generated.', agentName: 'Lumi', finalized: true };
+    h.listeners.get('agent:response')!(response);
+    h.listeners.get('agent:response')!(response);
+    vi.advanceTimersByTime(180000);
+    expect(h.status()).toBe('done');
+    expect(h.deps.chatRequestLedgerRef.current.size).toBe(0);
+    expect(h.deps.chatExecutionWatchesRef.current.size).toBe(0);
+    expect(h.deps.messages.filter((m: any) => m.text === response.text)).toHaveLength(1);
+    expect(h.deps.pushChatProgress.mock.calls.some((call: any[]) => call[1] === 'error')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { h.cleanup(); vi.useRealTimers(); }
 });

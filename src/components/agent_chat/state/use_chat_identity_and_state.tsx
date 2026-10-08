@@ -1,3 +1,4 @@
+import type { ChatExecutionWatch } from '@/lib/chatExecutionWatch';
 import type { AgentChatVoiceSession, ChatAttachment, ConversationHistoryItem, ConversationHistoryContextMenu, WorkflowStatus, ChatTurnUiMeta } from "../contracts";
 import { makeChatMessageId } from "../history";
 import { CHAT_LIGHT_THEME, CHAT_NEUTRAL_THEME } from "../appearance";
@@ -86,8 +87,8 @@ export function useChatIdentityAndState({
     messagesRef.current = next;
     setMessageState(next);
   }, []);
-  const activeChatViewDetachersRef = useRef(new Map<string, () => void>());
-  useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); for (const detach of activeChatViewDetachersRef.current.values()) detach(); activeChatViewDetachersRef.current.clear(); }, []);
+  const chatExecutionWatchesRef = useRef(new Map<string, ChatExecutionWatch>());
+  useEffect(() => () => { chatViewWorkRef.current.invalidate(); chatUploadsRef.current.reset(); for (const watch of chatExecutionWatchesRef.current.values()) watch.dispose(); chatExecutionWatchesRef.current.clear(); }, []);
   const isOfficeCommandCenter = layout === 'command-center' && commandCenterView === 'office';
   const isCommandCenterUtility = layout === 'command-center' && !isOfficeCommandCenter;
   const chatExecutionSource = layout === 'command-center' ? 'command-center-chat' : 'chat';
@@ -445,7 +446,7 @@ export function useChatIdentityAndState({
     setAttachmentUploadFailures, setIsOptimizing, setOptimizationProgress, setPreviewFile, messages,
     mediaSourceArtifacts, mediaGenerationArtifacts, platform, socket, agentNameRef, recognition, setCopiedId,
     mediaGenerationText, searchQuery, searchResults, isZh, setSearchResults, setIsSearchingHistory, setSearchError,
-    chatExecutionSource, activeChatViewDetachersRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef,
+    chatExecutionSource, chatExecutionWatchesRef, terminalReceiptsRef, chatRequestLedgerRef, chatTurnUiMetaRef,
     currentTurnUiMetaRef, setIsTyping, setMessages, setIsCreatingConversation, setRestoringConversationId,
     setPendingAttachments, messagesRef, conversationTransitionRef, setConversationTransitionPending,
     taskRelationLedgerRef, messagesRevisionRef, historyRefreshRevisionRef, isCreatingConversation,

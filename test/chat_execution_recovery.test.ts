@@ -1,3 +1,5 @@
+import { ChatExecutionWatch } from '../src/lib/chatExecutionWatch';
+import { chatRecoveryCopy } from '../src/i18n/locales/chatRecovery';
 import { extractSourceExpression } from './source_expression';
 import { expect, it, vi } from 'vitest';
 import { ChatRequestLedger, upsertPersistedPendingChatExecution, removePersistedPendingChatExecution } from '../src/lib/chatEventReceipts';
@@ -35,7 +37,7 @@ function harness(currentOwner = owner('owner-a')) {
   const view = new ChatViewWorkRegistry();
   const resetMedia = vi.fn(() => { activeMedia.current = null; setReference(''); });
   const emit = vi.fn((_event: string, _payload: any, ack: any) => { replies.push(ack); });
-  const dependencies = {
+  const dependencies: Record<string, any> = {
     localStorage, activeExecutionStorageKey: key, ownedPendingChatExecutions, recoveryOwner: currentOwner,
     agentId: currentOwner.agentId, activeDomain: currentOwner.domain, activeOrgId: currentOwner.orgId || '',
     disposed: false, recoveryAttempt: 0, chatViewWorkRef: { current: view },
@@ -46,9 +48,11 @@ function harness(currentOwner = owner('owner-a')) {
     setMediaStudioMode: noop, setMediaSources: vi.fn(value => { setReference(value.primaryImage); }),
     mediaGenerationText: { statusGenerating: 'generating' }, chatRequestLedgerRef: { current: ledger },
     chatTurnTimerGuardRef: { current: { begin: noop } },
-    setIsTyping: vi.fn(), lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: vi.fn(),
+    setIsTyping: vi.fn(), lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: vi.fn(), clearChatProgress: noop, chatRecoveryCopy,
     uiMessage: (value: string) => value, isZh: false, attachmentConversationIdRef: { current: 'current-conversation' },
-    chatExecutionSource: currentOwner.source, socket: { emit }, setWorkflowStatus: vi.fn(), resetMediaGenerationSurface: resetMedia,
+    chatExecutionSource: currentOwner.source, socket: { connected: true, emit }, setWorkflowStatus: vi.fn(), resetMediaGenerationSurface: resetMedia,
+    chatExecutionWatchesRef: { current: new Map() }, chatTurnUiMetaRef: { current: new Map() }, dropRequestStream: noop, persistActiveExecution: noop, bindAttachmentContextToConversation: noop,
+    ChatExecutionWatch: class extends ChatExecutionWatch { constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: (() => 1) as any, clearTimeout: noop }); } },
     settleTrackedChatRequest: (id: string) => {
       const next = removePersistedPendingChatExecution(JSON.parse(localStorage.getItem(key) || 'null'), id);
       if (next.pending.length) localStorage.setItem(key, JSON.stringify(next));
@@ -56,6 +60,7 @@ function harness(currentOwner = owner('owner-a')) {
       return ledger.settle(id);
     },
   };
+  dependencies.attachChatExecutionWatch = callback('attachChatExecutionWatch', dependencies);
   const resume = callback('resumeActiveExecution', dependencies);
   const accepted = { ok: true, snapshot: { requestId, source: currentOwner.source, status: 'executing', terminal: false } };
   return { data, localStorage, seed, key, ledger, activeMedia, setReference, resetMedia, emit, replies, view, dependencies, resume, accepted };
@@ -113,26 +118,28 @@ it.each([true, false])('cleans rejected media only if it belongs to that request
   await h.resume();
   h.activeMedia.current = { requestId: matches ? requestId : 'new-request' };
   h.replies[0]({ ok: false });
-  expect(h.resetMedia).toHaveBeenCalledTimes(matches ? 1 : 0);
+  expect(h.activeMedia.current).toEqual(matches ? null : { requestId: 'new-request' });
   if (!matches) expect(h.activeMedia.current.requestId).toBe('new-request');
 });
 
-it.each(['view-change', 'unmount', 'reconnect'])('ignores stale acknowledgements after %s', async variant => {
+it.each(['view-change', 'unmount'])('ignores stale acknowledgements after disposing the exact view watch: %s', async () => {
   const h = harness();
   await h.resume();
-  if (variant === 'view-change') h.view.invalidate();
-  else if (variant === 'unmount') h.dependencies.disposed = true;
-  else await h.resume();
+  h.dependencies.chatExecutionWatchesRef.current.get(requestId).dispose();
   h.replies[0](h.accepted);
   expect(h.setReference).not.toHaveBeenCalled();
   expect(h.localStorage.getItem(h.key)).not.toBeNull();
-  if (variant === 'reconnect') {
-    h.replies[1](h.accepted);
-    expect(h.setReference).toHaveBeenCalledWith(reference);
-  }
 });
 
-it('can recover after adopting the active conversation without dropping reference metadata', async () => {
+it('reuses the in-flight request watch across repeated reconnect callbacks', async () => {
+  const h = harness();
+  await h.resume(); await h.resume();
+  expect(h.emit).toHaveBeenCalledTimes(1);
+  h.replies[0](h.accepted);
+  expect(h.setReference).toHaveBeenCalledExactlyOnceWith(reference);
+});
+
+it('lets the server resolve an omitted conversation from the exact request without guessing the active conversation', async () => {
   const h = harness();
   const stored = JSON.parse(h.localStorage.getItem(h.key)!);
   delete stored.pending[0].conversationId;
@@ -149,7 +156,8 @@ it('can recover after adopting the active conversation without dropping referenc
   });
   await h.resume();
   expect(h.emit).toHaveBeenCalledTimes(1);
-  expect(h.emit.mock.calls[0][1].conversationId).toBe('recovered-conversation');
+  expect(h.emit.mock.calls[0][1].conversationId).toBeUndefined();
+  expect(h.dependencies.fetch).not.toHaveBeenCalled();
   expect(JSON.parse(h.localStorage.getItem(h.key)!).pending[0].mediaGeneration.primaryImage).toBe(reference);
   expect(h.setReference).not.toHaveBeenCalled();
   h.replies[0](h.accepted);

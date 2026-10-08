@@ -1,3 +1,5 @@
+import { ChatExecutionWatch } from '../src/lib/chatExecutionWatch';
+import { chatRecoveryCopy } from '../src/i18n/locales/chatRecovery';
 import { readImplementationSource } from './implementation_source';
 import fs from 'node:fs';
 import { extractSourceExpression as extract } from './source_expression';
@@ -65,8 +67,8 @@ function recoveryHarness(user: any, data = new Map<string, string>()) {
     setItem: (name: string, value: string) => { data.set(name, value); },
     removeItem: (name: string) => { data.delete(name); },
   };
-  const socket = { emit: vi.fn() };
-  const dependencies = {
+  const socket = { connected: true, emit: vi.fn() };
+  const dependencies: Record<string, any> = {
     activeExecutionStorageKey: key, chatRecoveryUserId, recoveryOwner,
     activeDomain: 'personal', activeOrgId: undefined, chatExecutionSource: 'command-center-chat', agentId: 'lumi',
     localStorage, ownedPendingChatExecutions, upsertPersistedPendingChatExecution,
@@ -77,9 +79,12 @@ function recoveryHarness(user: any, data = new Map<string, string>()) {
     isOfficeCommandCenter: true, chatRequestLedgerRef: { current: new ChatRequestLedger() },
 
     chatTurnTimerGuardRef: { current: { begin: noop } }, setIsTyping: noop,
-    lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: noop,
-    uiMessage: (key: string) => key, isZh: true, socket,
+    lastResumedRequestIdsRef: { current: new Set() }, pushChatProgress: noop, clearChatProgress: noop,
+    uiMessage: (key: string) => key, isZh: true, socket, chatRecoveryCopy,
+    chatExecutionWatchesRef: { current: new Map() },
+    ChatExecutionWatch: class extends ChatExecutionWatch { constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: (() => 1) as any, clearTimeout: noop }); } },
   };
+  dependencies.attachChatExecutionWatch = extract(page, 'attachChatExecutionWatch', dependencies);
   return {
     key, data, socket,
     persist: extract(page, 'persistActiveExecution', dependencies),

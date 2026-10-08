@@ -1,3 +1,4 @@
+import { chatRecoveryCopy } from '../src/i18n/locales/chatRecovery';
 import { ChatExecutionWatch } from '../src/lib/chatExecutionWatch';
 import { takeChatStreamBucket } from '../src/lib/chatEventReceipts';
 import { extractSourceExpression as extract, readSourceAst } from './source_expression';
@@ -61,6 +62,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     pendingAttachmentsRef: { current: [] }, pendingAttachments: [], draftTextRef: { current: 'Summarize the document I just selected.' },
     messagesRef: { current: [] }, messages: [], user: { uid: 'synthetic-owner', username: 'synthetic-owner' },
     activeDomain: 'personal', activeOrgId: '', agentId: 'lumi', agentCategory: 'assistant',
+    chatRecoveryCopy, isOfficeCommandCenter: true, mediaStudioOpenRef: { current: false }, setMediaStudioMode: noop, setMediaSources: noop,
     chatExecutionSource: 'command-center-chat', operationMode: 'standard', isZh: false,
     mergeChatAttachmentReferences, createChatAttachmentReference, MAX_CHAT_ATTACHMENTS,
     chatViewWorkRef: { current: registry }, scopedFileUrl: (url: string) => url,
@@ -74,7 +76,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     chatTurnTimerGuardRef: { current: { begin: noop } },
     taskRelationLedgerRef: { current: { controlTarget: () => ({}) } },
 
-    attachmentConversationIdRef: { current: 'synthetic-conversation' }, activeChatViewDetachersRef: { current: new Map() },
+    attachmentConversationIdRef: { current: 'synthetic-conversation' }, chatExecutionWatchesRef: { current: new Map() },
     activeMediaGenerationRef: { current: null }, mediaGenerationText: {},
     agentName: "Lumi", mediaGenerationArtifactsRef: { current: [] },
     mediaGenerationArtifactValidationRef: { current: null },
@@ -105,7 +107,7 @@ export function pageHarness(withOldAttachment = false, transport?: (url: string,
     constructor(options: ConstructorParameters<typeof ChatExecutionWatch>[0]) { super(options, { setTimeout: deps.setTimeout, clearTimeout: deps.clearTimeout }); }
   };
   for (const name of ['createChatStreamReceivers', 'dropRequestStream', 'resumeForegroundRequest', 'settleTrackedChatRequest', 'appendPendingAttachments', 'acceptImportedChatFiles', 'rememberAttachmentContext',
-    'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
+    'attachChatExecutionWatch', 'sendText', 'handleSendMessage', 'runChatAttachmentUpload', 'uploadChatAttachments', 'importChatAttachmentPaths']) {
     deps[name] = extract(pagePath, name, deps);
   }
   return { deps, response, registry, emitted, upload: deps.uploadChatAttachments, send: () => deps.handleSendMessage({ preventDefault: noop }) };
