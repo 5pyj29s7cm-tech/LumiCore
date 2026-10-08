@@ -18,10 +18,6 @@ function playbackEpisode(value: unknown): string {
   return tens ? String((tens[1] ? digits.indexOf(tens[1]) : 1) * 10 + (tens[2] ? digits.indexOf(tens[2]) : 0)) : '';
 }
 
-function requestedPlaybackContent(taskText: string) {
-  return parsePlaybackGoal(taskText);
-}
-
 interface ObservedPlaybackState { playing: boolean; title: string; season: string; episode: string }
 
 // i18n-allow: Recognize observations of the playing content, never a play button or search result.
@@ -202,7 +198,7 @@ export function hasMediaPauseEvidence(records: ToolExecutionRecord[], taskText: 
 
 export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], taskText = '', currentTurn?: { requestId?: string; taskId?: string }, analysis?: ActionIntentAnalysis): boolean {
   const successful = scopedMediaEvidence(records, currentTurn);
-  const requested = requestedPlaybackContent(taskText);
+  const requested = parsePlaybackGoal(taskText);
   let target = requestedMediaPlayerTarget(taskText, analysis);
   if (/^(?:音乐|歌曲?|播放器|视频|music|song|player|video)$/iu.test(target)) target = ''; // i18n-allow: Generic player labels.
   let playerMatched = !target;
@@ -229,7 +225,7 @@ export function hasMediaPlaybackEvidence(records: ToolExecutionRecord[] = [], ta
     const currentObservation = observation && Boolean(currentTurn?.requestId);
     if (record.name === 'computer_use') {
       const executedTask = String(record.arguments?.task || record.arguments?.prompt || '');
-      const executedContent = requestedPlaybackContent(executedTask);
+      const executedContent = parsePlaybackGoal(executedTask);
       const executedPlayer = requestedMediaPlayerTarget(executedTask, analysis);
       const applicationIdentity = String(parseRecordJson(record)?.applicationIdentity || '').trim();
       const matchesTarget = (value: string) => matchesRequestedDesktopTarget(value, requestedDesktopTargetAliases(target));

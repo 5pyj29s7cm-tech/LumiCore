@@ -1,3 +1,4 @@
+import { buildConfirmedStepContinuationMessages } from '../server/llm/tool_loop/recovery';
 import { describe, expect, it } from 'vitest';
 import {
   buildConversationActionContinuationState,
@@ -9,7 +10,6 @@ import {
   applyTaskPolicySnapshot,
   coalesceToolExecutionRecords,
   mergeToolExecutionRecords,
-  confirmedStepNeedsContinuation,
   normalizeConversationTaskReceipt,
   recordsToTaskReceipts,
   taskCompletionFromReceipts,
@@ -430,22 +430,14 @@ describe('durable conversation task execution ledger', () => {
       }),
     };
 
-    expect(confirmedStepNeedsContinuation(
-      'Open WPS and create a Word document',
-      [confirmedOpen],
-    )).toBe(true);
-    expect(confirmedStepNeedsContinuation(
-      'Open WPS',
-      [confirmedOpen],
-    )).toBe(true);
-    expect(confirmedStepNeedsContinuation(
-      'Open WPS and create a Word document',
-      [{ ...confirmedOpen, result: '', error: 'permission denied' }],
-    )).toBe(true);
-    expect(confirmedStepNeedsContinuation(
-      'Open WPS',
-      [],
-    )).toBe(false);
+    for (const goal of ['Open WPS and create a Word document', 'Open WPS']) {
+      for (const record of [confirmedOpen, { ...confirmedOpen, result: '', error: 'permission denied' }]) {
+        const messages = buildConfirmedStepContinuationMessages(goal, record);
+        expect(messages[0]).toMatchObject({ role: 'user', content: goal });
+        expect(messages).toContainEqual(expect.objectContaining({ role: 'tool', name: 'desktop_open' }));
+        expect(messages.at(-1)?.content).toContain('confirmation has already been consumed');
+      }
+    }
   });
 
   it('keeps the substantive workflow failure ahead of a later permission drift', () => {

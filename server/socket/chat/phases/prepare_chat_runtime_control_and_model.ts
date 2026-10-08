@@ -86,10 +86,10 @@ export async function prepareChatRuntimeControlAndModel(context: NonNullable<Awa
               taskId: context.durableTaskId,
               taskLabel: context.visibleUserText,
               toolRecords: context.taskAwareRecords([cleanupRecord]),
-              blocked: !cleanupVerified,
+              finalization: { blocked: !cleanupVerified,
               reason: cleanupVerified ? '' : cleanupRecord.error
                 || cleanupRecord.terminalVerification?.reason
-                || cleanupReason,
+                || cleanupReason },
             })
           : undefined;
         const cleanupTerminalPayload = context.normalizeAgentPayload('agent:response', {

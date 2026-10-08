@@ -16,7 +16,7 @@ import { formatPendingConfirmationRequest } from "../../tools/pending_confirmati
 
 import { setConversationActionExecutionStatus } from "../../conversation/manager";
 
-import { coalesceToolExecutionRecords, confirmedStepNeedsContinuation, toolRecordSucceeded } from "../../cognition/task_execution_ledger";
+import { coalesceToolExecutionRecords, toolRecordSucceeded } from "../../cognition/task_execution_ledger";
 
 import { recordTokenUsageBatch } from "../../llm/token_tracker";
 
@@ -86,15 +86,7 @@ export async function executeConfirmedChatTurn(context: executeConfirmedChatTurn
           : CN_VOICE_FAST_PATH_MESSAGES.confirmationFailed(
               confirmedRecord.error || confirmedRecord.result,
             ));
-        if (
-          !completedConfirmedAction
-          &&
-          confirmedStepNeedsContinuation(
-            confirmedTask,
-            context.taskAwareRecords([confirmedRecord]),
-          )
-          && !context.isChatCancelled()
-        ) {
+        if (!completedConfirmedAction && !context.isChatCancelled()) {
           confirmationLlmWasCalled = true;
           const continuation = await context.runAuthorizedTools({
             execution: context.executionPipeline,

@@ -24,8 +24,7 @@ describe('one completion contract across the media task lifecycle', () => {
     expect(final.text).toContain('不含音轨');
     expect(buildForegroundTaskCompletionFeedback({ taskId: replay.taskId, taskLabel: replay.taskText, toolRecords: [record], finalization: final }))
       .toMatchObject({ status: 'completed', blockers: [], incomplete: [] });
-    expect(buildForegroundTaskCompletionFeedback({ taskId: replay.taskId, taskLabel: replay.taskText, toolRecords: [record] }))
-      .toMatchObject({ status: 'completed', blockers: [] });
+    expect(buildForegroundTaskCompletionFeedback({ taskId: replay.taskId, taskLabel: replay.taskText, toolRecords: [record] })).toBeUndefined();
     expect(taskCompletionFromReceipts(replay.taskText, recordsToTaskReceipts([record]), undefined, replay).complete).toBe(true);
   });
 

@@ -1,3 +1,4 @@
+import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
 import { mediaContractForRequest } from './contracts/media_contract';
 import { buildActionEvidenceContract, extractPrimaryTaskText, hasCoreActionEvidence } from './action_contract';
 import type { ToolExecutionRecord } from '../tools/types';
@@ -26,35 +27,12 @@ export function hasResultCoreActionEvidence(
   }, input.flow?.acceptedTaskTarget);
 }
 
-export function recordMatchesCurrentTurnIdentity(
-  input: LumiResultFinalizerInput,
-  record: ToolExecutionRecord,
-): boolean {
-  const expectedTaskId = String(input.taskId || '').trim();
-  const expectedRequestId = String(input.requestId || '').trim();
-  const actualTaskIds = [record.taskId, record.envelope?.taskId]
-    .map(value => String(value || '').trim())
-    .filter(Boolean);
-  const actualRequestIds = [record.requestId, record.envelope?.requestId]
-    .map(value => String(value || '').trim())
-    .filter(Boolean);
-  if (
-    expectedTaskId
-    && (actualTaskIds.length === 0 || actualTaskIds.some(value => value !== expectedTaskId))
-  ) return false;
-  if (
-    expectedRequestId
-    && (actualRequestIds.length === 0 || actualRequestIds.some(value => value !== expectedRequestId))
-  ) return false;
-  return true;
-}
-
 /** A completion/progress claim may consume only receipts fenced to this turn. */
 export function isVerifiedCurrentTurnRecord(
   input: LumiResultFinalizerInput,
   record: ToolExecutionRecord,
 ): boolean {
-  if (!toolRecordSucceeded(record) || !recordMatchesCurrentTurnIdentity(input, record)) return false;
+  if (!toolRecordSucceeded(record) || !artifactRecordMatchesTurn(record, input)) return false;
   const receipt = parseReceiptObject(record.receipt);
   const result = parseReceiptObject(record.result);
   return record.terminalVerification?.status === 'verified'
@@ -179,8 +157,4 @@ export function findUnresolvedArtifactPlaceholder(artifactText: string): string 
     .map(value => value.trim())
     .find(value => /(?:\u6839\u636e|\u57fa\u4e8e|\u53c2\u7167).{0,24}(?:\u586b\u5199|\u8865\u5145|\u751f\u6210|\u66ff\u6362)|\u5f85(?:\u586b\u5199|\u8865\u5145|\u751f\u6210|\u66ff\u6362)|\b(?:TBD|TODO)\b|\{\{[^}]+\}\}/iu.test(value));
   return line || '';
-}
-
-export function parseActionReceipt(value: unknown): Record<string, any> | null {
-  return parseReceiptObject(value);
 }

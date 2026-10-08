@@ -1,10 +1,10 @@
+import { artifactRecordMatchesTurn } from '../tools/artifact_evidence';
 import type { ToolExecutionRecord } from '../tools/types';
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { normalizeActionIntent } from './normalized_action_intent';
 import { toolRecordSucceeded } from './task_execution_ledger';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
-import { documentReadMatchesRequestedTarget, isSuccessfulExactDocumentRead, extractDesktopLaunchTarget, extractPrimaryTaskText, extractSimpleDesktopOpenTarget, hasMediaPlaybackEvidence, hasMediaPauseEvidence, hasRequestedDesktopOpenEvidence, requiresMediaPlaybackAction } from './action_contract';
-import { isMediaPauseRequest } from './media_intent';
+import { documentReadMatchesRequestedTarget, isSuccessfulExactDocumentRead, extractDesktopLaunchTarget, extractPrimaryTaskText, extractSimpleDesktopOpenTarget, hasRequestedDesktopOpenEvidence } from './action_contract';
 import { CN_EXECUTION_EVIDENCE_MESSAGES } from "../regions/messages/execution_evidence_messages";
 import { hasRequestedArtifactMutation, isCurrentClientDiagnosticRequest, isDiagnosticOrRepairRequest } from './tool_intent';
 import { formatVerifiedTaskResultForReadability } from './reply_style';
@@ -14,7 +14,7 @@ import { formatCnUnsupportedToolExecutionClaim } from "../regions/messages/messa
 import { hasImmediateExecutionPromise } from './execution_claims';
 import { CN_UNVERIFIED_CLIENT_STATE_CLAIM } from "../regions/messages/capability_meta_messages";
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
-import { resultTaskText, isVerifiedCurrentTurnRecord, taskActionContract, hasResultCoreActionEvidence, isChineseText, isInternalRuntimeWorkNarration, recordMatchesCurrentTurnIdentity, parseActionReceipt } from "./result_finalizer_support";
+import { resultTaskText, isVerifiedCurrentTurnRecord, taskActionContract, hasResultCoreActionEvidence, isChineseText, isInternalRuntimeWorkNarration } from "./result_finalizer_support";
 import { isVerifiedPrimaryDesktopOpen } from "./result_desktop_presenter";
 
 type RealWorldClaimKind =
@@ -178,9 +178,7 @@ export function hasVerifiedEvidenceForRealWorldClaim(
     ));
   }
   if (kind === 'playback') {
-    if (isMediaPauseRequest(taskText)) return hasMediaPauseEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId });
-    return requiresMediaPlaybackAction(taskText)
-      && hasMediaPlaybackEvidence(records, taskText, { requestId: input.requestId, taskId: input.taskId });
+    return Boolean(contract.mediaPlayback) && hasResultCoreActionEvidence(input, contract, records, taskText);
   }
   if (kind === 'communication') {
     if (!['messaging_send', 'public_post'].includes(contract.kind)) return false;
@@ -410,7 +408,7 @@ function hasVerifiedOngoingExecutionReceipt(input: LumiResultFinalizerInput): bo
       !toolRecordSucceeded(record)
       || record.terminalVerification?.status === 'failed'
     ) return false;
-    if (!recordMatchesCurrentTurnIdentity(input, record)) return false;
+    if (!artifactRecordMatchesTurn(record, input)) return false;
     const payload = parseReceiptObject(toolRecordTerminalPayload(record));
     if (!payload) return false;
     const status = String(
@@ -584,7 +582,7 @@ function hasVerifiedNonLedgerActionReceipt(records: ToolExecutionRecord[]): bool
       record.envelope?.status === 'verified_success'
       && record.envelope.verification?.status === 'verified'
     ) return true;
-    const receipt = parseActionReceipt(record.receipt);
+    const receipt = parseReceiptObject(record.receipt);
     const receiptVerification = receipt?.terminalVerification?.status
       || receipt?.verification?.status;
     return receiptVerification === 'verified'

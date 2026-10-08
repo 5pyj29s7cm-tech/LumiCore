@@ -6,7 +6,7 @@ import { formatConversationActionTaskStatus } from "../../../cognition/action_co
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably } from "../../../tools/pending_confirmation";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
-import { coalesceToolExecutionRecords, recordsToTaskReceipts, confirmedStepNeedsContinuation, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
+import { coalesceToolExecutionRecords, recordsToTaskReceipts, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../tools/types";
 import { isExplicitMemoryRequest, persistTurnMemory } from "../../../memory/turn_memory";
 import { isDirectDesktopTool } from "../../desktop_relay";
@@ -210,7 +210,7 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
               || confirmationRecord.result,
           ));
 
-      if (!completedConfirmedAction && confirmedStepNeedsContinuation(confirmedTask, context.taskAwareRecords([confirmationRecord])) && context.isCurrentTurn()) {
+      if (!completedConfirmedAction && context.isCurrentTurn()) {
         // Confirmation is a boundary inside the same task, not the end of the
         // task. Continue the remaining plan immediately with the exact confirmed
         // receipt in context; a later hard boundary will stop once again.

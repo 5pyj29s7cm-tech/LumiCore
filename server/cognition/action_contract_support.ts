@@ -1,5 +1,5 @@
 import type { ToolExecutionRecord } from '../tools/types';
-import { parseReceiptObject, toolRecordHasTerminalPayload, toolRecordTerminalPayload } from '../tools/receipt_payload';
+import { parseReceiptObject, toolRecordHasTerminalPayload, toolRecordTerminalPayload, toolRecordTerminalText } from '../tools/receipt_payload';
 
 export function compact(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -44,11 +44,7 @@ export function recordText(record: ToolExecutionRecord): string {
   return `${record.name}\n${JSON.stringify(record.arguments || {})}\n${String(record.result || '')}`;
 }
 
-export function terminalPayloadText(record: ToolExecutionRecord): string {
-  const payload = toolRecordTerminalPayload(record);
-  if (typeof payload === 'string') return payload.trim();
-  try { return JSON.stringify(payload); } catch { return String(payload || ''); }
-}
+export { toolRecordTerminalText as terminalPayloadText } from '../tools/receipt_payload';
 
 export function hasVisualModelAvailabilityEvidence(
   records: ToolExecutionRecord[] = [],
@@ -58,7 +54,7 @@ export function hasVisualModelAvailabilityEvidence(
       return false;
     }
     const payload = toolRecordTerminalPayload(record);
-    const text = terminalPayloadText(record);
+    const text = toolRecordTerminalText(record);
     if (!text || /^\s*(?:\{\s*\}|\[\s*\])\s*$/u.test(text)) return false;
     if (
       payload && typeof payload === 'object' && !Array.isArray(payload)

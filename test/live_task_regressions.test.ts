@@ -146,7 +146,7 @@ describe('regressions from the two live task rounds', () => {
       requestId: 'r', taskId: 't', terminalVerification: verified }];
     expect(hasMediaPlaybackEvidence(records, task, { requestId: 'r', taskId: 't' })).toBe(true);
     expect(hasMediaPlaybackEvidence([...records, { ...records[0], result: JSON.stringify({ player: '网易云音乐', playerState: 'paused' }) }], task, { requestId: 'r', taskId: 't' })).toBe(false);
-    expect(buildForegroundTaskCompletionFeedback({ taskId: 't', taskLabel: task, toolRecords: [records[1]] })?.status).toBe('blocked');
+    expect(buildForegroundTaskCompletionFeedback({ taskId: 't', taskLabel: task, toolRecords: [records[1]], finalization: finalizeLumiResponse({ taskText: task, responseText: 'Completed.', toolRecords: [records[1]], source: 'chat', taskId: 't', requestId: 'r' }) })?.status).toBe('blocked');
   });
 
   it('does not mark a file with missing formulas/chart as complete', () => {
@@ -155,7 +155,7 @@ describe('regressions from the two live task rounds', () => {
       result: JSON.stringify({ ok: true, path: 'D:/test/report.xlsx', formulaCount: 0, chartCount: 0, unresolvedFormulas: [] }) }];
     expect(finalizeLumiResponse({ taskText: task, responseText: '全部完成。', source: 'chat', toolRecords: records }))
       .toMatchObject({ blocked: true, reason: 'artifact_step_pending:repair_workbook' });
-    expect(buildForegroundTaskCompletionFeedback({ taskId: 't', taskLabel: task, toolRecords: records })?.status).toBe('blocked');
+    expect(buildForegroundTaskCompletionFeedback({ taskId: 't', taskLabel: task, toolRecords: records, finalization: finalizeLumiResponse({ taskText: task, responseText: 'Completed.', toolRecords: records, source: 'chat' }) })?.status).toBe('blocked');
   });
 
   it('uses a bounded working prompt even when the local runtime loads 32k context', () => {

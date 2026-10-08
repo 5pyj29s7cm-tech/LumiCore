@@ -1,6 +1,6 @@
 import './helpers';
 import { describe, expect, it } from 'vitest';
-import { artifactContentRequirements, checkArtifactContent } from '../server/cognition/artifact_progress';
+import { artifactContentRequirements, checkArtifactContent, artifactProgressFeedback } from '../server/cognition/artifact_progress';
 import { buildActionContract, getArtifactTaskProgress, hasCoreActionEvidence } from '../server/cognition/action_contract';
 import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from '../server/cognition/result_finalizer';
 import { buildForegroundTaskCompletionFeedback } from '../server/cognition/acceptance_evidence';
@@ -37,15 +37,17 @@ describe('one artifact checkpoint for continuation and completion', () => {
       expect(result.text).toContain('缺少要求的内容：会议结论');
     }
     expect(tryFinalizeVerifiedBoundedAction({ ...turn, taskText: task, responseText: '', toolRecords: records, source: 'chat' })).toBeNull();
-    const feedback = buildForegroundTaskCompletionFeedback({ taskId: turn.taskId, taskLabel: task, toolRecords: records });
+    const feedback = buildForegroundTaskCompletionFeedback({ taskId: turn.taskId, taskLabel: task, toolRecords: records,
+      finalization: finalizeLumiResponse({ ...turn, taskText: task, responseText: 'Completed.', toolRecords: records, source: 'chat' }) });
+    const stages = artifactProgressFeedback(progress, task);
     expect(feedback?.status).toBe('blocked');
-    expect(feedback?.completed).toContain('已回读当前版本');
-    expect(feedback?.incomplete).toContain('缺少要求的内容：会议结论');
-    expect(feedback?.nextSteps[0]).toContain('补齐');
+    expect(stages.completed).toContain('已回读当前版本');
+    expect(stages.incomplete).toContain('缺少要求的内容：会议结论');
+    expect(stages.nextSteps[0]).toContain('补齐');
     const publicFeedback = normalizeCompletionFeedbackForPersistence(feedback)!;
-    expect(publicFeedback.completed).toContain('已回读当前版本');
+    expect(publicFeedback.status).toBe('blocked');
     expect(publicFeedback.completed).not.toContain('任务已完成。');
-    expect(publicFeedback.incomplete).toContain('缺少要求的内容：会议结论');
+    expect(publicFeedback.blockers.length).toBeGreaterThan(0);
     expect(normalizeCompletionFeedbackForPersistence(publicFeedback)).toEqual(publicFeedback);
     expect(buildArtifactProgressPrompt(task, records, turn)).toContain('repair_content');
     expect(resolveArtifactReadbackCall(task, records, new Set(['read_docx']), turn)).toBeNull();
@@ -58,7 +60,8 @@ describe('one artifact checkpoint for continuation and completion', () => {
     records.push(read(complete, { id: 'read-2' }));
     expect(getArtifactTaskProgress(task, records, turn)).toMatchObject({ next: 'complete', complete: true });
     expect(hasCoreActionEvidence(buildActionContract(task), records, task, undefined, turn)).toBe(true);
-    expect(buildForegroundTaskCompletionFeedback({ taskId: turn.taskId, taskLabel: task, toolRecords: records })?.status).toBe('completed');
+    const final = finalizeLumiResponse({ ...turn, taskText: task, responseText: 'Completed.', toolRecords: records, source: 'chat' });
+    expect(buildForegroundTaskCompletionFeedback({ taskId: turn.taskId, taskLabel: task, toolRecords: records, finalization: final })?.status).toBe('completed');
   });
   it('keeps successive document observations and section formatting through durable task hydration', () => {
     const verified = { status: 'verified' as const, strategy: 'terminal_receipt' as const, reason: 'actual tool result' };

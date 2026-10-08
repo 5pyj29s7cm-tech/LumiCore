@@ -9,10 +9,10 @@ import { CN_VOICE_FAST_PATH_MESSAGES, formatCnClientActionTargetLabel } from "..
 import { normalizeActionIntent } from './normalized_action_intent';
 import { isVideoPlaybackRequest } from './media_intent';
 import { validatePlaybackVerification } from './playback_verification';
-import { artifactPathFromRecord } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, artifactPathFromRecord } from '../tools/artifact_evidence';
 import { CN_TASK_TARGET_ANCHOR_MESSAGES } from "../regions/messages/task_target_anchor_messages";
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
-import { resultTaskText, isChineseText, recordMatchesCurrentTurnIdentity, taskActionContract, hasResultCoreActionEvidence } from "./result_finalizer_support";
+import { resultTaskText, isChineseText, taskActionContract, hasResultCoreActionEvidence } from "./result_finalizer_support";
 
 export function formatCurrentAuthoringDocumentClarification(
   input: LumiResultFinalizerInput,
@@ -273,7 +273,7 @@ export function formatGroundedClientActionResult(input: LumiResultFinalizerInput
   const expectedMode = String(expectedIntent.clientActionArguments?.mode || '').trim();
   const expectedEnabled = expectedIntent.clientActionArguments?.enabled;
   const receipts = (input.toolRecords || [])
-    .filter(record => recordMatchesCurrentTurnIdentity(input, record))
+    .filter(record => artifactRecordMatchesTurn(record, input))
     .map(parseVerifiedClientActionReceipt)
     .filter((receipt): receipt is NonNullable<typeof receipt> => Boolean(receipt));
   const receipt = [...receipts].reverse().find(item => (

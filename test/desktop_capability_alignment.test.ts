@@ -65,7 +65,7 @@ describe('desktop capability alignment', () => {
     expect(result).toContain('screenRecording=granted');
   });
 
-  it('lets a complete current-turn client snapshot override an ambiguous fabricated diagnosis', async () => {
+  it('lets an explicitly requested current-turn client snapshot override a fabricated diagnosis', async () => {
     const { finalizeLumiResponse } = await import('../server/cognition/result_finalizer');
     const records = [{
       name: 'client_health_check',
@@ -86,7 +86,7 @@ describe('desktop capability alignment', () => {
     }];
 
     const result = finalizeLumiResponse({
-      taskText: '\u600e\u4e48\u56de\u4e8b\uff1f',
+      taskText: '检查客户端当前状态。',
       responseText: '\u540e\u7aef\u6ca1\u6709\u542f\u52a8\uff0c\u622a\u56fe\u5df2\u6267\u884c 300 \u6b65\u3002',
       toolRecords: records,
       source: 'voice',

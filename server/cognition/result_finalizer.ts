@@ -15,7 +15,7 @@ import { isModelConfigurationReadRequest } from './model_configuration_intent';
 import type { LumiTurnFlow } from './turn_flow';
 import { verifiedExternalCliStatus, formatExternalCliStatus } from './external_cli_status';
 import { findDesktopCompletionReview, desktopCompletionReviewText, DESKTOP_COMPLETION_REVIEW_REASON } from './desktop_completion_review';
-import { artifactPathFromRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, artifactPathFromRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { withoutLocationLiterals } from './location_literals';
 import { buildTaskTargetAnchorProjection, isVerifiedProducedDocumentTarget } from '../conversation/task_target_anchor';
 import { missingTaskInputResult } from './missing_task_input';
@@ -25,7 +25,6 @@ import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXTERNAL_CLI_MESSAGES } from "../regions/messages/external_cli_messages";
 import { buildOperationModeMetaResponse } from './capability_meta';
 import { formatGroundedKnowledgeObservation } from './knowledge_result';
-import { normalizeActionIntent } from './normalized_action_intent';
 import { buildMediaArtifactReceipt } from '../socket/media_artifact_receipt';
 import { sanitizeUserFacingExecutionOutput } from './user_output_protection';
 import { guardCompletionClaims } from '../work_product/completion_guard';
@@ -34,7 +33,7 @@ import { formatClientDiagnosticResult, hasCompleteClientDiagnosticReceipts } fro
 import { evaluateDesktopObservationEvidence } from './desktop_observation';
 import { hasContinuousStockWatchIntent, hasContinuousStockWatchEvidence, requiresLegalCurrentLawGate, claimsLegalDocumentCompletion, hasLegalDocumentProductionEvidence, hasLegalCurrentLawGateEvidence, hasLegalReasoningChainEvidence, hasLegalExternalPlatformSignal, describesAuthorizedLegalExternalHandoff, claimsExternalLegalPlatformFinalAction, claimsExternalLegalPlatformResult, hasLegalExternalPlatformResultEvidence } from './result_policy_evidence';
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
-import { taskActionContract, isInternalRuntimeWorkNarration, resultTaskText, isChineseText, summarizeToolFailure, hasResultCoreActionEvidence, isVerifiedCurrentTurnRecord, recordMatchesCurrentTurnIdentity, requiresSourceGroundedArtifactContent, sanitizeInternalExecutionText } from "./result_finalizer_support";
+import { taskActionContract, isInternalRuntimeWorkNarration, resultTaskText, isChineseText, summarizeToolFailure, hasResultCoreActionEvidence, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, sanitizeInternalExecutionText } from "./result_finalizer_support";
 import { formatGroundedDesktopEvidence, formatGroundedSimpleDesktopOpenResult, formatGroundedClientActionResult, formatGroundedCurrentAuthoringDocumentResult, formatGoalSpecificDesktopResult, formatObservedDesktopOpenResult, formatGroundedPartialActionResult, formatCurrentAuthoringDocumentClarification, formatCreatedArtifactWithoutInAppCompletion } from "./result_desktop_presenter";
 import { unsupportedOngoingExecutionClaim, leakedLegacyToolProtocol, unsupportedClientStateVerificationClaim, unsupportedLedgerOnlyWorkTaskCompletion, unsupportedToolModeClaim, unsupportedToolAvailabilityExcuse, groundedVerifiedDocumentObservation, VERIFIED_DOCUMENT_OBSERVATION_TOOL_RE, unsupportedPriorDiagnosticClaim, unsupportedToolExecutionClaim, realWorldClaimKind, isExecutionClaimGuardTurn, isFirstPersonConcreteRealWorldClaim, hasVerifiedEvidenceForRealWorldClaim, unsupportedRealWorldClaim } from "./result_claim_guards";
 import { groundedMediaGeneration, formatGroundedWorkflowProgress, formatGroundedSkillDraft, formatGroundedArtifactResult, formatGroundedCadRunResult, formatGroundedBlankAutoCadDocumentResult, formatGroundedWpsMutationResult, formatGroundedCadGeometryExtractionResult, formatExternalAiHistoryResult } from "./result_artifact_presenter";
@@ -159,7 +158,7 @@ function shouldUseCompactActionBlockedResponse(input: LumiResultFinalizerInput):
 
 function shouldEnforceCoreActionContract(contract: ReturnType<typeof buildActionContract>, text: string): boolean {
   if (!contract.applies) return false;
-  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation', 'artifact_work', 'media_generation'].includes(contract.kind)) {
+  if (['messaging_read', 'messaging_send', 'browser_account', 'public_post', 'cad_drafting', 'customer_operations', 'ecommerce_operations', 'design_delivery', 'stock_monitor', 'task_control', 'desktop_operation', 'artifact_work', 'media_generation', 'external_ai_request'].includes(contract.kind)) {
     return true;
   }
   if (contract.kind === 'legal_document') {
@@ -578,7 +577,7 @@ export function tryFinalizeVerifiedBoundedAction(
   if (!input.requestId || !input.taskId) return null;
   const task = resultTaskText(input);
   const records = coalesceToolExecutionRecords(input.toolRecords || [])
-    .filter(record => recordMatchesCurrentTurnIdentity(input, record));
+    .filter(record => artifactRecordMatchesTurn(record, input));
   const scopedInput = { ...input, toolRecords: records, responseText: '' };
   const business = groundedBusinessAnalysis(scopedInput);
   if (business) return business;
@@ -668,7 +667,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
     // their only machine result in `receipt`; downstream completion guards and
     // grounded formatters historically read `result`. A verified receipt must
     // not become a failure merely because the display-result string is empty.
-    toolRecords: coalesceToolExecutionRecords((input.toolRecords || []).filter(record => recordMatchesCurrentTurnIdentity(input, record))).map(record => (
+    toolRecords: coalesceToolExecutionRecords((input.toolRecords || []).filter(record => artifactRecordMatchesTurn(record, input))).map(record => (
       String(record.result || '').trim()
         ? record
         : { ...record, result: toolRecordTerminalText(record) }
@@ -676,7 +675,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   };
   const actionText = resultTaskText(input);
   const missingInput = missingTaskInputResult(actionText,
-    (input.toolRecords || []).filter(record => recordMatchesCurrentTurnIdentity(input, record)));
+    (input.toolRecords || []).filter(record => artifactRecordMatchesTurn(record, input)));
   if (missingInput) return missingInput;
   const business = groundedBusinessAnalysis(input);
   if (business) return business;
@@ -695,7 +694,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   const sessionObservation = browserSessionObservation((input.toolRecords || []).filter(record => isVerifiedCurrentTurnRecord(input, record)), actionText);
   if (sessionObservation) return { text: sessionObservation, blocked: false, reason: 'verified_browser_session_inspection' };
   const missingSpreadsheet = missingSpreadsheetRequirements(actionText,
-    (input.toolRecords || []).filter(record => recordMatchesCurrentTurnIdentity(input, record)));
+    (input.toolRecords || []).filter(record => artifactRecordMatchesTurn(record, input)));
   if (missingSpreadsheet.length) return {
     text: isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.spreadsheetIncomplete(missingSpreadsheet)
       : `The workbook was saved, but these requested features are not verified: ${missingSpreadsheet.join(', ')}. The task is incomplete.`,
@@ -765,11 +764,11 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   if (knowledgeObservation) return { text: knowledgeObservation, blocked: false, reason: 'Grounded current-turn knowledge observation.' };
   const mediaGeneration = groundedMediaGeneration(input);
   if (mediaGeneration) return mediaGeneration;
-  const mediaIntent = normalizeActionIntent(actionText);
-  const mediaFailures = mediaIntent.kind === 'media_generation'
-    ? (input.toolRecords || []).filter(record => record.name === mediaIntent.target && record.error && recordMatchesCurrentTurnIdentity(input, record))
+  const mediaTool = actionContract.mediaGeneration?.toolName;
+  const mediaFailures = mediaTool
+    ? (input.toolRecords || []).filter(record => record.name === mediaTool && record.error && artifactRecordMatchesTurn(record, input))
     : [];
-  if (mediaFailures.length && !(input.toolRecords || []).some(record => record.name === mediaIntent.target
+  if (mediaFailures.length && !(input.toolRecords || []).some(record => record.name === mediaTool
     && buildMediaArtifactReceipt(record.name, record.arguments, toolRecordTerminalPayload(record), record.error))) {
     // i18n-allow: Receipt-grounded failed-generation result and bounded retry offer.
     const text = isChineseText(actionText)
@@ -1065,7 +1064,7 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
   // task. Do not let an unrelated auxiliary failure (for example an extra
   // write_file attempt after the process list was already returned)
   // overwrite that evidence with a generic incomplete-work guard.
-  const desktopObservation = evaluateDesktopObservationEvidence(input.toolRecords || [], actionText);
+  const desktopObservation = evaluateDesktopObservationEvidence(input.toolRecords || [], actionContract.kind === 'desktop_operation' ? actionText : '');
   if (desktopObservation.complete && desktopObservation.text) {
     // Observation tasks exist to return the sampled facts. A generic model
     // acknowledgement such as "check complete" is not a useful result and

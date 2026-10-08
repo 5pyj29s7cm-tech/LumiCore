@@ -198,7 +198,7 @@ describe('chat and voice tool-call stability', () => {
     for (const source of [chat]) {
       expect(source).toContain('buildConfirmedStepContinuationMessages');
       expect(source).toMatch(/priorToolRecords:\s*(?:taskAwareRecords\()?\[(?:confirmedRecord|confirmationRecord)\]/);
-      expect(source).toContain('confirmedStepNeedsContinuation(');
+      expect(source).not.toContain('confirmedStepNeedsContinuation(');
     }
     expect(chat).toContain('llmWasCalled: confirmationLlmWasCalled');
     expect(chat).toContain('recordTokenUsageBatch(uid, continuation.usageRecords, interactionId)');

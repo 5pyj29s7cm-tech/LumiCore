@@ -49,7 +49,7 @@ describe('workflow progress is a successful phase, not task completion', () => {
     const final = finalizeLumiResponse({ ...identity, taskText: task, responseText: '任务已完成', source: 'chat', toolRecords: [record] });
     expect(final).toMatchObject({ blocked: true, reason: 'workflow_incomplete' });
     expect(final.text).toContain('1/2');
-    expect(buildForegroundTaskCompletionFeedback({ taskId: identity.taskId, taskLabel: task, toolRecords: [record], blocked: final.blocked })?.status).not.toBe('completed');
+    expect(buildForegroundTaskCompletionFeedback({ taskId: identity.taskId, taskLabel: task, toolRecords: [record], finalization: final })?.status).not.toBe('completed');
     expect(buildForegroundTaskCompletionFeedback({ taskId: identity.taskId, taskLabel: task, toolRecords: [makeRecord('run_workflow', started)], status: 'executing' })?.status).toBe('working');
   });
   it('shows verified computation data instead of suppressing the whole workflow ledger', () => {

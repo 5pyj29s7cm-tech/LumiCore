@@ -595,26 +595,6 @@ export function taskCompletionFromReceipts(
   };
 }
 
-/**
- * Confirmation consumes one exact safety boundary; it does not adjudicate the
- * user's whole natural-language goal. Every canonical confirmation record is
- * therefore returned to the shared model/tool loop, including a failed or
- * unverified record. The loop and finalizer can then use the receipt as
- * evidence, continue missing work, or recover without rediscovering/replaying
- * the already-confirmed side effect.
- *
- * `goal` remains in the signature for compatibility with older callers. It is
- * deliberately not classified here: deterministic action-contract matching
- * must never turn one confirmed tool receipt into a terminal task decision.
- */
-export function confirmedStepNeedsContinuation(
-  goal: string,
-  records: ToolExecutionRecord[] = [],
-): boolean {
-  void goal;
-  return records.some(record => Boolean(compact(record?.name, 160)));
-}
-
 export function buildConfirmedStepContinuationNote(
   record: ToolExecutionRecord,
 ): string {

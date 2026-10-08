@@ -125,14 +125,14 @@ export async function answerPriorTaskStatus(context: answerPriorTaskStatusInput)
             taskId: context.runtimeCancellationRecheck.taskId,
             taskLabel: context.previousActionState?.goal || context.visibleUserText,
             toolRecords: [recheckRecord],
-            blocked: !recheckSettled,
+            finalization: { blocked: !recheckSettled,
             reason: recheckSettled
               ? ''
               : recheckPending
                 ? 'Cancellation is still in progress.'
                 : recheckRecord.error
                   || recheckRecord.terminalVerification?.reason
-                  || 'The exact runtime cancellation could not be verified.',
+                  || 'The exact runtime cancellation could not be verified.' },
           });
           await context.commitDeterministicTerminal({
             payload: {

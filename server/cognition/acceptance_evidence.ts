@@ -12,11 +12,6 @@ import {
   parseReceiptObject,
   toolRecordHasTerminalPayload,
 } from '../tools/receipt_payload';
-import { buildActionEvidenceContract, hasCoreActionEvidence } from './action_contract';
-import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
-import { getArtifactTaskProgress } from './action_contract';
-import { artifactProgressFeedback } from './artifact_progress';
-import { isExternalCliRequest } from './external_cli_intent';
 
 export type AcceptanceStage = 'registered' | 'available' | 'exercised' | 'verified';
 export type RuntimeSampleStatus = 'not_exercised' | 'unknown' | 'degraded' | 'verified';
@@ -409,8 +404,8 @@ export function buildTaskCompletionFeedback(
 
 /**
  * Build a structured foreground result without turning ordinary conversation
- * into a fake task. Only an actual tool receipt, a blocked execution, or an
- * explicit task lifecycle status produces feedback.
+ * into a fake task. Only a finalized verdict or an explicit task lifecycle
+ * produces feedback; receipts alone never decide whether the goal is complete.
  */
 export function buildForegroundTaskCompletionFeedback(input: {
   /** The finalizer already adjudicated this turn. Feedback only projects that verdict. */
@@ -442,26 +437,13 @@ export function buildForegroundTaskCompletionFeedback(input: {
       nextSteps: ['Approve or reject the pending action to continue.'],
     };
   }
-  if (records.length === 0 && !input.finalization?.blocked && !input.blocked && !input.status) return undefined;
-  const contract = input.finalization ? undefined : buildActionEvidenceContract(input.taskLabel);
-  const requestIds = [...new Set(records.map(record => record.requestId || record.envelope?.requestId).filter(Boolean))];
-  const scope = { taskId: input.taskId, ...(requestIds.length === 1 ? { requestId: requestIds[0] } : {}) };
-  const artifactProgress = contract?.kind === 'artifact_work'
-    ? getArtifactTaskProgress(input.taskLabel, records, scope) : null;
-  const missingRequestedActionEvidence = Boolean(contract && (
-    Boolean(artifactProgress && !artifactProgress.complete)
-    || missingSpreadsheetRequirements(input.taskLabel, records).length > 0
-    || ((contract.kind === 'media_generation' || contract.mediaPlayback || contract.kind === 'task_control' || isExternalCliRequest(input.taskLabel))
-      && !hasCoreActionEvidence(contract, records, input.taskLabel, undefined, scope))
-  ));
+  if (!input.finalization && !input.blocked && !input.status) return undefined;
   const outcome: TaskTerminalOutcome = input.status === 'cancelled'
     ? 'cancelled'
-    : input.finalization?.blocked || input.blocked || input.status === 'persistence_unknown' || missingRequestedActionEvidence
+    : input.finalization?.blocked || input.blocked || input.status === 'persistence_unknown'
       ? 'blocked'
       : 'completed';
-  const terminalReason = input.finalization?.reason || input.reason || (missingRequestedActionEvidence
-    ? `The tool receipts do not verify the requested ${contract!.label.toLowerCase()}.`
-    : undefined);
+  const terminalReason = input.finalization?.reason || input.reason;
   const receipt = buildTaskTerminalReceipt({
     taskId: input.taskId,
     runtime: 'conversation',
@@ -481,13 +463,6 @@ export function buildForegroundTaskCompletionFeedback(input: {
     reason: terminalReason,
     accepted: outcome === 'completed' && receipt.verification === 'verified',
   });
-  if (artifactProgress) {
-    const stages = artifactProgressFeedback(artifactProgress, input.taskLabel);
-    return { ...feedback, ...stages,
-      // A transport cancellation or another unfinished action still owns the
-      // task outcome; keep its blocker even if this one deliverable is complete.
-      blockers: artifactProgress.complete ? feedback.blockers : stages.incomplete };
-  }
   return feedback;
 }
 

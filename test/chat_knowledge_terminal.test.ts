@@ -98,7 +98,7 @@ describe('knowledge observation completion contract', () => {
     expect(response.completionGuard?.blocked).toBe(true);
     const final = finalizeLumiResponse({ taskText: '读取合同内容并审查', responseText: response.text, toolRecords: response.toolCalls, completionGuard: response.completionGuard, source: 'chat' });
     expect(final.blocked).toBe(true);
-    expect(buildForegroundTaskCompletionFeedback({ taskId: 'test-task', taskLabel: '读取合同内容并审查', toolRecords: response.toolCalls, blocked: final.blocked, reason: final.reason })?.status).toBe('blocked');
+    expect(buildForegroundTaskCompletionFeedback({ taskId: 'test-task', taskLabel: '读取合同内容并审查', toolRecords: response.toolCalls, finalization: final })?.status).toBe('blocked');
     const recovered = await recoverBlockedExecutionOnce({
       task: '读取合同内容并审查', responseText: final.text, finalization: final, allowToolUse: true,
       toolRecords: response.toolCalls,

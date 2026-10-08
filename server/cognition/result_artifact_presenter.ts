@@ -1,6 +1,6 @@
 import { parseReceiptObject, toolRecordTerminalPayload } from '../tools/receipt_payload';
 import { verifiedSkillAuthoringReceipt } from '../skills/authoring_receipt';
-import { artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
+import { artifactRecordMatchesTurn, artifactPathFromRecord, isArtifactProducerRecord, resolveArtifactDelivery } from '../tools/artifact_evidence';
 import { matchesRequestedArtifactOutput } from './artifact_write_scope';
 import { getArtifactTaskProgress } from './action_contract';
 import { formatArtifactProgress } from './artifact_progress';
@@ -15,12 +15,12 @@ import { CN_CAD_MESSAGES } from "../regions/messages/cad_messages";
 import { CN_EXTERNAL_AI_MESSAGES } from "../regions/messages/external_ai_messages";
 import { evaluateMediaGenerationEvidence } from './contracts/media_contract';
 import { type LumiResultFinalizerInput, type LumiResultFinalizerResult } from "./result_finalizer_types";
-import { recordMatchesCurrentTurnIdentity, isChineseText, resultTaskText, taskActionContract, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, findUnresolvedArtifactPlaceholder } from "./result_finalizer_support";
+import { isChineseText, resultTaskText, taskActionContract, isVerifiedCurrentTurnRecord, requiresSourceGroundedArtifactContent, findUnresolvedArtifactPlaceholder } from "./result_finalizer_support";
 
 export function formatGroundedWorkflowProgress(input: LumiResultFinalizerInput): LumiResultFinalizerResult | null {
   const record = [...(input.toolRecords || [])].reverse().find(item =>
       ['run_workflow', 'get_workflow_run', 'resume_workflow_run', 'decide_workflow_confirmation'].includes(item.name)
-      && !item.error && recordMatchesCurrentTurnIdentity(input, item)
+      && !item.error && artifactRecordMatchesTurn(item, input)
       && item.terminalVerification?.status === 'verified');
   if (!record) return null;
   const result = parseReceiptObject(toolRecordTerminalPayload(record));

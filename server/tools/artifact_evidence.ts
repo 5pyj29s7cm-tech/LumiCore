@@ -60,9 +60,9 @@ export function artifactPathFromRecord(record: ToolExecutionRecord): string {
 
 export function artifactRecordMatchesTurn(record: ToolExecutionRecord, turn: { requestId?: string; taskId?: string }): boolean {
   return (['requestId', 'taskId'] as const).every(key => {
-    const expected = turn[key];
+    const expected = String(turn[key] || '').trim();
     if (!expected) return true;
-    const actual = [record[key], record.envelope?.[key]].filter(Boolean);
+    const actual = [record[key], record.envelope?.[key]].map(value => String(value || '').trim()).filter(Boolean);
     return actual.length > 0 && actual.every(value => value === expected);
   });
 }

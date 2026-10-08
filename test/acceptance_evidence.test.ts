@@ -1,3 +1,4 @@
+import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
 import { describe, expect, it } from 'vitest';
 import {
   buildAcceptanceEvidenceSnapshot,
@@ -127,7 +128,7 @@ describe('unified acceptance and evidence state', () => {
 
   it('does not report task cancellation complete from unrelated verified reads', () => {
     const feedback = buildForegroundTaskCompletionFeedback({
-      taskId: 'failed-cleanup-task',
+      taskId: 'failed-cleanup-task', blocked: true, reason: 'Cancellation failed.',
       taskLabel: '\u6e05\u6389\u8fd9\u4e9b\u4efb\u52a1',
       toolRecords: [{
         id: 'cancel-failed',
@@ -723,7 +724,7 @@ describe('unified acceptance and evidence state', () => {
     for (const taskLabel of ['请生成一张图片：蓝色杯子。完成后直接给我图片。', 'Generate a video: a quiet forest.']) { // i18n-allow: live media regression input.
       const discovery = { ...terminalToolRecord('media-discovery'), name: 'client_capability_manifest' };
       expect(buildForegroundTaskCompletionFeedback({ taskId: 'media-task', taskLabel,
-        toolRecords: [discovery], reason: 'task_status' })).toMatchObject({ status: 'blocked', completed: [] });
+        toolRecords: [discovery], finalization: finalizeLumiResponse({ taskText: taskLabel, responseText: 'Completed.', toolRecords: [discovery], source: 'chat' }) })).toMatchObject({ status: 'blocked', completed: [] });
     }
     expect(buildForegroundTaskCompletionFeedback({
       taskId: 'plain-chat',
@@ -731,7 +732,7 @@ describe('unified acceptance and evidence state', () => {
     })).toBeUndefined();
 
     expect(buildForegroundTaskCompletionFeedback({
-      taskId: 'foreground-success',
+      taskId: 'foreground-success', finalization: { blocked: false },
       taskLabel: 'Run the controlled probe',
       toolRecords: [terminalToolRecord('foreground-receipt')],
     })).toMatchObject({
