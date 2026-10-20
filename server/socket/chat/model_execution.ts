@@ -77,7 +77,7 @@ export async function prepareChatModelTurn(context: executeChatModelTurnInput) {
     signal: context.abortController.signal, ...context.reasoningRoutePolicy,
   };
   const responseFinalizer = createTurnResponseFinalizer({
-    taskText: context.executionTaskText, flow: context.turnFlow, taskId: context.durableTaskId, requestId: context.requestId,
+    taskText: context.executionTaskText, flow: context.turnFlow, get taskId() { return context.durableTaskId; }, requestId: context.requestId,
     pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
     controlPauseReason: () => context.desktopRelay.getControlPauseReason(),
   });

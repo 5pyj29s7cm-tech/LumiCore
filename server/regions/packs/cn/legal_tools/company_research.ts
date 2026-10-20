@@ -12,10 +12,10 @@ import { courtLevelRank, LEGAL_CASE_SEARCH_ORDER, archiveLegalReportToCase } fro
 
 export async function traceAssetsHandler(args: Record<string, any>, context?: any): Promise<string> {
   const subjectName = args.name as string;
-  if (!subjectName) return '请提供被执行主体名称（name参数）';
+  if (!subjectName) return '请提供查询主体名称（name参数）';
   const caseName = textArg(args, 'caseName') || `${subjectName}财产线索`;
 
-  const lines: string[] = [`# 被执行人"${subjectName}"财产线索报告\n`];
+  const lines: string[] = [`# "${subjectName}"财产线索查询报告\n`];
 
   // 1. Company info
   const sourceErrors: string[] = [];
@@ -34,10 +34,6 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
         lines.push(`  - ${s.name}: ${s.ratio}% (${s.type})`);
       }
     }
-    lines.push(`\n## 风险信息`);
-    lines.push(`- 被执行记录: ${company.riskInfo.enforcementCount === null ? '未取得该项来源' : company.riskInfo.enforcementCount + ' 条'}`);
-    lines.push(`- 失信记录: ${company.riskInfo.dishonestyCount === null ? '未取得该项来源' : company.riskInfo.dishonestyCount + ' 条'}`);
-    lines.push(`- 限制消费: ${company.riskInfo.restrictionsCount === null ? '未取得该项来源' : company.riskInfo.restrictionsCount + ' 条'}`);
     lines.push(`- 查询来源: ${company.sourceName || '企业信息数据源'} ${company.queriedAt ? `(${company.queriedAt.slice(0, 10)})` : ''}`);
   } else {
     lines.push('## 企业基本信息');
@@ -55,6 +51,13 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
     enforcementSource = await searchEnforcementRecords(subjectName, { localOnly: context?.dataRoutingPolicy === 'local_only' });
   } catch (error) {
     enforcementSourceError = error instanceof Error && error.message.includes('[QCC_') ? error.message : '中国执行信息公开网需要通过授权网页核验并导入来源材料；当前执行来源未取得，不能认定无执行记录。';
+  }
+  if (company) {
+    const missingRiskDetail = enforcementSource ? '已取得执行查询原文；未提供该项结构化明细，见来源' : '未取得该项来源';
+    lines.push('\n## 风险信息');
+    lines.push(`- 被执行记录: ${company.riskInfo.enforcementCount === null ? missingRiskDetail : company.riskInfo.enforcementCount + ' 条'}`);
+    lines.push(`- 失信记录: ${company.riskInfo.dishonestyCount === null ? missingRiskDetail : company.riskInfo.dishonestyCount + ' 条'}`);
+    lines.push(`- 限制消费: ${company.riskInfo.restrictionsCount === null ? missingRiskDetail : company.riskInfo.restrictionsCount + ' 条'}`);
   }
   lines.push('\n## 公开执行记录');
   if (enforcementSourceError) {
@@ -75,13 +78,9 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
     lines.push('- 当前步骤未取得可核验的外部企业或执行数据，不能标记为已完成；请配置官方 API，或由律师通过授权浏览器核验后导入来源材料。');
   }
 
-  lines.push('\n## 财产线索分析');
-  lines.push('1. **银行账户**: 建议通过法院执行系统查询被执行人银行开户信息');
-  lines.push('2. **不动产**: 建议查询被执行人及其配偶名下不动产登记信息');
-  lines.push('3. **车辆**: 建议通过车管所查询被执行人名下机动车辆');
-  lines.push('4. **股权**: 通过股权穿透分析关联企业（见股权穿透分析工具）');
-  lines.push('5. **婚姻状况**: 建议查询被执行人婚姻登记信息，判断是否涉及夫妻共同财产');
-  lines.push('6. **知识产权**: 建议查询被执行人名下专利、商标、著作权');
+  lines.push('\n## 后续核验');
+  lines.push('- 本报告登记本次取得的来源，不据此确认查询主体的被执行人身份、资产权属或可供执行财产。');
+  lines.push('- 如需进一步核验账户、不动产、车辆、股权或知识产权，应结合具体案件和查询权限选择相应渠道。');
   lines.push(`\n*数据来源: ${company?.sourceName || '授权网页登录协作/待人工确认'} | 公开执行来源${enforcementSourceError ? '未取得（待授权网页核验）' : '已返回查询结果'} | ${new Date().toISOString().slice(0, 10)}*`);
 
   const sourceOriginals = [

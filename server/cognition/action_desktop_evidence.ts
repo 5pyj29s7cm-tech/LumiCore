@@ -1040,7 +1040,7 @@ export function requestsExactReadOnlyArtifactInspection(taskText: string): boole
   const wantsSemanticRead = /(?:计算|核算|汇总|算出|口算|重新算|列出|金额|数量|\u8bfb\u53d6|\u9605\u8bfb|\u67e5\u770b|\u68c0\u67e5|\u68c0\u89c6|\u5206\u6790|\u603b\u7ed3|\u5ba1\u9605|\u5185\u5bb9|\u91cc\u9762|\u6587\u4ef6\u4e2d)|\b(?:read|calculate|recalculate|compute|inspect|examine|analy[sz]e|review|summari[sz]e|contents?|inside|marker|amount|quantity)\b/iu.test(primary);
   if (!wantsSemanticRead) return false;
   // i18n-allow: File/attachment subject recognition.
-  const hasFileSubject = /(?:附件|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b/iu.test(primary) || explicitDocumentTargets(primary).length > 0 || DOCUMENT_TARGET_MENTION_RE.test(primary);
+  const hasFileSubject = /(?:附件|已有资料|提供的资料|\u6587\u4ef6|\u6587\u6863|\u6587\u672c|\u8def\u5f84)|\b(?:attachment|file|document|filepath|path)\b|\b(?:read|inspect)\s+(?:the\s+)?(?:available|provided|attached)\s+source\b/iu.test(primary) || explicitDocumentTargets(primary).length > 0 || DOCUMENT_TARGET_MENTION_RE.test(primary);
   if (!hasFileSubject) return false;
   const wantsMutation = hasRequestedArtifactMutation(primary);
   return !wantsMutation;

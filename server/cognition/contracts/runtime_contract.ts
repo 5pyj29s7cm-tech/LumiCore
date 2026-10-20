@@ -27,27 +27,31 @@ export function buildRuntimeControlContract(rawInput: string, text: string, prim
   const runtimeWorkIntent = classifyRuntimeWorkIntent(text);
   if (runtimeWorkIntent !== 'none') {
     const cancelling = runtimeWorkIntent === 'cancel';
-    return withDefaults({
-      kind: 'task_control',
-      label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
-      coreAction: cancelling
-        ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
-        : 'Read the active Lumi work recorded in the unified runtime ledger.',
-      preparationIsNotCompletion: [
-        'listing operating-system processes',
-        'checking client health',
-        'saying work was stopped without a runtime cancellation receipt',
-      ],
-      requiredEvidence: [cancelling
-        ? 'runtime_work_cancel result with ok=true and cancelled/idle for completion; cancelling proves only that the request was accepted and must be rechecked'
-        : 'runtime_work_status result with ok=true and the exact active item count'],
-      preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
-      verificationTools: ['runtime_work_status'],
-      nextStep: cancelling
-        ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
-        : 'Read the runtime work ledger and report its current items without substituting a process list.',
-      caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
-    });
+    return buildRuntimeWorkControlContract(cancelling);
   }
   return null;
+}
+
+export function buildRuntimeWorkControlContract(cancelling: boolean): LumiActionContract {
+  return withDefaults({
+    kind: 'task_control',
+    label: cancelling ? 'Runtime work cancellation' : 'Runtime work status',
+    coreAction: cancelling
+      ? 'Cancel the active Lumi work recorded in the unified runtime ledger.'
+      : 'Read the active Lumi work recorded in the unified runtime ledger.',
+    preparationIsNotCompletion: [
+      'listing operating-system processes',
+      'checking client health',
+      'saying work was stopped without a runtime cancellation receipt',
+    ],
+    requiredEvidence: [cancelling
+      ? 'runtime_work_cancel result with ok=true and cancelled/idle for completion; cancelling proves only that the request was accepted and must be rechecked'
+      : 'runtime_work_status result with ok=true and the exact active item count'],
+    preferredTools: [cancelling ? 'runtime_work_cancel' : 'runtime_work_status'],
+    verificationTools: ['runtime_work_status'],
+    nextStep: cancelling
+      ? 'Cancel the matching runtime work and report whether cancellation completed, is still draining, or there was nothing active.'
+      : 'Read the runtime work ledger and report its current items without substituting a process list.',
+    caution: 'Only runtime ledger receipts prove Lumi task status or cancellation.',
+  });
 }

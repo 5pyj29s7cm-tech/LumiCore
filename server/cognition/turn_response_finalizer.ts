@@ -12,7 +12,7 @@ export function createTurnResponseFinalizer(input: Pick<FinalizerInput, 'taskTex
   controlPauseReason: () => string | null;
   pauseTaskText?: string;
 }) {
-  const { pendingConfirmation, controlPauseReason, pauseTaskText, ...context } = input;
+  const { pendingConfirmation, controlPauseReason, pauseTaskText } = input;
   const isDesktopPaused = (toolRecords: ToolExecutionRecord[]) => shouldBlockForDesktopControlPause({
     pauseReason: controlPauseReason(),
     waitingForConfirmation: Boolean(pendingConfirmation()),
@@ -32,7 +32,7 @@ export function createTurnResponseFinalizer(input: Pick<FinalizerInput, 'taskTex
       const pending = input.pendingConfirmation();
       const result = pending
         ? { text: formatPendingConfirmationRequest(pending), blocked: false, reason: 'waiting_confirmation', notification: undefined }
-        : finalizeLumiResponse({ ...context, ...candidate });
+        : finalizeLumiResponse({ ...input, ...candidate });
       if (!isDesktopPaused(candidate.toolRecords || [])) return result;
       const pause = formatDesktopControlPausePresentation(pauseTaskText ?? input.taskText);
       return { ...result, text: pause.text, blocked: true, reason: pause.reason };

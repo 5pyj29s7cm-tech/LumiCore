@@ -1,4 +1,4 @@
-import { requestedArtifactInstructions } from './artifact_progress';
+import { requestedArtifactInstructions, artifactInstructionClauses } from './artifact_progress';
 import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
@@ -19,7 +19,7 @@ import { extractPrimaryTaskText, isBrowserSessionInspection, requiresCurrentAppU
 import { requestsExactReadOnlyArtifactInspection } from "./action_desktop_evidence";
 import type { LumiActionContract } from './contracts/contracts';
 import { NONE_CONTRACT, withDefaults } from './contracts/contracts';
-import { buildRuntimeControlContract } from './contracts/runtime_contract';
+import { buildRuntimeControlContract, buildRuntimeWorkControlContract } from './contracts/runtime_contract';
 import { buildArtifactWorkContract, buildArtifactRetrievalContract, buildLegalDocumentContract, buildCadGeometryExtractionContract, buildDesignDeliveryContract, buildReadOnlyArtifactInspectionContract } from './contracts/artifact_contracts';
 import { extensionRegistryToolForAction, buildVisualModelAvailabilityContract, buildCurrentAppMutationContract, buildSimpleDesktopOpenContract, buildMediaPlaybackContract, buildDesktopOperationContract } from './contracts/navigation_contracts';
 import { buildExternalHistoryActionContract } from './contracts/external_history_contract';
@@ -524,7 +524,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     return buildArtifactWorkContract();
   }
 
-  if (appInventoryInspection || matches(text, /\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u70b9\u51fb|\u8f93\u5165|\u5e94\u7528|\u8f6f\u4ef6|desktop|open|click|type|app|application/i)) {
+  if (appInventoryInspection || matches(text, /\u684c\u9762|\u6253\u5f00|\u805a\u7126|\u70b9\u51fb|\u8f93\u5165|\u5e94\u7528|\u8f6f\u4ef6|\b(?:desktop|open|click|type|app|application)\b/i)) {
     return buildDesktopOperationContract();
   }
 
@@ -543,7 +543,18 @@ export function buildActionEvidenceContract(input: string, analysis?: ActionInte
   const contract = accepted?.taskText === input ? accepted.contract : buildActionContract(input, undefined, analysis);
   if (!contract.components?.length && contract.kind === 'artifact_work' && !hasExplicitNoToolInstruction(input) && !isInformationOnlyQuestion(input, analysis)) {
     const artifacts = requestedArtifactInstructions(input);
-    if (artifacts.length > 1) return combineActionContracts(contract, artifacts.map(({ text }) => ({ text, contract: buildActionContract(text, undefined, analysis) })));
+    const clauses = artifacts.length ? artifactInstructionClauses(input) : [];
+    const affirmative = new Set(independentActionClauses(withoutLocationLiterals(clauses.map(item => item.probe).join('')), true));
+    const outputSteps = artifacts.map(output => ({
+      start: clauses.find(item => output.text.startsWith(item.text.trim()))?.start ?? Infinity,
+      probes: new Set(artifactInstructionClauses(output.text).map(item => item.probe.trim())),
+    }));
+    const sources = clauses.filter(item => requestsExactReadOnlyArtifactInspection(item.probe)
+      && independentActionClauses(withoutLocationLiterals(item.probe), true).some(text => affirmative.has(text))
+      && !outputSteps.some(output => item.start >= output.start && output.probes.has(item.probe.trim())))
+      .map(({ text }) => ({ text: text.trim(), contract: buildActionContract(text, undefined, analysis) }));
+    if (artifacts.length > 1 || sources.length) return combineActionContracts(contract, [...sources,
+      ...artifacts.map(({ text }) => ({ text, contract: buildActionContract(text, undefined, analysis) }))]);
   }
   // This is completion evidence, never a positive execution grant. Keep an
   // independent final commit even when the routing contract chose its input read.
@@ -565,7 +576,7 @@ export function buildActionEvidenceContract(input: string, analysis?: ActionInte
   if (contract.applies || !isRuntimeCleanupOfferAcceptanceText(compact(input))) {
     return contract;
   }
-  return buildActionContract('Cancel all active background tasks', undefined, analysis);
+  return buildRuntimeWorkControlContract(true);
 }
 
 function buildAuthoringActionContract(rawInput: string, text: string, analysis?: ActionIntentAnalysis): LumiActionContract | null {

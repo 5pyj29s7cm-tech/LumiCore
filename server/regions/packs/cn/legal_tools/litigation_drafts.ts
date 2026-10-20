@@ -29,8 +29,8 @@ export function litigationDraftBoundary(caseName: string): string {
     '',
     `- 本文件属于“${caseName}”系统草稿，只能作为律师工作底稿。`,
     '- 当事人身份、事实、请求、金额、证据、授权范围、签字盖章和提交信息均须逐项人工确认。',
-    '- 法律依据必须先检索并核验现行有效版本；未核验内容不得转为正式文书。',
-    '- 正式交付前必须完成现行有效法律、引用来源和法律分析完整性核验，并由律师复核确认。',
+    '- 法律依据必须先检索并核验案件相应时间适用版本；未核验内容不得转为正式文书。',
+    '- 正式交付前必须完成案件相应时间适用法律、引用来源和法律分析完整性核验，并由律师复核确认。',
   ].join('\n');
 }
 
@@ -55,7 +55,7 @@ export function buildLitigationPacketDrafts(
   const evidence = litigationDraftValue(textArg(args, 'evidence'), '证据材料');
   const registeredEvidence = analyses.has('10_civil-complaint') ? litigationDraftValue(textArg(args, 'evidence') || evidenceRows.map(row =>
     litigationDraftCell(row.name + '；' + row.sourceLabel + '；原件与证明力待核')).join('；'), '证据材料') : evidence;
-  const opponentMaterials = litigationDraftValue(textArg(args, 'opponentMaterials'), '对方起诉状及证据材料');
+  const opponentMaterials = textArg(args, 'opponentMaterials');
   const clientPartyName = textArg(args, 'clientPartyName');
   const client = clientPartyName ? litigationDraftCell(clientPartyName) + '（身份资料待核验）' : '［委托人名称及身份待确认］';
   const lawFirmName = litigationDraftValue(textArg(args, 'lawFirmName'), '律师事务所名称');
@@ -220,7 +220,7 @@ export function buildLitigationPacketDrafts(
         `## 证据和证据来源\n${registeredEvidence}`,
         '',
         '## 法律依据',
-        analysis('10_civil-complaint', 'law', '- ［待结合请求权基础检索并核验现行有效法律、司法解释和类案，不得凭模型记忆补写］'),
+        analysis('10_civil-complaint', 'law', '- ［待结合请求权基础检索并核验案件相应时间适用法律、司法解释和类案，不得凭模型记忆补写］'),
         '',
         `此致\n${court}`,
         '',
@@ -290,8 +290,7 @@ export function buildLitigationPacketDrafts(
         '',
         `## 当事人\n${parties}`,
         '',
-        `## 对方诉请及材料\n${opponentMaterials}`,
-        '',
+        ...(opponentMaterials ? [`## 对方诉请及材料\n${opponentMaterials}`, ''] : []),
         `## 答辩目标\n${claims}`,
         '',
         `## 答辩事实\n${facts}`,
@@ -302,7 +301,7 @@ export function buildLitigationPacketDrafts(
         analysis('20_statement-of-defense', 'response', '- ［按对方每项诉讼请求、事实主张和证据编号逐项回应；未取得材料的部分标记待补充］'),
         '',
         '## 法律依据',
-        analysis('20_statement-of-defense', 'law', '- ［待围绕抗辩要件检索并核验现行有效法律、司法解释和类案］'),
+        analysis('20_statement-of-defense', 'law', '- ［待围绕抗辩要件检索并核验案件相应时间适用法律、司法解释和类案］'),
         '',
         `此致\n${court}`,
         '',
@@ -318,8 +317,7 @@ export function buildLitigationPacketDrafts(
       markdown: [
         '# 质证意见（系统草稿）',
         '',
-        `## 对方材料范围\n${opponentMaterials}`,
-        '',
+        ...(opponentMaterials ? [`## 对方材料范围\n${opponentMaterials}`, ''] : []),
         analysis('21_cross-examination-opinion', 'evidence', [
           '| 对方证据编号 | 证据名称 | 真实性意见 | 合法性意见 | 关联性意见 | 对证明目的意见 | 反证/补证 | 待核验项 |',
           '| --- | --- | --- | --- | --- | --- | --- | --- |',

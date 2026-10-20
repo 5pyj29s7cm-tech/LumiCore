@@ -1,4 +1,5 @@
 import { makeApp, JWT_SECRET } from './helpers';
+import sourceFixture from './fixtures/legal_property_source_live_20261021.json';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
@@ -33,7 +34,7 @@ describe('property quick scan uses the actual authorized source through the page
    {subject:name,queryType:'registration',sourceTool:'get_company_registration_info',sourceEndpoint:'https://agent.qcc.com/mcp/company/stream',sourceTextSha256:sha(company)},
    {subject:name,queryType:'enforcement',sourceTool:'get_judgment_debtor_info',sourceEndpoint:'https://agent.qcc.com/mcp/risk/stream',sourceTextSha256:sha(enforcement)}]});
   expect(data.verification.status).toBe('verified');expect(data.caseUpdates).toEqual([]);expect(data.text).toContain(company);expect(data.text).toContain(enforcement);expect(data.text).toContain(sha(enforcement));
-  expect(data.text).toContain('未取得该项来源');expect(data.text).not.toContain('被执行记录: 0 条');expect(data.text).not.toContain('不存在被执行记录');
+  expect(data.text).toContain('已取得执行查询原文；未提供该项结构化明细，见来源');expect(data.text).not.toContain('被执行记录: 0 条');expect(data.text).not.toContain('不存在被执行记录');
   for(const source of data.receipt.sourceResults)expect(Number.isFinite(Date.parse(source.queriedAt))).toBe(true);
   expect(mcpManager.callToolForServer).toHaveBeenCalledTimes(2);expect(vi.mocked(mcpManager.callToolForServer).mock.calls.map(row=>row[1])).toEqual(['get_company_registration_info','get_judgment_debtor_info']);expect(fetch).not.toHaveBeenCalled();
  });
@@ -45,4 +46,16 @@ describe('property quick scan uses the actual authorized source through the page
  });
  it('does not query the network with no configured risk authorization',async()=>{vi.stubEnv('QICHACHA_API_KEY','');await expect(searchEnforcementRecords(name)).rejects.toThrow('authorized webpage');expect(mcpManager.callToolForServer).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();});
  it('enforces local-only before either existing source dispatch',async()=>{await expect(searchEnforcementRecords(name,{localOnly:true})).rejects.toThrow('local-only');const record=await executeToolCall({registry:toolRegistry,name:'legal_trace_assets',arguments:{name,persistCase:false},context:{userId,authenticated:true,authRole:'user',dataRoutingPolicy:'local_only'} as any});expect(record.error).toContain('local-only');expect(mcpManager.callToolForServer).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();});
+ it('keeps the saved real official text and distinguishes observed risk source from unavailable structured detail without assuming debtor or marital status',async()=>{
+  const registration=sourceFixture.sources.find(s=>s.queryType==='registration')!,risk=sourceFixture.sources.find(s=>s.queryType==='enforcement')!;
+  expect(sha(registration.text)).toBe(registration.sourceTextSha256);expect(sha(risk.text)).toBe(risk.sourceTextSha256);
+  vi.mocked(mcpManager.callToolForServer).mockImplementation(async(_server,tool)=>tool==='get_company_registration_info'?registration.text:risk.text);
+  const data=await page({name:sourceFixture.subject}),summary=data.text.split('## 官方来源原始结果')[0];
+  expect(data.receipt).toMatchObject({ok:true,status:'observed',persisted:false,changedCaseIds:[],artifacts:[]});expect(data.verification.status).toBe('verified');expect(data.caseUpdates).toEqual([]);
+  expect(summary).toContain('# "'+sourceFixture.subject+'"财产线索查询报告');expect(summary).toContain('- 被执行记录: 已取得执行查询原文；未提供该项结构化明细，见来源');expect(summary).toContain('- 失信记录: 已取得执行查询原文；未提供该项结构化明细，见来源');expect(summary).toContain('- 限制消费: 已取得执行查询原文；未提供该项结构化明细，见来源');
+  expect(summary).not.toContain('未取得该项来源');expect(summary).not.toMatch(/配偶|婚姻|夫妻/);expect(summary).not.toContain('# 被执行人');expect(summary).toContain('不据此确认查询主体的被执行人身份');expect(summary).not.toContain('被执行记录: 0 条');
+  for(const source of sourceFixture.sources){expect(data.text).toContain(source.text);expect(data.receipt.sourceResults).toContainEqual(expect.objectContaining({queryType:source.queryType,sourceTool:source.sourceTool,sourceEndpoint:source.sourceEndpoint,sourceTextSha256:source.sourceTextSha256}));}
+  expect(mcpManager.callToolForServer).toHaveBeenCalledTimes(2);expect(fetch).not.toHaveBeenCalled();
+ });
+
 });

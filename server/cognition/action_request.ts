@@ -415,9 +415,11 @@ export function isDesktopLaunchVerificationOnly(
 }
 
 export function requiresArtifactPostWriteReadback(input: string): boolean {
+  // i18n-allow: locations and quoted document data are operands, not readback instructions.
+  const text = withoutLocationLiterals(String(input || '')).replace(/((?:内容(?:为|是)|写入)\s*[：:]?\s*|\b(?:containing|content\s*(?:is|:|=))\s*)(?:“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`)/giu, '$1 ');
   // i18n-allow: explicit post-write verification input recognition.
-  if (/(?:写完|保存完|创建完|生成完)(?:后|之后)?\s*(?:再|然后|并)?\s*(?:回读|重读|重新读取)/u.test(String(input || ''))) return true;
-  return /(?:\u5199\u5165|\u4fdd\u5b58|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210).{0,48}(?:\u540e|\u4e4b\u540e|\u2192|->|\u7136\u540e|\u63a5\u7740|\u518d|\u5e76).{0,48}(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb)|(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb).{0,32}(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u62a5\u544a)|\bafter\s+(?:writing|saving|creating)\b[\s\S]{0,420}\b(?:read|verify|check)\b|\b(?:write|save|create)\b[\s\S]{0,220}\b(?:then|afterwards|next)\b[\s\S]{0,220}\b(?:read|verify|check)\b/iu.test(String(input || ''));
+  if (/(?:写完|保存完|创建完|生成完)(?:后|之后)?\s*(?:再|然后|并)?\s*(?:回读|重读|重新读取)/u.test(text)) return true;
+  return /(?:\u5199\u5165|\u4fdd\u5b58|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210).{0,48}(?:\u540e|\u4e4b\u540e|\u2192|->|\u7136\u540e|\u63a5\u7740|\u518d|\u5e76).{0,48}(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb)|(?:\u91cd\u8bfb|\u56de\u8bfb|\u91cd\u65b0\u8bfb\u53d6|\u518d\u8bfb).{0,32}(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u62a5\u544a)|\bafter\s+(?:writing|saving|creating)\b[\s\S]{0,420}\b(?:read|verify|check)\b|\b(?:write|save|create)\b[\s\S]{0,220}\b(?:then|afterwards|next)\b[\s\S]{0,220}\b(?:read|verify|check)\b|\b(?:write|save|create)\b[\s\S]{0,220}\band\s+(?:re)?read\s+(?:it\s+)?back\b/iu.test(text);
 }
 
 export function hasRequestedArtifactPostWriteReadback(

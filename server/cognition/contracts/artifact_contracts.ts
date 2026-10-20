@@ -119,18 +119,19 @@ export function buildDesignDeliveryContract(): LumiActionContract {
 /** A single explicit existing-file handoff; excluded actions remain excluded, not a new production goal. */
 export function buildArtifactRetrievalContract(input: string): LumiActionContract | null {
   // i18n-allow: bounded multilingual prohibition clauses, preserving later affirmative work.
-  const text = String(input || '').replace(/(?:不要|别|无需|不用|不需要|禁止|请勿|\bdo\s+not\b|\bdon't\b|\bwithout\b)[^，,。；;\n]*?(?=[，,。；;\n]|但是|但|然后|随后|之后|接着|\bbut\b|\bthen\b|$)/giu, ' ');
-  // i18n-allow: explicit return-as-attachment goal, existing-state language and bounded single-object scope.
+  const text = String(input || '').replace(/(^|[，,。；;\n])\s*(?:请\s*)?(?:不要|别|无需|不用|不需要|禁止|请勿|\bdo\s+not\b|\bdon't\b|\bwithout\b)[^，,。；;\n]*?(?=[，,。；;\n]|但是|但|然后|随后|之后|接着|\bbut\b|\bthen\b|$)/giu, '$1 ');
+  // i18n-allow: shared past-state input grammar.
+  const existingState = /已(?:经)?(?:[^，,。；;\n、的]{1,12}的|生成|制作|完成)|\b(?:already|previously)(?:\s+\w+(?:ed|en))?\b/giu;
+  // i18n-allow: explicit return-as-attachment goal and bounded single-object scope.
   if (!/^(?:\s*(?:请|麻烦)?(?:帮我)?(?:把|将|返回|取回|提供|交付)|\s*(?:please\s+)?(?:return|retrieve|provide)\b)/iu.test(text)
-    || !/(?:已有|现有|已经有|已(?:经)?(?:生成|制作|完成)|\bexisting\b|\balready\b|\bpreviously\b)/iu.test(text)
+    || (!/(?:已有|现有|已经有|\bexisting\b)/iu.test(text) && !existingState.test(text))
     // i18n-allow: input grammar requiring an explicit attachment return.
     || !/(?:附件[^。；;\n]{0,12}(?:返回|取回|提供|交付|发(?:回|到|在)?(?:这里|当前聊天|本次聊天))|(?:返回|取回|提供|交付)[^。；;\n]{0,24}附件|\b(?:return|retrieve|provide)\b[^.;\n]{0,120}\battachment\b|\battachment\b[^.;\n]{0,40}\b(?:return|retrieve|provide)\b)/iu.test(text)
     // i18n-allow: reject multi-object retrieval requests.
     || /(?:所有|全部|多个|多份|两(?:个|份)|三个|三份|另一|另外|第二|\b(?:all|both|two|three|multiple|another|other|additional)\b)/iu.test(text)) return null;
-  // Past generation describes an existing object; affirmative new work cannot be discharged by retrieval.
-  // i18n-allow: existing-state and requested positive action grammar, not user-facing copy.
-  const remaining = text.replace(/可(?:播放|下载)(?:或(?:播放|下载))?(?=的[^。；;\n]{0,12}附件)/giu, ' ').replace(/已(?:经)?(?:生成|制作|完成)|\b(?:already|previously)\s+(?:generated|created|made|completed)\b/giu, ' ');
-  if (hasRequestedArtifactMutation(remaining) || /(?:调整|打开|发送|发给|发布|上传|提交|签署|签名|签字|签章|签付|盖章|付款|支付|缴费|转账|分析|总结|翻译|计算|审查|播放|运行|执行|安装|下载)|\b(?:generate|create|make|draft|write|modify|edit|change|update|export|save|open|send|publish|upload|submit|sign|pay|analyze|analyse|summarize|translate|calculate|review|play)(?:s|d|ed|ing)?\b|\b(?:generate|create|modify|send|publish|sign|pay|open|export)[_-][a-z]/iu.test(remaining)) return null;
+  // i18n-allow: past object state is not a new action.
+  const remaining = text.replace(/可(?:播放|下载)(?:或(?:播放|下载))?(?=的[^。；;\n]{0,12}附件)/giu, ' ').replace(existingState, ' ');
+  if (hasRequestedArtifactMutation(remaining) || /(?:调整|渲染|打开|发送|发给|发布|上传|提交|签署|签名|签字|签章|签付|盖章|付款|支付|缴费|转账|分析|总结|翻译|计算|审查|播放|运行|执行|安装|下载)|\b(?:make|change|render|open|send|publish|upload|submit|sign|pay|analyze|analyse|summarize|translate|calculate|review|play|download)(?:s|d|ed|ing)?\b|\b(?:generate|create|modify|send|publish|sign|pay|open|export)[_-][a-z]/iu.test(remaining)) return null;
   const ids = [...new Set(text.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/giu)?.map(id => id.toLowerCase()) || [])];
   // i18n-allow: explicit requested project revision number.
   const revisions = [...new Set([...text.matchAll(/(?:第\s*(\d+)\s*版|\brevision\s*[:=#]?\s*(\d+))/giu)].map(match => Number(match[1] || match[2])))];

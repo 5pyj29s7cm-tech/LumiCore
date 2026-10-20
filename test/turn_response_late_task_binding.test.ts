@@ -1,0 +1,38 @@
+import { makeApp } from './helpers';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { ToolRegistry } from '../server/tools/registry';
+import { executeToolCall, isCanonicalToolExecutionRecord } from '../server/tools/execution_engine';
+import { registerLegalTools } from '../server/regions/packs/cn/legal_tools';
+import { prepareVoiceModelTurn } from '../server/socket/voice/turn/execute_voice_model_turn';
+import { createToolLifecycleCallbacks } from '../server/socket/tool_lifecycle';
+import { prepareChatModelTurn } from '../server/socket/chat/model_execution';
+import { createTurnResponseFinalizer } from '../server/cognition/turn_response_finalizer';
+import { mcpManager } from '../server/mcp/client';
+import type { ToolExecutionRecord } from '../server/tools/types';
+let app:Awaited<ReturnType<typeof makeApp>>;const registry=new ToolRegistry();
+const name='虚构晚绑定查询样本有限公司';const taskText='请通过企查查查询“'+name+'”的工商登记，仅查询，不入案、不写入知识库、不发送消息。';
+const responseText='已通过企查查查询'+name+'。登记状态：存续；成立日期：2020-01-02；注册资本：10万元。来源为本次官方MCP回执。';
+beforeAll(async()=>{app=await makeApp();registerLegalTools(registry);});afterAll(()=>app.cleanup());
+beforeEach(()=>{for(const key of['QICHACHA_API_KEY','QICHACHA_APP_KEY','QICHACHA_SECRET_KEY','TIANYANCHA_API_KEY','QIXINBAO_API_KEY'])vi.stubEnv(key,'');vi.stubEnv('QICHACHA_API_KEY','synthetic-late-binding-key');vi.stubGlobal('fetch',vi.fn(async()=>{throw Error('No network in late binding fixture');}));vi.spyOn(mcpManager,'callToolForServer').mockResolvedValue(JSON.stringify({企业名称:name,登记状态:'存续',成立日期:'2020-01-02',注册资本:'10万元'}));});
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.unstubAllEnvs();});
+async function record(userId:string,requestId:string,taskId:string){return executeToolCall({registry,id:'late-'+randomUUID(),name:'legal_company_database_lookup',arguments:{name,sourceIds:['qichacha'],queryType:'registration',persistCase:false,confirmedForKb:false},context:{userId,requestId,taskId,turnId:requestId,domain:'personal',authenticated:true,authRole:'user',localExecution:true,executionBoundary:'trusted_local',source:'chat'} as any});}
+function prepare(){let taskId:string|undefined;let reads=0;const requestId='request-'+randomUUID();const finalizer=createTurnResponseFinalizer({taskText,get taskId(){reads++;return taskId;},requestId,pendingConfirmation:()=>null,controlPauseReason:()=>null});return{finalizer,requestId,get reads(){return reads;},bind:(value:string)=>{taskId=value;}};}
+const finish=(f:ReturnType<typeof prepare>,records:ToolExecutionRecord[],source='chat')=>f.finalizer.finalize({responseText,toolRecords:records,source});
+describe('current turn finalization reads the accepted task identity after model-selected binding',()=>{
+ it('does not snapshot task identity before the selected tool creates its accepted task',async()=>{const f=prepare();expect(f.reads).toBe(0);expect(finish(f,[]).blocked).toBe(true);const taskId='task-'+randomUUID();f.bind(taskId);const actual=await record('late-binding-owner',f.requestId,taskId);expect(isCanonicalToolExecutionRecord(actual)).toBe(true);expect(finish(f,[actual])).toMatchObject({blocked:false});expect(finish(f,[actual],'chat_guard_recovery')).toMatchObject({blocked:false});expect(fetch).not.toHaveBeenCalled();expect(mcpManager.callToolForServer).toHaveBeenCalledTimes(1);});
+ it.each(['wrong-request','wrong-task','foreign-owner','unbranded-copy'])('keeps exact scope and canonical proof strict after late binding (%s)',async mismatch=>{const f=prepare(),taskId='task-'+randomUUID();f.bind(taskId);const actual=await record(mismatch==='foreign-owner'?'separate-real-owner':'late-binding-owner',mismatch==='wrong-request'?'other-request':f.requestId,mismatch==='wrong-task'||mismatch==='foreign-owner'?'other-owner-task':taskId);const input=mismatch==='unbranded-copy'?{...actual}:actual;expect(finish(f,[input]).blocked).toBe(true);expect(fetch).not.toHaveBeenCalled();});
+ it('does not freeze a previous bound task for later finalization and recovery',async()=>{const f=prepare(),first='task-'+randomUUID();f.bind(first);const actual=await record('late-binding-owner',f.requestId,first);expect(finish(f,[actual]).blocked).toBe(false);f.bind('task-'+randomUUID());expect(finish(f,[actual],'chat_guard_recovery').blocked).toBe(true);});
+ it('keeps the actual chat assembly bound to the accepted task created after model preparation',async()=>{
+  const requestId='request-'+randomUUID();const context:any={uid:'late-chat-assembly-owner',conversationId:'conv-late-assembly-'+randomUUID(),requestId,text:taskText,executionTaskText:taskText,durableTaskId:undefined,effectiveSystemPrompt:'Offline fixture',activeProvider:'relay',activeModel:'offline-selected-model',resolvedDomain:'personal',resolvedOrgId:'',toolSessionActive:true,modelCapabilityPolicy:{maxIterations:4},effectiveOperationMode:'assistant',turnFlow:undefined,personality:{name:'Lumi',id:'lumi',toolPolicy:{maxIterations:4}},abortController:new AbortController(),allToolRecords:[],actionTaskExecution:{},desktopRelay:{getControlPauseReason:()=>null},pendingConfirmationCreatedThisTurn:null,markTurnTiming:()=>{},emitToolLifecycle:()=>{},emitAgent:()=>{},formatToolResultForUi:(s:string)=>s,formatMediaArtifactReceiptForUi:()=>undefined,rememberRequestToolRecord:()=>{},taskAwareRecords:(r:ToolExecutionRecord[])=>r,isChatCancelled:()=>false};
+  const prepared=await prepareChatModelTurn(context);context.durableTaskId='task-'+randomUUID();const actual=await record(context.uid,requestId,context.durableTaskId);const result={text:responseText,toolCalls:[actual],usageRecords:[]};
+  const policy=prepared.prepared.finalization({responseText,result,toolRecords:[actual]});expect(policy.initialFinalization).toMatchObject({blocked:false});expect(policy.refinalize(responseText,[actual],undefined)).toMatchObject({blocked:false});expect(fetch).not.toHaveBeenCalled();
+ });
+
+ it('keeps the actual voice assembly bound to the selected task without microphone, STT or TTS calls',async()=>{
+  const requestId='voice-request-'+randomUUID(),uid='late-voice-assembly-owner';const context:any={voiceModel:'offline-selected-model',provider:'relay',executionPipeline:{normalizedIntent:{kind:'none'}},conversationTurn:{conversation:{id:'conv-late-voice-'+randomUUID()}},requestId,voiceSystemPrompt:'Offline voice fixture',userText:taskText,routedUserText:taskText,actionIntentText:taskText,session:{userId:uid},voiceScope:{domain:'personal',orgId:''},pipelineAbort:new AbortController(),turnAuthorization:{assertCurrent:()=>{}},isCurrentTurn:()=>true,actionTaskExecution:{state:null},pendingConfirmationCreatedThisTurn:null,desktopRelay:{getControlPauseReason:()=>null},toolResults:[],taskAwareRecords:(r:ToolExecutionRecord[])=>r,maxIterations:4,routedToolPolicy:{maxIterations:4},observeVoiceTools:(onRecord?: (r:ToolExecutionRecord)=>void)=>createToolLifecycleCallbacks({emit:()=>{},correlationPrefix:'offline-voice',formatResult:(s='')=>s,onRecord})};
+  const prepared=await prepareVoiceModelTurn(context);context.actionTaskExecution.state={taskId:'task-'+randomUUID()};const actual=await record(uid,requestId,context.actionTaskExecution.state.taskId);const result={text:responseText,toolCalls:[actual],usageRecords:[]};
+  const policy=prepared.prepared.finalization({responseText,result,toolRecords:[actual]});expect(policy.initialFinalization).toMatchObject({blocked:false});expect(policy.refinalize(responseText,[actual],undefined)).toMatchObject({blocked:false});context.actionTaskExecution.state.taskId='other-voice-task';expect(policy.refinalize(responseText,[actual],undefined).blocked).toBe(true);expect(fetch).not.toHaveBeenCalled();
+ });
+
+});

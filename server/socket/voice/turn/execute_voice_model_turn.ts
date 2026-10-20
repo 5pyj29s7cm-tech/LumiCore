@@ -72,7 +72,7 @@ export async function prepareVoiceModelTurn(context: NonNullable<Awaited<ReturnT
     markVoiceLatencyMilestone(context.requestId, 'firstModelRequestAt');
     const toolLifecycle = context.observeVoiceTools(record => context.toolResults.push(record));
     const responseFinalizer = createTurnResponseFinalizer({
-      taskText: context.actionIntentText, flow: context.turnFlow, taskId: context.actionTaskExecution.state?.taskId, requestId: context.requestId,
+      taskText: context.actionIntentText, flow: context.turnFlow, get taskId() { return context.actionTaskExecution.state?.taskId; }, requestId: context.requestId,
       pendingConfirmation: () => context.pendingConfirmationCreatedThisTurn,
       controlPauseReason: () => context.desktopRelay.getControlPauseReason(), pauseTaskText: context.routedUserText,
     });

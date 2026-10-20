@@ -109,10 +109,10 @@ const EXTERNAL_APP_CONTEXT = /(?:\u5fae\u4fe1|\u4f01\u4e1a\u5fae\u4fe1|\u98de\u4
 const LUMI_CLIENT_CONTEXT = /(?:Lumi|\u5ba2\u6237\u7aef|\u4e2d\u67a2|\u4e16\u754c\u89c6\u56fe|\u4e91\u7aef\u753b\u5e03|\u6280\u80fd\u5927\u5385|\u8fd0\u884c\u65e5\u5fd7|\u8bbe\u7f6e|\u5c0f\u7ec4\u4ef6|\b(?:client|nexus|cloud canvas|world view|skill center|settings|runtime log|widget)\b)/iu;
 
 function canonicalIntentOwnsNonClientAction(
-  kind: ReturnType<typeof normalizeActionIntent>['kind'],
+  canonical: ReturnType<typeof normalizeActionIntent>,
   text: string,
 ): boolean {
-  if (kind === 'desktop_operation') return EXTERNAL_APP_CONTEXT.test(text);
+  if (canonical.kind === 'desktop_operation') return canonical.sideEffectClass === 'local_write' || EXTERNAL_APP_CONTEXT.test(text);
   return [
     'external_ai_history',
     'external_cli_status',
@@ -127,7 +127,7 @@ function canonicalIntentOwnsNonClientAction(
     'scheduled_task',
     'work_task',
     'workflow',
-  ].includes(kind);
+  ].includes(canonical.kind);
 }
 const SKILL_TERMS = /(?:\u6280\u80fd|\u6280\u80fd\u5927\u5385|\b(?:skill|skills|plugin|mcp)\b)/iu;
 const INSTALL_VERBS = /(?:\u5b89\u88c5|\u88c5\u4e0a|\u88c5\u4e00\u4e0b|\binstall\b)/iu;
@@ -490,16 +490,17 @@ export function hasClientActionIntent(text: string, analysis?: ActionIntentAnaly
   if (!normalized || hasExplicitNoToolInstruction(normalized)
     || isExternalAiHistoryActionRequest(normalized) || isReadOnlyKnowledgeBaseInspectionRequest(normalized)) return false;
   const canonical = normalizeActionIntent(normalized, analysis);
+  const instruction = withoutLocationLiterals(normalized);
   if (canonical.kind === 'client_navigation' || canonical.kind === 'client_state') return true;
-  if (canonicalIntentOwnsNonClientAction(canonical.kind, normalized)
+  if (canonicalIntentOwnsNonClientAction(canonical, instruction)
     || isInformationOnlyQuestion(normalized, analysis) || isDesktopMusicControlRequest(normalized)) return false;
-  if (only && hasExternalDesktopExecutionIntent(normalized)) return false;
-  const requestedMode = detectRequestedOperationMode(normalized);
-  if (requestedMode && (!only || isPureOperationModeSwitchRequest(normalized, requestedMode))) return true;
-  if (hasExternalDesktopExecutionIntent(normalized)) return false;
-  if (EXTERNAL_APP_CONTEXT.test(normalized) && !LUMI_CLIENT_CONTEXT.test(normalized) && !ORGANIZATION_WORKSPACE_SURFACES.test(normalized)) return false;
-  return matchesIntentGrammar(normalized, STRUCTURED_CLIENT_ACTION_RULES)
-    || (only ? CLIENT_ACTION_ONLY_PATTERNS : CLIENT_ACTION_INTENT_PATTERNS).some(pattern => pattern.test(normalized));
+  if (only && hasExternalDesktopExecutionIntent(instruction)) return false;
+  const requestedMode = detectRequestedOperationMode(instruction);
+  if (requestedMode && (!only || isPureOperationModeSwitchRequest(instruction, requestedMode))) return true;
+  if (hasExternalDesktopExecutionIntent(instruction)) return false;
+  if (EXTERNAL_APP_CONTEXT.test(instruction) && !LUMI_CLIENT_CONTEXT.test(instruction) && !ORGANIZATION_WORKSPACE_SURFACES.test(instruction)) return false;
+  return matchesIntentGrammar(instruction, STRUCTURED_CLIENT_ACTION_RULES)
+    || (only ? CLIENT_ACTION_ONLY_PATTERNS : CLIENT_ACTION_INTENT_PATTERNS).some(pattern => pattern.test(instruction));
 }
 
 export function hasClientActionOnlyIntent(text: string, analysis?: ActionIntentAnalysis): boolean {
@@ -558,7 +559,7 @@ export function traceToolIntentDecision(text: string, source?: string, operation
     : false;
   const externalDesktopExecution = normalized
     ? (
-        canonicalIntentOwnsNonClientAction(canonical.kind, normalized)
+        canonicalIntentOwnsNonClientAction(canonical, normalized)
         || hasExternalDesktopExecutionIntent(normalized)
       )
     : false;

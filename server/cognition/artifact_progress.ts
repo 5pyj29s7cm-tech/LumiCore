@@ -9,8 +9,8 @@ import { missingSpreadsheetRequirements } from './spreadsheet_requirements';
 import { CN_EXECUTION_EVIDENCE_MESSAGES as CN } from "../regions/messages/execution_evidence_messages";
 
 
-/** Evidence only: keep independently named outputs and their original content apart. */
-export function requestedArtifactInstructions(input: string): Array<{ text: string; path: string }> {
+/** Shared quote-aware instruction projection; quoted content stays data. */
+export function artifactInstructionClauses(input: string): Array<{ text: string; probe: string; start: number }> {
   const parts: string[] = [];
   let start = 0, quote = '';
   // i18n-allow: quote delimiters in user-supplied document content.
@@ -24,19 +24,26 @@ export function requestedArtifactInstructions(input: string): Array<{ text: stri
     }
   }
   parts.push(input.slice(start));
-  const instructions: Array<{ text: string; path: string }> = [];
-  for (const part of parts) {
-    // Quoted document data is never another output instruction. A quoted
-    // concrete path remains a valid operand for its unquoted create verb.
-    // i18n-allow: quoted document payload recognition.
+  let offset = 0;
+  return parts.map(part => {
+    const start = offset; offset += part.length;
     const probe = part.replace(/“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`/gu, literal => {
       const value = literal.slice(1, -1).trim();
       return buildTaskTargetAnchorProjection({ taskText: value }).target.path === value ? literal : ' ';
     });
-    const affirmative = independentActionClauses(withoutLocationLiterals(probe).replace(/\bfor\s+example\b/giu, '例如'), true).length > 0; // i18n-allow: reuse the existing hypothetical-clause boundary.
-    const artifact = affirmative && isExplicitArtifactCreationText(probe) ? requestedSingleArtifact(probe) : null;
+    return { text: part, probe, start };
+  });
+}
+
+/** Evidence only: keep independently named outputs and their original content apart. */
+export function requestedArtifactInstructions(input: string): Array<{ text: string; path: string }> {
+  const instructions: Array<{ text: string; path: string }> = [];
+  for (const { text: part, probe } of artifactInstructionClauses(input)) {
+    // i18n-allow: reuse the existing hypothetical-clause boundary.
+    if (!independentActionClauses(withoutLocationLiterals(probe).replace(/\bfor\s+example\b/giu, '例如'), true).length) continue;
+    const artifact = isExplicitArtifactCreationText(probe) ? requestedSingleArtifact(probe) : null;
     if (artifact) instructions.push({ text: part.trim(), path: artifact.path });
-    else if (affirmative && instructions.length) {
+    else if (instructions.length) {
       const referenced = buildTaskTargetAnchorProjection({ taskText: probe }).target.path;
       if (!referenced || sameArtifactPath(referenced, instructions[instructions.length - 1].path)) instructions[instructions.length - 1].text += part;
     }

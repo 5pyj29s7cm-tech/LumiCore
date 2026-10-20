@@ -126,7 +126,7 @@ export async function prepareChatEvents(context: NonNullable<Awaited<ReturnType<
       });
       const publicPayload = event === 'agent:response'
         ? projectPublicArtifactPayload(projectedEvent, context.collectRequestTerminalRecords(), context.selectedConversationId,
-          { userId: context.uid, requestId: context.requestId, originalText: [context.visibleUserText] })
+          { userId: context.uid, taskId: context.durableTaskId, requestId: context.requestId, originalText: [context.visibleUserText] })
         : projectedEvent;
       const completionFeedback = normalizeCompletionFeedbackForPersistence(publicPayload.completionFeedback);
       const boundedPublicPayload = { ...publicPayload };

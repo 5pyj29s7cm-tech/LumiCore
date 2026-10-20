@@ -53,7 +53,7 @@ async function fixture(original = 'ORIGINAL_FULL_BODY\nTAIL_SENTINEL', userLiter
         { id: 'safe-report-readback', name: 'read_file', arguments: { path: safe } }] : []),
     ] };
     const rows = readDB().conversationActionReceipts.filter((row: any) => row.requestId === requestId);
-    if (!rows.some((row: any) => row.toolName === 'read_file' && row.targetIdentity === dirty)) return { text: '', toolCalls: [
+    if (batchAllReads && !rows.some((row: any) => row.toolName === 'read_file' && row.targetIdentity === dirty)) return { text: '', toolCalls: [
       { id: 'dirty-report-readback', name: 'read_file', arguments: { path: dirty } },
       { id: 'safe-report-readback', name: 'read_file', arguments: { path: safe } },
     ] };
