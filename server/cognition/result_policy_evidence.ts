@@ -108,7 +108,7 @@ export function claimsExternalLegalPlatformFinalAction(text: string): boolean {
 }
 
 export function claimsExternalLegalPlatformResult(text: string): boolean {
-  const value = text || '';
+  const value = String(text || '').replace(/\s+/gu, ' ');
   if (describesAuthorizedLegalExternalHandoff(value)) return false;
   return /(?:(?:\u5df2\u7ecf|\u5df2|\u5b8c\u6210|\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u67e5\u8be2\u5230|\u4e0b\u8f7d\u5230|\u6293\u53d6\u5230).{0,36}(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66|\u6848\u4f8b\u5e93|\u516c\u53f8|\u88ab\u6267\u884c|\u6cd5\u9662|\u7ed3\u679c))|(?:(?:\u6cd5\u8749|\bAlpha\b|\u4f01\u67e5\u67e5|\u88c1\u5224\u6587\u4e66\u7f51|\u4eba\u6c11\u6cd5\u9662\u6848\u4f8b\u5e93).{0,36}(?:\u67e5\u5230|\u68c0\u7d22\u5230|\u627e\u5230|\u7ed3\u679c|result))/iu
     .test(value);

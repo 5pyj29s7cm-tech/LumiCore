@@ -6,7 +6,6 @@ import type { ToolExecutionRecord, ToolContext } from '../tools/types';
 import { parseNestedJson, parseStoredArray, toolRecordSucceeded } from '../tools/receipt_payload';
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from "../regions/messages/user_output_protection_messages";
 import {
-  containsInternalExecutionLanguage,
   privateExecutionReferences,
   sanitizePublicExecutionText,
 } from '../../shared/public_execution_language';
@@ -623,16 +622,13 @@ export function sanitizeUserFacingExecutionOutput(
 ): string {
   const raw = stringify(value).trim();
   if (!raw) return '';
-  const redacted = redactSensitive(raw);
+  const redacted = sanitizePublicExecutionText(redactSensitive(raw));
   const trustedConfirmationRequestText = String(
     options.trustedConfirmationRequestText || '',
   ).trim();
-  if (containsInternalExecutionLanguage(redacted)) {
-    return sanitizePublicExecutionText(redacted);
-  }
   if (trustedConfirmationRequestText && raw === trustedConfirmationRequestText) return redacted;
-  const oversizedUnscopedOutput = raw.length > 50_000;
-  if (!containsUnsafeToolPayload(raw) && !oversizedUnscopedOutput) return redacted;
+  const oversizedUnscopedOutput = redacted.length > 50_000;
+  if (!containsUnsafeToolPayload(redacted) && !oversizedUnscopedOutput) return redacted;
   return humanSummary(redacted, options).slice(0, 1_200);
 }
 

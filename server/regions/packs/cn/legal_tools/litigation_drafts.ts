@@ -8,7 +8,7 @@ export const LITIGATION_ANALYSIS_SECTIONS: Record<string, Array<{ id: string; ti
   '21_cross-examination-opinion': [{ id: 'evidence', title: '逐证质证分析' }],
   '23_argument-outline': [{ id: 'position', title: '条件立场分析' }, { id: 'issues', title: '争议焦点分析' }, { id: 'law', title: '条件法律适用' }, { id: 'conclusion', title: '条件结论分析' }],
 };
-import { formatEvidenceReviewRows, formatEvidenceCatalogRows, formatEvidenceGapList, type EvidenceReviewRow } from './case_workflow';
+import { formatEvidenceCatalogRows, type EvidenceReviewRow } from './case_workflow';
 
 export interface LitigationPacketDraft {
   baseName: string;
@@ -40,9 +40,7 @@ export function buildLitigationPacketDrafts(
   evidenceRows: EvidenceReviewRow[],
   analyses = new Map<string, LitigationAnalysisEntry[]>(),
 ): LitigationPacketDraft[] {
-  const evidenceReviewTable = formatEvidenceReviewRows(evidenceRows);
   const evidenceCatalogTable = formatEvidenceCatalogRows(evidenceRows);
-  const evidenceGapList = formatEvidenceGapList(evidenceRows);
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const caseType = litigationDraftValue(textArg(args, 'caseType'), '案由/案件类型');
   const court = litigationDraftValue(textArg(args, 'court'), '受理/审理法院');
@@ -110,21 +108,6 @@ export function buildLitigationPacketDrafts(
         '- 律师执业证复印件及年度考核状态。',
         '- 当事人身份证明、营业执照、法定代表人身份证明。',
         '- 全部签字、盖章、日期、份数和扫描件清晰度。',
-        boundary,
-      ].join('\n'),
-    },
-    {
-      baseName: '03_evidence-review-matrix',
-      label: '证据目录与三性审查矩阵',
-      markdown: [
-        `# ${caseName} Evidence Catalog And Three-Property Review`,
-        '',
-        '| 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- |',
-        evidenceReviewTable,
-        '',
-        '## Evidence Gaps',
-        evidenceGapList,
         boundary,
       ].join('\n'),
     },

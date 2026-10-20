@@ -258,6 +258,7 @@ export function repairContradictoryConversationActionReceipts(db: any): number {
       state.goal || task.goal,
       receipts,
       state.taskCapsule,
+      records.length && records.every(record => record.requestId === records[0].requestId) ? { requestId: records[0].requestId, taskId, userId: task.userId, conversationId: task.conversationId, domain: task.domain, orgId: task.orgId } : undefined,
     );
     const finalization = parseObject(context.taskFinalization);
     const sameRequestNegativeFinalization = ['blocked', 'cancelled', 'failed', 'persistence_unknown'].includes(finalization.outcome)

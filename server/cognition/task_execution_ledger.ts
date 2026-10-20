@@ -1,4 +1,6 @@
-import { hasVerifiedCompanyLookupEvidence } from './result_policy_evidence';
+import { classifyToolRecordTaskDurability } from './continuation/tool_receipts';
+import { getConversationCompletionSnapshot } from '../conversation/conversation_lifecycle';
+import { listModelRoutingReceipts } from '../llm/model_routing_receipts';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 export { toolRecordSucceeded } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
@@ -571,16 +573,61 @@ export function taskReceiptsToRecords(receipts: ConversationTaskReceipt[] = []):
   }).filter((record): record is ToolExecutionRecord => Boolean(record));
 }
 
+
+/** A taskless contract may finish only its fresh, model-selected read observation. */
+type ReadCompletionScope = { requestId?: string; taskId?: string; userId?: string; conversationId?: string; domain?: string; orgId?: string };
+function hasVerifiedReadObservation(records: ToolExecutionRecord[], goal: string, current?: ReadCompletionScope): boolean {
+  if (!current?.requestId || !current.taskId || !current.userId || !current.conversationId || !goal.trim()) return false;
+  const scoped = records.filter(record => record.requestId === current.requestId && record.taskId === current.taskId);
+  const substantive = (value: unknown): boolean => {
+    if (typeof value === 'string') return Boolean(value.trim());
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (Array.isArray(value)) return value.some(substantive);
+    return Boolean(value && typeof value === 'object' && Object.entries(value).some(([key, item]) =>
+      !/^(?:ok|success|status|verified|verification|count|total|query|queriedAt|sourceEndpoint|sourceTool|sourceTextSha256|error|warning)$/iu.test(key) && substantive(item)));
+  };
+  return scoped.length > 0 && scoped.every(record => {
+    if (!toolRecordSucceeded(record) || record.executionOrigin !== 'model_selected'
+      || !record.modelRoutingReceiptId
+      || classifyToolRecordTaskDurability(record) !== 'observation_only' || record.adapterStarted !== true
+      || !substantive(toolRecordTerminalPayload(record))) return false;
+    const proof = inspectPersistedToolExecutionReceipt({ ...record, toolName: record.name,
+      outcome: record.envelope?.status, targetIdentity: record.envelope?.targetIdentity },
+      { rowTaskId: current.taskId, requestId: current.requestId, outcome: 'verified_success' });
+    if (!proof.valid || !proof.explicitlyTerminalVerified) return false;
+    const scope = { ...current, domain: current.domain || 'personal', orgId: current.orgId || '' };
+    const snapshot = getConversationCompletionSnapshot(scope);
+    if (!snapshot?.root || ![snapshot.task.goal, (() => { try { return JSON.parse(snapshot.task.context || '{}').actionState?.latestInstruction; } catch { return ''; } })()].some(value => String(value || '').trim() === goal.trim())
+      || !snapshot.turns.some(turn => turn.requestId === current.requestId
+        && (['accepted','leased'].includes(turn.status) || snapshot.task.status === 'completed' && turn.status === 'terminal'))) return false;
+    const stored = snapshot.receipts.filter(row => row.id === record.id && row.taskId === current.taskId
+      && row.requestId === current.requestId && row.turnId === record.turnId && row.turnRowId === record.turnRowId
+      && row.toolName === record.name && row.modelRoutingReceiptId === record.modelRoutingReceiptId && row.executionOrigin === 'model_selected'
+      && row.targetIdentity === record.envelope?.targetIdentity && row.idempotencyKey === record.idempotencyKey
+      && row.inputDigest === crypto.createHash('sha256').update(JSON.stringify(stableValue(record.arguments || {}))).digest('hex'));
+    if (stored.length !== 1) return false;
+    const durable = inspectPersistedToolExecutionReceipt(stored[0], { rowTaskId: current.taskId, requestId: current.requestId, outcome: 'verified_success' });
+    const started = Date.parse(proof.envelope?.startedAt || ''), ended = Date.parse(proof.envelope?.completedAt || ''), persisted = Date.parse(durable.envelope?.completedAt || '');
+    if (!durable.valid || !durable.explicitlyTerminalVerified || !substantive(durable.envelope?.result)
+      || ![started, ended, persisted].every(Number.isFinite) || started > ended || ended > persisted) return false;
+    return listModelRoutingReceipts(current.userId!, 1000, { conversationId: current.conversationId, requestId: current.requestId })
+      .some(route => route.id === record.modelRoutingReceiptId && route.status === 'succeeded'
+        && route.domain === scope.domain && route.orgId === scope.orgId
+        && Number.isFinite(Date.parse(route.completedAt)) && Number.isFinite(Date.parse(proof.envelope!.startedAt || ''))
+        && Date.parse(route.completedAt) <= Date.parse(proof.envelope!.startedAt || ''));
+  });
+}
+
 export function taskCompletionFromReceipts(
   goal: string,
   receipts: ConversationTaskReceipt[] = [],
   taskCapsule?: TaskCapsuleV1 | null,
-  currentTurn?: { requestId?: string; taskId?: string },
+  currentTurn?: ReadCompletionScope,
 ): { complete: boolean; blocker: string; records: ToolExecutionRecord[] } {
   const records = coalesceToolExecutionRecords(taskReceiptsToRecords(receipts));
   const contract = buildActionEvidenceContract(goal);
   const complete = contract.applies ? hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn)
-    : hasVerifiedCompanyLookupEvidence(records, { ...currentTurn, taskText: goal }, true);
+    : hasVerifiedReadObservation(records, goal, currentTurn);
   const failures = [...records].reverse().filter(record => !toolRecordSucceeded(record));
   // A later policy/routing rejection is useful diagnostic evidence, but it
   // must not replace the domain failure that actually stopped the task. Keep

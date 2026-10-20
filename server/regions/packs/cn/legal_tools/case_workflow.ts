@@ -192,8 +192,12 @@ export function formatEvidenceCatalogRows(rows: EvidenceReviewRow[]): string {
     '| --- | --- | --- | --- | --- | --- |', ...rows.map(row => '| ' + [row.index, row.name, row.sourceLabel,
       row.sources.map(source => `${source.id}：${source.locator}`).join('；') || '未提供', '见下方拟议关联；待律师确认', row.pendingCompilation ? '未编目' : '已登记原文，证据用途待核验']
       .map(evidenceCell).join(' | ') + ' |')].join('\n')
-    + '\n\n## 编目说明（未核准）\n\n原句详录见03证据审查矩阵及上述材料编号、正文行位；该行位不是外部原件页码。登记材料不等于证明目的或证据三性已成立。\n\n'
-    + rows.map(row => `### ${row.index}. ${row.name}\n\n外部原件页码：[待逐份核对补录]（上述行位仅供本程序定位）\n\n${row.proofPurpose}\n\n${row.gap}`).join('\n\n');
+    + '\n\n## 编目说明（未核准）\n\n原句、拟议证明目的和三性核对按材料列于下方；上述正文行位不是外部原件页码。登记材料不等于证明目的或证据三性已成立。\n\n'
+    + rows.map(row => [
+      `### ${row.index}. ${row.name}`, '外部原件页码：[待逐份核对补录]（上述行位仅供本程序定位）',
+      ...row.sources.flatMap(source => [`- ${source.id}；${source.locator}`, `> ${source.quote}`]),
+      row.proofPurpose, `真实性：${row.authenticity}\n\n合法性：${row.legality}\n\n关联性：${row.relevance}`, `缺口/质证风险：${row.gap}`,
+    ].join('\n\n')).join('\n\n');
 }
 
 export function formatEvidenceGapList(rows: EvidenceReviewRow[]): string {

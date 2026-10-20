@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { buildActionContract } from '../server/cognition/action_contract';
 import { buildArtifactRetrievalContract } from '../server/cognition/contracts/artifact_contracts';
 import { hasCompletedCoreAction } from '../server/llm/tool_loop/projection';
-import { finalizeLumiResponse } from '../server/cognition/result_finalizer';
+import { finalizeLumiResponse, tryFinalizeVerifiedBoundedAction } from '../server/cognition/result_finalizer';
 import type { ToolExecutionRecord } from '../server/tools/types';
 
 const projectId = 'a590fef2-1d8f-4cea-a2b6-6a3ed5567e6a';
@@ -30,6 +30,7 @@ describe('existing artifact handoff is not new production', () => {
     const record = fixture();
     expect(buildActionContract(actualRequest).artifactMode).toBe('retrieve');
     expect(hasCompletedCoreAction(actualRequest, [record], identity)).toBe(true);
+    expect(tryFinalizeVerifiedBoundedAction({ ...identity, taskText: actualRequest, responseText: '', source: 'chat', toolRecords: [record] })).toMatchObject({ blocked: false, reason: 'artifact_retrieved' });
     expect(finalizeLumiResponse({ ...identity, taskText: actualRequest, responseText: '', source: 'chat', toolRecords: [record] })).toMatchObject({ blocked: false, reason: 'artifact_retrieved' });
   });
   it.each(['已经保存的', '已生成的', '已经制作的', '已经完成的', '已经编辑过的'])('treats %s as existing state only', state => {

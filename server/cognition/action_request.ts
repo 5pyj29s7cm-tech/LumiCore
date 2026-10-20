@@ -1,5 +1,5 @@
 import type { ActionIntentAnalysis } from './normalized_action_intent';
-import { normalizeActionIntent } from './normalized_action_intent';
+import { normalizeActionIntent, independentActionClauses, withoutNegatedLookupClauses } from './normalized_action_intent';
 import { hasExplicitNoMutationInstruction } from './tool_intent';
 import { isMediaPauseRequest, isVideoPlaybackRequest } from './media_intent';
 import { withoutLocationLiterals } from './location_literals';
@@ -439,9 +439,11 @@ export function requestedMediaPlayerTarget(taskText: string, analysis?: ActionIn
 }
 
 export function requiresArtifactOpen(input: string): boolean {
-  // i18n-allow: Negated opening instructions are constraints, not pending actions.
-  const positive = input.replace(/(?:不要|无需|不用|不必|别)\s*(?:再|另外)?\s*打开[^，,。.!?！？;\n]*|\b(?:do not|don't|without)\s+open(?:ing)?\b[^,;.!?\n]*/giu, ' ');
-  return /打开|\bopen\b/iu.test(positive); // i18n-allow: Artifact opening input grammar.
+  // i18n-allow: quoted document text and locations are data, not opening instructions.
+  const text = withoutLocationLiterals(input).replace(/((?:内容(?:为|是)|写入)\s*[：:]?\s*|\b(?:containing|content\s*(?:is|:|=))\s*)(?:“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|`[^`]*`)/giu, '$1 ');
+  // i18n-allow: reuse affirmative clauses so coordinated prohibitions stay negative.
+  const positive = text.replace(/\bwithout\s+open(?:ing)?\b[^,;.!?\n]*/giu, ' ');
+  return independentActionClauses(withoutNegatedLookupClauses(positive), true).some(clause => /打开|\bopen\b/iu.test(clause));
 }
 
 export function isDesktopAppInventoryRequest(text: string): boolean {

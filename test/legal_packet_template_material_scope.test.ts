@@ -49,6 +49,18 @@ describe('litigation template uses registered originals without contradictory em
     expect(byName(drafts, '20_statement-of-defense')).toContain(ownQuote);
   });
 
+  it.each(['原告', '被告', '通用'] as const)('keeps one complete evidence catalog for %s without a duplicate placeholder matrix', role => {
+    const purpose = '拟议用途：核对材料原句；不能据此认定对方已经承认。';
+    const input = rows.map(row => ({ ...row, proofPurpose: purpose, authenticity: '原件待核', legality: '取得方式待核', relevance: '与争点对应关系待核' }));
+    const snapshot = JSON.stringify(input);
+    const drafts = buildLitigationPacketDrafts(args, role, input);
+    expect(drafts.some(document => document.baseName === '03_evidence-review-matrix')).toBe(false);
+    const catalog = drafts.find(document => /^(16_|27_)/.test(document.baseName))!.markdown;
+    for (const text of [quote, ownQuote, purpose, '真实性：原件待核', '合法性：取得方式待核', '关联性：与争点对应关系待核']) expect(catalog).toContain(text);
+    expect(catalog).not.toContain('见03证据审查矩阵');
+    expect(JSON.stringify(input)).toBe(snapshot);
+  });
+
   it.each(['原告', '被告', '通用'] as const)('retains temporal verification and lawyer review for %s without forcing current law', role => {
     const temporalArgs = { ...args, factDate: '2000-01-01', procedureDate: '2026-10-01' };
     const before = JSON.stringify(temporalArgs);

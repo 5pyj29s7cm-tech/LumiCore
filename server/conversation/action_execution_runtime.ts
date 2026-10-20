@@ -535,7 +535,7 @@ export function finalizeConversationActionRequestInDb(
       previous.goal,
       previous.receipts || [],
       previous.taskCapsule,
-      { requestId: normalizedRequestId, taskId: previous.taskId },
+      { requestId: normalizedRequestId, taskId: previous.taskId, userId: conversation.userId, conversationId: conversation.id, domain: conversation.domain, orgId: conversation.orgId },
     );
     const requestWasRunning = conversationTaskStatusOwnsExecutionLease(previous.status);
     const authoritativeDisposition = Boolean(

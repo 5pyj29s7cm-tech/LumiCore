@@ -263,9 +263,8 @@ describe('chat pending-confirmation terminal consistency', () => {
       const context = args[11];
       const requestTurn = modelTurn;
       modelTurn += 1;
-      const proposed = requestTurn === 0
-        ? { name: 'write_file', arguments: { path: targets[0], content } }
-        : context.runtimeOwnedDeterministicRecoveryCall;
+      Object.assign(context, await context.prepareSelectedToolCall());
+      const proposed = { name: 'write_file', arguments: { path: targets[requestTurn], content } };
       expect(proposed).toMatchObject({
         name: 'write_file',
         arguments: { path: targets[requestTurn], content },
@@ -279,7 +278,7 @@ describe('chat pending-confirmation terminal consistency', () => {
           taskId: context.taskId,
           turnId: context.requestId,
           requestId: context.requestId,
-          executionOrigin: requestTurn === 0 ? 'model_selected' : 'deterministic_route',
+          executionOrigin: 'model_selected',
           name: proposed.name,
           arguments: proposed.arguments,
           result: 'Tool "write_file" requires user confirmation and was not approved.',
@@ -504,6 +503,7 @@ describe('chat pending-confirmation terminal consistency', () => {
     const confirmationRequestId = `fast-confirm-${suffix}`;
     mocks.runWithTools.mockImplementation(async (...args: any[]) => {
       expect(args[11].requestId).toBe(proposalRequestId);
+      Object.assign(args[11], await args[11].prepareSelectedToolCall());
       expect(await args[11].requestConfirmation('write_file', { path: target, content })).toBe(false);
       return { text: 'waiting confirmation', toolCalls: [], usageRecords: [] };
     });

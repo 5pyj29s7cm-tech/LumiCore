@@ -48,7 +48,7 @@ export function buildGroundedBidDraft(
   sources = buildMaterialSources([{ id: 'requirements', title: '提供的招标材料', content: requirements }]),
   chapters = buildBidChapters(sources), drafts = new Map<string, BidDraftEntry[]>(),
 ): string {
-  const tableCell = (value: string) => value.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+  const tableCell = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
   const responseEntries = drafts.get('response') || [];
   const rows = bidNumberedSources(sources);
   const covered = rows.filter(source => responseEntries.some(entry => entry.sectionId === source.id

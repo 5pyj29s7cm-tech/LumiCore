@@ -188,10 +188,11 @@ export function formatGroundedArtifactResult(
       const stats = fs.statSync(path);
       if (stats.isFile() && stats.size > 0) {
         const exactText = extractExplicitArtifactTextRequirements(actionText);
+        const sourceGrounded = requiresSourceGroundedArtifactContent(input.flow?.rootTaskText || actionText);
         let artifactText = '';
-        if ((exactText.length || requiresSourceGroundedArtifactContent(actionText)) && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
+        if ((exactText.length || sourceGrounded) && /\.(?:txt|md|csv|json|xml|html?|css|svg|dxf|ya?ml|toml|tsx?|jsx?|py|rs)$/iu.test(path)) {
           artifactText = fs.readFileSync(path, 'utf8');
-          if (requiresSourceGroundedArtifactContent(actionText)) {
+          if (sourceGrounded) {
             const unresolvedPlaceholder = findUnresolvedArtifactPlaceholder(artifactText);
             if (unresolvedPlaceholder) {
               return {

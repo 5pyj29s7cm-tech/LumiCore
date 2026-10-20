@@ -1,0 +1,372 @@
+{
+  "source": "Saved failed ordinary chat 2026-10-21. No live request is replayed by this fixture.",
+  "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+  "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+  "prompt": "先完整读取明确指定的源文件 D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/source-verified_1792534919764.txt，并逐字展示其完整原文。请创建本次验收专用文件 D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt，原样写入“[虚构验收甲-verified_1792534919764]\n物品：蓝色纸盒\n数量：3\n仅为程序验收，不构成任何真实业务。\n甲文件到此结束。”。写完后回读并检查甲文件。然后创建另一份独立文件 D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt，原样写入“[虚构验收乙-verified_1792534919764]\n物品：橙色书签\n数量：7\n这是与甲文件独立的第二份验收内容。\n乙文件到此结束。”。写完后回读并检查乙文件。最后逐份完整展示读取到的全部原文。除读取上述明确源文件外，只创建和回读以上两个虚构本地文件；不要签署、提交、发送、发布、联网或打开桌面软件。两份都写入并完整回读后才能说完成，任何一步未完成请明确说明。",
+  "originalPrefix": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files",
+  "sourceBody": "[虚构读取来源-verified_1792534919764]\n来源对象：青绿色纸卡\n未核实的是数量，不等于数量为零。\nSOURCE_TAIL_verified_1792534919764",
+  "outputBodies": [
+    "[虚构验收甲-verified_1792534919764]\n物品：蓝色纸盒\n数量：3\n仅为程序验收，不构成任何真实业务。\n甲文件到此结束。",
+    "[虚构验收乙-verified_1792534919764]\n物品：橙色书签\n数量：7\n这是与甲文件独立的第二份验收内容。\n乙文件到此结束。"
+  ],
+  "records": [
+    {
+      "id": "call_fc0112f564d148ab9ff73124",
+      "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+      "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+      "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+      "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+      "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+      "idempotencyKey": "7c12a8f5ae758e41065d1641f188ab4696e8a1d522d8470fe3e9e783d89aa131",
+      "key": "read_file:{\"path\":\"D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/source-verified_1792534919764.txt\"}",
+      "name": "read_file",
+      "arguments": {
+        "path": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/source-verified_1792534919764.txt"
+      },
+      "result": "[虚构读取来源-verified_1792534919764]\n来源对象：青绿色纸卡\n未核实的是数量，不等于数量为零。\nSOURCE_TAIL_verified_1792534919764",
+      "receipt": {
+        "byteLength": 158,
+        "contentDigest": "9385a28d9c35f6b68e25b26ff75c52593dfeb08026bde4490f0efaaf1edddcec",
+        "encoding": "UTF-8",
+        "kind": "text_readback_metadata",
+        "lineCount": 4
+      },
+      "adapterStarted": true,
+      "envelope": {
+        "completedAt": "2026-10-20T22:23:27.578Z",
+        "durationMs": 2257,
+        "idempotencyKey": "7c12a8f5ae758e41065d1641f188ab4696e8a1d522d8470fe3e9e783d89aa131",
+        "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+        "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+        "startedAt": "2026-10-20T22:23:25.321Z",
+        "status": "verified_success",
+        "targetIdentity": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/source-verified_1792534919764.txt",
+        "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+        "toolName": "read_file",
+        "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+        "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+        "verification": {
+          "basis": "terminal_verification",
+          "reason": "The receipt proves observation returned, not that the observed external state is complete.",
+          "status": "verified"
+        },
+        "version": 1
+      },
+      "modelRoutingReceiptId": "6a149c6f-0832-41f5-a98f-e5208d4cc040",
+      "executionOrigin": "model_selected",
+      "error": "",
+      "outcome": "success",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "terminal_receipt",
+        "reason": "The receipt proves observation returned, not that the observed external state is complete."
+      },
+      "capability": {
+        "capabilityId": "read_file",
+        "lane": "files",
+        "operation": "observe",
+        "risk": "low",
+        "sideEffects": [],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": [
+            "terminal tool receipt"
+          ],
+          "limitations": [
+            "The receipt proves observation returned, not that the observed external state is complete."
+          ]
+        }
+      },
+      "recordedAt": "2026-10-20T22:24:36.817Z"
+    },
+    {
+      "id": "call_12be75470a8b4d1d9b2dacb2",
+      "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+      "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+      "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+      "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+      "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+      "idempotencyKey": "b6eb4dd3cdf3de26d16d381fbb0c15554c306f06a2df88d9c49140218fc426a6",
+      "key": "write_file:{\"content\":\"[虚构验收甲-verified_1792534919764]\\n物品：蓝色纸盒\\n数量：3\\n仅为程序验收，不构成任何真实业务。\\n甲文件到此结束。\",\"path\":\"D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt\"}",
+      "name": "write_file",
+      "arguments": {
+        "content": {
+          "digest": "89e69d09e27034b82ae3c0d3458aca72e1c9392ea99e65624ed11b3d781d1226"
+        },
+        "path": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt"
+      },
+      "result": "File written: D:\\lumiOS\\.codex-run\\final-live-retest-20261021-1792534919764\\client-linked-probe\\files\\甲-verified_1792534919764.txt (70 bytes)",
+      "adapterStarted": true,
+      "envelope": {
+        "completedAt": "2026-10-20T22:24:07.585Z",
+        "durationMs": 1843,
+        "idempotencyKey": "b6eb4dd3cdf3de26d16d381fbb0c15554c306f06a2df88d9c49140218fc426a6",
+        "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+        "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+        "startedAt": "2026-10-20T22:24:05.742Z",
+        "status": "verified_success",
+        "targetIdentity": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt",
+        "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+        "toolName": "write_file",
+        "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+        "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+        "verification": {
+          "basis": "terminal_verification",
+          "reason": "The declared artifact exists and is non-empty.",
+          "status": "verified"
+        },
+        "version": 1
+      },
+      "modelRoutingReceiptId": "f33d7b0a-a68e-4e6a-86cb-4eae12afc524",
+      "executionOrigin": "model_selected",
+      "error": "",
+      "outcome": "success",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "artifact",
+        "reason": "The declared artifact exists and is non-empty."
+      },
+      "capability": {
+        "capabilityId": "files.text.write",
+        "lane": "files",
+        "operation": "create",
+        "risk": "medium",
+        "sideEffects": [
+          {
+            "type": "local_write",
+            "scope": "explicit local text file path",
+            "reversible": true
+          }
+        ],
+        "verification": {
+          "strategy": "artifact",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": [
+            "the returned local file path exists and is non-empty"
+          ],
+          "limitations": [
+            "An intentionally empty file cannot satisfy the non-empty artifact verifier."
+          ]
+        }
+      },
+      "recordedAt": "2026-10-20T22:24:36.817Z"
+    },
+    {
+      "id": "artifact_readback_2_mvh9339x",
+      "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+      "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+      "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+      "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+      "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+      "idempotencyKey": "0710f983bad4d6a21a4046c07587e852ede3507c4ef5fabf248299bac0dca879",
+      "key": "read_file:{\"path\":\"D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt\"}",
+      "name": "read_file",
+      "arguments": {
+        "path": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt"
+      },
+      "result": "[虚构验收甲-verified_1792534919764]\n物品：蓝色纸盒\n数量：3\n仅为程序验收，不构成任何真实业务。\n甲文件到此结束。",
+      "receipt": {
+        "byteLength": 150,
+        "contentDigest": "c7f4a88ac90f02b924974922f581db30c8c7564c546713cda96d1b500af52ad7",
+        "encoding": "UTF-8",
+        "kind": "text_readback_metadata",
+        "lineCount": 5
+      },
+      "adapterStarted": true,
+      "envelope": {
+        "completedAt": "2026-10-20T22:24:09.127Z",
+        "durationMs": 845,
+        "idempotencyKey": "0710f983bad4d6a21a4046c07587e852ede3507c4ef5fabf248299bac0dca879",
+        "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+        "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+        "startedAt": "2026-10-20T22:24:08.282Z",
+        "status": "verified_success",
+        "targetIdentity": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/甲-verified_1792534919764.txt",
+        "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+        "toolName": "read_file",
+        "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+        "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+        "verification": {
+          "basis": "terminal_verification",
+          "reason": "The receipt proves observation returned, not that the observed external state is complete.",
+          "status": "verified"
+        },
+        "version": 1
+      },
+      "executionOrigin": "deterministic_route",
+      "error": "",
+      "outcome": "success",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "terminal_receipt",
+        "reason": "The receipt proves observation returned, not that the observed external state is complete."
+      },
+      "capability": {
+        "capabilityId": "read_file",
+        "lane": "files",
+        "operation": "observe",
+        "risk": "low",
+        "sideEffects": [],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": [
+            "terminal tool receipt"
+          ],
+          "limitations": [
+            "The receipt proves observation returned, not that the observed external state is complete."
+          ]
+        }
+      },
+      "recordedAt": "2026-10-20T22:24:36.817Z"
+    },
+    {
+      "id": "call_c90d98e82bcb4899849e5fa9",
+      "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+      "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+      "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+      "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+      "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+      "idempotencyKey": "d003a20c92b35c52531193859edfebbaa8fa82f7d4be5f4bfb2d7404b64e84f1",
+      "key": "write_file:{\"content\":\"[虚构验收乙-verified_1792534919764]\\n物品：橙色书签\\n数量：7\\n这是与甲文件独立的第二份验收内容。\\n乙文件到此结束。\",\"path\":\"D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt\"}",
+      "name": "write_file",
+      "arguments": {
+        "content": {
+          "digest": "f5f3b93f388e0945543e21aa1b74cb94d244f2e527341f8f0e8fd427ad2d59ae"
+        },
+        "path": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt"
+      },
+      "result": "File written: D:\\lumiOS\\.codex-run\\final-live-retest-20261021-1792534919764\\client-linked-probe\\files\\乙-verified_1792534919764.txt (70 bytes)",
+      "adapterStarted": true,
+      "envelope": {
+        "completedAt": "2026-10-20T22:24:16.171Z",
+        "durationMs": 781,
+        "idempotencyKey": "d003a20c92b35c52531193859edfebbaa8fa82f7d4be5f4bfb2d7404b64e84f1",
+        "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+        "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+        "startedAt": "2026-10-20T22:24:15.390Z",
+        "status": "verified_success",
+        "targetIdentity": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt",
+        "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+        "toolName": "write_file",
+        "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+        "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+        "verification": {
+          "basis": "terminal_verification",
+          "reason": "The declared artifact exists and is non-empty.",
+          "status": "verified"
+        },
+        "version": 1
+      },
+      "modelRoutingReceiptId": "de998184-95db-47c1-a5b8-cab9da1766af",
+      "executionOrigin": "model_selected",
+      "error": "",
+      "outcome": "success",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "artifact",
+        "reason": "The declared artifact exists and is non-empty."
+      },
+      "capability": {
+        "capabilityId": "files.text.write",
+        "lane": "files",
+        "operation": "create",
+        "risk": "medium",
+        "sideEffects": [
+          {
+            "type": "local_write",
+            "scope": "explicit local text file path",
+            "reversible": true
+          }
+        ],
+        "verification": {
+          "strategy": "artifact",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": [
+            "the returned local file path exists and is non-empty"
+          ],
+          "limitations": [
+            "An intentionally empty file cannot satisfy the non-empty artifact verifier."
+          ]
+        }
+      },
+      "recordedAt": "2026-10-20T22:24:36.817Z"
+    },
+    {
+      "id": "artifact_readback_4_mvh939tm",
+      "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+      "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+      "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+      "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+      "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+      "idempotencyKey": "3c2c2fa24bc21e229be70e5aa2d3047e9b6e740cb571f94ce3fc2dfe0961de8e",
+      "key": "read_file:{\"path\":\"D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt\"}",
+      "name": "read_file",
+      "arguments": {
+        "path": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt"
+      },
+      "result": "[虚构验收乙-verified_1792534919764]\n物品：橙色书签\n数量：7\n这是与甲文件独立的第二份验收内容。\n乙文件到此结束。",
+      "receipt": {
+        "byteLength": 150,
+        "contentDigest": "5fe3d2dd115a8fa97f7844a2ab8857725d1ce6a6bbe393bade8658d292ad0189",
+        "encoding": "UTF-8",
+        "kind": "text_readback_metadata",
+        "lineCount": 5
+      },
+      "adapterStarted": true,
+      "envelope": {
+        "completedAt": "2026-10-20T22:24:18.222Z",
+        "durationMs": 1454,
+        "idempotencyKey": "3c2c2fa24bc21e229be70e5aa2d3047e9b6e740cb571f94ce3fc2dfe0961de8e",
+        "requestId": "live-entry-verified_1792534919764-compound-source-readback",
+        "resolutionId": "resolution:live-entry-verified_1792534919764-compound-source-readback",
+        "startedAt": "2026-10-20T22:24:16.768Z",
+        "status": "verified_success",
+        "targetIdentity": "D:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt",
+        "taskId": "task_cc110191-0432-475e-ab76-7f0467d4cc76",
+        "toolName": "read_file",
+        "turnId": "live-entry-verified_1792534919764-compound-source-readback",
+        "turnRowId": "action_turn_a84ac11a8abc500636694cafbcebcf9f",
+        "verification": {
+          "basis": "terminal_verification",
+          "reason": "The receipt proves observation returned, not that the observed external state is complete.",
+          "status": "verified"
+        },
+        "version": 1
+      },
+      "executionOrigin": "deterministic_route",
+      "error": "",
+      "outcome": "success",
+      "terminalVerification": {
+        "status": "verified",
+        "strategy": "terminal_receipt",
+        "reason": "The receipt proves observation returned, not that the observed external state is complete."
+      },
+      "capability": {
+        "capabilityId": "read_file",
+        "lane": "files",
+        "operation": "observe",
+        "risk": "low",
+        "sideEffects": [],
+        "verification": {
+          "strategy": "terminal_receipt",
+          "required": true,
+          "requiredFields": [],
+          "successSignals": [
+            "terminal tool receipt"
+          ],
+          "limitations": [
+            "The receipt proves observation returned, not that the observed external state is complete."
+          ]
+        }
+      },
+      "recordedAt": "2026-10-20T22:24:36.817Z"
+    }
+  ],
+  "failedFinal": "文件已保存\n已回读当前版本\n已核实：[虚构验收乙-verified_1792534919764]\n物品：橙色书签\n数量：7\n这是与甲文件独立的第二份验收内容。\n乙文件到此结束。\nD:/lumiOS/.codex-run/final-live-retest-20261021-1792534919764/client-linked-probe/files/乙-verified_1792534919764.txt\n缺少要求的内容：[虚构验收甲-verified_1792534919764]\n物品：蓝色纸盒\n数量：3\n仅为程序验收，不构成任何真实业务。\n甲文件到此结束。\n尚未确认在指定软件中打开\n下一步：补齐以上缺项，再回读核对；已保存的文件和操作记录保留。\n这项任务还未全部完成。"
+}

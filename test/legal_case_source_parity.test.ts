@@ -37,7 +37,7 @@ describe('shared backend original case sources and reasoning archive boundary',(
   const matrix=await execute('legal_case_reasoning_matrix',{caseId:c.id,legalAuthorities:'《民法典》第585条',writeFiles:false});expect(matrix.receipt).toMatchObject({ok:true,reasoningLinked:true});
   const prompt=String(vi.mocked(makeLLMCall).mock.calls[0][0].find(m=>m.role==='user')!.content);expect(prompt).toContain(raw);expect(prompt).toContain(original.id);
   const packet=await execute('legal_generate_litigation_packet',{caseId:c.id}, {llmGetters:undefined});expect(packet.receipt?.ok).toBe(false);
-  const file=(packet.receipt?.artifacts as string[]).find(p=>p.endsWith('03_evidence-review-matrix.md'))!;expect(fs.readFileSync(file,'utf8')).toContain(raw);
+  const file=(packet.receipt?.artifacts as string[]).find(p=>p.endsWith('16_evidence-catalog.md'))!;expect(fs.readFileSync(file,'utf8')).toContain(raw);
  });
  it('preserves omitted fields, exact original dedupe, and material tombstones on continuing an existing case',async()=>{
   const {c}=item();const args={caseId:c.id,materials:'原始补充内容，尚待核验'};await execute('legal_case_workspace',args);const first=Cases.getCase(context.orgId,c.id,context.userId)!;

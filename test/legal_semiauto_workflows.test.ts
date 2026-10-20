@@ -182,16 +182,16 @@ describe('semi-automated legal workflows', () => {
       const manifestPath = path.join(dir, '99_manifest.md');
 
       expect(output).toContain('诉讼文书包文件输出');
-      for (const file of [packetPath, filingChecklistPath, authorizationChecklistPath, evidenceMatrixPath, manifestPath]) expect(output).toContain(file);
+      for (const file of [packetPath, filingChecklistPath, authorizationChecklistPath, evidenceCatalogPath, manifestPath]) expect(output).toContain(file);
       expect(decodeToolResult(output).receipt).toMatchObject({ ok: true, status: 'generated', persisted: true });
       expect(sdk.create).toHaveBeenCalledTimes(4);
-      expect(fs.readdirSync(dir).filter(name => name.endsWith('.md'))).toHaveLength(12);
-      expect(fs.readdirSync(dir).filter(name => name.endsWith('.docx'))).toHaveLength(12);
+      expect(fs.readdirSync(dir).filter(name => name.endsWith('.md'))).toHaveLength(11);
+      expect(fs.readdirSync(dir).filter(name => name.endsWith('.docx'))).toHaveLength(11);
       expect(output).toContain('DOCX 生成：全部成功');
       expect(fs.existsSync(packetPath)).toBe(true);
       expect(fs.existsSync(filingChecklistPath)).toBe(true);
       expect(fs.existsSync(authorizationChecklistPath)).toBe(true);
-      expect(fs.existsSync(evidenceMatrixPath)).toBe(true);
+      expect(fs.existsSync(evidenceMatrixPath)).toBe(false);
       expect(fs.existsSync(complaintPath)).toBe(true);
       expect(fs.existsSync(elementComplaintPath)).toBe(true);
       expect(fs.existsSync(engagementPath)).toBe(true);
@@ -202,7 +202,8 @@ describe('semi-automated legal workflows', () => {
       expect(fs.existsSync(manifestPath)).toBe(true);
       expect(fs.readFileSync(filingChecklistPath, 'utf8')).toContain('Filing Material Checklist');
       expect(fs.readFileSync(authorizationChecklistPath, 'utf8')).toContain('Authorization Checklist');
-      expect(fs.readFileSync(evidenceMatrixPath, 'utf8')).toContain('Evidence Catalog And Three-Property Review');
+      for (const label of ['真实性：', '合法性：', '关联性：']) expect(fs.readFileSync(evidenceCatalogPath, 'utf8')).toContain(label);
+      expect(fs.readFileSync(evidenceCatalogPath, 'utf8')).toContain('买卖合同；送货单；签收单；银行流水。');
       const complaint = fs.readFileSync(complaintPath, 'utf8');
       expect(complaint).toContain('民事起诉状（系统草稿）');
       expect(complaint).toContain('尚待核验');
@@ -847,7 +848,7 @@ describe('semi-automated legal workflows', () => {
         name: `${subjectName}有限公司`,
       });
 
-      expect(assets).toContain('财产线索报告'); expect(equity).toContain('授权网页登录协作');
+      expect(assets).toContain('财产线索查询报告'); expect(equity).toContain('授权网页登录协作');
       for (const output of [assets, equity]) {
         expect(decodeToolResult(output).receipt).toMatchObject({ ok: false, status: 'partial' });
         expect(output).not.toContain('案件空间：已归档'); expect(output).toMatch(/未取得|未通过|不能/);

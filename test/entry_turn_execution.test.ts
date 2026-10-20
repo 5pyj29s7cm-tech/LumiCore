@@ -8,6 +8,7 @@ import { getConversationExecution } from '../server/cognition/conversation_execu
 import { runLumiEntryTurn, type LumiEntryTurnInput, type ExecutedLumiTurn } from '../server/cognition/turn_execution';
 import { ToolRegistry } from '../server/tools/registry';
 import { executeToolCall } from '../server/tools/execution_engine';
+import { persistModelRoutingReceipt } from '../server/llm/model_routing_receipts';
 const model = vi.hoisted(() => vi.fn());
 vi.mock('../server/llm/adapter', () => ({ runWithTools: (...args: any[]) => model(...args) }));
 vi.mock('../server/llm/providers', async original => ({
@@ -40,7 +41,11 @@ function fixture(previous?: { userId: string; conversationId: string }, source =
 }
 async function verifiedStep(registry: ToolRegistry, args: any[]) {
   const context = args[11];
-  const record = await executeToolCall({ registry, id: context.requestId + ':search', name: 'web_search', arguments: { query: 'synthetic' }, context });
+  const now = new Date().toISOString();
+  const route = persistModelRoutingReceipt({ userId:context.userId, conversationId:context.conversationId, requestId:context.requestId,
+    domain:context.domain || 'personal', orgId:context.orgId || '', interactionId:'', source:context.source || 'mcp_chat', status:'succeeded',
+    startedAt:now,completedAt:now,durationMs:0,requestedProvider:'deepseek',requestedModel:'fixture',selectionMode:'pinned',selectedProvider:'deepseek',selectedModel:'fixture',fallbackReason:'',attempts:[{provider:'deepseek',model:'fixture',status:'succeeded'}] });
+  const record = await executeToolCall({ registry, id: context.requestId + ':search', name: 'web_search', arguments: { query: 'synthetic' }, context, executionOrigin:'model_selected',modelRoutingReceiptId:route.id });
   expect(record.error).toBeUndefined(); await args[3]?.(record);
   return { text: 'The search returned a synthetic source.', toolCalls: [record], usageRecords: [] };
 }
@@ -107,7 +112,8 @@ describe('entry turn execution ownership', () => {
     await expect(runLumiEntryTurn(item.input)).rejects.toThrow('accepted request');
     expect(model).not.toHaveBeenCalled();
     const turn = readDB().conversationActionTurns.find((row: any) => row.requestId === item.identity.requestId);
-    expect(readDB().conversationActionTasks.find((row: any) => row.id === turn.taskId)?.status).toBe('blocked');
+    expect(turn).toMatchObject({status:'terminal',taskId:''});
+    expect(readDB().conversationActionTasks.some((row: any)=>row.id === turn.taskId)).toBe(false);
     expect(getMessages(item.identity.conversationId, 20).at(-1)).toMatchObject({ requestId: item.identity.requestId, role: 'assistant', message: 'The turn could not finish.' });
   });
   it('holds an external ledger turn through settlement before resolving a later entry', async () => {

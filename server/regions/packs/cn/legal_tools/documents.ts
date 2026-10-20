@@ -88,6 +88,21 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string, 
   const lines = markdown.replace(/\r/g, '').split('\n');
   const tableBuffer: string[][] = [];
 
+  // Decode only this compiler's table escapes; source HTML remains plain text.
+  const tableCells = (line: string) => {
+    const cells = [''];
+    for (let index = 1; index < line.length - 1; index++) {
+      if (line[index] === '\\' && /[\\|]/.test(line[index + 1] || '')) cells[cells.length - 1] += line[++index];
+      else if (line[index] === '|') cells.push('');
+      else cells[cells.length - 1] += line[index];
+    }
+    return cells.map(cell => cell.trim());
+  };
+  const tableRuns = (cell: string, bold = false) => cell.trim().split('<br>').map((part, index) => new TextRun({
+    text: part.replace(/&(amp|lt|gt);/g, (_, entity) => entity === 'amp' ? '&' : entity === 'lt' ? '<' : '>'),
+    bold, ...(index ? { break: 1 } : {}),
+  }));
+
   const flushTable = () => {
     if (tableBuffer.length < 2) {
       for (const row of tableBuffer) children.push(new Paragraph({
@@ -111,13 +126,13 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string, 
           tableHeader: true,
           children: header.map(cell => new TableCell({
             width: { size: cellWidth, type: WidthType.DXA },
-            children: [new Paragraph({ children: [new TextRun({ text: cell.trim(), bold: true })] })],
+            children: [new Paragraph({ children: tableRuns(cell, true) })],
           })),
         }),
         ...rows.map(row => new TableRow({
           children: header.map((_, index) => new TableCell({
             width: { size: cellWidth, type: WidthType.DXA },
-            children: [new Paragraph({ children: [new TextRun(row[index]?.trim() || '')] })],
+            children: [new Paragraph({ children: tableRuns(row[index] || '') })],
           })),
         })),
       ],
@@ -128,7 +143,7 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string, 
   for (const [index, line] of lines.entries()) {
     const trimmed = line.trim();
     if (/^\|.*\|$/.test(trimmed) && !stripMarkdownTableDivider(trimmed)) {
-      tableBuffer.push(trimmed.slice(1, -1).split('|').map(cell => cell.trim()));
+      tableBuffer.push(tableCells(trimmed));
       continue;
     }
     if (stripMarkdownTableDivider(trimmed)) continue;

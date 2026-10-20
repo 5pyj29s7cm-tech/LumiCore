@@ -443,6 +443,7 @@ export function tryFinalizeVerifiedBoundedAction(
   }
   if (contract.kind === 'skill_authoring') return formatGroundedSkillDraft(scopedInput);
   if (contract.kind !== 'artifact_work') return null;
+  if (contract.artifactMode === 'retrieve') return formatGroundedArtifactResult(scopedInput);
   // Structured spreadsheet writers persist real formulas/charts and return
   // computed cells. Once the shared contract verifies every required step,
   // deliver those facts rather than asking an optional text-file checker to
@@ -527,14 +528,14 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
         isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.artifactStillIncomplete : 'The whole task is not complete.'].filter(Boolean).join('\n')).join('\n'),
     blocked: true, reason: 'artifact_components_pending',
   };
-  const artifactProgress = actionContract.kind === 'artifact_work' && !artifactComponents.length
+  const artifactProgress = actionContract.kind === 'artifact_work' && !actionContract.components?.length
     ? getArtifactTaskProgress(actionText, input.toolRecords || [], input) : null;
   if (artifactProgress && !artifactProgress.complete) return {
     text: formatArtifactProgress(artifactProgress, actionText), blocked: true,
     reason: `artifact_step_pending:${artifactProgress.next}`,
     progress: artifactProgressFeedback(artifactProgress, actionText),
   };
-  if (!artifactProgress && input.completionGuard?.blocked && ['model_failed_before_tool_execution', 'media_generation_failed'].includes(input.completionGuard.reason || '')) {
+  if (!actionContract.components?.length && !artifactProgress && input.completionGuard?.blocked && ['model_failed_before_tool_execution', 'media_generation_failed'].includes(input.completionGuard.reason || '')) {
     return { text: input.completionGuard.text, blocked: true, reason: input.completionGuard.reason };
   }
   const sessionObservation = browserSessionObservation((input.toolRecords || []).filter(record => isVerifiedCurrentTurnRecord(input, record)), actionText);
@@ -574,16 +575,17 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       const sourceRead = !outputs.length && requestsExactReadOnlyArtifactInspection(component.text)
         ? records.find(record => isVerifiedCurrentTurnRecord(scoped, record) && isSuccessfulExactDocumentRead(record)
           && documentReadMatchesRequestedTarget(record, component.text, input.flow?.acceptedTaskTarget, input.flow?.currentAttachmentPaths)) : undefined;
-      const componentInput = { ...scoped, taskText: component.text, flow: undefined, completionGuard: undefined,
+      const componentInput = { ...scoped, taskText: component.text, flow: { rootTaskText: actionText } as LumiTurnFlow, completionGuard: undefined,
         responseText: outputs.length === 1 ? '' : input.responseText || (sourceRead ? actualDocumentReadContent(sourceRead) : '') };
       const result = (outputs.length === 1 ? formatGroundedArtifactResult(componentInput) : null)
         || finalizeLumiResponse(componentInput);
       const complete = verified && !result.blocked && Boolean(result.text);
-      return { complete, text: complete ? result.text
+      return { complete, reason: result.blocked ? result.reason : undefined, text: complete || result.blocked && result.text ? result.text
         : isChineseText(actionText) ? CN_EXECUTION_EVIDENCE_MESSAGES.incompleteComponent(component.text) : `Not completed: ${component.text}` };
     });
     return { text: outcomes.map(outcome => outcome.text).join('\n'), blocked: outcomes.some(outcome => !outcome.complete),
-      reason: outcomes.every(outcome => outcome.complete) ? 'All requested operations verified.' : 'Some requested operations remain unverified.' };
+      reason: outcomes.every(outcome => outcome.complete) ? 'All requested operations verified.'
+        : outcomes.filter(outcome => !outcome.complete).map(outcome => outcome.reason).filter(Boolean).join('; ') || 'Some requested operations remain unverified.' };
   }
   const workflowProgress = formatGroundedWorkflowProgress(input);
   if (workflowProgress) return workflowProgress;

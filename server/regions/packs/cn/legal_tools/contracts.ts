@@ -162,11 +162,11 @@ export async function generateBidHandler(args: Record<string, any>, context?: an
   const report = buildGroundedBidDraft(projectName, requirements, sources, chapters, chapterDrafts);
   const coverage = useModel ? '## 逐章生成进度\n' + chapters.map(chapter => {
     const missing = units.filter(unit => unit.chapter.id === chapter.id && !drafts.has(unit.key));
-    return '- ' + chapter.title + '：' + (!missing.length ? '来源绑定正文与事实一致性复核已取得，内容与计算仍待责任人核验' : '正文未完成，不能计为完成；原因：'
+    return '- ' + chapter.title + '：' + (!missing.length ? '模型复核回复已取得，内容与计算仍待责任人核验' : '正文未完成，不能计为完成；原因：'
       + missing.map(unit => (units.filter(item => item.chapter.id === chapter.id).length > 1 ? unit.chapter.sections[0].title + '至' + unit.chapter.sections.at(-1)!.title + '：' : '')
         + (failures.get(unit.key) || (!sourceComplete ? '来源未完整读取，本轮未发起新的生成请求' : context?.llmGetters ? (pending.has(unit.key) ? '待审稿已保留，下次只复核' : '本轮预算耗尽，章节未开始') : '未接通模型执行入口'))).join('；'));
   }).join('\n')
-    + '\n- 接续复用 ' + reused + ' 章（已完成事实复核）；同源同配方待审稿下次只复核，明确拒绝且已清缓存的章节下次重新起草。变更材料、配方、案件或模型后重新生成。'
+    + '\n- 接续复用 ' + reused + ' 章（模型复核回复已取得）；同源同配方待审稿下次只复核，明确拒绝且已清缓存的章节下次重新起草。变更材料、配方、案件或模型后重新生成。'
     : '本次按要求只生成原文底稿，不计为模型完整标书验收通过。';
   const moneySourceVerified = !moneyContract.required || (!moneyContract.issues.length && Boolean(moneyContract.uniqueTableTotalSourceId));
   const complete = modelCompleted && sourceComplete;

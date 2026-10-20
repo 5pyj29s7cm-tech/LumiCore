@@ -183,7 +183,7 @@ export function archiveBoundConversationActionReceipts(
         state.goal || task.goal,
         receipts,
         state.taskCapsule,
-        exactRequestOwnsActiveTask ? { requestId: receiptRequestId, taskId } : undefined,
+        exactRequestOwnsActiveTask ? { requestId: receiptRequestId, taskId, userId: input.userId, conversationId: task.conversationId, domain: task.domain, orgId: task.orgId } : undefined,
       );
       const waitingForConfirmation = records.some(record => isConfirmationBlockedToolRecord(record)
         && (!receiptRequestId || String(record.requestId || record.turnId || '') === receiptRequestId));
