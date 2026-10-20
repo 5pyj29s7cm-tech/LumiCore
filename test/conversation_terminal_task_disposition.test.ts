@@ -17,12 +17,12 @@ const TOOL_POLICY = {
   maxIterations: 4,
 };
 
-function prepareRequest(label: string) {
+function prepareRequest(label: string, goal?: string) {
   const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const userId = `terminal-disposition-${label}-${nonce}`;
   const conversation = getOrCreateActiveConversation(userId, 'lumi', 'personal', '');
   const requestId = `request-${label}-${nonce}`;
-  const userText = `Investigate lifecycle evidence for ${label}.`;
+  const userText = goal || `Investigate lifecycle evidence for ${label}.`;
   const userMessageId = addMessageIdempotent({
     userId,
     agentId: 'lumi',
@@ -49,6 +49,7 @@ function prepareRequest(label: string) {
     userId,
     conversationId: conversation.id,
     requestId,
+    userText,
     taskId: prepared.state!.taskId!,
   };
 }
@@ -57,9 +58,9 @@ function successRecord(scope: ReturnType<typeof prepareRequest>, suffix = 'searc
   return {
     id: `success-${suffix}-${scope.requestId}`,
     key: `search_files:${suffix}`,
-    name: 'search_files',
-    arguments: { directory: 'isolated', pattern: `${suffix}.txt` },
-    result: '[]',
+    name: scope.userText === '列出当前运行进程' ? 'desktop_running_processes' : 'search_files',
+    arguments: scope.userText === '列出当前运行进程' ? {} : { directory: 'isolated', pattern: `${suffix}.txt` },
+    result: scope.userText === '列出当前运行进程' ? '{"processes":[{"name":"isolated.exe","pid":42}]}' : '[]',
     error: '',
     outcome: 'success',
     terminalVerification: {
@@ -159,7 +160,7 @@ describe('transport-neutral terminal task disposition', () => {
     expect(state?.receipts.map(receipt => receipt.name)).toEqual(
       expect.arrayContaining(['search_files', 'read_file']),
     );
-    expect(taskCompletionFromReceipts(state?.goal || '', state?.receipts || []).complete).toBe(true);
+    expect(taskCompletionFromReceipts(state?.goal || '', state?.receipts || []).complete).toBe(false);
 
     const archived = (readDB().conversationActionReceipts || []).filter((row: any) => (
       row.taskId === scope.taskId && row.requestId === scope.requestId
@@ -236,32 +237,32 @@ describe('transport-neutral terminal task disposition', () => {
     });
   });
 
-  it('keeps the default all-success inference completed', () => {
+  it('does not infer an unclassified whole goal from successful observations', () => {
     const scope = prepareRequest('all-success');
     persistAssistant(scope, [successRecord(scope, 'first'), successRecord(scope, 'second')]);
 
     expect(getConversationActionStateByTaskId(readDB(), scope)).toMatchObject({
       taskId: scope.taskId,
-      status: 'completed',
-      unfinished: false,
-      completionSource: 'tool_receipt',
+      status: 'blocked',
+      unfinished: true,
+      completionSource: undefined,
     });
     expect(taskRow(scope)).toMatchObject({
-      status: 'completed',
+      status: 'blocked',
       activeRequestId: '',
-      completionSource: 'tool_receipt',
+      completionSource: '',
     });
   });
 
-  it('preserves the previous receipt inference when no disposition is supplied', () => {
+  it('keeps an unclassified goal blocked after a failed step without a disposition', () => {
     const scope = prepareRequest('legacy-inference');
     persistAssistant(scope, [successRecord(scope), failureRecord(scope)]);
 
     expect(getConversationActionStateByTaskId(readDB(), scope)).toMatchObject({
       taskId: scope.taskId,
-      status: 'completed',
-      unfinished: false,
-      completionSource: 'tool_receipt',
+      status: 'blocked',
+      unfinished: true,
+      completionSource: undefined,
     });
     const archived = (readDB().conversationActionReceipts || []).filter((row: any) => (
       row.taskId === scope.taskId && row.requestId === scope.requestId
@@ -270,7 +271,7 @@ describe('transport-neutral terminal task disposition', () => {
   });
 
   it('rejects wrong request/task fences and cannot rewrite another request completed task', () => {
-    const wrongRequest = prepareRequest('wrong-request');
+    const wrongRequest = prepareRequest('wrong-request', '列出当前运行进程');
     persistAssistant(wrongRequest, [successRecord(wrongRequest)], {
       outcome: 'blocked',
       taskId: wrongRequest.taskId,
@@ -279,7 +280,7 @@ describe('transport-neutral terminal task disposition', () => {
     });
     expect(taskRow(wrongRequest).status).toBe('completed');
 
-    const wrongTask = prepareRequest('wrong-task');
+    const wrongTask = prepareRequest('wrong-task', '列出当前运行进程');
     persistAssistant(wrongTask, [successRecord(wrongTask)], {
       outcome: 'blocked',
       taskId: `other-${wrongTask.taskId}`,

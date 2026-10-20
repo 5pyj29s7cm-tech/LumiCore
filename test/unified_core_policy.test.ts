@@ -30,10 +30,8 @@ describe('one Lumi core across legacy inputs', () => {
     for (const mode of postures) {
       const answer = run('不要调用工具，也不要执行任务。陪我聊聊今天的心情。', channel, mode);
       expect(answer.executionRequested).toBe(false);
-      expect(answer.turnIntent.flow.modelToolAccess).toBe('hard_off');
       const recall = run('你还记得项目标记吗？不要搜索聊天记录。', channel, mode);
       expect(recall.executionRequested).toBe(false);
-      expect(recall.turnIntent.flow.modelToolAccess).toBe('hard_off');
     }
   });
 

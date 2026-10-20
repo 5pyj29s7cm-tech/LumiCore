@@ -49,7 +49,6 @@ describe('Lumi turn flow', () => {
       targetIsLumi: true,
     });
     expect(flow.allowToolUseForTurn).toBe(false);
-    expect(flow.modelToolAccess).toBe('hard_off');
     expect(flow.selfRepairTurn).toBe(false);
     expect(flow.completionEvidenceNeeded).toBe(false);
     expect(flow.executionGovernance.verificationIntent).toBe('none');
@@ -462,7 +461,6 @@ describe('Lumi turn flow', () => {
     expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(false);
     expect(dispatch.flow.selfRepairTurn).toBe(false);
     expect(dispatch.flow.allowToolUseForTurn).toBe(false);
-    expect(dispatch.flow.modelToolAccess).toBe('hard_off');
     expect(dispatch.flow.routeText).toContain('followupIntent: repeat');
     expect(dispatch.flow.routeText).toContain('我是 Lumi，是你的常驻智能伙伴。');
     expect(dispatch.flow.routeText).not.toContain('工作接管');

@@ -52,8 +52,10 @@ export function normalizeConversationActionState(
       .slice(0, 8),
     latestBlocker: status === 'completed' || status === 'waiting_confirmation' || status === 'cancelled'
       ? ''
-      : value.latestBlocker === 'model_failed_before_tool_execution'
-        ? value.latestBlocker : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
+      : !requestLeaseActive && value.latestBlocker
+        ? compact(value.latestBlocker, 380)
+        : value.latestBlocker === 'model_failed_before_tool_execution'
+          ? value.latestBlocker : compact(receiptCompletion?.blocker || value.latestBlocker, 380),
     unfinished,
     evidenceTools: Array.from(new Set(Array.isArray(value.evidenceTools) ? value.evidenceTools : []))
       .map(name => compact(name, 120))

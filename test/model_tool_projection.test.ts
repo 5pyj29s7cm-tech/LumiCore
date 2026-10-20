@@ -673,8 +673,8 @@ describe('model tool declaration projection', () => {
       .toEqual(['mcp_dynamic-skill_probe', 'client_capability_manifest']);
     expect(installedProbe).toHaveBeenCalledTimes(1);
     expect(confirmation.mock.calls).toEqual([
-      ['skill_marketplace_install', { skillId: 'skill-dynamic-skill' }],
-      ['mcp_dynamic-skill_probe', {}],
+      ['skill_marketplace_install', { skillId: 'skill-dynamic-skill' }, expect.objectContaining({ capabilityId: 'skills.marketplace.install' })],
+      ['mcp_dynamic-skill_probe', {}, expect.objectContaining({ capabilityId: 'test.mcp.dynamic-skill.probe' })],
     ]);
     expect(observedTaskIds).toEqual([
       'task-live-skill-chain',
@@ -797,8 +797,8 @@ describe('model tool declaration projection', () => {
     expect(mocks.makeLLMCall.mock.calls[1][1].map((item: any) => item.function.name))
       .toEqual(['mcp_dynamic-external_probe', 'client_capability_manifest']);
     expect(confirmation.mock.calls).toEqual([
-      ['external_control_configure_candidate', { candidateId: 'dynamic-external', enabled: true }],
-      ['mcp_dynamic-external_probe', {}],
+      ['external_control_configure_candidate', { candidateId: 'dynamic-external', enabled: true }, expect.objectContaining({ capabilityId: 'external-control.candidate.configure' })],
+      ['mcp_dynamic-external_probe', {}, expect.objectContaining({ capabilityId: 'test.external-mcp.dynamic-probe' })],
     ]);
     expect(observedTaskIds).toEqual([
       'task-live-external-mcp-chain',

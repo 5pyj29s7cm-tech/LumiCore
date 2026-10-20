@@ -134,7 +134,6 @@ describe('model-owned main chat architecture', () => {
     });
 
     expect(dispatch.flow.effectiveOperationMode).toBe('assistant');
-    expect(dispatch.flow.modelToolAccess).toBe('manifest');
     expect(buildModelCapabilityPolicy(execution).allowedTools).toEqual(expect.arrayContaining([
       'desktop_list_apps',
       'desktop_open',

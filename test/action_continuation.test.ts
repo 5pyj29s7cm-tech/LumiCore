@@ -1005,7 +1005,7 @@ describe('recent action continuation', () => {
       goal: '打开 WPS。',
       latestInstruction: '在这里面写“我好想你”',
       appTarget: 'WPS',
-      unfinished: false,
+      unfinished: true,
     });
     expect(written?.evidenceTools).toEqual(['desktop_open', 'wps_create_document']);
     expect(checked).toMatchObject({

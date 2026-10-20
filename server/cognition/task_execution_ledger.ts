@@ -9,7 +9,6 @@ import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_executi
 import {
   buildActionEvidenceContract,
   hasCoreActionEvidence,
-  requiresCurrentAppUiMutation,
 } from './action_contract';
 import type { TaskCapsuleV1 } from '../conversation/task_capsule';
 import {
@@ -365,7 +364,7 @@ export function coalesceToolExecutionRecords(
   const latestIndexByKey = new Map<string, number>();
   for (const record of records) {
     if (!record?.name) continue;
-    const key = toolRecordKey(record);
+    const key = JSON.stringify([record.taskId || '', record.requestId || '', record.id || '', toolRecordKey(record)]);
     if (hasPlaybackObservation(record)) {
       // A new capture can supersede earlier playback, including an ad, pause
       // or unreadable progress. Preserve runtime observation order instead of
@@ -533,9 +532,7 @@ export function mergeTaskReceipts(
     const observation = hasPlaybackObservation(receipt)
       || ['observe', 'test'].includes(receipt.capability?.operation || '')
       || isArtifactReaderRecord({ name: receipt.name } as ToolExecutionRecord);
-    const mergeKey = observation
-      ? JSON.stringify(['observation', receipt.requestId || '', receipt.taskId || '', receipt.id || receipt.key])
-      : receipt.key;
+    const mergeKey = JSON.stringify([receipt.taskId || '', receipt.requestId || '', receipt.id || '', receipt.key]);
     if (!merged.has(mergeKey)) order.push(mergeKey);
     const prior = merged.get(mergeKey);
     const rank = { failure: 0, partial: 1, success: 2 } as const;
@@ -581,15 +578,7 @@ export function taskCompletionFromReceipts(
 ): { complete: boolean; blocker: string; records: ToolExecutionRecord[] } {
   const records = coalesceToolExecutionRecords(taskReceiptsToRecords(receipts));
   const contract = buildActionEvidenceContract(goal);
-  // Legacy desktop builds emitted this terminal adapter name before the
-  // verified `wps_create_document_with_text` receipt was introduced. Keep
-  // already-persisted tasks resumable without weakening generic UI evidence.
-  const legacyVerifiedWpsCreate = requiresCurrentAppUiMutation(goal) && records.some(record => (
-    record.name === 'wps_create_document' && toolRecordSucceeded(record)
-  ));
-  const complete = contract.applies
-    ? hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn) || legacyVerifiedWpsCreate
-    : records.some(toolRecordVerifiedForCompletion);
+  const complete = contract.applies && hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn);
   const failures = [...records].reverse().filter(record => !toolRecordSucceeded(record));
   // A later policy/routing rejection is useful diagnostic evidence, but it
   // must not replace the domain failure that actually stopped the task. Keep

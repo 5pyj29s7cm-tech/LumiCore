@@ -10,6 +10,7 @@ import {
   applyTaskPolicySnapshot,
   coalesceToolExecutionRecords,
   mergeToolExecutionRecords,
+  mergeTaskReceipts,
   normalizeConversationTaskReceipt,
   recordsToTaskReceipts,
   taskCompletionFromReceipts,
@@ -119,6 +120,46 @@ describe('durable conversation task execution ledger', () => {
     expect(mergeToolExecutionRecords([snapshot], [updated])).toEqual([updated]);
     const { id: _id, ...anonymous } = first;
     expect(mergeToolExecutionRecords([anonymous], [{ ...anonymous }, { ...anonymous, arguments: { path: 'other.txt' } }])).toHaveLength(2);
+  });
+
+
+  it('keeps distinct call failures after an earlier success with the same arguments', () => {
+    const first = { id: 'call-before', taskId: 'task', requestId: 'request', name: 'write_file', arguments: { path: 'D:/isolated/output.txt', content: 'Approved' }, result: 'saved' };
+    const failed = { ...first, id: 'call-after', result: '', error: 'Disk full.' };
+    expect(coalesceToolExecutionRecords([first, failed])).toEqual([first, failed]);
+    expect(mergeTaskReceipts(recordsToTaskReceipts([first]), [failed]).map(record => record.outcome)).toEqual(['success', 'failure']);
+  });
+
+  it('keeps the current request failure separate from an older call with the same arguments', () => {
+    const first = { id: 'same-call-id', taskId: 'task', requestId: 'request-before', name: 'write_file', arguments: { path: 'D:/isolated/output.txt', content: 'Approved' }, result: 'saved' };
+    const failed = { ...first, requestId: 'request-after', result: '', error: 'Access denied.' };
+    expect(coalesceToolExecutionRecords([first, failed])).toEqual([first, failed]);
+    const persisted = mergeTaskReceipts(recordsToTaskReceipts([first]), [failed]);
+    expect(persisted).toHaveLength(2);
+    expect(persisted[1]).toMatchObject({ requestId: 'request-after', outcome: 'failure', error: 'Access denied.' });
+  });
+
+  it('does not complete an unclassified goal from an unrelated successful receipt', () => {
+    const receipts = recordsToTaskReceipts([{ name: 'read_file', arguments: { path: 'D:/isolated/source.txt' }, result: 'Source text.' }]);
+    expect(taskCompletionFromReceipts('perform the requested custom operation', receipts)).toMatchObject({ complete: false, blocker: 'The task has no verified completion receipt.' });
+  });
+
+  it('does not complete legal drafting from a successful source read', () => {
+    const receipts = recordsToTaskReceipts([{ name: 'read_file', arguments: { path: 'D:/isolated/evidence.txt' }, result: 'Unverified source material.' }]);
+    expect(taskCompletionFromReceipts('Generate a legal complaint.', receipts).complete).toBe(false);
+  });
+
+
+  it('does not let the retired WPS adapter bypass the original mutation goal', () => {
+    const receipts = recordsToTaskReceipts([{ name: 'wps_create_document', arguments: {}, result: 'Document created.' }]);
+    expect(taskCompletionFromReceipts('打开 WPS 并写入会议安排，然后保存文档', receipts).complete).toBe(false);
+  });
+
+  it('uses the existing legal production and review evidence together', () => {
+    const record = { name: 'legal_generate_litigation_packet', arguments: {}, result: 'currentLawGate: pending; major premise; minor premise; conclusion' };
+    expect(taskCompletionFromReceipts('Generate a legal complaint.', recordsToTaskReceipts([record])).complete).toBe(false);
+    const reviewed = { ...record, name: 'legal_finalize_delivery_package', result: '{"currentLawGate":"passed","reasoning":"major premise; minor premise; conclusion"}', receipt: { ok: true, status: 'generated' } };
+    expect(taskCompletionFromReceipts('Generate a legal complaint.', recordsToTaskReceipts([reviewed])).complete).toBe(true);
   });
 
   it('creates state before tools run and preserves task identity and capability envelope on confirmation', () => {

@@ -91,8 +91,7 @@ export interface LumiTurnFlow {
   requestedMode: OperationMode | null;
   autoPromoteToAssistant: boolean;
   conceptualCapabilityQuestion?: boolean;
-  /** Whether the main model receives the hard-policy capability manifest. */
-  modelToolAccess: 'manifest' | 'hard_off';
+  /** Tools are available within hard boundaries; the model decides whether to use them. */
   allowToolUseForTurn: boolean;
   selfRepairTurn: boolean;
   clientActionOnlyTurn: boolean;
@@ -444,11 +443,15 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const clientActionOnlyTurn = !selfRepairTurn && clientActionIntent;
   const visionIntent = hasVisionIntent(routingText);
   const recoveredCurrentAppEdit = Boolean(currentAppEditTarget);
-  const allowToolUseForTurn = immediateAssistantRestatement || explicitNoToolInstruction || readOnlyConversationTurn
+  const matchedWorkflow = immediateAssistantRestatement || conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
+    ? null
+    : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
+  const allowToolUseForTurn = !input.text.trim() || immediateAssistantRestatement || explicitNoToolInstruction || readOnlyConversationTurn
     ? false
     : conceptualCapabilityQuestion || statusOnlyContinuation
       ? false
-      : clientActionOnlyTurn ||
+      : Boolean(matchedWorkflow) ||
+          clientActionOnlyTurn ||
           taskEntryTurn ||
           actionContractRequiresTools ||
           readOnlyKnowledgeInspection ||
@@ -459,22 +462,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
   const desktopExecutionPreference = getStoredDesktopExecutionPreference(input.userId);
   const workSurfaceRoute = resolveWorkSurfaceRoute(routingText, currentAppEditTarget,
     allowToolUseForTurn && !clientActionOnlyTurn && !selfRepairTurn ? desktopExecutionPreference : 'internal');
-  // Legacy action detection still describes the likely lane, but it no longer
-  // decides whether the main chat model can inspect/use the manifest. Only
-  // explicit no-tool/read-only/status/meeting boundaries turn model access off.
-  const modelToolAccess = isInteractiveTurnChannel(input.channel)
-    && !immediateAssistantRestatement
-    && !explicitNoToolInstruction
-    && !readOnlyConversationTurn
-    && !statusOnlyContinuation
-    && effectiveOperationMode !== 'meeting'
-      ? 'manifest' as const
-      : allowToolUseForTurn
-        ? 'manifest' as const
-        : 'hard_off' as const;
-  const matchedWorkflow = immediateAssistantRestatement || conceptualCapabilityQuestion || recoveredCurrentAppEdit || explicitNoToolInstruction
-    ? null
-    : matchSkillWorkflow(routingText, { targetIsLumi: input.targetIsLumi });
   const derivedExecution = buildExecutionGovernance({
     text: routingText,
     flowInput: input,
@@ -523,7 +510,6 @@ export function buildLumiTurnFlow(input: LumiTurnFlowInput): LumiTurnFlow {
     requestedMode,
     autoPromoteToAssistant,
     conceptualCapabilityQuestion,
-    modelToolAccess,
     allowToolUseForTurn,
     selfRepairTurn,
     clientActionOnlyTurn,
@@ -577,7 +563,7 @@ export function buildInteractionModeOverlay(flow: LumiTurnFlow): string {
   if (flow.selfRepairTurn) {
     return '## Client Self-Repair Capability Hint\nThe user may be reporting that Lumi or one of its client workflows is failing. Prefer evidence-bearing inspection and a safe verified recovery when the manifest and current receipts support it; do not merely repeat the raw error. This semantic hint does not grant or remove capabilities. Writes, desktop control, external app automation, and system changes remain governed by hard policy and confirmation.' + restatementOverlay;
   }
-  if (opModeConfig && (flow.modelToolAccess === 'manifest' || flow.effectiveOperationMode === 'meeting')) {
+  if (opModeConfig && (flow.allowToolUseForTurn || flow.effectiveOperationMode === 'meeting')) {
     return opModeConfig.promptOverlay + restatementOverlay;
   }
   return '## Interaction Mode\nThis turn is chat-only. Do not call tools, operate the desktop, or claim that you are taking actions. Answer naturally unless the user gives an explicit command.' + restatementOverlay;

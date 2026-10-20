@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import './helpers';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { initDatabase } from '../db_layer';
+beforeAll(() => initDatabase());
 import {
   createPreFinalizationTextGate,
   finalizeLumiResponseForDelivery,
@@ -29,7 +32,6 @@ function flow(overrides: Partial<LumiTurnFlow> = {}): LumiTurnFlow {
     requestedMode: null,
     autoPromoteToAssistant: false,
     allowToolUseForTurn: false,
-    modelToolAccess: 'hard_off',
     selfRepairTurn: false,
     clientActionOnlyTurn: false,
     visionIntent: false,

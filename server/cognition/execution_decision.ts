@@ -230,7 +230,7 @@ function fallbackPolicy(
   visibilityContext?: Pick<ToolContext, 'userId' | 'domain' | 'orgId' | 'autonomous' | 'source'>,
 ): ToolPolicy {
   const modePolicy = buildOperationModeToolPolicy(flow.effectiveOperationMode, registry, visibilityContext);
-  return isInteractiveTurnChannel(flow.channel) && flow.modelToolAccess === 'manifest'
+  return isInteractiveTurnChannel(flow.channel) && flow.allowToolUseForTurn
     ? modePolicy : flow.workSurfaceRoute.toolPolicy || modePolicy;
 }
 
@@ -568,12 +568,8 @@ export function buildLumiExecutionDecision(input: LumiExecutionDecisionInput): L
     input.flow.routeText || input.text,
     { limit: 6, context: input.visibilityContext },
   ).filter(tool => tool.name.startsWith('external_capability_action_')) || [];
-  const allowToolUse = !unboundTerseContinuation && (
-    input.flow.allowToolUseForTurn
-    || Boolean(input.flow.workflowHint)
-    || input.trustedActionContinuation
-    || runtimeWorkIntent !== 'none'
-  ) && !input.isSanctuary && !statusOnlyContinuation;
+  const allowToolUse = input.flow.allowToolUseForTurn
+    && !unboundTerseContinuation && !input.isSanctuary && !statusOnlyContinuation;
   const selfRepairToolPolicy = input.flow.selfRepairTurn && !buildClientDiagnosticPlan(input.flow.routeText || input.text).length && !statusOnlyContinuation
     ? buildSelfRepairToolPolicy(input.flow.routeText || input.text, input.toolRegistry, input.visibilityContext)
     : null;

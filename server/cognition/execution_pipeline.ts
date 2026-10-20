@@ -448,24 +448,8 @@ export function buildLumiExecutionPipeline(
       ...(requestedArtifact ? [requestedArtifact.producer, requestedArtifact.reader] : []),
     ],
   });
-  // Operation modes and manifest visibility define the authorization ceiling;
-  // neither is current-turn execution authority. Main Chat deliberately lets
-  // the model know which capabilities exist, but a greeting, correction about
-  // Lumi's behaviour, or ordinary conversation must not become executable
-  // merely because that manifest is visible. Only the current semantic turn,
-  // an exact server-bound continuation, or a task-owned entry may open the
-  // canonical tool loop.
-  const turnOwnsExecution = Boolean(
-    turnIntent.flow.allowToolUseForTurn
-    || Boolean(turnIntent.flow.workflowHint)
-    || queryTarget === 'runtime_work'
-    || trustedActionContinuation
-    || turnIntent.boundary === 'task_center'
-    || turnIntent.boundary === 'work_takeover',
-  );
   const executionRequested = Boolean(
-    turnOwnsExecution
-    && execution.allowToolUse
+    execution.allowToolUse
     && modelToolProjection.toolNames.length > 0,
   );
   // Publish the actual projection state; catalog visibility is not execution.

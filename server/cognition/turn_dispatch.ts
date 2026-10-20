@@ -49,7 +49,7 @@ function boundaryRule(boundary: LumiTurnBoundary): string {
     case 'task_center':
       return 'This turn entered through the task center. Treat it as persistent work with state, artifacts, blockers, and a concise user-facing result.';
     case 'tool_action':
-      return 'This turn asks for action. Choose the lightest fitting tool/skill/desktop path and keep Lumi as the single owner of the result.';
+      return 'Choose whether to answer or act from the newest user request. If work is requested, use the lightest fitting declared tool and keep Lumi as the single owner of the result.';
     case 'conversation':
     default:
       return 'This turn is conversation-first. Answer naturally and do not force tools or task continuation without a clear action signal.';

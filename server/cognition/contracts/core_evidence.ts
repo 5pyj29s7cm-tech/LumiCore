@@ -14,6 +14,7 @@ import { compact, parseRecordJson, expandSuccessfulRecords, hasVisualModelAvaila
 import { requiresCurrentAppUiMutation, requiresVisualModelAvailabilityCheck, requiresCurrentAuthoringDocumentInspection, requiresDesktopAiAnswerReadback, isSimpleDesktopOpenRequest, requiresCadGeometryExtractionOnly, requiresVisibleAutoCadExecution, requiresAutoCadMcpPlayback, requestedDesktopWindowAction, requiresSourceGrounding, extractDesktopLaunchTarget, extractSimpleDesktopOpenTarget, isDesktopAppInventoryRequest, isRunningSoftwareInspectionRequest } from "../action_request";
 import { hasRequestedDesktopOpenEvidence, requestsExactReadOnlyArtifactInspection, hasVisibleAutoCadExecutionEvidence, hasBlankAutoCadDocumentEvidence, hasVerifiedExactReadOnlyArtifactEvidence, hasCurrentAppUiMutationEvidence, resolveVerifiedCurrentAuthoringDocumentEvidence, hasMatchingDesktopObservationEvidence } from "../action_desktop_evidence";
 import { hasMediaPauseEvidence, hasMediaPlaybackEvidence } from "../action_media_evidence";
+import { requiresLegalCurrentLawGate, hasLegalDocumentProductionEvidence, hasLegalCurrentLawGateEvidence, hasLegalReasoningChainEvidence } from '../result_policy_evidence';
 import type { LumiActionContract } from './contracts';
 import { hasVerifiedManifestCapabilityEvidence, hasVerifiedGenericDesktopMutation } from './receipt_evidence';
 import { hasRequestedMessagingFileEvidence, hasPublicPostEvidence } from './messaging_evidence';
@@ -139,8 +140,9 @@ export function hasCoreActionEvidence(
     );
   }
   if (contract.kind === 'legal_document') {
-    return successful.some(record => /legal_|read_|create_docx|write_file|desktop_path_info|work_product_verify/i.test(record.name))
-      || hasVerifiedManifestCapabilityEvidence(contract, successful);
+    return requiresLegalCurrentLawGate(taskText)
+      ? hasLegalDocumentProductionEvidence(successful) && hasLegalCurrentLawGateEvidence(successful) && hasLegalReasoningChainEvidence(successful)
+      : successful.some(record => record.name.startsWith('legal_')) || hasVerifiedManifestCapabilityEvidence(contract, successful);
   }
   if (contract.kind === 'artifact_work') {
     if (contract.artifactMode === 'retrieve') return Boolean(resolveVerifiedArtifactRetrieval(taskText, contract, records, currentTurn));
