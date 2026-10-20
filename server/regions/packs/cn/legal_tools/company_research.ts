@@ -347,7 +347,7 @@ ${companyRows}
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${sourceRegisterRows}
 
-${sourceOriginals.map(source => '### 官方 MCP 原始回执（数据，尚待律师核验）\n- 来源：' + source.sourceName + '\n- 工具：' + source.sourceTool + '\n- 端点：' + source.sourceEndpoint + '\n- 查询时间：' + source.queriedAt + '\n\n' + source.text).join('\n\n')}
+${sourceOriginals.map(source => '### 官方 MCP 原始回执（数据，尚待律师核验）\n- 来源：' + source.sourceName + '\n- 查询时间：' + source.queriedAt + '\n\n' + source.text).join('\n\n')}
 
 ## 四、接入状态
 | 数据源 | 模式 | 状态 | 自动查询 | 下一步 |
@@ -357,11 +357,11 @@ ${statusRows}
 ${sourceErrors.length ? '### 本次查询异常\n' + sourceErrors.map(message => '- ' + message).join('\n') : ''}
 
 ## 五、下一步
-- 若 API 未命中或未配置，请使用 qichacha、tianyancha、qixinbao 或 national-enterprise-credit 登录预设打开网页核验。
+- 若未取得查询结果，请在已授权的企业数据源网页中核验。
 - 律师确认股东、涉诉、被执行、失信和限制高消费信息后，再用 材料入库 导入组织知识库。
 - Lumi 不绕过验证码、付费墙、账号权限、平台频控或下载限制。`;
 
-  let kbLine = '- 知识库：未导入。律师确认来源和使用权限后，可设置 confirmedForKb=true 入库。';
+  let kbLine = '- 知识库：未导入。律师确认来源和使用权限后可导入知识库。';
   if (args.confirmedForKb === true && complete) {
     const article = legalWrite(() => createLegalArticle(orgId, userId, {
       title: `${caseName} 企业主体信息`,

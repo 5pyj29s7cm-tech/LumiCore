@@ -118,7 +118,7 @@ export function privateExecutionReferences(text: string, identities: readonly (s
 }
 
 /** Exact-reference public text projection. Complete verified blocks survive inline private annotations. */
-export function projectExecutionReferenceText(answer: string, privateReferences: readonly string[], verifiedText: readonly string[]): string {
+export function projectExecutionReferenceText(answer: string, privateReferences: readonly string[], verifiedText: readonly string[], metadataReferences: readonly string[] = []): string {
   const verifiedRanges = verifiedText.filter(text => text
     && !privateReferences.some(id => text.includes(id))).flatMap(text => {
       const ranges: { start: number; end: number }[] = [];
@@ -134,7 +134,7 @@ export function projectExecutionReferenceText(answer: string, privateReferences:
       return ranges;
     }, []);
   let lineOffset = 0;
-  return privateReferences.length > 0
+  const projected = privateReferences.length > 0
     ? answer.split('\n').flatMap(line => {
       const start = lineOffset, end = start + line.length;
       lineOffset = end + 1;
@@ -143,4 +143,31 @@ export function projectExecutionReferenceText(answer: string, privateReferences:
         .map(range => answer.slice(Math.max(start, range.start), Math.min(end, range.end)));
     }).join('\n').trim()
     : answer;
+
+
+  // Metadata annotations do not change completion or source verification. Exact
+  // readback blocks remain untouched, including source text with these keys.
+  if (!metadataReferences.length) return projected;
+  const protectedText = verifiedText.filter(Boolean).sort((a, b) => b.length - a.length);
+  const strip = (text: string) => {
+    let clean = text;
+    for (const reference of metadataReferences) {
+      const literal = reference.replace(/[.*+?^$()|[\]{}\\]/gu, '\\$&');
+      // i18n-allow -- remove an exact annotation and its empty grammatical wrapper.
+      clean = clean.replace(new RegExp('[ \t]*' + '`' + literal + '`' + '（([^（）\r\n]+)）', 'gu'), '$1')
+        .replace(new RegExp('(?:尚属)?[「“]' + literal + '[」”]', 'gu'), '')
+        .replace(new RegExp('`' + literal + '`' + '(?:\\s*(?:为空|未启用))?', 'gu'), '');
+      if (reference.includes('=') || /^https?:\/\/|_/u.test(reference)) clean = clean.replace(new RegExp(literal, 'gu'), '');
+    }
+    if (clean === text) return text;
+    return clean.replace(/（[\s，、；]*）|\([\s,;]*\)/gu, '')
+      .replace(/^\s*[-*]\s+[^:：\r\n]{1,24}[:：][ \t]*$/gmu, '')
+      .replace(/^\s*#{1,6}[ \t]*$/gmu, '');
+  };
+  const protect = (text: string, index: number): string => {
+    if (index >= protectedText.length) return strip(text);
+    const source = protectedText[index], parts = text.split(source);
+    return parts.length === 1 ? protect(text, index + 1) : parts.map(part => protect(part, index + 1)).join(source);
+  };
+  return protect(projected, 0).replace(/\n{3,}/gu, '\n\n').trim();
 }

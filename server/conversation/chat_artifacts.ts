@@ -3,7 +3,7 @@ import { readDatabaseTables } from '../../db_layer';
 import { privateExecutionReferences, projectExecutionReferenceText } from '../../shared/public_execution_language';
 import { inspectPersistedToolExecutionReceipt } from '../tools/persisted_execution_receipt';
 import { getCanonicalToolExecutionInputDigests } from '../tools/canonical_execution_record';
-import { sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
+import { publicExecutionMetadataReferences, sanitizeToolRecordsForPersistence } from '../cognition/user_output_protection';
 import { digest } from './ledger/serialization';
 import { makeChatArtifact, type ChatArtifact } from '../../shared/chat_artifacts';
 import { artifactPathFromRecord, isArtifactDeliveryRecord, isArtifactProducerRecord, isArtifactReaderRecord, artifactReadbackText, artifactReadbackTextSources, artifactRecordMatchesTurn, sameArtifactPath } from '../tools/artifact_evidence';
@@ -349,7 +349,7 @@ export function publicChatArtifactDelivery(value: unknown, conversationId?: stri
   const projection = projectPublicArtifactDelivery({ artifacts, ...evidence,
     snapshots: artifacts.filter(artifact => evidence.records.some(record => isArtifactProducerRecord(record)
       && sameArtifactPath(artifact.path, artifactPathFromRecord(record)))).map(artifact => artifactContentSnapshot(artifact.path, privateIds)).filter((item): item is ArtifactContentSnapshot => Boolean(item)),
-    text: projectExecutionReferenceText(context.text || '', references, verifiedText), progress: context.progress });
+    text: projectExecutionReferenceText(context.text || '', references, verifiedText, publicExecutionMetadataReferences(evidence.records, requests)), progress: context.progress });
   return { ...projection, deliveryBlocked: projection.deliveryBlocked || references.length > 0 };
 }
 

@@ -6,6 +6,7 @@ import { ToolRegistry } from '../server/tools/registry';
 import { executeToolCall } from '../server/tools/execution_engine';
 import { registerLegalTools } from '../server/regions/packs/cn/legal_tools';
 import { createCase, getCase } from '../server/org/legal_cases';
+import { parseReceiptObject } from '../server/tools/receipt_payload';
 import { legalWorkspaceId } from '../server/regions/packs/cn/legal_tools/context';
 
 const company = JSON.stringify({企业名称:'虚构单密钥企业',统一社会信用代码:'SYNTHETIC-QCC-ID',法定代表人:'模拟甲',登记状态:'存续',注册资本:'10万元'});
@@ -32,12 +33,15 @@ describe('shared QCC query contract and truthful failure receipts', () => {
     expect(result.result).toContain('虚构单密钥企业');
     expect(result.result).toContain('SYNTHETIC-QCC-ID');
     expect(result.result).toContain(company);
-    expect(result.result).toContain('get_company_registration_info');
-    expect(result.result).toContain('https://agent.qcc.com/mcp/company/stream');
+
     expect(listLegalSourceCapabilities().find(s=>s.id==='qichacha')).toMatchObject({configured:true,canAutoQuery:true});
     expect(mcpManager.callToolForServer).toHaveBeenCalledExactlyOnceWith('qcc-company','get_company_registration_info',{searchKey:'虚构单密钥企业'},expect.objectContaining({configuration:expect.objectContaining({headers:{Authorization:'Bearer '+fixtureSecret}})}));
     expect(fetch).not.toHaveBeenCalled();
     expect(result.result).not.toContain(fixtureSecret);
+    const receipt=parseReceiptObject(result.receipt)!;
+    expect(receipt.content).toContain(company);
+    expect(receipt.content).not.toMatch(/- 工具：|- 端点：|confirmedForKb=true|qichacha、tianyancha/u);
+    expect(receipt.sourceResults[0]).toMatchObject({sourceTool:'get_company_registration_info',sourceEndpoint:'https://agent.qcc.com/mcp/company/stream'});
   });
   it.each([
     ['authorization', () => Promise.reject(Error('HTTP 401 Bearer '+fixtureSecret))],

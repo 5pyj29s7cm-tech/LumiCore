@@ -7,6 +7,7 @@ import { parseNestedJson, parseStoredArray, toolRecordSucceeded } from '../tools
 import { CN_USER_OUTPUT_PROTECTION_MESSAGES } from "../regions/messages/user_output_protection_messages";
 import {
   privateExecutionReferences,
+  projectExecutionReferenceText,
   sanitizePublicExecutionText,
 } from '../../shared/public_execution_language';
 
@@ -16,7 +17,36 @@ export function inspectPublicExecutionReferences(input: Pick<ToolContext, 'reque
   const { sourceText, verifiedText } = artifactReadbackTextSources(currentRecords, requests);
   const privateIds = [input.requestId, input.taskId, ...input.toolCalls.map(record => record.id), ...(input.completionRequest?.history || []).map(item => item.id)];
   const privateReferences = privateExecutionReferences(answer, privateIds, [...requests, ...sourceText]);
-  return { requests, currentRecords, sourceText, verifiedText, privateReferences, privateReference: privateReferences.length > 0 };
+  const metadataReferences = publicExecutionMetadataReferences(currentRecords, requests);
+  return { requests, currentRecords, sourceText, verifiedText, privateReferences, metadataReferences, privateReference: privateReferences.length > 0 };
+}
+
+
+/** Exact control annotations from records already verified by the live or durable owner. */
+export function publicExecutionMetadataReferences(records: readonly ToolExecutionRecord[], requests: readonly string[]): string[] {
+  const references = new Set<string>();
+  for (const record of records) {
+    const parsed = parseNestedJson(record.receipt || record.result);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const receipt = parsed as Record<string, unknown>;
+    for (const key of ['status', 'persisted', 'changedCaseIds']) if (Object.hasOwn(receipt, key)) {
+      const value = receipt[key];
+      if (typeof value === 'string' || typeof value === 'boolean') references.add(key + '=' + String(value));
+      if (key !== 'status') references.add(key);
+    }
+    if (Object.hasOwn(record.arguments || {}, 'confirmedForKb') || /\bconfirmedForKb\s*=/u.test(String(receipt.content || ''))) references.add('confirmedForKb');
+    if (typeof record.arguments?.queryType === 'string') references.add(record.arguments.queryType);
+    for (const source of Array.isArray(receipt.sourceResults) ? receipt.sourceResults : []) {
+      if (!source || typeof source !== 'object') continue;
+      for (const key of ['sourceTool', 'sourceEndpoint', 'queryType']) {
+        const value = (source as Record<string, unknown>)[key];
+        if (typeof value === 'string' && value) references.add(value);
+      }
+    }
+    // i18n-allow -- exact annotation recognition, never a business verdict.
+    if (record.terminalVerification?.status === 'verified') references.add('已核验终端回执');
+  }
+  return [...references].filter(reference => !requests.some(request => request.includes(reference)));
 }
 
 export interface UserFacingOutputProtectionOptions extends Pick<ToolContext, 'requestId' | 'taskId' | 'completionRequest'> {
@@ -622,7 +652,9 @@ export function sanitizeUserFacingExecutionOutput(
 ): string {
   const raw = stringify(value).trim();
   if (!raw) return '';
-  const redacted = sanitizePublicExecutionText(redactSensitive(raw));
+  const inspected = inspectPublicExecutionReferences({ task: options.task || '', toolCalls: options.toolRecords || [], ...options }, raw);
+  const projected = projectExecutionReferenceText(raw, [], inspected.verifiedText, inspected.metadataReferences);
+  const redacted = sanitizePublicExecutionText(redactSensitive(projected));
   const trustedConfirmationRequestText = String(
     options.trustedConfirmationRequestText || '',
   ).trim();
