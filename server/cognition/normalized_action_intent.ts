@@ -20,7 +20,7 @@ export function withoutNegatedLookupClauses(value: string): string {
   return String(value || '').split(/([，。！？!?；;\n]|\.(?=\s|$))/u).map(clause => { // i18n-allow: multilingual clause boundaries.
     const parts = clause.split(/((?:但是|不过|但)|\b(?:but|instead)\b)/iu); // i18n-allow: preserve a following affirmative instruction.
     const head = parts[0];
-    if (/^\s*(?:(?:请|也|并且|并|且)\s*)?(?:不要|别|无需|不需要|不用|禁止|请勿|不(?=打开|切换|进入|关闭))|^\s*(?:please\s+)?(?:do\s+not|don't|never|no\s+need\s+to)\b/iu.test(head) // i18n-allow: negated lookup clause recognition.
+    if (/^\s*(?:(?:请|也|并且|并|且)\s*)?(?:不要|别|无需|不需要|不用|禁止|请勿|不(?=搜索|查找|查阅|读取|查看|浏览|查询|打开|切换|进入|关闭))|^\s*(?:please\s+)?(?:do\s+not|don't|never|no\s+need\s+to)\b/iu.test(head) // i18n-allow: negated lookup clause recognition.
       && /搜索|查找|查阅|读取|查看|浏览|查询|打开|切换|进入|关闭|\b(?:search|look\s*up|read|browse|fetch|inspect|open|switch|enter|close)\b/iu.test(head)) { // i18n-allow: read-only lookup verbs.
       parts[0] = ' ';
     }
@@ -962,7 +962,7 @@ function inboundMessageRead(text: string): NormalizedActionIntent | null {
 export function hasNegatedMessagingSendIntent(text: string): boolean {
   // i18n-allow: Chinese input-recognition pattern; not user-visible copy.
   if (/^(?:我)?(?:没有|没|并未|从未|不是|并不是).{0,100}(?:发给|发送给|给.{0,24}发|让你.{0,24}(?:发|回复|告诉))/u.test(text)) return true;
-  return /(?:不要|别|无需|禁止).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
+  return /(?:不要|别|无需|禁止|不用|不需要|请勿|不(?=发送|发消息|回复|发出)).{0,32}(?:发送|发消息|回复|发出)|\b(?:do\s+not|don't|dont|never)\b.{0,64}\b(?:send|message|reply)\b|\bwithout\b.{0,40}\b(?:sending|messaging|replying)\b/iu.test(text);
 }
 
 function outgoingMessageSend(text: string): NormalizedActionIntent | null {

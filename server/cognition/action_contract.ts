@@ -3,7 +3,7 @@ import { buildMediaGenerationContract } from './contracts/media_contract';
 import { isExplicitArtifactCreationText, isExternalCommitConfirmationOnlyRequest, normalizeActionIntent } from "./normalized_action_intent";
 import { isLegalEntryTurn, isRemoteLegalMessageTurn } from "./legal_entry";
 import type { ActionIntentAnalysis } from "./normalized_action_intent";
-import { hasExplicitNoToolInstruction, isInformationOnlyQuestion } from "./tool_intent";
+import { hasExplicitNoToolInstruction, isInformationOnlyQuestion, hasRequestedArtifactMutation } from "./tool_intent";
 import { withoutNegatedLookupClauses, compositeNavigationInstructions, independentActionClauses, genericExternalCommit } from "./normalized_action_intent";
 import { withoutLocationLiterals } from "./location_literals";
 import { isAvatarAuthoringRequest } from "./media_creation_intent";
@@ -439,7 +439,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
     });
   }
 
-  if (isLegalEntryTurn(text) || matches(text, /\u5f8b\u5e08|\u4ee3\u7406\u8bcd|\u8d77\u8bc9\u72b6|\u7b54\u8fa9\u72b6|\u5408\u540c|\u534f\u8bae|\u8d22\u4ea7\u7ebf\u7d22|\u88ab\u6267\u884c\u4eba|\u80a1\u6743\u7a7f\u900f|\u8d22\u4ea7\u4fdd\u5168|\u5b9e\u9645\u63a7\u5236\u4eba|\u5931\u4fe1|\u9650\u5236\u6d88\u8d39|\u6cd5\u5f8b\u4f1a\u8bae|\u5f8b\u5e08\u4f1a\u8bae|\u529e\u6848\u4f1a\u8bae|\u6848\u4ef6\u4f1a\u8bae|\u4f1a\u8bae\u7eaa\u8981.*\u6848\u4ef6|\u6c9f\u901a\u8bb0\u5f55.*\u6848\u4ef6|\u4e09\u6bb5\u8bba|\u5927\u524d\u63d0|\u5c0f\u524d\u63d0|\u6db5\u6444|legal|lawyer|pleading|contract|agreement|asset|enforcement|equity|shareholder/i)) {
+  if (isLegalEntryTurn(text) && hasRequestedArtifactMutation(text)) {
     return buildLegalDocumentContract();
   }
 
@@ -520,7 +520,7 @@ export function buildActionContract(input: string, acceptedIntent?: Readonly<Ret
 
   if (readOnlyArtifactInspection) return buildReadOnlyArtifactInspectionContract();
 
-  if (matches(text, /\u6587\u4ef6|\u6587\u6863|PPT|PDF|txt|markdown|md\b|docx|xlsx|pptx|\u521b\u5efa|\u5199\u5165|\u751f\u6210|\u5bfc\u51fa|\u4fdd\u5b58|create|write|generate|export|save/i)) {
+  if (hasRequestedArtifactMutation(text)) {
     return buildArtifactWorkContract();
   }
 

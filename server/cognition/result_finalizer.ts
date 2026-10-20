@@ -785,6 +785,19 @@ export function finalizeLumiResponse(input: LumiResultFinalizerInput): LumiResul
       },
     };
   }
+  if (
+    hasLegalExternalPlatformSignal(actionText) &&
+    claimsExternalLegalPlatformFinalAction(input.responseText || '')
+  ) {
+    return blockedCompletionClaim(input, 'External legal platform final action requires authorized collaboration.');
+  }
+  if (
+    hasLegalExternalPlatformSignal(actionText) &&
+    claimsExternalLegalPlatformResult(input.responseText || '') &&
+    !hasLegalExternalPlatformResultEvidence(input.toolRecords || [], { requestId: input.requestId, taskId: input.taskId, taskText: actionText })
+  ) {
+    return blockedCompletionClaim(input, 'Missing external legal platform result evidence.');
+  }
   // Domain contracts below have stronger target-specific verdicts (for
   // example exact desktop windows, legal gates, and in-app saves). This guard
   // closes the dangerous gap left by terse continuation turns whose task text
@@ -1025,19 +1038,6 @@ function finalizeActionCompletionClaims(
     describesAuthorizedLegalExternalHandoff(input.responseText || '') &&
     !claimsExternalLegalPlatformFinalAction(input.responseText || '') &&
     !claimsExternalLegalPlatformResult(input.responseText || '');
-  if (
-    hasLegalExternalPlatformSignal(actionText) &&
-    claimsExternalLegalPlatformFinalAction(input.responseText || '')
-  ) {
-    return blockedCompletionClaim(input, 'External legal platform final action requires authorized collaboration.');
-  }
-  if (
-    hasLegalExternalPlatformSignal(actionText) &&
-    claimsExternalLegalPlatformResult(input.responseText || '') &&
-    !hasLegalExternalPlatformResultEvidence(input.toolRecords || [])
-  ) {
-    return blockedCompletionClaim(input, 'Missing external legal platform result evidence.');
-  }
   if (
     actionContract.kind === 'desktop_operation'
     && currentAppMutationTask

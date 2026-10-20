@@ -96,6 +96,9 @@ export async function executePlannedToolBatch(state: ToolLoopState, { normalized
         name: tc.name,
         arguments: executionArguments,
         context: state.toolExecutionContext,
+        executionOrigin: state.deterministicRecoveryToolCallIds.has(tc.id || '') ? 'deterministic_route'
+          : response.routingReceiptId ? 'model_selected' : undefined,
+        modelRoutingReceiptId: state.deterministicRecoveryToolCallIds.has(tc.id || '') ? undefined : response.routingReceiptId,
         preflight: () => {
           if (!currentAppGuard.allowed) {
             return { allowed: false, reason: currentAppGuard.reason, arguments: executionArguments };
@@ -121,12 +124,6 @@ export async function executePlannedToolBatch(state: ToolLoopState, { normalized
           return { allowed: true, arguments: executionArguments };
         },
       });
-      if (state.deterministicRecoveryToolCallIds.has(tc.id || '')) {
-        record.executionOrigin = 'deterministic_route';
-      } else if (response.routingReceiptId) {
-        record.modelRoutingReceiptId = response.routingReceiptId;
-        record.executionOrigin = 'model_selected';
-      }
       state.executionLog.push(record);
       await state.onToolCall?.(record);
 

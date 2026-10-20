@@ -95,6 +95,7 @@ export function withLegalReceipt(handler: LegalToolHandler, profile: LegalReceip
       materialSources,
       articleIds,
       artifacts,
+      ...(Array.isArray(declared?.sourceResults) ? { sourceResults: declared.sourceResults } : {}),
       ...(typeof declared?.reasoningLinked === 'boolean' ? { reasoningLinked: declared.reasoningLinked } : {}),
       ...(typeof declared?.reasoningReviewed === 'boolean' ? { reasoningReviewed: declared.reasoningReviewed } : {}),
       ...(['template', 'mixed', 'model'].includes(declared?.draftMode) ? { draftMode: declared!.draftMode } : {}),

@@ -2,7 +2,6 @@ import { createModelTurnState, type ModelTurnState } from "../model_turn_state";
 import { normalizeActionIntent } from "../../cognition/normalized_action_intent";
 import { isCnLiteralTableFieldEdit } from "../../regions/input/zh_action_continuation";
 import { resolveModelAttemptTimeouts, type StreamCallback, type ModelAttemptTimeouts } from "../providers";
-import { buildActionContract } from "../../cognition/action_contract";
 import type { LLMConfig } from './contracts';
 
 export const DEFAULT_TOOL_LOOP_MODEL_WAIT_BUDGET_MS = 120_000;
@@ -20,18 +19,6 @@ export class ToolLoopModelBudgetError extends Error {
 export function positiveBudget(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.trunc(parsed)) : fallback;
-}
-
-export function resolveInteractiveToolTimeouts(config: LLMConfig, task: string): Partial<ModelAttemptTimeouts> | undefined {
-  // A bounded file task has an explicitly configured fallback and produces no
-  // side effect until a full tool call is returned. Do not spend the former
-  // 45-second silent-generation window before trying that fallback. Pinned,
-  // local and explicitly tuned semantic deadlines retain their own policy.
-  if (config.provider !== 'relay' || config.selectionMode !== 'ordered_fallback'
-    || !config.fallbackCandidates?.length || config.attemptTimeouts?.semanticContentMs !== undefined
-    || (buildActionContract(task).kind !== 'artifact_work'
-      && normalizeActionIntent(task).rule !== 'explicit-artifact-edit')) return config.attemptTimeouts;
-  return { ...config.attemptTimeouts, semanticContentMs: 25_000 };
 }
 
 export function resolveInteractiveToolConfig(config: LLMConfig, task: string): LLMConfig {
@@ -83,7 +70,11 @@ export class ToolLoopModelBudget {
     if (remainingMs <= 0) {
       throw new ToolLoopModelBudgetError(this.timeoutMs);
     }
-    const resolved = resolveModelAttemptTimeouts(config);
+    const resolved = resolveModelAttemptTimeouts({
+      ...config,
+      semanticContentMs: config?.semanticContentMs === undefined ? this.timeoutMs : config.semanticContentMs,
+      absoluteMs: config?.absoluteMs === undefined ? this.timeoutMs : config.absoluteMs,
+    });
     // The caller's cumulative deadline is enforced by runModelAttempt's
     // AbortSignal. Do not also shorten the provider's health deadline: a turn
     // with 797 ms left is not evidence that a healthy local model is hung.

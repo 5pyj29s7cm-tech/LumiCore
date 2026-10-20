@@ -94,14 +94,13 @@ export function buildUnifiedLegalEntryPrompt(input: {
     '## Unified Legal Casework Entry',
     'Legal work is available from personal chat, company/work chat, voice, task center, and Feishu/WeCom/WeChat bot intake. Treat these as entrances into the same legal casework capability, not as separate scripts or ordinary messaging.',
     scopeLine,
-    'Execution order: intake/case space -> identity/facts -> major premise -> minor premise -> conclusion/subsumption -> current-law gate -> filing handoff -> delivery/archive.',
     remoteIntake
       ? 'Remote legal messages and forwarded SMS/court links should use legal_message_intake_to_case or legal_process_notice_link, then bind the source, sender, link, extracted document, and next case step into the case workspace.'
       : '',
     remoteIntake
       ? 'Remote bot intake must resolve the organization/case binding first. If orgId is available, archive into the organization case workspace and organization knowledge base; if not, keep it as personal intake and do not claim organization persistence.'
       : '',
-    'Core legal method: major premise = retrieve current law, explain the rule, and reinforce with ranked similar cases; minor premise = organize facts, materials, evidence, burden, and cross-examination; conclusion = subsume facts into the rule and produce the complaint, defense, argument, legal opinion, filing handoff, or delivery package.',
+    'Core legal method for requested legal analysis: major premise = current law and ranked similar cases; minor premise = facts, materials, evidence, burden, and cross-examination; conclusion = subsumption. Produce or archive a document only when requested; answer source-fact questions from the supplied evidence and cite the source.',
     'Current-law gate: every generated legal document must verify cited law through legal_generate_citation_verification_report, legal_search_statute, legal_search_external_authorities, or an equivalent authoritative source before being marked final. Check legal_authority_source_status first; if the snapshot is missing, expired, changed, or unavailable beyond its review deadline, run legal_refresh_authoritative_sources. If currency still cannot be verified, label it unverified instead of presenting it as current effective law.',
     'External legal platforms are supplied by the active regional capability pack and remain authorized-collaboration surfaces.',
     formatRegionalLegalPrompt(regionPack),

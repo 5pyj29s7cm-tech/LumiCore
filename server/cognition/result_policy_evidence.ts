@@ -1,5 +1,7 @@
 import type { ToolExecutionRecord } from '../tools/types';
-import { toolRecordSucceeded } from '../tools/receipt_payload';
+import { toolRecordSucceeded, parseReceiptObject } from '../tools/receipt_payload';
+import { isCanonicalToolExecutionRecord } from '../tools/canonical_execution_record';
+import { withoutNegatedLookupClauses } from './normalized_action_intent';
 
 export function hasContinuousStockWatchIntent(text: string): boolean {
   return /(?:\u6301\u7eed|\u4e00\u76f4|\u5b9e\u65f6|\u76d8\u4e2d|\u5f00\u59cb|\u6b63\u5728)?.{0,12}(?:\u76ef\u76d8|\u76d1\u63a7|\u9884\u8b66|\u63d0\u9192)|(?:watch|monitor|track|alert|watchlist|price\s*alert|market\s*alert)/iu
@@ -110,13 +112,28 @@ export function claimsExternalLegalPlatformResult(text: string): boolean {
     .test(value);
 }
 
-export function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[]): boolean {
+export function hasLegalExternalPlatformResultEvidence(records: ToolExecutionRecord[], current?: { requestId?: string; taskId?: string; taskText?: string }): boolean {
   const successful = records.filter(record => !record.error && String(record.result || '').trim());
   if (successful.length === 0) return false;
 
   return successful.some(record => {
     const name = String(record.name || '');
     const result = String(record.result || '');
+    if (name === 'legal_company_database_lookup') {
+      const receipt = parseReceiptObject(record.receipt);
+      const qccRequested = /(?:\u4f01\u67e5\u67e5|qichacha|\bqcc\b)/iu.test(withoutNegatedLookupClauses(current?.taskText || ''));
+      if (!isCanonicalToolExecutionRecord(record) || !toolRecordSucceeded(record)
+        || !current?.requestId || record.requestId !== current.requestId
+        || current.taskId && record.taskId !== current.taskId
+        || receipt?.ok !== true || receipt.status !== 'observed' || !Array.isArray(receipt.sourceResults)) return false;
+      return receipt.sourceResults.some((source: any) => source?.status === 'observed'
+        && typeof source.subject === 'string' && source.subject.trim()
+        && Number.isFinite(Date.parse(source.queriedAt)) && /^[a-f0-9]{64}$/.test(source.sourceTextSha256)
+        && (qccRequested
+          ? /^https:\/\/agent\.qcc\.com\/mcp\/(?:company|risk)\/stream$/.test(source.sourceEndpoint)
+            && /^get_(?:company_registration_info|shareholder_info|actual_controller|company_risk_scan|judgment_debtor_info|dishonest_info|high_consumption_restriction)$/.test(source.sourceTool)
+          : typeof source.sourceEndpoint === 'string' && source.sourceEndpoint.startsWith('https://')));
+    }
     if (/manual_required|captcha|2FA|QR|\u9a8c\u8bc1\u7801|\u626b\u7801|\u4ed8\u8d39|\u9700\u8981\u767b\u5f55|\u672a\u914d\u7f6e|not configured|login required/i.test(result)) {
       return false;
     }

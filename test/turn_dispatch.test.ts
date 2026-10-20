@@ -60,7 +60,7 @@ describe('Lumi turn dispatch', () => {
     expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(true);
   });
 
-  it('keeps casual chat conversational instead of forcing an active task', async () => {
+  it('answers casual chat without disabling tools or resuming an unrelated task', async () => {
     const { createWorkTakeoverTask } = await import('../server/work_takeover/tasks');
     const { buildLumiTurnDispatch } = await import('../server/cognition/turn_dispatch');
 
@@ -83,8 +83,8 @@ describe('Lumi turn dispatch', () => {
     });
 
     expect(dispatch.surface).toBe('chat');
-    expect(dispatch.boundary).toBe('conversation');
-    expect(dispatch.flow.allowToolUseForTurn).toBe(false);
-    expect(dispatch.promptOverlay).toContain('conversation-first');
+    expect(dispatch.boundary).toBe('tool_action');
+    expect(dispatch.flow.allowToolUseForTurn).toBe(true);
+    expect(dispatch.flow.workTakeover.shouldResumeTask).toBe(false);
   });
 });

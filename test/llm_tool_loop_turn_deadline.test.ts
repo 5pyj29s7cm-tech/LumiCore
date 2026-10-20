@@ -13,6 +13,7 @@ vi.mock('../server/llm/providers', async () => {
 });
 
 import { runWithTools } from '../server/llm/adapter';
+import { resolveModelAttemptTimeouts } from '../server/llm/providers';
 import { createModelTurnState } from '../server/llm/model_turn_state';
 import { encodeToolResult } from '../server/tools/result_envelope';
 import { ToolRegistry } from '../server/tools/registry';
@@ -85,6 +86,37 @@ afterEach(() => {
 });
 
 describe('bounded cumulative model-wait lifecycle', () => {
+  it.each([
+    'Create D:/work/meeting.docx with a meeting agenda.',
+    '水杯数量改成4，其余不变，更新刚才生成的 Excel，保存后回读告诉我结果。',
+    'Explain a mathematical theorem.',
+  ])('preserves provider deadlines across task wording: %s', async task => {
+    vi.useFakeTimers();
+    const { registry, verified, late } = deadlineRegistry();
+    for (const attemptTimeouts of [undefined, { semanticContentMs: 90_000 }, { semanticContentMs: 90_000, absoluteMs: 100_000 }]) {
+      let attemptConfig: any;
+      mocks.makeLLMCallStreaming.mockImplementationOnce((_messages, _tools, config) => {
+        attemptConfig = config;
+        return new Promise((_resolve, reject) => setTimeout(() => reject(new Error('provider-only stop')), 30_000));
+      });
+      const pending = runWithTools([{ role: 'user', content: task }], registry, {
+        provider: 'relay', model: 'primary', selectionMode: 'ordered_fallback',
+        fallbackCandidates: [{ provider: 'relay', model: 'backup' }], attemptTimeouts,
+      }, undefined, 1, ...getters, () => {});
+      const assertion = expect(pending).rejects.toThrow('provider-only stop');
+      await vi.advanceTimersByTimeAsync(25_001);
+      expect(attemptConfig.attemptTimeouts).toEqual(resolveModelAttemptTimeouts({
+        ...attemptTimeouts, semanticContentMs: attemptTimeouts?.semanticContentMs ?? 120_000,
+        absoluteMs: attemptTimeouts?.absoluteMs ?? 120_000,
+      }));
+      expect(attemptConfig.signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(4_999);
+      await assertion;
+    }
+    expect(verified).not.toHaveBeenCalled();
+    expect(late).not.toHaveBeenCalled();
+  });
+
   it('stops queued calls and model recovery at a missing required source, but permits a new attempt', async () => {
     const { registry, late } = deadlineRegistry();
     const read = vi.fn().mockRejectedValueOnce(new Error('XLSX file not found: D:/orders.xlsx'))

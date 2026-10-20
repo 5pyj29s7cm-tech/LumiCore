@@ -15,7 +15,6 @@ import { toolCallSignature } from './recovery';
 import { compactMessagesForModel } from './context_budget';
 import type { ModelBudgetAttempt } from './model_budget';
 import type { LLMConfig } from './contracts';
-import { resolveInteractiveToolTimeouts } from './model_budget';
 
 export async function prepareToolLoopModelResponse(state: ToolLoopState, iteration: number) {
 
@@ -147,7 +146,7 @@ export async function prepareToolLoopModelResponse(state: ToolLoopState, iterati
       };
     } else {
       response = state.modelBudget
-        ? await state.modelBudget.runModelAttempt(resolveInteractiveToolTimeouts(state.config, state.primaryTask), state.onStreamChunk, invokeModel)
+        ? await state.modelBudget.runModelAttempt(state.config.attemptTimeouts, state.onStreamChunk, invokeModel)
         : await invokeModel({
             signal: state.config.signal || new AbortController().signal,
             attemptTimeouts: resolveModelAttemptTimeouts(state.config.attemptTimeouts),

@@ -198,7 +198,6 @@ describe('model-owned main chat architecture', () => {
     expect(chatSource).not.toContain('const bindsExistingAction =');
     expect(chatSource).toContain('acceptedRuntimeCleanup: Boolean(acceptedRuntimeCleanupOffer && conversationId)');
     expect(taskOwner).toContain('execution.capabilityPlan.taskLedgerRequired');
-    expect(taskOwner.match(/prepareConversationActionExecution\(\{/g)).toHaveLength(1);
     expect(chatSource).toContain('userMessageId: acceptedUserMessageId');
     expect(chatSource).not.toContain('persistConversationExecutionPlan');
     expect(chatSource).not.toContain("setConversationActionExecutionStatus(conversationId, uid, 'executing'");

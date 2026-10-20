@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { queryQichachaMcp, QICHACHA_QUERY_TOOLS, type QichachaQueryType } from '../../../../legal/sources';
 import { encodeToolResult } from '../../../../tools/result_envelope';
 import { searchCompany, searchEnforcementRecords, type ExternalLegalSearchKind, searchLegalAuthorityDatabase, listLegalSourceCapabilities, searchCompanySources, searchTenderSources } from "../../../../legal/sources";
@@ -386,7 +387,9 @@ ${sourceErrors.length ? '### 本次查询异常\n' + sourceErrors.map(message =>
     cause: textArg(args, 'caseType') || '主体信息核验',
   });
 
-  return encodeToolResult(`${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`, { ok: complete, status: complete ? 'observed' : 'partial' });
+  return encodeToolResult(`${report}\n\n## 六、入库与案件归档\n${kbLine}\n${caseLine}`, { ok: complete, status: complete ? 'observed' : 'partial',
+    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: name, queryType, status: 'observed', sourceTextSha256: createHash('sha256').update(text).digest('hex') })),
+  });
 }
 
 export async function searchTenderProjectsHandler(args: Record<string, any>, context?: any): Promise<string> {

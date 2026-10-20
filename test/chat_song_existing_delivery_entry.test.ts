@@ -64,7 +64,7 @@ async function cachedVideo(withImage = false) {
   mock.media.mockClear(); return { p: p as ChatSongProject, render, filePath, directory };
 }
 
-async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en' | 'zh' = 'en') {
+async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en' | 'zh' = 'en', routingReceiptId = '') {
   const requestId = randomUUID(), conversationId = getOrCreateActiveConversation(uid, 'lumi', 'personal', '').id;
   const identity = { userId: uid, requestId, conversationId, agentId: 'lumi', domain: 'personal' as const, orgId: '' };
   const text = language === 'en' ? 'Return the existing video for chat-song project ' + p.id + ', revision ' + p.revision + ', as an attachment. Do not regenerate or modify any file.'
@@ -74,7 +74,7 @@ async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en
     const fields = messages.find(message => message.promptBlock?.id === 'current-execution-authorization')?.promptBlock?.fields;
     if (mock.llm.mock.calls.length === 1) {
       expect(declarations.map(item => item.function.name), JSON.stringify(diagnostic)).toContain('chat_song_read');
-      return { text: '', finishReason: 'tool_calls', toolCalls: [{ id: 'accepted-existing-song-read', name: 'chat_song_read', arguments: { projectId: p.id, revision: p.revision, includeOutput: true } }] };
+      return { text: '', finishReason: 'tool_calls', ...(routingReceiptId ? { routingReceiptId } : {}), toolCalls: [{ id: 'accepted-existing-song-read', name: 'chat_song_read', arguments: { projectId: p.id, revision: p.revision, includeOutput: true } }] };
     }
     const evidence = fields?.completionEvidence as Array<{ id: string; operation: string; effects: unknown[] }>;
     return { text: config.responseFormat === 'json_object' ? JSON.stringify({ answer: 'Here is the selected existing video.', goals: [{ text, operation: evidence[0].operation, effects: evidence[0].effects, status: 'completed', evidenceIds: [evidence[0].id] }] }) : 'Here is the selected existing video.', finishReason: 'stop', toolCalls: [] };
@@ -155,4 +155,18 @@ it.each(['missing-receipt', 'turn-user', 'turn-domain', 'turn-org'] as const)('w
   commitDatabaseTables(tables); await flushDBOrThrow();
   try { expect(collectChatArtifacts(entry.result.toolRecords, entry.identity.conversationId)).toEqual([]); }
   finally { const restore = readDatabaseTables(['conversationActionReceipts', 'conversationActionTurns']); restore.conversationActionReceipts = savedReceipts; restore.conversationActionTurns = savedTurns; commitDatabaseTables(restore); await flushDBOrThrow(); }
+});
+
+it('keeps a genuine model-selected existing-video receipt canonical before persistence and attachment delivery', async () => {
+  const { p, filePath } = await cachedVideo();
+  const routingReceiptId = 'synthetic-model-routing-' + randomUUID();
+  const entry = await deliverExistingVideoThroughChat(p, 'zh', routingReceiptId);
+  expect(entry.result.toolRecords).toHaveLength(1);
+  const record = entry.result.toolRecords[0];
+  expect(isCanonicalToolExecutionRecord(record)).toBe(true);
+  expect(record).toMatchObject({ executionOrigin: 'model_selected', modelRoutingReceiptId: routingReceiptId });
+  expect(entry.result.finalized.blocked).toBe(false);
+  const durable = await querySQL<{ executionOrigin: string; modelRoutingReceiptId: string }>('SELECT executionOrigin, modelRoutingReceiptId FROM conversation_action_receipts WHERE requestId = ?', [entry.identity.requestId]);
+  expect(durable).toEqual([{ executionOrigin: 'model_selected', modelRoutingReceiptId: routingReceiptId }]);
+  expect(collectChatArtifacts(entry.result.toolRecords, entry.identity.conversationId)).toMatchObject([{ kind: 'video', path: filePath }]);
 });

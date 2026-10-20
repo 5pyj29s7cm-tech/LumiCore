@@ -38,7 +38,6 @@ export { compactToolLoopMessagesForModel } from './tool_loop/context_budget';
 export { localizeInternalStatusLeak } from './tool_loop/summaries';
 export { isForbiddenLocalCadImageFallback } from './tool_loop/artifacts';
 export { ToolLoopModelBudgetError } from './tool_loop/model_budget';
-export { resolveInteractiveToolTimeouts } from './tool_loop/model_budget';
 export { resolveInteractiveToolConfig } from './tool_loop/model_budget';
 export { parseScreenshotBase64 } from './tool_loop/vision';
 export { analyzeScreen } from './tool_loop/vision';
@@ -68,13 +67,11 @@ export async function runWithTools(
   const priorToolRecords = (context?.priorToolRecords || [])
     .filter(record => Boolean(record?.name))
     .slice(-40);
-  const policyAttemptTimeoutMs = positiveBudget(
-    context?.toolPolicy?.modelAttemptTimeoutMs,
-    resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs,
-  );
   const configuredAttemptTimeouts: Partial<ModelAttemptTimeouts> = {
     ...config.attemptTimeouts,
-    absoluteMs: config.attemptTimeouts?.absoluteMs ?? policyAttemptTimeoutMs,
+    ...(config.attemptTimeouts?.absoluteMs === undefined && context?.toolPolicy?.modelAttemptTimeoutMs !== undefined
+      ? { absoluteMs: positiveBudget(context.toolPolicy.modelAttemptTimeoutMs,
+          resolveModelAttemptTimeouts(config.attemptTimeouts).absoluteMs) } : {}),
   };
   const modelWaitBudgetMs = positiveBudget(
     config.modelWaitBudgetMs ?? context?.toolPolicy?.modelWaitBudgetMs,

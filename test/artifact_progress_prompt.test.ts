@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildArtifactProgressPrompt, resolveRequiredToolNamesForModel, resolveArtifactReadbackCall, resolveInteractiveToolTimeouts, resolveInteractiveToolConfig } from '../server/llm/adapter';
+import { buildArtifactProgressPrompt, resolveRequiredToolNamesForModel, resolveArtifactReadbackCall, resolveInteractiveToolConfig } from '../server/llm/adapter';
 import { requestedArtifactSaveAsPath, matchesRequestedArtifactOutput } from '../server/cognition/artifact_write_scope';
 
 describe('generated deliverable continuation', () => {
@@ -23,16 +23,6 @@ describe('generated deliverable continuation', () => {
     expect(matchesRequestedArtifactOutput(task,'D:/work/random-copy.xlsx')).toBe(false);
     expect(matchesRequestedArtifactOutput(task,'D:/work/updated.xlsx')).toBe(true);
     expect(requestedArtifactSaveAsPath('不要另存到 D:/work/no.xlsx')).toBe('');
-  });
-  it('bounds silent official file-task waiting only when an ordered fallback is configured', () => {
-    const config: any = { provider: 'relay', model: 'primary', selectionMode: 'ordered_fallback', fallbackCandidates: [{provider:'relay', model:'backup'}] };
-    const task='Create D:/work/meeting.docx with a meeting agenda.';
-    expect(resolveInteractiveToolTimeouts(config,task)?.semanticContentMs).toBe(25000);
-    expect(resolveInteractiveToolTimeouts(config,'水杯数量改成4，其余不变，更新刚才生成的 Excel，保存后回读告诉我结果。')?.semanticContentMs).toBe(25000);
-    expect(resolveInteractiveToolTimeouts({...config,selectionMode:'pinned'},task)).toBeUndefined();
-    expect(resolveInteractiveToolTimeouts({...config,provider:'lmstudio'},task)).toBeUndefined();
-    expect(resolveInteractiveToolTimeouts({...config,attemptTimeouts:{semanticContentMs:90000}},task)?.semanticContentMs).toBe(90000);
-    expect(resolveInteractiveToolTimeouts(config,'Explain a mathematical theorem.')).toBeUndefined();
   });
   const saved: any = { name: 'create_docx', arguments: {}, result: JSON.stringify({ ok: true, status: 'created', path: 'D:/work/meeting.docx' }), terminalVerification: { status: 'verified' } };
   it('carries a verified output and its pending open step into the next model request', () => {

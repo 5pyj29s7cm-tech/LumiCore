@@ -1,3 +1,4 @@
+import { explicitNoMutationScope } from '../../../../cognition/tool_intent';
 import type { ToolDefinition } from '../../../../tools/types';
 import { searchExternalAuthoritiesHandler, companyDatabaseLookupHandler, searchTenderProjectsHandler } from "./company_research";
 import { externalResearchPlanHandler, prepareExternalBrowserWorkspaceHandler } from "./external_workspace";
@@ -88,7 +89,9 @@ queryType: { ...stringField('企查查本次明确查询范围；默认registrat
       confirmedForKb: booleanField('律师确认来源和授权后设为 true，可将报告导入组织知识库'),
     },
     required: ['name'],
-    handler: companyDatabaseLookupHandler,
+    serverOwnedArgumentBinder: (args, context) => explicitNoMutationScope(context?.acceptedActionContract?.taskText || '').local
+      ? { ...args, persistCase: false, confirmedForKb: false } : args,
+    handler: withLegalReceipt(companyDatabaseLookupHandler, { status: 'observed', expectCaseMutation: 'when_requested' }),
   }),
   defineLegalTool({
     name: 'legal_external_research_plan',

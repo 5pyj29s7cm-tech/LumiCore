@@ -705,7 +705,7 @@ describe('Lumi action contract', () => {
     expect(buildActionContract('\u89c6\u9891\u7f51\u7ad9\u81ea\u52a8\u8bc4\u8bba').kind).toBe('public_post');
     expect(buildActionContract('CAD\u81ea\u52a8\u753b\u56fe').kind).toBe('cad_drafting');
     expect(buildActionContract('\u5e2e\u6211\u76ef\u76d8\u80a1\u7968').kind).toBe('stock_monitor');
-    expect(buildActionContract('\u5f8b\u5e08\u7684\u4ee3\u7406\u8bcd').kind).toBe('legal_document');
+    expect(buildActionContract('\u5f8b\u5e08\u7684\u4ee3\u7406\u8bcd').kind).toBe('none');
     const legalMeeting = buildActionContract('\u628a\u8fd9\u6b21\u529e\u6848\u4f1a\u8bae\u6574\u7406\u6210\u6848\u4ef6\u4f1a\u8bae\u7eaa\u8981');
     expect(legalMeeting.kind).toBe('legal_document');
     expect(legalMeeting.preferredTools).toContain('legal_meeting_minutes_to_case');
@@ -716,9 +716,7 @@ describe('Lumi action contract', () => {
     expect(legalReasoning.preferredTools).toContain('legal_case_reasoning_matrix');
     expect(legalReasoning.verificationTools).toContain('legal_case_reasoning_matrix');
     const legalAssetTrace = buildActionContract('\u67e5\u88ab\u6267\u884c\u4eba\u8d22\u4ea7\u7ebf\u7d22\u548c\u80a1\u6743\u7a7f\u900f');
-    expect(legalAssetTrace.kind).toBe('legal_document');
-    expect(legalAssetTrace.preferredTools).toContain('legal_trace_assets');
-    expect(legalAssetTrace.preferredTools).toContain('legal_equity_penetration');
+    expect(legalAssetTrace.kind).toBe('none');
     const legalRemoteIntake = buildActionContract('\u98de\u4e66\u53d1\u7ed9 Lumi bot \u7684\u6cd5\u9662\u77ed\u4fe1\u94fe\u63a5\uff0c\u81ea\u52a8\u5165\u6848');
     expect(legalRemoteIntake.kind).toBe('legal_document');
     expect(legalRemoteIntake.preferredTools).toContain('legal_message_intake_to_case');
