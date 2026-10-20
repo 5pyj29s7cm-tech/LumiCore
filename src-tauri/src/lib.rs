@@ -66,8 +66,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
-#[cfg(not(test))]
-use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 mod backend_shutdown;
