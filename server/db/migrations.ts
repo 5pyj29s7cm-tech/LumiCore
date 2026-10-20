@@ -176,6 +176,17 @@ export function migrateSchema(database: sqlite3.Database): Promise<void> {
     // Add domain + orgId to conversations for personal/work isolation
     database.run("ALTER TABLE conversations ADD COLUMN domain TEXT DEFAULT 'personal'", onAlter);
     database.run("ALTER TABLE conversations ADD COLUMN orgId TEXT DEFAULT ''", onAlter);
+    database.run("ALTER TABLE conversations ADD COLUMN surface TEXT NOT NULL DEFAULT 'chat'", onAlter);
+    // Only exact, unmixed creation provenance can recover a legacy surface.
+    database.run(`UPDATE conversations SET surface='creation'
+      WHERE COALESCE(surface,'chat')='chat'
+        AND EXISTS (SELECT 1 FROM interactions i WHERE i.conversationId=conversations.id AND i.source='ai-creation'
+          AND i.userId=conversations.userId AND COALESCE(i.domain,'personal')=COALESCE(conversations.domain,'personal')
+          AND COALESCE(i.orgId,'')=COALESCE(conversations.orgId,''))
+        AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.conversationId=conversations.id
+          AND (COALESCE(i.source,'')<>'ai-creation' OR i.userId<>conversations.userId
+            OR COALESCE(i.domain,'personal')<>COALESCE(conversations.domain,'personal')
+            OR COALESCE(i.orgId,'')<>COALESCE(conversations.orgId,'')))`, onAlter);
     // Durable auto-summary cadence and bounded summary history. -1 marks rows
     // created before this migration so the manager can infer a safe baseline.
     database.run("ALTER TABLE conversations ADD COLUMN summaryChain TEXT DEFAULT '[]'", onAlter);

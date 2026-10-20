@@ -300,6 +300,7 @@ export function createStream(
 
   const resultCallbacks: Array<(result: STTResult) => void> = [];
   const errorCallbacks: Array<(err: Error) => void> = [];
+  const readyCallbacks: Array<() => void> = [];
   const audioQueue: Buffer[] = [];
   let sequence = 1;
   let sessionReady = false;
@@ -368,6 +369,7 @@ export function createStream(
 
       if (!sessionReady) {
         sessionReady = true;
+        if (!ending && !errorNotified) readyCallbacks.forEach(callback => callback());
         recordSuccess(PROVIDER);
         logger.info('[Doubao-ASR] Session ready');
         for (const chunk of audioQueue.splice(0)) sendAudioFrame(chunk);
@@ -447,6 +449,10 @@ export function createStream(
     },
     onError(callback) {
       errorCallbacks.push(callback);
+    },
+    onReady(callback) {
+      readyCallbacks.push(callback);
+      if (sessionReady && !closed && !ending && !errorNotified) callback();
     },
   };
 }

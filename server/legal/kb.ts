@@ -8,8 +8,7 @@ import { checkStatuteProvision, extractStatuteReferences, statuteTextCopy, type 
  */
 import * as EDB from '../org/db';
 import { recordLegalArticleWrite } from './execution';
-import { generateEmbeddingWithIdentity, cosineSimilarity } from '../memory/store';
-import { indexArticle } from '../org/kb';
+import { indexArticle, searchKnowledgeBase } from '../org/kb';
 import { getStatuteAuthorityCheck, loadStatuteAuthorityRefreshState, type StatuteAuthorityCheck } from './statute_authority_store';
 import { authorizeOrganizationResource, getOrganizationResourcePolicy } from '../org/resource_acl';
 
@@ -93,19 +92,6 @@ export async function indexLegalArticle(orgId: string, articleId: string, actorU
 
 // ── Case Similarity Search ──────────────────────────────────────────────
 
-function legalEmbeddingScore(
-  row: { modelName: string; embedding: string },
-  query: NonNullable<Awaited<ReturnType<typeof generateEmbeddingWithIdentity>>>,
-): number | null {
-  // Legacy labels cannot establish which model actually produced the vector.
-  // Reindex those articles; never guess identity from a matching dimension.
-  if (row.modelName !== `${query.provider}/${query.model}`) return null;
-  let vector: unknown;
-  try { vector = JSON.parse(row.embedding); } catch { return null; }
-  if (!Array.isArray(vector) || vector.length !== query.vector.length || !vector.every(Number.isFinite)) return null;
-  return cosineSimilarity(query.vector, vector);
-}
-
 export interface CaseResult {
   articleId: string;
   title: string;
@@ -114,6 +100,8 @@ export interface CaseResult {
   chunk: string;
   score: number;
   date?: string;
+  source?: 'semantic' | 'keyword';
+  citationKey?: string;
 }
 
 export async function searchSimilarCases(
@@ -122,47 +110,24 @@ export async function searchSimilarCases(
   limit = 5,
   actorUserId?: string,
 ): Promise<CaseResult[]> {
-  const allEmbeddings = EDB.getAllKbEmbeddings(orgId);
-  if (allEmbeddings.length === 0) return [];
-
-  // Only search judgment-type articles
-  const judgmentArticles = listAuthorizedLegalArticles(orgId, { category: 'legal_judgment' }, actorUserId);
-  const judgmentIds = new Set(judgmentArticles.map(a => a.id));
-  const relevantEmbeddings = allEmbeddings.filter(e => judgmentIds.has(e.articleId));
-  if (relevantEmbeddings.length === 0) return [];
-
-  let queryEmbedding: Awaited<ReturnType<typeof generateEmbeddingWithIdentity>> = null;
-  try {
-    queryEmbedding = await generateEmbeddingWithIdentity(query, actorUserId);
-  } catch {
-    return [];
-  }
-  if (!queryEmbedding) return [];
-
-  const results = relevantEmbeddings
-    .map(emb => {
-      const score = legalEmbeddingScore(emb, queryEmbedding!);
-      return score === null ? null : { ...emb, score };
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null && r.score > 0.3)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
-
+  const results = await searchKnowledgeBase(orgId, query, {
+    category: 'legal_judgment', limit, userId: actorUserId,
+  });
   return results.map(r => {
-    const article = judgmentArticles.find(a => a.id === r.articleId);
-    let tags: string[] = [];
-    try { tags = JSON.parse(article?.tags || '[]'); } catch {}
+    const tags = r.tags;
     const caseNum = tags.find(t => t.startsWith('case:'))?.replace('case:', '');
     const court = tags.find(t => t.startsWith('jurisdiction:'))?.replace('jurisdiction:', '');
 
     return {
       articleId: r.articleId,
-      title: article?.title || '(unknown)',
+      title: r.title,
       caseNumber: caseNum,
       court,
-      chunk: r.content,
+      chunk: r.chunk,
       score: Math.round(r.score * 1000) / 1000,
-      date: article?.createdAt,
+      date: r.updatedAt,
+      source: r.source,
+      citationKey: r.citationKey,
     };
   });
 }
@@ -179,6 +144,8 @@ export interface StatuteResult {
   sourceUrl?: string;
   reviewAfter?: string;
   content?: string;
+  source?: 'semantic' | 'keyword';
+  citationKey?: string;
 }
 
 export interface StatuteVerificationSnapshot {
@@ -683,42 +650,17 @@ export async function searchStatutes(
   }
 
   // 2. Search local KB for statute articles
-  const statuteArticles = listAuthorizedLegalArticles(orgId, { category: 'legal_statute' }, actorUserId);
-  if (statuteArticles.length > 0) {
-    const allEmbeddings = EDB.getAllKbEmbeddings(orgId);
-    const statuteIds = new Set(statuteArticles.map(a => a.id));
-    const relevant = allEmbeddings.filter(e => statuteIds.has(e.articleId));
-
-    if (relevant.length > 0) {
-      let queryEmb: Awaited<ReturnType<typeof generateEmbeddingWithIdentity>> = null;
-      try { queryEmb = await generateEmbeddingWithIdentity(query, actorUserId); } catch { /* empty */ }
-
-      if (queryEmb) {
-        const semantic = relevant
-          .map(emb => {
-            const score = legalEmbeddingScore(emb, queryEmb!);
-            return score === null ? null : { ...emb, score };
-          })
-          .filter((s): s is NonNullable<typeof s> => s !== null && s.score > 0.3)
-          .sort((a, b) => b.score - a.score);
-
-        for (const s of semantic) {
-          const article = statuteArticles.find(a => a.id === s.articleId);
-          if (article && !results.find(r => r.articleId === article.id)) {
-            let tags: string[] = [];
-            try { tags = JSON.parse(article.tags || '[]'); } catch {}
-            const effective = !tags.includes('repealed');
-            results.push({
-              articleId: article.id,
-              title: article.title,
-              chunk: s.content,
-              score: Math.round(s.score * 1000) / 1000,
-              isEffective: effective,
-            });
-          }
-        }
-      }
-    }
+  const local = await searchKnowledgeBase(orgId, query, { category: 'legal_statute', limit, userId: actorUserId });
+  for (const item of local) {
+    if (results.some(result => result.articleId === item.articleId)) continue;
+    results.push({
+      articleId: item.articleId, title: item.title, chunk: item.chunk,
+      score: Math.round(item.score * 1000) / 1000,
+      isEffective: !item.tags.includes('repealed'),
+      // An imported text is a candidate, not proof of current legal validity.
+      verificationStatus: item.tags.includes('repealed') ? 'repealed' : 'missing',
+      source: item.source, citationKey: item.citationKey,
+    });
   }
 
   return results.slice(0, limit);

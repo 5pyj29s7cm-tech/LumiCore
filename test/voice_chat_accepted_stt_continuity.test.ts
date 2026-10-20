@@ -33,6 +33,7 @@ vi.mock('../server/stt/adapter', async importOriginal => {
         sendAudio: vi.fn((chunk: Buffer) => chunks.push(Buffer.from(chunk))),
         end: vi.fn(),
         updateEndpointing: vi.fn(),
+        onReady: (callback: () => void) => callback(),
         onResult: vi.fn((handler: (result: Record<string, any>) => void | Promise<void>) => {
           resultHandler = handler;
         }),
@@ -993,8 +994,7 @@ describe('accepted STT Voice -> Chat task continuity', () => {
       });
       const recoveryControls = observed.flatMap(messages => messages.filter(message => message.role === 'user'
         && typeof message.content === 'string' && message.content.startsWith('Internal execution recovery.')));
-      expect(recoveryControls.length).toBeGreaterThan(0);
-      for (const control of recoveryControls) expect(control.sourceMessageId).toBeUndefined();
+      expect(recoveryControls).toHaveLength(0);
       expect(modelUsers.length).toBeGreaterThan(0);
       expect(modelUsers.some(message => message.content === expected)).toBe(true);
       for (const message of modelUsers) {

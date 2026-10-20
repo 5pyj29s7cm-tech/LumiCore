@@ -27,6 +27,41 @@ const TOOLS = [
 ].map(declaration);
 
 describe('deterministic runtime-work routing', () => {
+  it.each([
+    '现在有哪些正在运行的Lumi任务？只查询状态，不取消、不暂停、不重试。',
+    '后台正在执行什么任务？只查看，不取消任何任务。',
+    'What is the current task status? Only report status; do not cancel, pause or retry.',
+  ])('preserves an explicit read-only status request despite negated control words: %s', text => {
+    expect(classifyRuntimeWorkIntent(text)).toBe('status');
+    const route = routeToolsForTurn(text, TOOLS);
+    expect(route.toolNames).toEqual(['runtime_work_status']);
+    expect(route.forbiddenToolNames).toContain('runtime_work_cancel');
+  });
+
+  it.each([
+    '取消当前任务', '取消所有后台任务', '停止正在运行的任务',
+    'cancel the current task.', 'stop all background tasks',
+  ])('keeps an unambiguous complete short cancellation control: %s', text => {
+    expect(classifyRuntimeWorkIntent(text)).toBe('cancel');
+    expect(routeToolsForTurn(text, TOOLS).toolNames).toEqual(['runtime_work_cancel']);
+  });
+
+  it.each([
+    '不取消后台任务。',
+    '先取消后台任务甲，但不要取消后台任务乙。',
+    '不取消后台任务，但暂停后台任务甲。',
+    '请解释示例“取消所有后台任务”是什么意思，不要执行。',
+    'Cancel background task A, but do not cancel background task B.',
+    'Do not cancel the current task, pause task A instead.',
+    'Explain the example "cancel the current task" without executing it.',
+  ])('leaves negation, named scope and quoted or mixed instructions to the existing model tool chain: %s', text => {
+    expect(classifyRuntimeWorkIntent(text)).toBe('none');
+    const route = routeToolsForTurn(text, TOOLS);
+    expect(route.hardAllowlist).not.toBe(true);
+    expect(route.requiredTools).not.toContain('runtime_work_cancel');
+    expect(route.categories).not.toEqual(['task_control']);
+  });
+
   it('does not turn a negated status-output constraint into a status command', () => {
     const text = 'Write the requested file exactly once. Do not report task status. Stop when confirmation is required.';
     expect(classifyRuntimeWorkIntent(text)).toBe('none');

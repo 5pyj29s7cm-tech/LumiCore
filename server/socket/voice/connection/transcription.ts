@@ -32,10 +32,12 @@ export async function startVoiceTranscription(
     if (sttProvider) {
       try {
         const language = sttProvider === 'qwen' ? 'zh' : 'zh-CN';
+        let sttReady = false;
         session.sttSession = createResilientStreamingSession(
           { provider: sttProvider, language, interimResults: true },
           {
             onRecovering: ({ attempt, delayMs, error }) => {
+              sttReady = false;
               if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.warn(`[Audio] STT connection recovering (attempt=${attempt}, delayMs=${delayMs}): ${error.message}`);
               runtime.socket.emit('audio:status', {
@@ -49,18 +51,14 @@ export async function startVoiceTranscription(
             onRecovered: ({ attempt }) => {
               if (!session.isActive || session.callControlGeneration !== startControlGeneration) return;
               logger.info(`[Audio] STT connection recovered after attempt ${attempt}`);
-              if (!session.isProcessing && !session.isSpeaking) {
-                runtime.socket.emit('audio:status', { status: 'listening', reason: 'stt_recovered', sessionId: voiceStartSessionId });
-              }
             },
           },
         );
         const callbackSttSession = session.sttSession;
         const callbackSessionId = session.sessionId;
-        resetSilenceTimer(session, runtime.socket);
 
         session.sttSession.onResult(async (result) => {
-          if (!authorization.isCurrent()) return;
+          if (!sttReady || !authorization.isCurrent()) return;
           if (!isCurrentVoiceInputSource({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -438,6 +436,7 @@ export async function startVoiceTranscription(
         });
 
         session.sttSession.onError(async (err: Error) => {
+          sttReady = false;
           if (!isCurrentVoiceInputSource({
             sessionActive: session.isActive,
             currentSessionId: session.sessionId,
@@ -452,7 +451,21 @@ export async function startVoiceTranscription(
           } });
         });
 
-        runtime.socket.emit("audio:status", { status: "listening", sessionId: voiceStartSessionId });
+        callbackSttSession.onReady?.(() => {
+          if (sttReady || !authorization.isCurrent() || session.callControlGeneration !== startControlGeneration
+            || !isCurrentVoiceInputSource({
+              sessionActive: session.isActive,
+              currentSessionId: session.sessionId,
+              callbackSessionId,
+              currentSttSession: session.sttSession,
+              callbackSttSession,
+            })) return;
+          sttReady = true;
+          resetSilenceTimer(session, runtime.socket);
+          if (!session.isProcessing && !session.isSpeaking) {
+            runtime.socket.emit("audio:status", { status: "listening", sessionId: voiceStartSessionId });
+          }
+        });
       } catch (err: any) {
         logger.error("[Audio Start Error]:", err);
         await runtime.stopVoiceCall(session, { source: 'voice_start_failed', error: {

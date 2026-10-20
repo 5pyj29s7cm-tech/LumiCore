@@ -6,7 +6,7 @@ import { formatConversationActionTaskStatus } from "../../../cognition/action_co
 import { buildTransportNeutralConfirmationScope, clearPendingConfirmationDurably, isExplicitConfirmationReply } from "../../../tools/pending_confirmation";
 import { toolRegistry } from "../../../tools/registry";
 import { withDesktopExecutionReceipt } from "../../../desktop/execution_runtime";
-import { coalesceToolExecutionRecords, recordsToTaskReceipts, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
+import { mergeToolExecutionRecords, recordsToTaskReceipts, toolRecordSucceeded } from "../../../cognition/task_execution_ledger";
 import type { ToolExecutionRecord } from "../../../tools/types";
 import { isExplicitMemoryRequest, persistTurnMemory } from "../../../memory/turn_memory";
 import { isDirectDesktopTool } from "../../desktop_relay";
@@ -253,7 +253,7 @@ export async function executeVoiceConfirmedAndDeterministicTurn(context: NonNull
         if (!context.isCurrentTurn()) {
           { return { terminal: true as const, context: undefined }; }
         }
-        confirmationRecords = coalesceToolExecutionRecords([confirmationRecord, ...(continuation.toolCalls || [])]);
+        confirmationRecords = mergeToolExecutionRecords([confirmationRecord], continuation.toolCalls || []);
         confirmationLlmWasCalled = continuation.usageRecords.length > 0;
         recordTokenUsageBatch(context.session.userId, continuation.usageRecords, context.requestId, 'voice');
         context.completionGuard = continuation.completionGuard;

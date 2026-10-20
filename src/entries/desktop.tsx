@@ -18,20 +18,17 @@ import { installExternalNavigationGuards } from '../lib/externalNavigation';
 installApiBridge();
 initializeSharedSocketRuntime();
 
-const SETUP_DONE_KEY = 'lumi_setup_complete';
 const Docs = lazy(() => import('../components/Docs').then(m => ({ default: m.Docs })));
 const FoundersSanctuary = lazy(() => import('../components/FoundersSanctuary').then(m => ({ default: m.FoundersSanctuary })));
 const OrgPortal = lazy(() => import('../components/OrgPortal').then(m => ({ default: m.OrgPortal })));
 const Profile = lazy(() => import('../components/Profile').then(m => ({ default: m.Profile })));
 const Settings = lazy(() => import('../components/Settings').then(m => ({ default: m.Settings })));
-const SetupWizard = lazy(() => import('../components/SetupWizard').then(m => ({ default: m.SetupWizard })));
 const SkillCenter = lazy(() => import('../components/SkillCenter').then(m => ({ default: m.SkillCenter })));
 
 export function DesktopApp() {
   const shell = useAppShell();
   const { resolvedAppearanceMode } = useApp();
   const [activeTab, setActiveTab] = useState('home');
-  const [showSetup, setShowSetup] = useState(() => localStorage.getItem(SETUP_DONE_KEY) !== '1');
   const [startupVisible, setStartupVisible] = useState(true);
 
   useEffect(() => { document.body.classList.add('overflow-hidden'); return () => document.body.classList.remove('overflow-hidden'); }, []);
@@ -65,23 +62,11 @@ export function DesktopApp() {
     <div className="lumi-desktop-root h-screen w-full bg-transparent overflow-hidden">
       <ProactiveNotifications />
       <Toaster position="top-right" theme={resolvedAppearanceMode} />
-      {showSetup ? (
-        <div className="h-full w-full overflow-y-auto bg-black/80 p-4 sm:p-8">
-          <div className="flex min-h-full w-full items-center justify-center py-2">
-            <Suspense fallback={null}>
-              <SetupWizard onFinish={() => { setShowSetup(false); localStorage.setItem(SETUP_DONE_KEY, '1'); }} />
-            </Suspense>
-          </div>
-        </div>
-      ) : (
-        <>
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.5 }} className="h-full w-full">
-            <DesktopUI t={shell.t} user={shell.user} lang={shell.lang} setLang={shell.setLang} activeTab={activeTab} setActiveTab={setActiveTab}
-              onLogin={shell.handleLogin} renderTabContent={renderTabContent} />
-          </motion.div>
-          <LoginModal t={shell.t} isOpen={shell.isLoginModalOpen} onClose={() => shell.setIsLoginModalOpen(false)} onLoginSuccess={() => shell.refreshUser()} onGoogleLogin={shell.handleLogin} />
-        </>
-      )}
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.5 }} className="h-full w-full">
+        <DesktopUI t={shell.t} user={shell.user} lang={shell.lang} setLang={shell.setLang} activeTab={activeTab} setActiveTab={setActiveTab}
+          onLogin={shell.handleLogin} renderTabContent={renderTabContent} />
+      </motion.div>
+      <LoginModal t={shell.t} isOpen={shell.isLoginModalOpen} onClose={() => shell.setIsLoginModalOpen(false)} onLoginSuccess={() => shell.refreshUser()} onGoogleLogin={shell.handleLogin} />
     </div>
   );
 }

@@ -16,6 +16,15 @@ export function normalizeLegalCaseStage(input: string): LegalCases.LegalCaseStag
   return 'consultation';
 }
 
+export function legalCaseStageLabel(stage: LegalCases.LegalCaseStage): string {
+  if (stage === 'filing') return '立案';
+  if (stage === 'trial') return '庭审';
+  if (stage === 'judgment') return '判决';
+  if (stage === 'enforcement') return '执行';
+  if (stage === 'closed') return '结案';
+  return '诉前';
+}
+
 function legalWorkflowStateLabel(state: LegalCases.LegalCaseWorkflowStepState): string {
   if (state === 'done') return '已完成';
   if (state === 'ready') return '可推进';
@@ -86,6 +95,7 @@ export function makeWorkspaceWorkflowCase(args: Record<string, any>, params: {
     cause: params.caseType,
     court: params.court,
     stage: params.stage,
+    factDate: textArg(args, 'factDate') || undefined,
     notes: [
       params.claims ? `办理目标：${params.claims}` : '',
       params.facts ? `事实摘要：${params.facts.slice(0, 2000)}` : '',
@@ -199,6 +209,7 @@ export function workspaceMaterialIndexRows(materials: LegalCases.OrgLegalCaseMat
 
 export function workspaceMaterialInputs(args: Record<string, any>): Array<{ type: LegalCases.LegalCaseMaterialType; title: string; content: string }> {
   const entries: Array<{ type: LegalCases.LegalCaseMaterialType; title: string; content: string }> = [
+    { type: 'note', title: '聊天原始材料', content: textArg(args, 'materials') },
     { type: 'note', title: '案件事实与时间线', content: textArg(args, 'facts') },
     { type: 'evidence', title: '证据材料与证明目的', content: textArg(args, 'evidence') },
     { type: 'pleading', title: '起诉状/答辩状/对方材料', content: textArg(args, 'complaint') || textArg(args, 'opponentMaterials') },
@@ -274,7 +285,7 @@ export function archiveLegalReportToCase(args: Record<string, any>, params: {
       cause: params.cause || textArg(args, 'caseType') || textArg(args, 'cause'),
       court: params.court || textArg(args, 'court'),
       stage: normalizeLegalCaseStage(textArg(args, 'stage')),
-      notes: params.content.slice(0, 3000),
+      notes: textArg(args, 'facts') || textArg(args, 'contract') || textArg(args, 'requirements'),
     }));
   }
 

@@ -3,7 +3,7 @@ import { AlertCircle, Building2, FileText, FolderOpen, Loader2, Network, Search,
 import { useLegalDocument, useLegalDocumentScope } from '../../hooks/useLegalDocument';
 import { useT } from '../../lib/useT';
 import { getLegalCaseLabel, type LegalCaseFile, type LegalCaseMaterial } from '../../lib/legalCaseStore';
-import { runLegalTool } from '../../lib/legalToolClient';
+import { runLegalToolExecution } from '../../lib/legalToolClient';
 import { LegalCaseContextBar } from './LegalCaseContextBar';
 import { uiMessage } from '../../i18n/uiMessages';
 import { chinaLegalCopy } from '../../i18n/regions/cn/legal';
@@ -24,14 +24,14 @@ function legalCaseTitle(caseFile?: LegalCaseFile | null): string {
 }
 
 function assetTraceCaseArgs(caseFile?: LegalCaseFile | null, orgId?: string): Record<string, any> {
-  if (!caseFile) return orgId ? { orgId } : {};
+  if (!caseFile) return { ...(orgId ? { orgId } : {}), persistCase: false };
   return {
     caseId: caseFile.id,
     caseName: legalCaseTitle(caseFile),
     caseType: caseFile.cause || chinaLegalCopy().assetTraceCaseType,
     parties: caseFile.party || undefined,
     orgId,
-    persistCase: true,
+    persistCase: false,
   };
 }
 
@@ -47,24 +47,28 @@ export function LegalAssetTrace(props: Props) {
 function AssetTrace({ caseFile, orgId, onAddMaterial }: Props) {
   const t = useT();
   const { text: name, setText: setName, result: output, successfulResult, busy, generate, save } = useLegalDocument(caseFile?.party || '', { error: uiMessage('legal-asset-trace.error.1d47687da7') });
-  const result = useMemo(() => successfulResult ? parseTraceResult(successfulResult) : output ? { raw: output } as TraceResult : null, [output, successfulResult]);
+  const result = useMemo(() => output ? parseTraceResult(output) : null, [output]);
+  const [verified, setVerified] = useState(false);
   const loading = Boolean(busy);
   const [selectedTab, setActiveTab] = useState<'' | 'info' | 'enforcement' | 'equity' | 'raw'>('');
   const activeTab = selectedTab || (result?.company ? 'info' : 'raw');
 
-  const trace = () => {
+  const executeTrace = (toolName: 'legal_trace_assets' | 'legal_equity_penetration') => {
     if (!name.trim()) return;
     return generate(async signal => {
       setActiveTab('');
+      setVerified(false);
       const args = { ...assetTraceCaseArgs(caseFile, orgId), name };
-      const reports: string[] = [];
-      for (const tool of ['legal_trace_assets', 'legal_equity_penetration']) reports.push(await runLegalTool(tool, args, signal));
-      return reports.filter(Boolean).join('\n\n---\n\n');
+      const execution = await runLegalToolExecution(toolName, args, signal);
+      setVerified(execution.verification?.status === 'verified' && execution.receipt.ok !== false);
+      return execution.text;
     });
   };
 
+  const trace = () => executeTrace('legal_trace_assets');
+
   const archive = () => {
-    if (!successfulResult || !onAddMaterial) return;
+    if (!verified || !successfulResult || !onAddMaterial) return;
     return save(() => onAddMaterial('note', `${legalCaseTitle(caseFile)} ${uiMessage('legal-asset-trace.asset-trace-report.d6c2fdd263')}`, successfulResult, 'tool'), uiMessage('legal-asset-trace.asset-trace-report-archived-to.2e6765985f'));
   };
 
@@ -85,7 +89,7 @@ function AssetTrace({ caseFile, orgId, onAddMaterial }: Props) {
           </div>
         </section>
 
-        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : successfulResult ? 'result' : 'input'} />
+        <LegalCaseContextBar caseFile={caseFile} state={loading ? 'running' : verified ? 'result' : 'input'} />
 
         <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
           <div className="grid gap-3 md:grid-cols-[1fr_auto]">
@@ -100,6 +104,7 @@ function AssetTrace({ caseFile, orgId, onAddMaterial }: Props) {
                 className="w-full rounded-lg border border-white/10 bg-black/20 py-2.5 pl-9 pr-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-cyan-400/35"
               />
             </div>
+            <div className="flex flex-wrap gap-2">
             <button
               onClick={trace}
               disabled={loading || !name.trim()}
@@ -108,6 +113,15 @@ function AssetTrace({ caseFile, orgId, onAddMaterial }: Props) {
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
               {t.legalAssetTraceSearch || uiMessage('legal-asset-trace.trace.d2c6a7c6c9')}
             </button>
+            <button
+              onClick={() => executeTrace('legal_equity_penetration')}
+              disabled={loading || !name.trim()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white/65 hover:bg-white/10 disabled:opacity-50"
+            >
+              <Network size={16} />
+              {t.legalAssetTraceSearch || uiMessage('legal-asset-trace.trace.d2c6a7c6c9')} · {uiMessage('legal-asset-trace.equity.88cbe6797c')}
+            </button>
+            </div>
           </div>
         </section>
 
@@ -125,7 +139,7 @@ function AssetTrace({ caseFile, orgId, onAddMaterial }: Props) {
                   <TabButton active={activeTab === 'equity'} icon={<Network size={14} />} label={uiMessage('legal-asset-trace.equity.88cbe6797c')} onClick={() => setActiveTab('equity')} />
                   <TabButton active={activeTab === 'raw'} icon={<FileText size={14} />} label={uiMessage('legal-asset-trace.raw-report.ed806061d6')} onClick={() => setActiveTab('raw')} />
                 </div>
-                {successfulResult && onAddMaterial && !orgId && (
+                {verified && successfulResult && onAddMaterial && !orgId && (
                   <button onClick={archive} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/65 transition hover:bg-white/10 hover:text-white disabled:opacity-50">
                     <FolderOpen size={14} />
                     {uiMessage('legal-asset-trace.archive-to-case.6dc41a223d')}

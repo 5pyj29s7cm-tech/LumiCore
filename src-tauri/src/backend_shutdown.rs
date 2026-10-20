@@ -135,16 +135,14 @@ pub fn request_backend_save(expected_pid: u32) -> Result<(), String> {
         .and_then(|_| stream.flush())
         .map_err(|error| format!("Cannot send backend save request: {error}"))?;
     let mut response = Vec::new();
-    stream
-        .take(65_537)
-        .read_to_end(&mut response)
-        .map_err(|error| {
-            format!("Still waiting for backend save confirmation; closing was cancelled: {error}")
-        })?;
+    let read_error = stream.take(65_537).read_to_end(&mut response).err();
     if response.len() > 65_536 {
         return Err("Backend save receipt exceeded its limit".into());
     }
-    parse_save_receipt(&response, expected_pid)
+    parse_save_receipt(&response, expected_pid).map_err(|error| match read_error {
+        Some(read_error) => format!("{error}: {read_error}"),
+        None => error,
+    })
 }
 
 #[cfg(test)]

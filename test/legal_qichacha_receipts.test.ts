@@ -98,8 +98,9 @@ describe('shared QCC query contract and truthful failure receipts', () => {
   it('does not convert absent risk fields to zero or incomplete trace work to success',async () => {
     const sources=await searchCompanySources('虚构单密钥企业',['qichacha']);
     expect(sources[0].riskInfo).toEqual({enforcementCount:null,dishonestyCount:null,restrictionsCount:null});
+    vi.mocked(mcpManager.callToolForServer).mockResolvedValueOnce(company).mockRejectedValueOnce(Error('HTTP 403'));
     const result=await run({},'legal_trace_assets');
-    expect(result.result).toContain('SYNTHETIC-QCC-ID');expect(result.result).toContain('未取得该项来源');expect(result.result).toContain('不能认定无执行记录');
+    expect(result.result).toContain('SYNTHETIC-QCC-ID');expect(result.result).toContain('未取得该项来源');expect(result.result).toContain('[QCC_AUTHORIZATION]');
     expect(result.receipt).toMatchObject({ok:false,status:'partial'});expect(fetch).not.toHaveBeenCalled();
   });
   it('does not mark equity tracing complete when registration contains no shareholder evidence',async () => {

@@ -200,6 +200,7 @@ export async function hydrateDatabaseProjection(query: DatabaseSqlWriteSession['
       summaryChain: isolatedSummary.summaryChain,
       lastSummaryMessageCount: isolatedSummary.lastSummaryMessageCount,
       actionContinuationState: legacyActionContinuationState,
+      surface: c.surface === 'creation' ? 'creation' : undefined,
       domain: c.domain || 'personal',
       orgId: c.orgId || '',
     };

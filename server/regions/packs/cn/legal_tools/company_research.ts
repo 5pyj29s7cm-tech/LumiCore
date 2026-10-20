@@ -49,24 +49,22 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
   if (sourceErrors.length) lines.push('\n## 企业查询异常', ...sourceErrors.map(message => '- ' + message));
 
   // 2. Enforcement records
-  let enforcements: Awaited<ReturnType<typeof searchEnforcementRecords>> = [];
+  let enforcementSource: Awaited<ReturnType<typeof searchEnforcementRecords>> | undefined;
   let enforcementSourceError = '';
   try {
-    enforcements = await searchEnforcementRecords(subjectName);
-  } catch {
-    enforcementSourceError = '中国执行信息公开网需要通过授权网页核验并导入来源材料；当前执行来源未取得，不能认定无执行记录。';
+    enforcementSource = await searchEnforcementRecords(subjectName, { localOnly: context?.dataRoutingPolicy === 'local_only' });
+  } catch (error) {
+    enforcementSourceError = error instanceof Error && error.message.includes('[QCC_') ? error.message : '中国执行信息公开网需要通过授权网页核验并导入来源材料；当前执行来源未取得，不能认定无执行记录。';
   }
   lines.push('\n## 公开执行记录');
   if (enforcementSourceError) {
     lines.push('- 查询状态: needs_source');
     lines.push(`- ${enforcementSourceError}`);
-  } else if (enforcements.length > 0) {
-    for (const e of enforcements) {
-      lines.push(`- [${e.caseNumber}] ${e.court} | 立案: ${e.filingDate} | 执行标的: ${e.executionTarget} | ${e.status}`);
-    }
+  } else if (enforcementSource) {
+    lines.push('- 已取得授权数据源原始结果，内容见下方来源；不将未提供的字段推断为无执行记录。');
   }
 
-  const observedSourceCount = (company ? 1 : 0) + enforcements.length;
+  const observedSourceCount = (company ? 1 : 0) + (enforcementSource ? 1 : 0);
   const needsSource = sourceErrors.length > 0 || Boolean(enforcementSourceError) || observedSourceCount === 0;
   lines.push('\n## 数据可用性');
   lines.push(`- 数据状态: ${needsSource ? 'needs_source' : 'observed'}`);
@@ -86,6 +84,11 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
   lines.push('6. **知识产权**: 建议查询被执行人名下专利、商标、著作权');
   lines.push(`\n*数据来源: ${company?.sourceName || '授权网页登录协作/待人工确认'} | 公开执行来源${enforcementSourceError ? '未取得（待授权网页核验）' : '已返回查询结果'} | ${new Date().toISOString().slice(0, 10)}*`);
 
+  const sourceOriginals = [
+    ...(company?.sourceText ? [{ sourceName: company.sourceName, sourceTool: company.sourceTool, sourceEndpoint: company.sourceEndpoint, queriedAt: company.queriedAt, text: company.sourceText, queryType: 'registration' }] : []),
+    ...(enforcementSource ? [{ ...enforcementSource, queryType: 'enforcement' }] : []),
+  ];
+  for (const source of sourceOriginals) lines.push('\n## 官方来源原始结果', `- 来源: ${source.sourceName}\n- 工具: ${source.sourceTool}\n- 端点: ${source.sourceEndpoint}\n- 查询时间: ${source.queriedAt}\n- SHA256: ${createHash('sha256').update(source.text).digest('hex')}\n\n${source.text}`);
   const report = lines.join('\n');
   const archivedReport = await appendLegalWorkProductArchiveSection(report, needsSource ? { ...args, persistCase: false } : args, context, {
     caseName,
@@ -93,7 +96,9 @@ export async function traceAssetsHandler(args: Record<string, any>, context?: an
     type: 'evidence',
     cause: textArg(args, 'caseType') || '执行/财产保全线索',
   });
-  return needsSource ? encodeToolResult(archivedReport, { ok: false, status: 'partial' }) : archivedReport;
+  return encodeToolResult(archivedReport, { ok: !needsSource, status: needsSource ? 'partial' : 'observed',
+    sourceResults: sourceOriginals.map(({ text, ...source }) => ({ ...source, subject: subjectName, status: 'observed', sourceTextSha256: createHash('sha256').update(text).digest('hex') })),
+  });
 }
 
 // ── legal_equity_penetration ─────────────────────────────────────────────

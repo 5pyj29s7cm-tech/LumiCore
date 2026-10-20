@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
   stt: [] as any[],
   sttProvider: 'ark' as string | null,
   sttStartFails: false,
+  sttReady: true,
   ttsProvider: null as string | null,
   ttsVoices: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock('../server/stt/adapter', () => ({
   getActiveStreamingSTTProvider: () => fixture.sttProvider,
   createResilientStreamingSession: (_options: any, lifecycle: any) => {
     if (fixture.sttStartFails) throw new Error('synthetic STT start failure');
-    const stt = { lifecycle, end: vi.fn(), sendAudio: vi.fn(), onResult: vi.fn(), onError: vi.fn(), updateEndpointing: vi.fn() };
+    const stt = { lifecycle, end: vi.fn(), sendAudio: vi.fn(), onResult: vi.fn(), onError: vi.fn(), updateEndpointing: vi.fn(), onReady: vi.fn((callback: () => void) => { if (fixture.sttReady) callback(); }) };
     fixture.stt.push(stt);
     return stt;
   },
@@ -78,12 +79,58 @@ beforeEach(() => {
   fixture.stt.length = 0;
   fixture.sttProvider = 'ark';
   fixture.sttStartFails = false;
+  fixture.sttReady = true;
   fixture.ttsProvider = null;
   fixture.ttsVoices.mockReset().mockResolvedValue([]);
 });
 afterAll(async () => { for (const socket of sockets) await socket.receive('audio:stop'); });
 
 describe('voice call ownership and terminal STT failure cleanup', () => {
+  it('keeps manual input connecting and ignores transcripts until the provider acknowledges readiness', async () => {
+    fixture.sttReady = false;
+    const { socket } = createFixture();
+    await socket.receive('audio:start', start('delayed-ready'));
+    const stt = fixture.stt[0];
+    const result = stt.onResult.mock.calls[0][0];
+    expect(socket.outputs.some(([event, payload]) => event === 'audio:status' && payload.status === 'listening')).toBe(false);
+    await result({ text: '未就绪的内容不得显示', isFinal: false });
+    expect(socket.outputs.some(([event]) => event === 'audio:transcript')).toBe(false);
+    expect(socket.data.audioSession.silenceTimer).toBeNull();
+    stt.onReady.mock.calls[0][0]();
+    expect(socket.outputs.at(-1)).toEqual(['audio:status', { status: 'listening', sessionId: 'delayed-ready' }]);
+    await result({ text: '就绪后的实时转写', isFinal: false });
+    expect(socket.outputs).toContainEqual(['audio:transcript', { text: '就绪后的实时转写', isFinal: false }]);
+  });
+
+  it('does not admit transcripts from a recovering stream until its new provider is ready', async () => {
+    const { socket } = createFixture();
+    await socket.receive('audio:start', start('recover-ready'));
+    const stt = fixture.stt[0]; const result = stt.onResult.mock.calls[0][0];
+    stt.lifecycle.onRecovering({ attempt: 1, delayMs: 250, error: new Error('temporary disconnect') });
+    await result({ text: '恢复握手尚未完成', isFinal: false });
+    stt.lifecycle.onRecovered({ attempt: 1 });
+    expect(socket.outputs.at(-1)).toEqual(['audio:status', expect.objectContaining({ status: 'connecting' })]);
+    expect(socket.outputs.some(([event]) => event === 'audio:transcript')).toBe(false);
+    stt.onReady.mock.calls[0][0]();
+    await result({ text: '恢复后接续的转写', isFinal: false });
+    expect(socket.outputs).toContainEqual(['audio:transcript', { text: '恢复后接续的转写', isFinal: false }]);
+  });
+
+  it.each(['stop', 'error', 'replacement'])('ignores late readiness and transcript callbacks after %s', async reason => {
+    fixture.sttReady = false;
+    const { socket } = createFixture();
+    await socket.receive('audio:start', start('retire-ready'));
+    const stt = fixture.stt[0];
+    if (reason === 'error') await stt.onError.mock.calls[0][0](new Error('Unauthorized 401'));
+    else if (reason === 'replacement') await socket.receive('audio:start', start('new-ready'));
+    else await socket.receive('audio:stop', { sessionId: 'retire-ready' });
+    const before = socket.outputs.length;
+    stt.onReady.mock.calls[0][0]();
+    await stt.onResult.mock.calls[0][0]({ text: '已结束会话的迟到内容', isFinal: false });
+    expect(socket.outputs).toHaveLength(before);
+    expect(stt.end).toHaveBeenCalledOnce();
+  });
+
   it('finishes the old stop without closing the newer call', async () => {
     const { socket } = createFixture();
     await socket.receive('audio:start', start('call-a'));
@@ -262,6 +309,8 @@ describe('voice call ownership and terminal STT failure cleanup', () => {
     newStt.lifecycle.onRecovering({ attempt: 1, delayMs: 10, error: new Error('current recovery') });
     expect(socket.outputs.at(-1)).toEqual(['audio:status', expect.objectContaining({ status: 'connecting', sessionId: 'error-b' })]);
     newStt.lifecycle.onRecovered({ attempt: 1 });
+    expect(socket.outputs.at(-1)).toEqual(['audio:status', expect.objectContaining({ status: 'connecting', sessionId: 'error-b' })]);
+    newStt.onReady.mock.calls[0][0]();
     expect(socket.outputs.at(-1)).toEqual(['audio:status', expect.objectContaining({ status: 'listening', sessionId: 'error-b' })]);
     expect(isRealtimeUserActive(socket.data.authenticatedUserId, 0)).toBe(true);
   });

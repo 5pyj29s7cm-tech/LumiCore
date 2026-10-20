@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
-import { apiFetch } from '@/services/apiClient';
 import { releaseSensorStream, requestMicrophoneStream } from '@/services/sensorPermissionService';
 import { translate } from '@/i18n/runtime';
 import { closeAudioContext } from '@/lib/audioContextLifecycle';
@@ -45,21 +44,6 @@ const wakeServiceUnavailableMessage = () => translate('wakeServiceUnavailable');
 
 function isWakeProviderUnavailableMessage(message: string): boolean {
   return /required for wake word detection|not configured|no DashScope key|access denied|not in good standing|unauthori[sz]ed|invalid api key|forbidden|401|403/i.test(message || '');
-}
-
-async function hasServerWakeProvider(signal?: AbortSignal): Promise<boolean | null> {
-  try {
-    const response = await apiFetch('/api/voice/active-provider', { signal });
-    const status = await response.json().catch(() => ({}));
-    if (!response.ok) return null;
-    if (!status.active || !Object.hasOwn(status.active, 'streamingStt')) return null;
-    const provider = status.active.streamingStt;
-    // A selected official route cannot be satisfied by an unrelated direct key.
-    if (status.pref?.stt === 'relay') return provider === 'relay';
-    return provider === 'ark' || provider === 'qwen';
-  } catch {
-    return null;
-  }
 }
 
 export function useWakeWord({
@@ -201,134 +185,118 @@ export function useWakeWord({
       return;
     }
 
-    const hasProvider = await hasServerWakeProvider(signal);
-    if (signal.aborted) return;
-    if (hasProvider === false) {
-      wakeConfigUnavailableRef.current = true;
-      setIsListening(false);
-      setIsSupported(false);
-      setError(wakeServiceUnavailableMessage());
-      return;
-    }
+    setError(null);
+    // Set up listeners BEFORE emitting wake:start
+    removeWakeHandlers();
 
-    try {
-      setError(null);
-      console.log('[WakeWord-Server] Opening microphone...');
+    const onDetected = (data: { keyword: string; timestamp: string }) => {
+      if (signal.aborted || socketRef.current !== s || !enabledRef.current || !isListeningRef.current) return;
+      const canAccept = canAcceptWakeRef.current;
+      if (canAccept && !canAccept()) {
+        console.log('[WakeWord-Server] Ignored detection: voice gate closed');
+        return;
+      }
+      console.log('[WakeWord-Server] Detected:', data.keyword);
+      setLastDetection(data.timestamp);
+      onDetectionRef.current?.();
 
-      const stream = await requestMicrophoneStream({
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      }, signal);
-      if (signal.aborted) { releaseSensorStream('microphone', stream); return; }
-      streamRef.current = stream;
-      console.log('[WakeWord-Server] Mic opened, setting up AudioContext');
+      if (isCallActiveRef.current?.()) {
+        onInterruptRef.current?.();
+      } else {
+        startCallRef.current?.();
+      }
+    };
 
-      const ctx = new AudioContext({ sampleRate: 16000 });
-      ctxRef.current = ctx;
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
+    let captureStarted = false;
+    const onStarted = async () => {
+      if (signal.aborted || socketRef.current !== s || !s.connected || !enabledRef.current || captureStarted) return;
+      captureStarted = true;
+      try {
+        console.log('[WakeWord-Server] Opening microphone...');
 
-      processor.onaudioprocess = (event) => {
-        if (signal.aborted || socketRef.current !== s || !s.connected || !enabledRef.current) return;
-        const canSend = canSendWakeAudioRef.current;
-        if (canSend && !canSend()) return;
-        try {
-          const input = event.inputBuffer.getChannelData(0);
-          const pcm = new Int16Array(input.length);
-          for (let i = 0; i < input.length; i++) {
-            pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
-          }
-          s.emit('wake:audio', pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
-        } catch { /* ignore */ }
-      };
+        const stream = await requestMicrophoneStream({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }, signal);
+        if (signal.aborted) { releaseSensorStream('microphone', stream); return; }
+        streamRef.current = stream;
+        console.log('[WakeWord-Server] Mic opened, setting up AudioContext');
 
-      source.connect(processor);
-      processor.connect(ctx.destination);
+        const ctx = new AudioContext({ sampleRate: 16000 });
+        ctxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
 
-      // Set up listeners BEFORE emitting wake:start
-      removeWakeHandlers();
+        processor.onaudioprocess = (event) => {
+          if (signal.aborted || socketRef.current !== s || !s.connected || !enabledRef.current) return;
+          const canSend = canSendWakeAudioRef.current;
+          if (canSend && !canSend()) return;
+          try {
+            const input = event.inputBuffer.getChannelData(0);
+            const pcm = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+              pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
+            }
+            s.emit('wake:audio', pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
+          } catch { /* ignore */ }
+        };
 
-      const onDetected = (data: { keyword: string; timestamp: string }) => {
-        if (signal.aborted || socketRef.current !== s || !enabledRef.current) return;
-        const canAccept = canAcceptWakeRef.current;
-        if (canAccept && !canAccept()) {
-          console.log('[WakeWord-Server] Ignored detection: voice gate closed');
-          return;
-        }
-        console.log('[WakeWord-Server] Detected:', data.keyword);
-        setLastDetection(data.timestamp);
-        onDetectionRef.current?.();
+        source.connect(processor);
+        processor.connect(ctx.destination);
 
-        if (isCallActiveRef.current?.()) {
-          onInterruptRef.current?.();
-        } else {
-          startCallRef.current?.();
-        }
-      };
-
-      const onStarted = () => {
-        if (signal.aborted || socketRef.current !== s) return;
         console.log('[WakeWord-Server] Server confirmed, listening');
         clearRetrySchedule(true);
         isListeningRef.current = true;
         setIsListening(true);
         setIsSupported(true);
-      };
-
-      const onError = (data: { message: string }) => {
+      } catch (err: any) {
         if (signal.aborted) return;
-        console.warn('[WakeWord-Server] Server error:', data.message);
-        const message = data.message || '';
-        if (isWakeProviderUnavailableMessage(message)) {
-          clearRetrySchedule(true);
-          wakeConfigUnavailableRef.current = true;
-          isListeningRef.current = false;
-          setIsListening(false);
-          setIsSupported(false);
-          setError(/required for wake word detection|not configured|no DashScope key/i.test(message)
-            ? wakeServiceMissingMessage()
-            : wakeServiceUnavailableMessage());
-          cleanupAudio();
-          try { s.emit('wake:stop'); } catch {}
-          removeWakeHandlers();
-          return;
-        }
-        isListeningRef.current = false;
-        setIsListening(false);
         cleanupAudio();
-        try { s.emit('wake:stop'); } catch {}
         removeWakeHandlers();
-        setError(data.message);
-        scheduleRetry();
-      };
+        try { s.emit('wake:stop'); } catch {}
+        const msg = err.message || 'Failed to start wake word';
+        setError(err.name === 'NotAllowedError' || /permission/i.test(msg)
+          ? 'Microphone permission denied. Please allow mic access.'
+          : msg);
+      }
+    };
 
-      wakeHandlersRef.current = { socket: s, detected: onDetected, started: onStarted, error: onError };
-      s.on('wake:detected', onDetected);
-      s.on('wake:started', onStarted);
-      s.on('wake:error', onError);
-
-      console.log('[WakeWord-Server] Emitting wake:start');
-      s.emit('wake:start');
-    } catch (err: any) {
+    const onError = (data: { message: string }) => {
       if (signal.aborted) return;
-      cleanupAudio();
-      const msg = err.message || 'Failed to start wake word';
-      if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
-        setError('Microphone permission denied. Please allow mic access.');
-      } else if (isWakeProviderUnavailableMessage(msg)) {
+      console.warn('[WakeWord-Server] Server error:', data.message);
+      const message = data.message || '';
+      if (isWakeProviderUnavailableMessage(message)) {
+        clearRetrySchedule(true);
         wakeConfigUnavailableRef.current = true;
         isListeningRef.current = false;
         setIsListening(false);
         setIsSupported(false);
-        setError(/required for wake word detection|not configured|no DashScope key/i.test(msg)
+        setError(/required for wake word detection|not configured|no DashScope key/i.test(message)
           ? wakeServiceMissingMessage()
           : wakeServiceUnavailableMessage());
-      } else {
-        setError(msg);
+        cleanupAudio();
+        try { s.emit('wake:stop'); } catch {}
+        removeWakeHandlers();
+        return;
       }
-    }
+      isListeningRef.current = false;
+      setIsListening(false);
+      cleanupAudio();
+      try { s.emit('wake:stop'); } catch {}
+      removeWakeHandlers();
+      setError(data.message);
+      scheduleRetry();
+    };
+
+    wakeHandlersRef.current = { socket: s, detected: onDetected, started: onStarted, error: onError };
+    s.on('wake:detected', onDetected);
+    s.on('wake:started', onStarted);
+    s.on('wake:error', onError);
+
+    console.log('[WakeWord-Server] Emitting wake:start');
+    s.emit('wake:start');
   }, [startCallRef, cleanupAudio, removeWakeHandlers, clearRetrySchedule, scheduleRetry]);
 
   // ── Picovoice on-device detection (fallback) ──

@@ -14,7 +14,7 @@ import { buildActionContract, requiresMediaPlaybackAction } from './action_contr
 import { buildClientDiagnosticPlan } from './client_diagnostic_result';
 import {
   hasMixedStatusExecutionIntent,
-  normalizeActionIntent,
+  normalizeActionIntent, withoutNegatedLookupClauses,
 } from './normalized_action_intent';
 import { formatUserVisibleReplyForReadability } from './reply_style';
 import { containsInternalExecutionLanguage, projectExecutionReferenceText } from '../../shared/public_execution_language';
@@ -226,6 +226,11 @@ export function classifyExecutionGuardIntent(
   if (buildClientDiagnosticPlan(clean).length) return 'action_execution';
   if (CONCEPTUAL_STATUS_DISCUSSION.test(clean) && !DIRECT_STATUS_QUERY.test(clean)) return 'conversation';
   if (BARE_AMBIGUOUS_REACTION.test(clean) && records.length === 0) return 'conversation';
+  // A fresh imperative lookup stays execution; later conditional failure/status words are scope fences.
+  const lookupInstruction = withoutNegatedLookupClauses(clean).split(/[\u3002\uff01\uff1f!?;\n]/u)[0];
+  if (normalizedIntent.kind === 'none' && !isExecutionStatusQuery(lookupInstruction) && /^(?:\u8bf7|\u5e2e\u6211|\u66ff\u6211|\u9ebb\u70e6\u4f60|\u73b0\u5728|\u76f4\u63a5|please\b)/iu.test(lookupInstruction)
+    && /\u67e5\u8be2|\u67e5\u627e|\u68c0\u7d22|\u641c\u7d22|\b(?:search|look\s+up|fetch)\b/iu.test(lookupInstruction)
+    && shouldAllowToolUseForTurn(lookupInstruction)) return 'action_execution';
   if (isExecutionStatusQuery(clean)) return 'status_query';
   if (CONVERSATION_ONLY.test(clean)) return 'conversation';
   const contract = buildActionContract(clean);

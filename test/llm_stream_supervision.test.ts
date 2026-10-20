@@ -276,7 +276,7 @@ describe('provider-independent streaming attempt supervision', () => {
     expect(isCircuitHealthy('deepseek', 'generic-model')).toBe(true);
   });
 
-  it('falls back to one non-stream relay request when SSE fails before semantic output', async () => {
+  it('does not replay an explicit relay stream after a pre-semantic failure', async () => {
     const requests: any[] = [];
     const client = {
       chat: {
@@ -299,12 +299,12 @@ describe('provider-independent streaming attempt supervision', () => {
     const chunks: string[] = [];
 
     await expect(callRelay(client, {}, { relayStreaming: true, onChunk: chunk => chunks.push(chunk) }))
-      .resolves.toMatchObject({ text: 'relay answer', toolCalls: null });
-    expect(requests.map(request => request.stream)).toEqual([true, false]);
-    expect(chunks).toEqual(['relay answer']);
+      .rejects.toThrow('chat_stream_error');
+    expect(requests.map(request => request.stream)).toEqual([true]);
+    expect(chunks).toEqual([]);
   });
 
-  it('keeps structured tool calls from the relay non-stream fallback', async () => {
+  it('keeps structured tool calls from an explicitly selected non-stream relay request', async () => {
     const requests: any[] = [];
     const client = {
       chat: {
@@ -336,13 +336,13 @@ describe('provider-independent streaming attempt supervision', () => {
     };
 
     const result = await callRelay(client, {}, {
-      relayStreaming: true,
+      relayStreaming: false,
       toolDeclarations: [{
         type: 'function',
         function: { name: 'lookup', description: 'Lookup', parameters: { type: 'object' } },
       }],
     });
-    expect(requests.map(request => request.stream)).toEqual([true, false]);
+    expect(requests.map(request => request.stream)).toEqual([false]);
     expect(result.text).toBeNull();
     expect(result.toolCalls).toEqual([{ id: 'call-1', name: 'lookup', arguments: { q: 'lumi' } }]);
   });
@@ -366,8 +366,8 @@ describe('provider-independent streaming attempt supervision', () => {
       },
     };
 
-    await expect(callRelay(client, {}, { relayStreaming: true })).resolves.toMatchObject({ text: 'in-band recovered' });
-    expect(requests.map(request => request.stream)).toEqual([true, false]);
+    await expect(callRelay(client, {}, { relayStreaming: true })).rejects.toThrow('stream unavailable');
+    expect(requests.map(request => request.stream)).toEqual([true]);
   });
 
   it('does not replay a relay request after visible output has started', async () => {
@@ -413,4 +413,21 @@ describe('provider-independent streaming attempt supervision', () => {
     expect(requests[0].stream).toBe(false);
     expect(chunks).toEqual(['default relay answer']);
   });
+  it('does not replay an empty completed relay stream', async () => {
+    const create = vi.fn(async () => (async function* () {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    })());
+    await expect(callRelay({ chat: { completions: { create } } }, {}, { relayStreaming: true }))
+      .rejects.toMatchObject({ stage: 'semantic_content', completedEmpty: true });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 402, 403, 404, 429, 500])('does not replay relay HTTP failure %s', async status => {
+    const failure = Object.assign(new Error('provider rejected request'), { status });
+    const create = vi.fn(async () => { throw failure; });
+    await expect(callRelay({ chat: { completions: { create } } }, {}, { relayStreaming: true }))
+      .rejects.toThrow('provider rejected request');
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
 });

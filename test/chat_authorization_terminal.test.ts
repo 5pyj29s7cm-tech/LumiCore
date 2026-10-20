@@ -69,6 +69,7 @@ vi.mock('../server/socket/chat_execution_registry', async original => {
 
 import { reserveConversationExecution } from '../server/cognition/conversation_execution';
 import { registerChatHandler } from '../server/socket/chat';
+import { getConversationActionTurn } from '../server/conversation/action_turn_ledger';
 import { registerAllTools } from '../server/tools/definitions';
 import { toolRegistry } from '../server/tools/registry';
 import { getOrCreateActiveConversation } from '../server/conversation/manager';
@@ -113,11 +114,17 @@ async function openChat(withTask: boolean) {
     if (args[2]?.source === 'chat_intent_classifier') return outcome('{"category":"question","confidence":0.99,"entities":{}}');
     if (!withTask) return outcome();
     const context = args[11];
+    // This fixture represents a selected read tool; acquire its real lazy task owner first.
+    const binding = await context.prepareSelectedToolCall();
+    Object.assign(context, binding);
+    expect(binding.turnRowId).toBeTruthy();
+    expect(getConversationActionTurn({ userId: context.userId, conversationId, requestId: context.requestId }))
+      .toMatchObject({ id: binding.turnRowId, taskId: binding.taskId, status: 'leased' });
     expect(context?.taskId).toBeTruthy();
     return { ...outcome(), toolCalls: [{
       name: 'read_file', arguments: { path: 'synthetic-project.txt' },
       result: JSON.stringify({ content: marker }), adapterStarted: true,
-      id: 'synthetic-read', taskId: context.taskId, requestId: context.requestId, turnId: context.requestId,
+      id: 'synthetic-read', taskId: context.taskId, requestId: context.requestId, turnId: context.requestId, turnRowId: context.turnRowId,
       executionOrigin: 'model_selected', outcome: 'success',
       evidence: { capability: 'file', operation: 'observe', assurance: 'observed', scope: ['synthetic-project.txt'] },
       terminalVerification: { status: 'verified' },

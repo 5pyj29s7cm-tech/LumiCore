@@ -16,6 +16,59 @@
         "orgId": {
           "type": "string",
           "description": "组织ID"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -60,6 +113,59 @@
         "orgId": {
           "type": "string",
           "description": "组织ID"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -145,6 +251,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -248,6 +407,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -294,6 +506,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -391,6 +656,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -433,6 +751,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -475,6 +846,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -636,6 +1060,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -793,6 +1270,59 @@
         "orgId": {
           "type": "string",
           "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -901,6 +1431,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -959,7 +1542,7 @@
   },
   {
     "name": "legal_meeting_minutes_to_case",
-    "description": "法律会议模式入案 — 将语音转写、会议沟通记录或咨询笔记整理为律师复核版会议纪要，同时生成实时滚动摘要、行动项/期限、案件入案更新文件，提取事实、证据三性提示、争议焦点和下一步，并归档到统一案件空间。",
+    "description": "法律会议模式入案 — 完整保存原始语音转写、会议沟通记录或咨询笔记，复用已生成的会议报告并单独归档为律师复核稿；不重新推断事实、行动项或期限。未提供报告时只保留原文，不声称总结完成。",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1026,6 +1609,63 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "report": {
+          "type": "string",
+          "description": "已有模型生成的完整会议报告；与原始转写分开保存，不作为原始事实材料"
         }
       }
     },
@@ -1190,6 +1830,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1328,6 +2021,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1454,6 +2200,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1578,6 +2377,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1648,6 +2500,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1794,6 +2699,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -1856,6 +2814,74 @@
         "userId": {
           "type": "string",
           "description": "导入人 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "password": {
+          "type": "string",
+          "description": "PDF 打开密码，仅用于当次读取，不回显、不入库"
+        },
+        "passwords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "按原文件完整路径提供 PDF 打开密码，仅用于当次读取"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "关联已有案件 ID；使用相同案件和材料重试时不重复入库"
         }
       }
     },
@@ -1975,6 +3001,70 @@
         "userId": {
           "type": "string",
           "description": "导入人 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "password": {
+          "type": "string",
+          "description": "PDF 打开密码，仅用于当次读取，不回显、不入库"
+        },
+        "passwords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "按原文件完整路径提供 PDF 打开密码，仅用于当次读取"
         }
       }
     },
@@ -2099,6 +3189,70 @@
         "userId": {
           "type": "string",
           "description": "导入人 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "password": {
+          "type": "string",
+          "description": "PDF 打开密码，仅用于当次读取，不回显、不入库"
+        },
+        "passwords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "按原文件完整路径提供 PDF 打开密码，仅用于当次读取"
         }
       }
     },
@@ -2110,10 +3264,389 @@
     "description": "外部法律数据源接入状态 — 明确企查查、Alpha、法蝉、裁判文书网、人民法院案例库、国家企业信用等数据源当前是官方 API 接入、授权网页登录协作还是材料导入，不夸大自动抓取能力。",
     "parameters": {
       "type": "object",
-      "properties": {}
+      "properties": {
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        }
+      }
     },
     "permission": "user",
     "securityLevel": "safe"
+  },
+  {
+    "name": "legal_verify_archived_delivery",
+    "description": "已归档文书交付核验 — 只读取指定案件和已归档草稿，逐项核对案件事实来源、法条/类案引用、时效期限、管辖、文件状态和律师复核边界；输出通过、阻断、待确认及正式交付结论，不重新生成、发送、提交或签署文书。",
+    "capability": {
+      "id": "legal.archived-delivery.verify",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "observe",
+      "risk": "low",
+      "sideEffects": [
+        {
+          "type": "local_read",
+          "scope": "organization legal case and archived work product",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "verified"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "This assessment does not create a formal package and never replaces lawyer review, filing, signing, sending, payment, or service confirmation."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.archived-delivery.verify",
+      "operation": "observe",
+      "assurance": "verified",
+      "subjectArgument": "caseId"
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "案件名称；未提供 caseId 时按名称查找"
+        },
+        "materialTitle": {
+          "type": "string",
+          "description": "要核验的已归档草稿或文书名称"
+        },
+        "documentTitle": {
+          "type": "string",
+          "description": "materialTitle 的别名"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID，默认使用当前工作域"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID，默认使用当前用户"
+        }
+      }
+    }
+  },
+  {
+    "name": "legal_search_tender_projects",
+    "description": "招投标与应收款线索查询 — 调用律所已配置的招投标数据网关；未配置 API 时生成全国公共资源交易平台核验动作、来源登记和证据缺口，不生成模拟项目。",
+    "capability": {
+      "id": "legal.tender-projects.search",
+      "family": "legal-workflow",
+      "lane": "industry",
+      "operation": "observe",
+      "risk": "medium",
+      "sideEffects": [
+        {
+          "type": "network_read",
+          "scope": "authorized configured tender gateway",
+          "reversible": true
+        },
+        {
+          "type": "local_state_change",
+          "scope": "optional observed tender report in the selected legal case",
+          "reversible": true
+        }
+      ],
+      "verification": {
+        "strategy": "terminal_receipt",
+        "required": true,
+        "requiredFields": [
+          "ok",
+          "status",
+          "persisted",
+          "changedCaseIds",
+          "articleIds",
+          "artifacts",
+          "content"
+        ],
+        "requiredValues": {
+          "ok": true
+        },
+        "successStatuses": [
+          "observed"
+        ],
+        "failureStatuses": [
+          "blocked",
+          "failed",
+          "unverified"
+        ],
+        "successSignals": [
+          "structured legal receipt reports case, knowledge-base, and file effects separately"
+        ],
+        "limitations": [
+          "An empty or unavailable source remains partial and is not archived as a successful search. A tender announcement does not prove a due unpaid receivable."
+        ]
+      }
+    },
+    "evidence": {
+      "capability": "legal.tender-projects.search",
+      "operation": "observe",
+      "assurance": "verified",
+      "subjectArgument": "keyword"
+    },
+    "permission": "user",
+    "securityLevel": "safe",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "keyword": {
+          "type": "string",
+          "description": "企业、项目、采购人、招标人或供应商名称"
+        },
+        "name": {
+          "type": "string",
+          "description": "keyword 的别名"
+        },
+        "companyName": {
+          "type": "string",
+          "description": "keyword 的别名"
+        },
+        "subjectName": {
+          "type": "string",
+          "description": "keyword 的别名"
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "指定数据源；当前 API 源为 tender-data"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "sourceIds 的别名"
+        },
+        "limit": {
+          "type": "number",
+          "description": "返回数量上限，默认 10，最高 50"
+        },
+        "caseId": {
+          "type": "string",
+          "description": "已有案件工作台 ID；提供后归档查询报告"
+        },
+        "caseName": {
+          "type": "string",
+          "description": "关联案件名称或简称"
+        },
+        "caseType": {
+          "type": "string",
+          "description": "案由或案件类型"
+        },
+        "persistCase": {
+          "type": "boolean",
+          "description": "是否归档到案件空间；设置 false 可关闭"
+        },
+        "orgId": {
+          "type": "string",
+          "description": "组织 ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "操作用户 ID"
+        }
+      },
+      "required": [
+        "keyword"
+      ]
+    }
   },
   {
     "name": "legal_search_external_authorities",
@@ -2189,6 +3722,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       },
       "required": [
@@ -2200,7 +3786,7 @@
   },
   {
     "name": "legal_company_database_lookup",
-    "description": "企业主体数据库 API 查询 — 调用已配置的企查查/天眼查官方 API 查询公司、股东和被执行主体基础信息；未配置时输出网页登录协作和材料入库步骤。",
+    "description": "企业主体数据库查询 — 企查查单 Key 使用官方 MCP，默认仅工商；queryType 可指定一项股东、实控人或风险查询，每次只调用对应工具。天眼查沿授权 API；未配置或失败保留待核验。",
     "parameters": {
       "type": "object",
       "properties": {
@@ -2264,6 +3850,72 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "queryType": {
+          "type": "string",
+          "description": "企查查本次明确查询范围；默认registration，不自动加查其他范围",
+          "enum": [
+            "registration",
+            "shareholders",
+            "controller",
+            "risk",
+            "enforcement",
+            "dishonesty",
+            "restrictions"
+          ]
         }
       },
       "required": [
@@ -2320,6 +3972,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2371,6 +4076,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2525,6 +4283,59 @@
         "userId": {
           "type": "string",
           "description": "操作用户 ID，默认上下文 userId 或 system"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2665,6 +4476,59 @@
         "orgId": {
           "type": "string",
           "description": "组织 ID，默认上下文 orgId 或 default"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2738,6 +4602,59 @@
         "timeoutMs": {
           "type": "number",
           "description": "单个官方请求超时毫秒数，范围 2000-30000；默认 12000"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2804,7 +4721,61 @@
     "description": "查看现行法权威来源巡检状态 — 显示最近运行时间、已验证法源、待人工复核项目和暂时不可用来源，不发起新的外部请求。",
     "parameters": {
       "type": "object",
-      "properties": {}
+      "properties": {
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        }
+      }
     },
     "permission": "user",
     "securityLevel": "safe"
@@ -2826,6 +4797,59 @@
         "orgId": {
           "type": "string",
           "description": "组织ID"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
         }
       }
     },
@@ -2853,6 +4877,70 @@
         "userId": {
           "type": "string",
           "description": "操作用户ID"
+        },
+        "factDate": {
+          "type": "string",
+          "description": "案件关键事实发生日期（YYYY-MM-DD）；未知须待确认，不得用生成日期代替。"
+        },
+        "procedureDate": {
+          "type": "string",
+          "description": "相关程序行为发生日期（YYYY-MM-DD）；不得用实体事实日期代替。"
+        },
+        "temporalReviews": {
+          "type": "array",
+          "description": "与引用、案件时点和事实/程序范围绑定的时间效力复核；权威条文及连续原文必须通过来源核验，适用说明仍需律师复核。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "citation": {
+                "type": "string",
+                "description": "本案拟适用的法条引用"
+              },
+              "referenceDate": {
+                "type": "string",
+                "description": "与 factDate 或 procedureDate 一致的 YYYY-MM-DD 时点"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "procedure"
+                ],
+                "description": "对应实体事实或程序行为"
+              },
+              "authorityCitation": {
+                "type": "string",
+                "description": "说明时间效力规则的权威条文引用"
+              },
+              "authorityQuote": {
+                "type": "string",
+                "description": "该权威条文的连续原文摘录"
+              },
+              "applicability": {
+                "type": "string",
+                "description": "本案适用及例外的待复核说明；不是程序自动认定"
+              }
+            },
+            "required": [
+              "citation",
+              "referenceDate",
+              "scope",
+              "authorityCitation",
+              "authorityQuote",
+              "applicability"
+            ]
+          }
+        },
+        "password": {
+          "type": "string",
+          "description": "PDF 打开密码，仅用于当次读取，不回显、不入库"
+        },
+        "passwords": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "按原文件完整路径提供 PDF 打开密码，仅用于当次读取"
         }
       }
     },

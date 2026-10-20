@@ -1,27 +1,29 @@
 import path from "path";
 import { legalWrite, assertLegalExecutionActive } from "../../../../legal/execution";
 import fs from "fs";
+import { encodeToolResult } from "../../../../tools/result_envelope";
+import { bindIndustryWorkspaceContext } from "../../../../industry/workspace_context";
 import * as LegalCases from "../../../../org/legal_cases";
-import { legalTemporalOptions, buildCaseContext, runLegalLLMWithin, LegalStructuredResponseError, textArg, roleLabel, listArg, inferDisputeFocuses, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
-import { buildEvidenceReviewRows, LEGAL_CASE_SEARCH_ORDER, normalizeLegalCaseStage, workspaceMaterialInputs, makeWorkspaceWorkflowCase, workspaceMaterialIndexRows, formatLegalWorkflowRows, formatLegalWorkflowActionQueue, formatEvidenceReviewRows, formatEvidenceGapList } from "./case_workflow";
+import { legalTemporalOptions, buildCaseContext, runLegalLLMWithin, LegalStructuredResponseError, textArg, roleLabel, listArg, withActiveLegalWorkspace, buildSearchQueries, legalWorkspaceId, resolveWritableOutputDir, ensureLegalDeliveryRoot } from "./context";
+import { buildEvidenceReviewRows, LEGAL_CASE_SEARCH_ORDER, normalizeLegalCaseStage, workspaceMaterialInputs, makeWorkspaceWorkflowCase, workspaceMaterialIndexRows, formatLegalWorkflowRows, formatLegalWorkflowActionQueue, formatEvidenceReviewRows, formatEvidenceOriginals, formatEvidenceGapList, legalCaseStageLabel } from "./case_workflow";
 import { ownCaseNumbersFromArgs, evaluateCurrentLawGate, legalReasoningGateStatus, formatCitationList } from "./citations";
 
 import { buildReasoningSources, buildMaterialSources, reasoningGenerationPrompt, resolveReasoningEntries, reasoningReviewPrompt, applyReasoningReview, type Source } from "../legal_reasoning_generation";
-import { inspectLegalReasoningLinks } from "../legal_reasoning_links";
+import { inspectLegalReasoningLinks, formatLegalReasoningLinks } from "../legal_reasoning_links";
 import { LEGAL_REASONING_MODEL_TIMEOUT_MS, LEGAL_REASONING_WORKFLOW_BUDGET_MS, LEGAL_STRUCTURED_MAX_TOKENS } from "../../../../legal/budgets";
-import { isLegalSourceMaterial } from "../../../../../shared/legal_workflow_receipts";
+import { isLegalSourceMaterial, legalCaseSourceFingerprint } from "../../../../../shared/legal_workflow_receipts";
 
-function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: string): string {
+function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: string, sourceCase?: LegalCases.OrgLegalCaseFile | null): string {
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const role = roleLabel(textArg(args, 'role'));
   const caseType = textArg(args, 'caseType') || textArg(args, 'cause') || '待确认案由';
   const facts = textArg(args, 'facts') || textArg(args, 'materials') || textArg(args, 'transcript') || '待补充案件事实';
-  const evidence = textArg(args, 'evidence') || '待整理证据材料';
+  const evidence = textArg(args, 'evidence');
   const legalAuthorities = textArg(args, 'legalAuthorities') || textArg(args, 'statutes') || '待检索现行有效法律、司法解释和裁判规则';
   const similarCases = textArg(args, 'similarCases') || '待按法院层级检索类案';
-  const issues = (listArg(args, 'issues').length ? listArg(args, 'issues') : inferDisputeFocuses({ ...args, facts, caseType })).slice(0, 12);
+  const issues = listArg(args, 'issues').slice(0, 12);
   const queries = buildSearchQueries({ ...args, facts, caseType, issues });
-  const evidenceRows = buildEvidenceReviewRows({ ...args, facts, evidence, caseType });
+  const evidenceRows = buildEvidenceReviewRows({ ...args, facts, evidence, caseType }, sourceCase);
   const lawGate = evaluateCurrentLawGate([
     legalAuthorities,
     textArg(args, 'content'),
@@ -30,10 +32,10 @@ function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: st
   const gateStatus = legalReasoningGateStatus(lawGate);
   const searchOrder = LEGAL_CASE_SEARCH_ORDER.join(' > ');
   const majorRows = issues.map(issue =>
-    `| ${issue.replace(/\|/g, ' ')} | ${legalAuthorities.replace(/\|/g, ' ').slice(0, 160)} | 围绕请求权基础、抗辩构成、举证责任和裁判规则解释适用边界 | ${similarCases.replace(/\|/g, ' ').slice(0, 120)}；检索顺序：${searchOrder} | ${gateStatus} |`,
+    `| ${issue.replace(/\|/g, ' ')} | 待逐项匹配法条 | 尚未完成本争议的法律适用分析 | ${similarCases.replace(/\|/g, ' ').slice(0, 120)}；检索顺序：${searchOrder} | 待分析 |`,
   ).join('\n');
   const minorRows = evidenceRows.map(row =>
-    `| ${row.index} | ${row.fact.replace(/\|/g, ' ')} | ${row.name.replace(/\|/g, ' ')} | ${row.proofPurpose.replace(/\|/g, ' ')} | ${row.authenticity}；${row.legality}；${row.relevance} | ${row.gap} |`,
+    `| ${row.index} | ${row.sources.map(source => source.id).join('、') || '未提供原句'} | ${row.name.replace(/\|/g, ' ')} | 见下方拟议关联；待律师确认 | ${row.authenticity}；${row.legality}；${row.relevance} | ${row.gap} |`,
   ).join('\n');
   const conclusionRows = issues.map(issue =>
     `| ${issue.replace(/\|/g, ' ')} | 以已归集事实和证据目录为基础，未能证明部分标注“待补证” | 将大前提规则适用于小前提事实，形成可复核的支持/抗辩路径 | 可转入答辩状、代理词、法律意见书或诉讼策略；正式交付前必须通过现行有效法律硬门槛 |`,
@@ -49,9 +51,13 @@ function buildLegalReasoningMatrixMarkdown(args: Record<string, any>, orgId?: st
 ## 一、大前提：检索法律、解释法律、类案补强
 
 - 现行有效法律预检：${gateStatus}
+- 此处仅核验已提供的法条，不代表各争议焦点的法律适用已通过。
 - 法源处理：先检索现行有效法律和司法解释，再按类案层级补强裁判规则。
 - 类案检索顺序：${searchOrder}
-- 未核验法条和类案不得进入正式交付包；正式文书需经 legal_finalize_delivery_package 硬门槛。
+- 未核验法条和类案不得进入正式交付包；正式文书需经 正式交付核验 硬门槛。
+
+### 已提供的法律依据（待逐项匹配法条与争议）
+${legalAuthorities}
 
 | 争议焦点 | 检索法律 | 解释法律 | 类案补强 | 当前状态 |
 | --- | --- | --- | --- | --- |
@@ -65,6 +71,7 @@ ${majorRows}
 | 序号 | 待证事实 | 证据材料 | 证明目的 | 举证/质证处理 | 缺口或风险 |
 | --- | --- | --- | --- | --- | --- |
 ${minorRows}
+${formatEvidenceOriginals(evidenceRows)}
 
 ## 三、结论：涵摄、文书表达、风险
 
@@ -84,13 +91,13 @@ ${formatCitationList(lawGate.blockingStatutes).join('\n')}
 ### 未确认案例
 ${formatCitationList(lawGate.missingCaseChecks).join('\n')}
 
-## 五、下一步工具链
+## 五、下一步
 
-1. legal_external_research_plan：生成外部法条、类案、主体信息检索行动单。
-2. legal_search_external_authorities：在已授权 API 或网页协作结果中登记法源和类案。
-3. legal_generate_litigation_packet：生成起诉状、答辩状、质证意见和证据目录工作底稿。
-4. legal_generate_argument_or_opinion：生成代理词、法律意见书、庭审提纲或应对策略。
-5. legal_finalize_delivery_package：正式交付前强制核验现行有效法律。
+1. 外部检索计划：生成外部法条、类案、主体信息检索行动单。
+2. 法源与类案检索：在已授权 API 或网页协作结果中登记法源和类案。
+3. 诉讼文书生成：生成起诉状、答辩状、质证意见和证据目录工作底稿。
+4. 法律意见生成：生成代理词、法律意见书、庭审提纲或应对策略。
+5. 正式交付核验：正式交付前强制核验现行有效法律。
 
 ## 六、检索关键词
 ${queries.map((query, index) => `${index + 1}. ${query}`).join('\n')}
@@ -211,7 +218,11 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
   const caseName = textArg(args, 'caseName') || '未命名案件';
   const persist = args.persistCase !== false;
   const writeFiles = args.writeFiles !== false && args.writeFile !== false;
-  const markdown = buildLegalReasoningMatrixMarkdown(args, orgId);
+  const { sourceCase, traceability, reasoningReviewed, generationFailure } = await resolveLegalReasoningDraft(args, context);
+  const draft = traceability.links.length
+    ? `# ${caseName} 法律分析三段论底稿\n\n${buildCaseContext(args)}\n\n${formatLegalReasoningLinks(traceability.links)}`
+    : `${buildLegalReasoningMatrixMarkdown(args, orgId, sourceCase)}\n\n当前为分析模板，尚未完成逐项来源关联。`;
+  const markdown = `${draft}\n\n来源关联检查：${traceability.passed ? '通过；仅证明引用可追溯，不代表法律结论正确' : '未通过'}\n法律适用自动复核：${reasoningReviewed ? '已完成；条件结论仍须律师核实前提和证据' : '未完成'}\n${generationFailure ? `- 未完成原因：${generationFailure}\n` : ''}${traceability.errors.map(error => `- ${error}`).join('\n')}\n`;
   const lawGate = evaluateCurrentLawGate([
     textArg(args, 'legalAuthorities'),
     textArg(args, 'content'),
@@ -231,8 +242,8 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
   }
 
   let caseFile: LegalCases.OrgLegalCaseFile | null = null;
-  let archiveLine = '- 案件空间：未归档（persistCase=false）';
-  if (persist) {
+  let archiveLine = persist ? '- 案件空间：未归档（来源关联未通过）' : '- 案件空间：未归档（persistCase=false）';
+  if (persist && traceability.passed) {
     const explicitCaseId = textArg(args, 'caseId');
     caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
     if (!caseFile) caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
@@ -252,41 +263,74 @@ export async function reasoningMatrixHandler(args: Record<string, any>, context?
       content: markdown,
       localPath: reasoningPath || undefined,
       source: 'tool',
+      reasoningLinks: traceability.passed ? traceability.links : undefined,
+      reasoningBasis: sourceCase ? legalCaseSourceFingerprint(sourceCase) : undefined,
     }));
     archiveLine = material
       ? `- 案件空间：已归档 caseId=${caseFile.id} materialId=${material.id}`
       : `- 案件空间：未归档 caseId=${caseFile.id}`;
   }
 
-  return [
-    '# 法律分析三段论底稿已生成',
+  return encodeToolResult([
+    traceability.passed ? '# 法律分析三段论底稿已生成' : '# 法律分析未完成，已保留待补底稿',
     '',
     `- 案件：${caseName}`,
     `- 现行有效法律预检：${legalReasoningGateStatus(lawGate)}`,
+    `- 来源关联检查：${traceability.passed ? '通过（法律结论仍待律师复核）' : '未通过，尚缺规则与证据的逐项关联'}`,
     reasoningPath ? `- 底稿文件：${reasoningPath}` : '- 底稿文件：未写入（writeFiles=false）',
     archiveLine,
+    ...(generationFailure ? [`- 未完成原因：${generationFailure}`] : []),
+    ...traceability.errors.map(error => `- ${error}`),
     '',
     '## 下一步',
-    '- 用 legal_external_research_plan 补齐法条、类案和主体检索。',
-    '- 用 legal_generate_argument_or_opinion 生成代理词/法律意见书律师复核稿。',
-    '- 正式交付前用 legal_finalize_delivery_package 触发现行有效法律硬门槛。',
-  ].join('\n');
+    '- 用 外部检索计划 补齐法条、类案和主体检索。',
+    '- 用 法律意见生成 生成代理词/法律意见书律师复核稿。',
+    '- 正式交付前用 正式交付核验 触发现行有效法律硬门槛。',
+  ].join('\n'), { ok: traceability.passed, status: traceability.passed ? 'generated' : 'partial', reasoningLinked: traceability.passed, reasoningReviewed });
 }
 
 export async function caseWorkspaceHandler(args: Record<string, any>, context?: any): Promise<string> {
+  const currentRequest = String(context?.actionIntent || context?.routedTaskText || '').trim();
+  const createRequested = /(?:\u65b0\u5efa|\u521b\u5efa|\u5efa\u7acb).{0,32}(?:\u6848\u4ef6|\u5de5\u4f5c\u53f0|\u6848\u4ef6\u7a7a\u95f4)/u.test(currentRequest);
+  // The planner may omit slots even when the user supplied them explicitly.
+  // Recover only clearly labelled values from the current user turn; this is
+  // deterministic slot filling, not factual inference.
+  const requestCaseName = currentRequest.match(/(?:\u6848\u4ef6\u540d|\u6848\u4ef6\u540d\u79f0)\s*[\u201c"']([^\u201d"']+)[\u201d"']/u)?.[1]?.trim() || '';
+  const requestPartyA = currentRequest.match(/(?:\u5f53\u4e8b\u4eba\s*)?\u7532\u65b9\s*([^\u3001\uff0c,\uff1b;\u3002\uff01\uff1f!?]{1,80})/u)?.[1]?.trim() || '';
+  const requestPartyB = currentRequest.match(/(?:\u5f53\u4e8b\u4eba\s*)?\u4e59\u65b9\s*([^\u3001\uff0c,\uff1b;\u3002\uff01\uff1f!?]{1,80})/u)?.[1]?.trim() || '';
+  const requestAmount = currentRequest.match(/\u4e89\u8bae\u91d1\u989d\s*(?:\u4e3a)?\s*([0-9]+(?:\.[0-9]+)?\s*(?:\u4e07\u5143|\u5143)?)/u)?.[1]?.replace(/\s+/g, '') || '';
+  const requestStage = currentRequest.match(/\u9636\u6bb5\s*(?:\u4e3a|\u662f|[:\uff1a])?\s*(\u8bc9\u524d|\u7acb\u6848|\u5ead\u5ba1|\u5f00\u5ead|\u5224\u51b3|\u6267\u884c|\u7ed3\u6848)/u)?.[1] || '';
+  args = {
+    ...args,
+    caseName: textArg(args, 'caseName') || textArg(args, 'title') || requestCaseName,
+    partyA: textArg(args, 'partyA') || requestPartyA,
+    partyB: textArg(args, 'partyB') || requestPartyB,
+    disputeAmount: textArg(args, 'disputeAmount') || requestAmount,
+    stage: textArg(args, 'stage') || requestStage,
+  };
+  args = withActiveLegalWorkspace(args, context);
   const orgId = legalWorkspaceId(args, context);
   const userId = textArg(args, 'userId') || context?.userId || 'system';
   const caseName = textArg(args, 'caseName') || textArg(args, 'title') || '未命名案件';
   const role = roleLabel(textArg(args, 'role'));
-  const caseType = textArg(args, 'caseType') || textArg(args, 'cause') || '待确认案由';
+  const requestedCaseType = textArg(args, 'caseType') || textArg(args, 'cause')
+    || (/\u4e70\u5356\u5408\u540c\u7ea0\u7eb7/u.test(caseName) ? '\u4e70\u5356\u5408\u540c\u7ea0\u7eb7' : '');
+  const caseType = requestedCaseType || '待确认案由';
   const court = textArg(args, 'court');
-  const parties = textArg(args, 'parties');
+  const partyA = textArg(args, 'partyA');
+  const partyB = textArg(args, 'partyB');
+  const parties = textArg(args, 'parties') || [partyA, partyB].filter(Boolean).join('\uff1b');
   const claims = textArg(args, 'claims') || textArg(args, 'objective');
-  const facts = textArg(args, 'facts') || textArg(args, 'materials');
+  const disputeAmount = textArg(args, 'disputeAmount');
+  const disputeAmountFact = disputeAmount
+    ? `\u4e89\u8bae\u91d1\u989d\uff1a\u4eba\u6c11\u5e01${/(?:\u5143|\u4e07\u5143)$/u.test(disputeAmount) ? disputeAmount : `${disputeAmount}\u5143`}`
+    : '';
+  const facts = textArg(args, 'facts') || textArg(args, 'materials')
+    || disputeAmountFact;
   const evidence = textArg(args, 'evidence');
   const stage = normalizeLegalCaseStage(textArg(args, 'stage'));
   const persist = args.persistCase !== false;
-  const focuses = inferDisputeFocuses({ ...args, caseType, facts });
+  const focuses = listArg(args, 'issues');
   const queries = buildSearchQueries({ ...args, caseType, facts, issues: focuses });
   const lawGate = evaluateCurrentLawGate([
     textArg(args, 'legalAuthorities'),
@@ -299,29 +343,50 @@ export async function caseWorkspaceHandler(args: Record<string, any>, context?: 
   if (persist) {
     const explicitCaseId = textArg(args, 'caseId');
     caseFile = explicitCaseId ? LegalCases.getCase(orgId, explicitCaseId, userId, 'write') : null;
-    if (!caseFile) {
+    if (!caseFile && !createRequested) {
       caseFile = LegalCases.listCases(orgId, caseName, 1, userId)[0] || null;
     }
+    const generatedNotes = [
+      claims ? `办理目标：${claims}` : '',
+      facts ? `事实摘要：${facts.slice(0, 2000)}` : '',
+      evidence ? `证据摘要：${evidence.slice(0, 1200)}` : '',
+    ].filter(Boolean).join('\n');
     const patch = {
       title: caseName,
-      party: parties || role,
-      cause: caseType,
-      court,
-      stage,
-      notes: [
-        claims ? `办理目标：${claims}` : '',
-        facts ? `事实摘要：${facts.slice(0, 2000)}` : '',
-        evidence ? `证据摘要：${evidence.slice(0, 1200)}` : '',
-      ].filter(Boolean).join('\n'),
+      party: parties || caseFile?.party || role,
+      cause: requestedCaseType || caseFile?.cause || caseType,
+      court: court || caseFile?.court || '',
+      stage: textArg(args, 'stage') ? stage : caseFile?.stage || stage,
+      notes: (facts || evidence) ? generatedNotes : caseFile?.notes || generatedNotes,
+      clientPartyName: Object.hasOwn(args, 'clientPartyName') ? textArg(args, 'clientPartyName') : caseFile?.clientPartyName || '',
+      clientRole: textArg(args, 'role') || caseFile?.clientRole || '',
+      objective: claims || caseFile?.objective || '',
+      factDate: textArg(args, 'factDate') || caseFile?.factDate,
     };
     caseFile = caseFile
       ? legalWrite(() => LegalCases.updateCase(orgId, userId, caseFile.id, patch)) || caseFile
       : legalWrite(() => LegalCases.createCase(orgId, userId, patch));
 
+    bindIndustryWorkspaceContext({
+      userId, productLine: 'legal',
+      domain: context?.domain === 'work' ? 'work' : 'personal',
+      orgId: context?.domain === 'work' ? String(context?.orgId || '') : '',
+    }, {
+      name: caseName,
+      attributes: {
+        caseId: caseFile.id,
+        caseName,
+        clientName: parties,
+        court,
+        stage,
+      },
+    });
+
     for (const material of workspaceMaterialInputs(args)) {
+      if (caseFile.materials.some(item => item.title === material.title && item.content === material.content)) continue;
       legalWrite(() => LegalCases.addMaterial(orgId, userId, caseFile.id, {
         ...material,
-        source: 'tool',
+        source: 'manual',
       }));
     }
     caseFile = LegalCases.getCase(orgId, caseFile.id, userId) || caseFile;
@@ -349,18 +414,19 @@ export async function caseWorkspaceHandler(args: Record<string, any>, context?: 
     ? `${workflow.nextStep.label}：${workflow.nextStep.nextStep}`
     : '闭环已完成，进入持续复核和归档。';
   const materialRows = workspaceMaterialIndexRows(caseFile?.materials || []);
-  const evidenceReviewRows = buildEvidenceReviewRows({ ...args, caseType, facts, evidence });
+  const evidenceReviewRows = buildEvidenceReviewRows({ ...args, caseType, facts, evidence }, caseFile);
 
   return `# ${caseFile?.title || caseName} 案件工作台
 
 ## 一、案件空间
 - 案件现有材料：${caseFile ? `共 ${caseFile.materials.length} 份` : '尚未入案'}
-- 阶段：${stage}
+- 阶段：${legalCaseStageLabel(stage)}
 - 我方身份：${role}
 - 案由/类型：${caseType}
 - 法院/机构：${court || '待确认'}
 - 当事人：${parties || '待补充'}
 - 办理目标：${claims || '待补充'}
+- 事实摘要：${facts || '待补充'}
 
 ## 二、闭环状态
 - 完成度：${workflow.doneCount}/${workflow.steps.length}（${workflow.completionRatio}%）
@@ -374,13 +440,15 @@ ${formatLegalWorkflowRows(workflow.steps)}
 
 ${formatLegalWorkflowActionQueue(workflow)}
 
+
+
 ## 三、材料索引
 | 序号 | 类型 | 标题 | 来源 | 归档时间 |
 | --- | --- | --- | --- | --- |
 ${materialRows}
 
 ## 四、争议焦点
-${focuses.map((focus, index) => `${index + 1}. ${focus}`).join('\n')}
+${focuses.map((focus, index) => `${index + 1}. ${focus}`).join('\n') || '待依据原始材料分析；未按案型预设争点。'}
 
 ## 五、证据目录与三性审查矩阵
 | 编号 | 证据名称 | 待证事实 | 证明目的 | 真实性核验 | 合法性核验 | 关联性核验 | 缺口/质证风险 |

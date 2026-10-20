@@ -1,4 +1,5 @@
 import { searchSimilarCases, searchStatutes, type LegalArticleType, createLegalArticle, indexLegalArticle, type CitationCheck, verifyMultipleCitations, verifyCitation } from "../../../../legal/kb";
+import { courtLevelRank } from "./case_workflow";
 import { searchLegalAuthorityDatabase } from "../../../../legal/sources";
 import { extractLegalMetadata } from "../../../../legal/parser";
 import { legalWrite, legalExecutionSignal, assertLegalExecutionActive } from "../../../../legal/execution";
@@ -17,17 +18,18 @@ import { normalizeMaterialArticleType, buildImportedMaterialContent, materialCat
 
 export async function searchCaseHandler(args: Record<string, any>, context?: any): Promise<string> {
   const query = args.query as string;
-  const limit = (args.limit as number) || 5;
+  const limit = Math.max(1, Math.min(Number(args.limit) || 5, 20));
   if (!query) return '请提供案由或事实描述（query参数）';
 
   // Search local KB
   const orgId = legalWorkspaceId(args, context);
-  const userId = textArg(args, 'userId') || context?.userId || 'system';
-  const localResults = await searchSimilarCases(orgId, query, limit, userId);
+  const userId = context?.userId || textArg(args, 'userId') || 'system';
+  const localResults = (await searchSimilarCases(orgId, query, Math.min(50, limit * 4), userId))
+    .sort((a, b) => courtLevelRank(a.court || '') - courtLevelRank(b.court || '') || b.score - a.score).slice(0, limit);
 
   if (localResults.length > 0) {
     const lines = localResults.map((r, i) =>
-      `${i + 1}. **${r.title}** [相似度: ${r.score}]\n   案号: ${r.caseNumber || 'N/A'} | 法院: ${r.court || 'N/A'}\n   摘要: ${r.chunk.slice(0, 300)}...`,
+      `${i + 1}. **${r.title}** [${r.source === 'keyword' ? '原文匹配' : '语义相关度'}: ${r.score}]\n   案号: ${r.caseNumber || 'N/A'} | 法院: ${r.court || 'N/A'}\n   引用: ${r.citationKey || r.articleId}\n   摘录: ${r.chunk}`,
     );
     return `本地知识库检索到 ${localResults.length} 个相似案例：\n\n${lines.join('\n\n')}\n\n*来源: 本地裁判文书知识库*`;
   }
@@ -62,7 +64,7 @@ export async function searchStatuteHandler(args: Record<string, any>, context?: 
   }
 
   const lines = results.map((r, i) =>
-    `${i + 1}. **${r.title}** ${r.isEffective ? '✓ 现行有效' : '✗ 已废止'}\n   ${r.chunk.slice(0, 200)}`,
+    `${i + 1}. **${r.title}** ${r.verificationStatus === 'verified' && r.isEffective ? '✓ 来源状态已核验，适用性待复核' : r.verificationStatus === 'repealed' ? '✗ 已废止，需检查历史适用' : '待核验有效性'}\n   ${r.chunk?.trim() ? r.chunk : '未取得可展示的法条全文；请核验权威来源'}\n   引用: ${r.citationKey || r.sourceUrl || r.articleId}`,
   );
   const externalLines = externalResults.map((r, i) =>
     `${results.length + i + 1}. **${r.title}** ${r.effectiveStatus || '待律师复核'}\n   来源: ${r.sourceName}${r.url ? ` | ${r.url}` : ''}\n   ${r.summary.slice(0, 200)}`,

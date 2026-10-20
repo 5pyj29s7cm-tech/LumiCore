@@ -55,7 +55,7 @@ describe('legal retrieval identity', () => {
   it('rejects equal-dimension vectors from another model and unknown legacy labels', async () => {
     const { userId, orgId, article } = fixture('different-space');
     EDB.saveKbEmbedding(article.id, 0, [1, 0], article.content, 'qwen/different-space');
-    const results = await searchSimilarCases(orgId, 'unrelated query in the current openai space', 5, userId);
+    const results = await searchSimilarCases(orgId, '紫色海豚', 5, userId);
     expect(results).toEqual([]);
     EDB.deleteKbEmbeddings(article.id);
     EDB.saveKbEmbedding(article.id, 0, [1, 0], article.content, 'text-embedding-3-small');
@@ -76,7 +76,7 @@ describe('legal retrieval identity', () => {
     const article = createLegalArticle(orgId, userId, { title: 'Synthetic statute', content: 'Synthetic regulation for testing.', articleType: 'statute' });
     upsertUserRetrievalModelPreferences(userId, { embedding: { provider: 'openai', model: 'statute-embedding', fallbackProvider: '' } });
     await indexLegalArticle(orgId, article.id, userId);
-    const query = 'unrelated synthetic semantic query';
+    const query = '紫色海豚';
     expect(await searchStatutes(orgId, query, 5, userId)).toContainEqual(expect.objectContaining({ articleId: article.id }));
     expect(JSON.parse((fetchMock.mock.calls as any[]).at(-1)[1].body).model).toBe('statute-embedding');
     EDB.deleteKbEmbeddings(article.id);

@@ -16,7 +16,7 @@ export function case_researchTools(): ToolDefinition[] {
       name: stringField('被执行主体名称（个人姓名/公司名称）'),
     },
     required: ['name'],
-    handler: traceAssetsHandler,
+    handler: withLegalReceipt(traceAssetsHandler, { status: 'observed', expectCaseMutation: 'when_requested' }),
   }),
   defineLegalTool({
     name: 'legal_equity_penetration',

@@ -379,6 +379,13 @@ function mountConversationCompletionRoutes(router: Router, llm: SharedProviderGe
 }
 
 function mountLegalCompletionRoutes(router: Router, llm: SharedProviderGetters & Required<Pick<SharedProviderGetters, 'getOpenAI' | 'getAnthropic' | 'getQwen'>>, asyncHandler: typeof chatRouteAsyncHandler) {
+  router.get('/legal/client-case-sync', requireAuth, asyncHandler(async (req, res) => {
+    if (resolveDomain(req.user!).domain !== 'personal') return res.status(403).json({ error: 'Use the organization case workspace for work cases.' });
+    const userId = req.user!.uid;
+    return res.json({ cases: LegalCases.listCases(LegalCases.legalWorkspaceNamespace(userId), '', null, userId).filter(item => item.createdBy === userId),
+      removedCaseIds: LegalCases.listPersonalDeletedCaseIds(userId) });
+  }));
+
   router.post('/legal/client-case-sync', requireAuth, asyncHandler(async (req, res) => {
     const scope = resolveDomain(req.user!);
     if (scope.domain !== 'personal') return res.status(403).json({ error: 'Use the organization case workspace for work cases.' });
@@ -388,6 +395,9 @@ function mountLegalCompletionRoutes(router: Router, llm: SharedProviderGetters &
       return res.status(400).json({ error: 'A valid case snapshot is required.' });
     }
     const orgId = resolveLegalCaseworkOrgId({ domain: 'personal', userOrgId: '', userId: req.user!.uid });
+    if (LegalCases.listPersonalDeletedCaseIds(req.user!.uid).includes(input.id)) return res.status(409).json({ error: 'This personal case was deleted.', code: 'LEGAL_CASE_DELETED', caseId: input.id });
+    const existing = LegalCases.getCase(orgId, input.id, req.user!.uid);
+    if (existing && existing.createdBy !== req.user!.uid) return res.status(403).json({ error: 'Case belongs to another account.' });
     const caseFile = LegalCases.upsertCaseSnapshot(orgId, req.user!.uid, input);
     if (req.body.activate === true) {
       const selectionScope = { userId: req.user!.uid, domain: 'personal' as const, orgId: '', productLine: 'legal' };
@@ -405,8 +415,14 @@ function mountLegalCompletionRoutes(router: Router, llm: SharedProviderGetters &
     const scope = resolveDomain(req.user!);
     if (scope.domain !== 'personal') return res.status(403).json({ error: 'Use the organization case workspace for work cases.' });
     const orgId = resolveLegalCaseworkOrgId({ domain: 'personal', userOrgId: '', userId: req.user!.uid });
-    const removed = LegalCases.deleteCase(orgId, req.user!.uid, String(req.params.caseId));
-    return res.json({ deleted: Boolean(removed) });
+    const caseId = String(req.params.caseId);
+    if (!/^[a-zA-Z0-9_.:@-]{1,200}$/.test(caseId)) return res.status(400).json({ error: 'A valid case id is required.' });
+    const existing = LegalCases.getCase(orgId, caseId, req.user!.uid);
+    if (existing && existing.createdBy !== req.user!.uid) return res.status(403).json({ error: 'Case belongs to another account.' });
+    const removed = LegalCases.deleteCase(orgId, req.user!.uid, caseId);
+    if (!removed) LegalCases.recordPersonalCaseDeletion(req.user!.uid, caseId);
+    await flushDBOrThrow();
+    return res.json({ deleted: Boolean(removed), tombstoned: true, caseId });
   }));
 
   // Native review/removal records a user's decision, never a model/tool claim.

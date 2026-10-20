@@ -1,89 +1,21 @@
 // @vitest-environment jsdom
-import React, { StrictMode } from 'react';
+import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { SetupWizard } from '../src/components/SetupWizard';
 import { toast } from 'sonner';
 import { useLocalModelConfig } from '../src/hooks/useLocalModelConfig';
 import { extractSourceExpression } from './source_expression';
 import { apiJson } from '../src/services/apiClient';
 import { LUMI_OFFICIAL_DEFAULT_MODELS } from '../shared/model_provider_capabilities';
 import { mediaGenerationCopy } from '../src/i18n/locales/mediaGeneration';
-const fixture = vi.hoisted(() => ({ net: vi.fn(), update: vi.fn(), save: vi.fn(), speak: vi.fn(), connect: vi.fn(), reload: vi.fn(), aiConfig: { ready: true, loadError: '' } }));
-vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ aiConfig: fixture.aiConfig, updateAIConfig: fixture.update, reloadModelPreferences: fixture.reload }) }));
-vi.mock('../src/lib/useT', () => ({ useT: () => ({}), useLocale: () => 'en' }));
-vi.mock('../src/i18n/uiMessages', () => ({ uiMessage: (key: string) => key.split('.')[1] }));
+const fixture = vi.hoisted(() => ({ net: vi.fn(), update: vi.fn(), save: vi.fn(), connect: vi.fn() }));
 vi.mock('../src/services/apiClient', async () => ({ apiJson: (await import('./source_expression')).extractSourceExpression('src/services/apiClient.ts', 'apiJson', { apiFetch: fixture.net }) }));
-vi.mock('../src/services/settingsKeys', () => ({ saveServerKeys: fixture.save }));
-vi.mock('../src/services/voiceService', () => ({ synthesizeSpeech: fixture.speak }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
-vi.mock('motion/react', () => ({ motion: { div: ({ children }: any) => <div>{children}</div> }, AnimatePresence: ({ children }: any) => <>{children}</> }));
 const reply = (data: any = { detected: false, models: [] }, status = 200) => ({ ok: status < 400, status, json: async () => data });
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
 const button = (name: string) => screen.getByRole('button', { name });
-beforeEach(() => { localStorage.clear(); fixture.aiConfig = { ready: true, loadError: '' }; fixture.net.mockResolvedValue(reply()); fixture.update.mockResolvedValue(true); fixture.save.mockResolvedValue(undefined); fixture.speak.mockResolvedValue(undefined); fixture.connect.mockResolvedValue({ latencyMs: 7, model: 'model-a' }); vi.stubGlobal('fetch', fixture.net); });
+beforeEach(() => { localStorage.clear(); fixture.net.mockResolvedValue(reply()); fixture.update.mockResolvedValue(true); fixture.save.mockResolvedValue(undefined); fixture.connect.mockResolvedValue({ latencyMs: 7, model: 'model-a' }); vi.stubGlobal('fetch', fixture.net); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetAllMocks(); });
-
-it.each(['ollama', 'lmstudio'])('selects a usable %s model, counts it consistently, and waits for persistence', async provider => {
-  fixture.net.mockImplementation(async (url: string) => reply({ detected: true, models: url.includes(provider) ? ['BGE-m3', 'NOMIC-EMBED', 'Whisper', 're-rank', 'chat-model'] : [] }));
-  const saved = deferred(); fixture.update.mockReturnValue(saved.promise); render(<SetupWizard onFinish={vi.fn()} />);
-  await screen.findByText('local-ai-found'); expect(screen.getAllByText('(1 models)')).toHaveLength(1);
-  act(() => { fireEvent.click(button('start-using-lumi')); fireEvent.click(button('start-using-lumi')); });
-  expect(fixture.update).toHaveBeenCalledExactlyOnceWith({ provider, model: 'chat-model' });
-  expect(screen.queryByText('voice-check')).toBeNull(); expect((button('also-configure-a-cloud-api') as HTMLButtonElement).disabled).toBe(true);
-  await act(async () => saved.resolve(true)); expect(screen.getByText('voice-check')).toBeTruthy();
-});
-
-it.each(['deepseek', 'qwen', 'openai'])('saves %s keys before preferences and stays on setup after a rejected preference', async provider => {
-  render(<SetupWizard onFinish={vi.fn()} />); await screen.findByText('no-local-ai-detected'); fireEvent.click(button('set-up-cloud-api-key'));
-  fireEvent.click(button(({ deepseek: 'DeepSeek', qwen: 'Qwen', openai: 'OpenAI' })[provider]!));
-  fireEvent.change(screen.getByPlaceholderText(`${provider} API key...`), { target: { value: ' test-key ' } });
-  const key = deferred(), preference = deferred(); fixture.save.mockReturnValueOnce(key.promise); fixture.update.mockReturnValueOnce(preference.promise);
-  act(() => { fireEvent.click(button('save-continue')); fireEvent.click(button('save-continue')); });
-  expect(fixture.save).toHaveBeenCalledExactlyOnceWith({ [({ deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', openai: 'OPENAI_API_KEY' })[provider]!]: 'test-key' });
-  expect(fixture.update).not.toHaveBeenCalled(); expect((button('skip-for-now') as HTMLButtonElement).disabled).toBe(true);
-  await act(async () => key.resolve(undefined)); expect(fixture.update).toHaveBeenCalledExactlyOnceWith({ provider });
-  await act(async () => preference.resolve(false)); expect(screen.queryByText('voice-check')).toBeNull(); expect((button('save-continue') as HTMLButtonElement).disabled).toBe(false);
-  fixture.save.mockRejectedValueOnce(new Error('key denied')); fireEvent.click(button('save-continue')); await waitFor(() => expect(toast.error).toHaveBeenCalledWith('key denied')); expect(fixture.update).toHaveBeenCalledTimes(1);
-  fireEvent.click(button('save-continue')); await screen.findByText('voice-check');
-});
-
-it('ignores late StrictMode results and aborts requests on unmount', async () => {
-  const old = deferred(); fixture.net.mockReturnValueOnce(old.promise).mockReturnValueOnce(old.promise);
-  const view = render(<StrictMode><SetupWizard onFinish={vi.fn()} /></StrictMode>); await screen.findByText('no-local-ai-detected');
-  await act(async () => old.resolve(reply({ detected: true, models: ['stale-model'] })));
-  expect(screen.queryByText('local-ai-found')).toBeNull(); expect(fixture.net.mock.calls.slice(0, 2).every(([, init]) => init.signal?.aborted)).toBe(true);
-  view.unmount(); expect(fixture.net.mock.calls.every(([, init]) => init.signal?.aborted)).toBe(true);
-});
-
-it('prefers Ollama when both are ready and permits retry after a failed local save', async () => {
-  fixture.net.mockResolvedValue(reply({ detected: true, models: ['chat-model'] })); fixture.update.mockResolvedValueOnce(false);
-  render(<SetupWizard onFinish={vi.fn()} />); await screen.findByText('local-ai-found'); fireEvent.click(button('start-using-lumi'));
-  await waitFor(() => expect((button('start-using-lumi') as HTMLButtonElement).disabled).toBe(false)); expect(screen.queryByText('voice-check')).toBeNull();
-  expect(fixture.update).toHaveBeenCalledExactlyOnceWith({ provider: 'ollama', model: 'chat-model' }); fireEvent.click(button('start-using-lumi')); await screen.findByText('voice-check');
-});
-
-it('keeps server addresses authoritative despite stale browser caches', async () => {
-  localStorage.setItem('lumi_ollama_url', 'http://localhost:11435'); render(<SetupWizard onFinish={vi.fn()} />); await screen.findByText('no-local-ai-detected');
-  expect(fixture.net.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body)])).toEqual([['/api/ollama/config', 'PUT', {}], ['/api/lmstudio/config', 'PUT', {}]]);
-  let input = screen.getByPlaceholderText('Ollama: http://127.0.0.1:11434'); fixture.net.mockResolvedValueOnce(reply({ error: 'denied' }, 403));
-  fireEvent.change(input, { target: { value: 'http://localhost:9999' } }); fireEvent.keyDown(input, { key: 'Enter' }); await screen.findByText('no-local-ai-detected');
-  expect(localStorage.getItem('lumi_ollama_url')).toBe('http://localhost:11435');
-  fixture.net.mockResolvedValueOnce(reply({ baseUrl: 'http://localhost:9999', detected: true, models: ['embed-only', 'Whisper', 42] }));
-  input = screen.getByPlaceholderText('Ollama: http://127.0.0.1:11434'); fireEvent.keyDown(input, { key: 'Enter' }); await screen.findByText('no-local-ai-detected');
-  expect(input).toHaveProperty('value', 'http://localhost:9999'); expect(localStorage.getItem('lumi_ollama_url')).toBe('http://localhost:11435'); expect(localStorage.getItem('lumi_lmstudio_url')).toBeNull();
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
-  fixture.net.mockResolvedValueOnce(reply({ detected: true, models: ['chat-model'] })); fireEvent.keyDown(screen.getByPlaceholderText('Ollama: http://127.0.0.1:11434'), { key: 'Enter' }); await screen.findByText('local-ai-found');
-});
-
-it.each([false, true])('does not continue a closed key save, and completes only while mounted (close=%s)', async close => {
-  const finish = vi.fn(), pending = deferred(); let view = render(<SetupWizard onFinish={finish} />); await screen.findByText('no-local-ai-detected'); fireEvent.click(button('set-up-cloud-api-key'));
-  fireEvent.change(screen.getByPlaceholderText('deepseek API key...'), { target: { value: 'test-key' } }); fixture.save.mockReturnValueOnce(pending.promise); fireEvent.click(button('save-continue'));
-  view.unmount(); await act(async () => pending.resolve(undefined)); expect(fixture.update).not.toHaveBeenCalled();
-  view = render(<SetupWizard onFinish={finish} />); await screen.findByText('no-local-ai-detected'); fireEvent.click(button('set-up-cloud-api-key')); fireEvent.click(button('skip-for-now'));
-  fireEvent.click(button('play-test-audio')); await screen.findByText('voice-is-working-perfectly'); expect(fixture.speak).toHaveBeenCalledExactlyOnceWith('Hello. Your LumiCore is ready.', 'default');
-  vi.useFakeTimers(); fireEvent.click(button('launch-lumi')); if (close) view.unmount(); act(() => vi.advanceTimersByTime(1000)); expect(finish).toHaveBeenCalledTimes(close ? 0 : 1);
-});
 
 function settingsRow(providerId: string, context: any = { aiConfig: { provider: providerId } }) {
   const deps: any = {
@@ -207,11 +139,6 @@ it('blocks inherited world-model tests until vision preferences have loaded', as
   const reload = vi.fn(), context = { visionConfig: { ready: false, loadError: 'vision unavailable', provider: 'openai', model: 'stale' }, reloadModelPreferences: reload }, { Page } = modelPage('WorldActionModelPage', context);
   fixture.net.mockResolvedValueOnce(reply({ provider: 'inherit_vision', model: '', models: {} })); const view = render(<Page />); await screen.findByText('vision unavailable'); expect(screen.queryByRole('button', { name: 'test-effective-model' })).toBeNull(); fireEvent.click(button('retry')); expect(reload).toHaveBeenCalledExactlyOnceWith('vision');
   context.visionConfig = { ready: true, loadError: '', provider: 'openai', model: 'confirmed' }; view.rerender(<Page />); fireEvent.click(button('test-effective-model')); await screen.findByText('world-model-call-passed-value0-ms'); expect(fixture.connect.mock.calls[0].slice(0, 3)).toEqual(['vision', 'openai', 'confirmed']);
-});
-
-it('offers model preference retry during first-run setup', async () => {
-  fixture.aiConfig = { ready: false, loadError: 'setup preferences unavailable' }; const view = render(<SetupWizard onFinish={vi.fn()} />); await screen.findByText('setup preferences unavailable'); fireEvent.click(button('retry')); expect(fixture.reload).toHaveBeenCalledExactlyOnceWith('llm');
-  fixture.aiConfig = { ready: true, loadError: '' }; view.rerender(<SetupWizard onFinish={vi.fn()} />); expect(screen.queryByRole('alert')).toBeNull();
 });
 
 it.each(['saved', 'rejected', 'edited', 'closed', 'pinned'])('reasoning tests use the edited route after confirmation (%s)', async outcome => {

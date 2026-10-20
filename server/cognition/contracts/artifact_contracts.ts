@@ -124,12 +124,12 @@ export function buildArtifactRetrievalContract(input: string): LumiActionContrac
   if (!/^(?:\s*(?:请|麻烦)?(?:帮我)?(?:把|将|返回|取回|提供|交付)|\s*(?:please\s+)?(?:return|retrieve|provide)\b)/iu.test(text)
     || !/(?:已有|现有|已经有|已(?:经)?(?:生成|制作|完成)|\bexisting\b|\balready\b|\bpreviously\b)/iu.test(text)
     // i18n-allow: input grammar requiring an explicit attachment return.
-    || !/(?:附件[^。；;\n]{0,12}(?:返回|取回|提供|交付)|(?:返回|取回|提供|交付)[^。；;\n]{0,24}附件|\b(?:return|retrieve|provide)\b[^.;\n]{0,120}\battachment\b|\battachment\b[^.;\n]{0,40}\b(?:return|retrieve|provide)\b)/iu.test(text)
+    || !/(?:附件[^。；;\n]{0,12}(?:返回|取回|提供|交付|发(?:回|到|在)?(?:这里|当前聊天|本次聊天))|(?:返回|取回|提供|交付)[^。；;\n]{0,24}附件|\b(?:return|retrieve|provide)\b[^.;\n]{0,120}\battachment\b|\battachment\b[^.;\n]{0,40}\b(?:return|retrieve|provide)\b)/iu.test(text)
     // i18n-allow: reject multi-object retrieval requests.
     || /(?:所有|全部|多个|多份|两(?:个|份)|三个|三份|另一|另外|第二|\b(?:all|both|two|three|multiple|another|other|additional)\b)/iu.test(text)) return null;
   // Past generation describes an existing object; affirmative new work cannot be discharged by retrieval.
   // i18n-allow: existing-state and requested positive action grammar, not user-facing copy.
-  const remaining = text.replace(/已(?:经)?(?:生成|制作|完成)|\b(?:already|previously)\s+(?:generated|created|made|completed)\b/giu, ' ');
+  const remaining = text.replace(/可(?:播放|下载)(?:或(?:播放|下载))?(?=的[^。；;\n]{0,12}附件)/giu, ' ').replace(/已(?:经)?(?:生成|制作|完成)|\b(?:already|previously)\s+(?:generated|created|made|completed)\b/giu, ' ');
   if (hasRequestedArtifactMutation(remaining) || /(?:调整|打开|发送|发给|发布|上传|提交|签署|签名|签字|签章|签付|盖章|付款|支付|缴费|转账|分析|总结|翻译|计算|审查|播放|运行|执行|安装|下载)|\b(?:generate|create|make|draft|write|modify|edit|change|update|export|save|open|send|publish|upload|submit|sign|pay|analyze|analyse|summarize|translate|calculate|review|play)(?:s|d|ed|ing)?\b|\b(?:generate|create|modify|send|publish|sign|pay|open|export)[_-][a-z]/iu.test(remaining)) return null;
   const ids = [...new Set(text.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/giu)?.map(id => id.toLowerCase()) || [])];
   // i18n-allow: explicit requested project revision number.

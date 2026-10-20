@@ -194,6 +194,8 @@ export function upsertCaseSnapshot(
       ownerUserId: current.createdBy,
     });
   }
+  const incomingTime = Date.parse(String(input.updatedAt || ''));
+  if (current && (!Number.isFinite(incomingTime) || incomingTime < Date.parse(current.updatedAt))) return current;
   const ts = now();
   const stage = ['consultation', 'filing', 'trial', 'judgment', 'enforcement', 'closed'].includes(String(input.stage || ''))
     ? input.stage as LegalCaseStage
@@ -319,7 +321,7 @@ export function canReadCaseOutput(orgId: string, userId: string, filePath: strin
     && (item.workflowRuns || []).some(run => run.artifacts.some(artifact => sameArtifactPath(artifact, filePath))));
 }
 
-export function listCases(orgId: string, query = '', limit = 50, actorUserId?: string): OrgLegalCaseFile[] {
+export function listCases(orgId: string, query = '', limit: number | null = 50, actorUserId?: string): OrgLegalCaseFile[] {
   const q = query.trim().toLowerCase();
   let cases = readStore().cases.filter(item => item.orgId === orgId && canAccessCase(item, actorUserId, 'read'));
   if (q) {
@@ -337,9 +339,24 @@ export function listCases(orgId: string, query = '', limit = 50, actorUserId?: s
       return haystack.includes(q);
     });
   }
-  return cases
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, Math.max(1, Math.min(limit, 200)));
+  cases.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return limit === null ? cases : cases.slice(0, Math.max(1, Math.min(limit, 200)));
+}
+
+/** Personal deletions reuse the complete durable audit ledger, never an org listing. */
+export function listPersonalDeletedCaseIds(userId: string): string[] {
+  const orgId = legalWorkspaceNamespace(userId);
+  const liveIds = new Set(readStore().cases.filter(item => item.orgId === orgId).map(item => item.id));
+  return [...new Set(EDB.listAuditLog(orgId, null).filter(entry => entry.userId === userId
+    && entry.action === 'legal_case.delete' && entry.resourceType === 'legal_case'
+    && !liveIds.has(entry.resourceId)).map(entry => entry.resourceId))];
+}
+
+export function recordPersonalCaseDeletion(userId: string, caseId: string): void {
+  const id = normalizeSnapshotId(caseId);
+  if (listPersonalDeletedCaseIds(userId).includes(id)) return;
+  EDB.logAudit({ orgId: legalWorkspaceNamespace(userId), userId, action: 'legal_case.delete',
+    resourceType: 'legal_case', resourceId: id, details: { source: 'personal_client' } });
 }
 
 export function getCase(

@@ -64,10 +64,11 @@ async function cachedVideo(withImage = false) {
   mock.media.mockClear(); return { p: p as ChatSongProject, render, filePath, directory };
 }
 
-async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en' | 'zh' = 'en', routingReceiptId = '') {
+async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en' | 'zh' | 'zh-natural' = 'en', routingReceiptId = '') {
   const requestId = randomUUID(), conversationId = getOrCreateActiveConversation(uid, 'lumi', 'personal', '').id;
   const identity = { userId: uid, requestId, conversationId, agentId: 'lumi', domain: 'personal' as const, orgId: '' };
   const text = language === 'en' ? 'Return the existing video for chat-song project ' + p.id + ', revision ' + p.revision + ', as an attachment. Do not regenerate or modify any file.'
+    : language === 'zh-natural' ? '请把已有聊天唱歌工程 ' + p.id + '（第' + p.revision + '版，作品“律师，先别替我气·完整剧情对唱”）已经保存的聊天记录版120秒视频，以可播放或下载的视频附件发在这里。只读取并取回既有成片，不要重新生成、渲染、导出，不要修改对白、歌曲、工程、模板或任何素材文件。找不到或当前成片已过期就明确说明，不要编造附件。'
     : '请取回聊天唱歌工程 ' + p.id + ' 第 ' + p.revision + ' 版已有成片，作为视频附件返回。不要重新生成或修改任何文件。';
   const authorization = captureRequestAuthorization(() => true, 'Synthetic request is no longer current'); let diagnostic: unknown;
   mock.llm.mockReset().mockImplementation(async (messages: Array<{ promptBlock?: { id: string; fields?: Record<string, unknown> } }>, declarations: Array<{ function: { name: string } }>, config: { responseFormat?: string }) => {
@@ -94,7 +95,7 @@ async function deliverExistingVideoThroughChat(p: ChatSongProject, language: 'en
   const result = await runLumiEntryTurn(input); return { result, identity, text, diagnostic };
 }
 
-it.each(['en', 'zh'] as const)('delivers an explicitly requested existing video through a canonical read-only receipt and the normal chat attachment collector (%s)', async language => {
+it.each(['en', 'zh', 'zh-natural'] as const)('delivers an explicitly requested existing video through a canonical read-only receipt and the normal chat attachment collector (%s)', async language => {
   const { p, render, filePath, directory } = await cachedVideo();
   const before = fs.readdirSync(directory), original = structuredClone(getChatSongProject(uid, p.id));
   const ordinary = await call('chat_song_read', { projectId: p.id });

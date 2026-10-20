@@ -25,6 +25,32 @@ class Socket {
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 describe('streaming recognition finish versus abort', () => {
+  it('reports readiness only after the existing provider session acknowledgement', () => {
+    vi.stubGlobal('WebSocket', Socket);
+    const session = createStream(); const socket = Socket.latest;
+    const ready = vi.fn(); session.onReady!(ready);
+    socket.open(); expect(ready).not.toHaveBeenCalled();
+    socket.message({ type: 'session.created' }); expect(ready).toHaveBeenCalledOnce();
+    socket.message({ type: 'session.created' }); expect(ready).toHaveBeenCalledOnce();
+    const late = vi.fn(); session.onReady!(late); expect(late).toHaveBeenCalledOnce();
+    session.abort!();
+  });
+  it.each(['abort', 'finish', 'error', 'close'])('does not publish readiness after %s', reason => {
+    vi.stubGlobal('WebSocket', Socket);
+    const session = createStream(); const socket = Socket.latest;
+    const ready = vi.fn(); const error = vi.fn(); session.onReady!(ready); session.onError(error);
+    socket.open();
+    if (reason === 'abort') session.abort!();
+    else if (reason === 'finish') session.end();
+    else if (reason === 'error') socket.onerror?.({ message: 'Unauthorized 401' });
+    else socket.close();
+    socket.message({ type: 'session.created' });
+    session.onReady!(ready);
+    expect(ready).not.toHaveBeenCalled();
+    if (reason === 'error' || reason === 'close') expect(error).toHaveBeenCalledOnce();
+    session.abort!();
+  });
+
   it('closes a late connection after abort without configuring it or emitting late results', () => {
     vi.stubGlobal('WebSocket', Socket);
     const session = createStream();

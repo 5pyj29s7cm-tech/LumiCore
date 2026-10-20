@@ -122,7 +122,7 @@ export function getOrCreateActiveConversation(userId: string, agentId?: string, 
     .filter((c: Conversation) =>
       c.userId === userId &&
       c.agentId === (agentId || '') &&
-      c.status === 'active' &&
+      c.status === 'active' && c.surface !== 'creation' &&
       conversationMatchesScope(c, scope.domain, scope.orgId)
     )
     .sort((a: Conversation, b: Conversation) =>
@@ -157,6 +157,7 @@ export function startNewConversation(userId: string, agentId?: string, domain?: 
     if (
       conversation.userId === userId
       && conversation.agentId === (agentId || '')
+      && conversation.surface !== 'creation'
       && conversation.status === 'active'
       && conversationMatchesScope(conversation, scope.domain, scope.orgId)
           ) {
@@ -353,7 +354,7 @@ export function getOrCreateConversationForTurn(
   const current = requestedConversation || getOrCreateActiveConversation(userId, agentId, domain, orgId);
   // An explicitly bound in-flight turn is allowed to finish after the user has
   // opened a new conversation. Never roll that archived transcript into the new one.
-  if (requestedConversation && requestedConversation.status !== 'active') {
+  if (requestedConversation && (requestedConversation.status !== 'active' || requestedConversation.surface === 'creation')) {
     return { conversation: requestedConversation, rolledOver: false };
   }
   if (!shouldRolloverConversationForTurn(current, options.userText, options.messageLimit)) {
@@ -523,6 +524,7 @@ export function activateConversation(
       conversation.id !== target.id
       && conversation.userId === userId
       && conversation.agentId === agentId
+      && conversation.surface !== 'creation'
       && conversation.status === 'active'
       && conversationMatchesScope(conversation, domainOrOrgId, orgIdMaybe)
     ) {

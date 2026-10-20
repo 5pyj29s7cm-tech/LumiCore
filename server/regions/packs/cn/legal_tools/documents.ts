@@ -78,10 +78,10 @@ export function buildFormalLegalMarkdown(args: Record<string, any>, content: str
   ].join('\n');
 }
 
-export async function writeDocxFromMarkdown(markdown: string, filePath: string): Promise<void> {
+export async function writeDocxFromMarkdown(markdown: string, filePath: string, pageHeader = ''): Promise<void> {
   const {
     Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
-    Table, TableRow, TableCell, WidthType,
+    Table, TableRow, TableCell, WidthType, Header, Footer, PageNumber,
   } = await import('docx');
 
   const children: any[] = [];
@@ -90,6 +90,9 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string):
 
   const flushTable = () => {
     if (tableBuffer.length < 2) {
+      for (const row of tableBuffer) children.push(new Paragraph({
+        children: [new TextRun('| ' + row.join(' | ') + ' |')], spacing: { after: 100 },
+      }));
       tableBuffer.length = 0;
       return;
     }
@@ -105,6 +108,7 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string):
       width: { size: 9000, type: WidthType.DXA },
       rows: [
         new TableRow({
+          tableHeader: true,
           children: header.map(cell => new TableCell({
             width: { size: cellWidth, type: WidthType.DXA },
             children: [new Paragraph({ children: [new TextRun({ text: cell.trim(), bold: true })] })],
@@ -118,11 +122,10 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string):
         })),
       ],
     }));
-    children.push(new Paragraph({ text: '' }));
     tableBuffer.length = 0;
   };
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const trimmed = line.trim();
     if (/^\|.*\|$/.test(trimmed) && !stripMarkdownTableDivider(trimmed)) {
       tableBuffer.push(trimmed.slice(1, -1).split('|').map(cell => cell.trim()));
@@ -131,41 +134,44 @@ export async function writeDocxFromMarkdown(markdown: string, filePath: string):
     if (stripMarkdownTableDivider(trimmed)) continue;
     flushTable();
 
-    if (/^#\s+/.test(trimmed)) {
+    if (!trimmed) continue;
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const levels = [HeadingLevel.TITLE, HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5];
       children.push(new Paragraph({
-        text: trimmed.replace(/^#\s+/, ''),
-        heading: HeadingLevel.TITLE,
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 300 },
+        children: [new TextRun({ text: heading[2], color: '000000' })],
+        heading: levels[heading[1].length - 1],
+        ...(heading[1].length === 1 ? { alignment: AlignmentType.CENTER } : {}),
+        keepNext: true,
+        spacing: { before: heading[1].length === 1 ? 0 : 200, after: heading[1].length === 1 ? 300 : 100 },
       }));
-    } else if (/^##\s+/.test(trimmed)) {
+    } else if (/^>/.test(trimmed)) {
       children.push(new Paragraph({
-        text: trimmed.replace(/^##\s+/, ''),
-        heading: HeadingLevel.HEADING_1,
-        spacing: { before: 240, after: 120 },
-      }));
-    } else if (/^###\s+/.test(trimmed)) {
-      children.push(new Paragraph({
-        text: trimmed.replace(/^###\s+/, ''),
-        heading: HeadingLevel.HEADING_2,
-        spacing: { before: 200, after: 100 },
+        children: [new TextRun(trimmed.replace(/^>+\s?/, ''))],
+        indent: { left: 360 }, spacing: { after: 100 },
       }));
     } else if (/^[-*]\s+/.test(trimmed)) {
       children.push(new Paragraph({
         children: [new TextRun(trimmed.replace(/^[-*]\s+/, ''))],
         bullet: { level: 0 },
+        keepNext: lines.slice(index + 1).find(next => next.trim())?.trim().startsWith('>') || undefined,
         spacing: { after: 80 },
       }));
     } else {
       children.push(new Paragraph({
-        children: [new TextRun(trimmed || ' ')],
-        spacing: { after: trimmed ? 100 : 40 },
+        children: [new TextRun(trimmed)],
+        spacing: { after: 100 },
       }));
     }
   }
   flushTable();
 
-  const doc = new Document({ sections: [{ properties: {}, children }] });
+  const doc = new Document({ sections: [{ properties: {}, children,
+    ...(pageHeader ? {
+      headers: { default: new Header({ children: [new Paragraph({ children: [new TextRun({ text: pageHeader, size: 18, color: '000000' })] })] }) },
+      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: [PageNumber.CURRENT], size: 18 })] })] }) },
+    } : {}),
+  }] });
   const buffer = await Packer.toBuffer(doc);
   legalWrite(() => fs.writeFileSync(filePath, buffer));
 }
@@ -401,9 +407,11 @@ export async function readLegalFolderMaterials(args: Record<string, any>): Promi
 export async function readBidRequirementInput(args: Record<string, any>): Promise<{
   requirements: string;
   sources: string[];
+  materials: Array<{ id: string; title: string; content: string }>;
   skipped: string[];
 }> {
   const sources: string[] = [];
+  const materials: Array<{ id: string; title: string; content: string }> = [];
   const skipped: string[] = [];
   const chunks: string[] = [];
   const maxChars = Math.max(5000, Math.min(Number(args.maxChars) || 180000, 600000));
@@ -417,34 +425,47 @@ export async function readBidRequirementInput(args: Record<string, any>): Promis
       return;
     }
     const clipped = clean.slice(0, maxChars - used);
+    if (clipped.length < clean.length) skipped.push(`${title}: 仅读取前 ${clipped.length}/${clean.length} 字符，其余未读取`);
     chunks.push(`# ${title}\n${clipped}`);
     sources.push(title);
+    materials.push({ id: String(materials.length + 1), title, content: clipped });
   };
 
-  addText('粘贴的招标要求', textArg(args, 'requirements') || textArg(args, 'content') || textArg(args, 'text'));
+  addText(textArg(args, 'sourceLabel') || '粘贴的招标要求', textArg(args, 'materials') || textArg(args, 'requirements') || textArg(args, 'content') || textArg(args, 'text'));
 
   const filePaths = Array.from(new Set([
     textArg(args, 'filePath'),
     ...listArg(args, 'filePaths'),
   ].filter(Boolean)));
 
+  const seenPaths = new Set<string>();
+  const fileIdentity = (file: string) => {
+    const real = fs.realpathSync(file);
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+  };
   const addFile = async (rawPath: string) => {
     const resolved = path.resolve(expandLocalPath(rawPath));
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       skipped.push(`${rawPath}: 文件不存在或不可访问`);
       return;
     }
+    const canonical = fileIdentity(resolved);
+    if (seenPaths.has(canonical)) return;
+    seenPaths.add(canonical);
     const ext = path.extname(resolved).toLowerCase();
     if (!LEGAL_MATERIAL_EXTENSIONS.has(ext)) {
       skipped.push(`${resolved}: 暂不支持该格式 ${ext || '(无扩展名)'}`);
       return;
     }
-    const parsed = await parseDocument(resolved);
+    let parsed;
+    try { parsed = await parseLegalDocument(resolved, args); } catch (error) {
+      skipped.push(`${resolved}: ${legalReadError(error)}`); return;
+    }
     if (!parsed?.text?.trim()) {
       skipped.push(`${resolved}: 未提取到可用文本`);
       return;
     }
-    addText(`招标文件 ${path.basename(resolved)}`, parsed.text);
+    addText(`${textArg(args, 'sourceLabel') || '招标文件'} ${path.basename(resolved)}`, parsed.text);
   };
 
   for (const filePath of filePaths) {
@@ -456,12 +477,11 @@ export async function readBidRequirementInput(args: Record<string, any>): Promis
     if (!folder || !fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
       skipped.push(`${textArg(args, 'folderPath') || textArg(args, 'folderName')}: 文件夹不存在或不可访问`);
     } else {
-      const files = collectMaterialFiles(
-        folder,
-        args.recursive !== false,
-        Math.max(1, Math.min(Number(args.maxFiles) || 30, 100)),
-      );
-      for (const file of files) {
+      const maxFiles = Math.max(1, Math.min(Number(args.maxFiles) || 30, 100));
+      const files = collectMaterialFiles(folder, args.recursive !== false, maxFiles + seenPaths.size + 1)
+        .filter(file => !seenPaths.has(fileIdentity(file)));
+      if (files.length > maxFiles) skipped.push('文件数量超过本次读取上限 ' + maxFiles + '，仍有材料未读取');
+      for (const file of files.slice(0, maxFiles)) {
         await addFile(file);
       }
     }
@@ -470,6 +490,7 @@ export async function readBidRequirementInput(args: Record<string, any>): Promis
   return {
     requirements: chunks.join('\n\n').trim(),
     sources,
+    materials,
     skipped,
   };
 }

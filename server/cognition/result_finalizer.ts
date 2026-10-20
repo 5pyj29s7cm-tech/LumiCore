@@ -446,7 +446,7 @@ export function tryFinalizeVerifiedBoundedAction(
   const structuredDelivery = resolveArtifactDelivery(records, record => isVerifiedCurrentTurnRecord(scopedInput, record));
   const computed = structuredDelivery && parseReceiptObject(toolRecordTerminalPayload(structuredDelivery.producer))?.calculatedCells;
   const taskInstruction = withoutLocationLiterals(task);
-  const additionalWork = /(?:运行|发送|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(taskInstruction); // i18n-allow: additional semantic/action obligations.
+  const additionalWork = /(?:运行|发送|发邮件|发给|发布|上传|分析|总结|解释|对比|比较|翻译|删除|移动|复制|重命名|安装|提醒|另外|还要|分别)|\b(?:run|send|publish|upload|analy[sz]\w*|summari[sz]\w*|explain|compare|translate|delete|move|copy|rename|install|remind|another|each)\b/iu.test(taskInstruction); // i18n-allow: additional semantic/action obligations.
   if (structuredDelivery && /\.xlsx$/iu.test(structuredDelivery.outputPath)
     && Array.isArray(computed) && computed.length > 0 && !additionalWork) {
     const result = formatGroundedArtifactResult(scopedInput);
@@ -471,11 +471,11 @@ export function tryFinalizeVerifiedBoundedAction(
   if (!extractExplicitArtifactTextRequirements(task).length) return null;
   if (requiresSourceGroundedArtifactContent(task)) return null;
   const instruction = extractExplicitArtifactTextRequirements(task)
-    .reduce((text, payload) => text.split(payload).join(''), task);
+    .reduce((text, payload) => text.split(payload).join(''), withoutLocationLiterals(task));
   // Only exact local text production and its requested readback are bounded.
   // A later open, calculation, delivery, or other mutation still needs its own result.
   // i18n-allow: compound action recognition, not user-facing copy.
-  if (/(?:打开|启动|运行|发送|发布|上传|计算|分析|汇总|总结|翻译|删除|移动|复制|重命名|另存|导出|安装|提醒)|\b(?:open|launch|run|send|publish|upload|calculat\w*|analy[sz]\w*|summari[sz]\w*|translate|delete|move|copy|rename|export|install|remind)\b/iu.test(instruction)) return null;
+  if (/(?:打开|启动|运行|发送|发邮件|发给|发布|上传|计算|分析|汇总|总结|翻译|删除|移动|复制|重命名|另存|导出|安装|提醒)|\b(?:open|launch|run|send|publish|upload|calculat\w*|analy[sz]\w*|summari[sz]\w*|translate|delete|move|copy|rename|export|install|remind)\b/iu.test(instruction)) return null;
   const writes = records.filter(record => /^(?:write_file|desktop_write_text_file)$/u.test(record.name)
     && isVerifiedCurrentTurnRecord(scopedInput, record));
   if (writes.length !== 1) return null;

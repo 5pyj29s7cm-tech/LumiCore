@@ -299,9 +299,49 @@ function uniqueLegalFolder(baseDir: string, caseName: string, suffix: string): s
   return candidate;
 }
 
-export function resolveWritableOutputDir(input: string, fallbackRoot: string, caseName: string, suffix: string): string {
+export function resolveWritableOutputDir(
+  input: string,
+  fallbackRoot: string,
+  caseName: string,
+  suffix: string,
+  options: { restrictToFallbackRoot?: boolean } = {},
+): string {
   if (input) {
     const resolved = path.resolve(expandLocalPath(input));
+    if (options.restrictToFallbackRoot) {
+      const resolvedRoot = path.resolve(fallbackRoot);
+      if (!pathIsWithinRoot(resolvedRoot, resolved)) {
+        throw new Error(`Output directory must stay within the legal delivery root: ${resolvedRoot}`);
+      }
+      legalWrite(() => fs.mkdirSync(resolvedRoot, { recursive: true }));
+      const realRoot = fs.realpathSync(resolvedRoot);
+
+      // Resolve the deepest existing ancestor before creating anything. This
+      // prevents a junction/symlink below the lexical root from redirecting
+      // mkdirSync into an unrelated directory before the containment check.
+      let existingAncestor = resolved;
+      while (!fs.existsSync(existingAncestor)) {
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) {
+          throw new Error(`Unable to resolve a safe legal delivery ancestor for: ${resolved}`);
+        }
+        existingAncestor = parent;
+      }
+      const realAncestor = fs.realpathSync(existingAncestor);
+      if (!pathIsWithinRoot(realRoot, realAncestor)) {
+        throw new Error(`Output directory must stay within the legal delivery root: ${realRoot}`);
+      }
+      const realTarget = path.resolve(realAncestor, path.relative(existingAncestor, resolved));
+      if (!pathIsWithinRoot(realRoot, realTarget)) {
+        throw new Error(`Output directory must stay within the legal delivery root: ${realRoot}`);
+      }
+      legalWrite(() => fs.mkdirSync(realTarget, { recursive: true }));
+      const realResolved = fs.realpathSync(realTarget);
+      if (!pathIsWithinRoot(realRoot, realResolved)) {
+        throw new Error(`Output directory must stay within the legal delivery root: ${realRoot}`);
+      }
+      return realResolved;
+    }
     legalWrite(() => fs.mkdirSync(resolved, { recursive: true }));
     return resolved;
   }
@@ -507,4 +547,13 @@ export function resolveLegalCaseArguments(name: string, input: Record<string, an
     transcript: textArg(args, 'transcript') || render(originals.filter(item => item.type === 'consultation')),
     legalAuthorities: textArg(args, 'legalAuthorities') || render(originals.filter(item => /法条|法律依据|检索记录/.test(item.title))),
   };
+}
+
+export function pathIsWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
 }

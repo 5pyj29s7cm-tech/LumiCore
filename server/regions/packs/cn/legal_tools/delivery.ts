@@ -8,6 +8,8 @@ import { legalTemporalOptions, withActiveLegalWorkspace, textArg, expandLocalPat
 import { formatCitationReportMarkdown, findArchivedLegalReasoningGateText, ownCaseNumbersFromArgs, evaluateCurrentLawGate, evaluateLegalReasoningGate, formatCurrentLawGateBlock, formatCitationList, formatCaseSourceGateBlock } from "./citations";
 import { markdownTitle, normalizeFormalDocumentType, buildFormalLegalMarkdown, writeDocxFromMarkdown, tryConvertDocxToPdf } from "./documents";
 import { appendLegalCaseMaterial } from "./case_workflow";
+import { inspectLegalReasoningLinks, formatLegalReasoningLinks } from "../legal_reasoning_links";
+import { legalCaseSourceFingerprint } from "../../../../../shared/legal_workflow_receipts";
 
 // ── legal_generate_citation_verification_report ─────────────────────────
 
@@ -120,6 +122,12 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
   const citationReport = formatCitationReportMarkdown(citationGateArgs, formalMarkdown, 'formal_delivery_document');
   const currentLawGate = evaluateCurrentLawGate(formalMarkdown, orgId, ownCaseNumbers, textArg(args, 'factDate'), { ...legalTemporalOptions(args), actorUserId: context?.userId });
   const reasoningGate = evaluateLegalReasoningGate(reasoningArgs, content);
+  const archivedLinks = caseFileForDeliveryGate?.materials.find(item => item.source === 'tool'
+    && item.reasoningLinks?.length && item.reasoningBasis === legalCaseSourceFingerprint(caseFileForDeliveryGate));
+  const traceability = inspectLegalReasoningLinks(args.reasoningLinks ?? archivedLinks?.reasoningLinks,
+    caseFileForDeliveryGate, orgId, { ...legalTemporalOptions(args), document: content, actorUserId: userId });
+  reasoningGate.missing.push(...traceability.errors);
+  reasoningGate.passed = traceability.passed;
   const reasoningSourceRow = archivedReasoning
     ? '| 内部推理底稿 | 案件工作台 | 已归档三段论底稿 | 案件材料 | 已归档 | 三段论推理链 gate | 已复用 |'
     : '| 内部推理底稿 | legal_case_reasoning_matrix / reasoningSummary | 待登记 | 待登记 | 待登记 | 三段论推理链 gate | 待补充 |';
@@ -133,6 +141,9 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
     '| 证据材料 | 本地案件材料/当事人提供 | 待登记 | 待登记 | 待登记 | 证明待证事实 | 原件核对 |',
     reasoningSourceRow,
     '| 外部主体信息 | 企查查/国家企业信用/执行信息公开网 | 待登记 | 待登记 | 待登记 | 主体与财产线索核验 | 律师复核 |',
+    ...currentLawGate.checks.map(check => `| ${check.type === 'statute' ? '本次法条引用' : '本次案例引用'} | ${check.source.replace(/\|/g, ' ')} | ${check.citation} | ${check.sourceUrl || '本地来源'} | ${check.verifiedAt || '见原始记录'} | 本次文书依据 | ${check.verificationStatus || '需复核'} |`),
+    ...traceability.links.flatMap(link => Array.isArray(link?.evidence) ? link.evidence.map(e => `| 本案证据摘录 | ${e.materialId} | ${e.locator} | 见案件原始材料 | 见材料记录 | ${String(e.quote).replace(/[|\n]/g, ' ')} | 原件真实性仍须复核 |`) : []),
+    ...currentLawGate.statuteChecks.filter(check => check.temporalBasisCitation).map(check => `| 时间效力依据 | ${check.temporalBasisSource} | ${check.temporalBasisCitation} | ${check.temporalBasisSource} | 见权威核验记录 | ${check.referenceDate}；${check.temporalBasisQuote?.replace(/[|\n]/g, ' ')} | 连续摘录已核验；案件适用仍须律师复核 |`),
     '',
     '边界：未登记来源的法条、案例、网页摘录和主体信息，不应作为最终对外文书中的确定性依据。',
     '',
@@ -150,6 +161,7 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
     '- 02_citation-verification-report.md：法条/案例引用核验报告',
     '- 03_source-register.md：来源登记表',
     '- 04_filing-and-signature-checklist.md：提交、签署、盖章、送达确认清单',
+    '- 05_reasoning-links.md：逐项规则、事实、证据摘录及结论关联',
     '',
     '## 边界',
     '- Lumi 只生成本地文件和复核清单，不自动提交、签名、盖章、缴费、发送或确认送达。',
@@ -321,7 +333,7 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
       `- 案件：${caseName}`,
       `- 文书类型：${documentType}`,
       `- 输出目录：${outputDir}`,
-      '- 阻断原因：推理底稿结构不完整。缺少有实质内容的大前提、小前提或涵摄结论；结构完整也不代表法律结论已核实。',
+      '- 阻断原因：推理底稿结构不完整或来源关联未通过。需逐项关联规则原文、事实、证据原文与位置、适用分析和本次文书结论；三个标题不能代替检查。',
       `- 大前提：${reasoningGate.hasMajorPremise ? '已识别' : '缺失'}`,
       `- 小前提：${reasoningGate.hasMinorPremise ? '已识别' : '缺失'}`,
       `- 涵摄结论：${reasoningGate.hasConclusion ? '已识别' : '缺失'}`,
@@ -330,7 +342,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
       `- 阻断记录：${reasoningGatePath}`,
       caseArchiveLine,
       '',
-      '请先运行 legal_case_reasoning_matrix，或提供 reasoningMatrix/reasoningSummary，再重新运行 legal_finalize_delivery_package。',
+      ...traceability.errors.map(error => `- ${error}`),
+      '请先补齐法律分析底稿中的来源关联，再重新进行正式交付核验。',
     ].join('\n');
   }
 
@@ -339,6 +352,8 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
   legalWrite(() => fs.writeFileSync(reportPath, citationReport, 'utf-8'));
   legalWrite(() => fs.writeFileSync(sourcePath, sourceRegister, 'utf-8'));
   legalWrite(() => fs.writeFileSync(checklistPath, filingChecklist, 'utf-8'));
+  const linksPath = path.join(outputDir, '05_reasoning-links.md');
+  legalWrite(() => fs.writeFileSync(linksPath, `# ${caseName} 来源关联复核底稿\n\n${formatLegalReasoningLinks(traceability.links)}\n\n仅核验引用可追溯；事实真实性、证据证明力及法律结论仍待律师复核。`, 'utf-8'));
 
   const docxLines: string[] = [];
   if (args.includeDocx !== false) {
@@ -386,10 +401,12 @@ export async function finalizeDeliveryPackageHandler(args: Record<string, any>, 
     `- 引用核验报告：${reportPath}`,
     `- 来源登记表：${sourcePath}`,
     `- 提交确认清单：${checklistPath}`,
+    `- 逐项来源关联：${linksPath}`,
     caseArchiveLine,
     ...docxLines,
     '- 现行有效法律硬门槛：通过',
     '- 推理底稿结构检查：通过；事实、证据与法律结论仍待律师复核',
+    '- 来源关联检查：通过；不等于事实真实性、证据证明力或法律适用正确性已核实',
     `- 引用风险项：${riskCount}`,
     '',
     '## 人工边界',
@@ -542,4 +559,19 @@ export async function verifyArchivedDeliveryHandler(args: Record<string, any>, c
     '- 实际使用能力：归档交付核验（案件账本读取、目标材料精确匹配、现行法与案例引用校验、期限/管辖/文件/律师边界核验）',
     '- 任务回执状态：核验已完成并形成结构化回执；正式交付结论以上述逐项依据为准。未登录外部网站，未重新生成文书，未发送、提交或签署。',
   ].join('\n');
+}
+
+export function isVerifiableDocxArtifact(filePath: string): boolean {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return buffer.length >= 256
+      && buffer[0] === 0x50
+      && buffer[1] === 0x4b
+      && buffer[2] === 0x03
+      && buffer[3] === 0x04
+      && buffer.includes(Buffer.from('[Content_Types].xml'))
+      && buffer.includes(Buffer.from('word/document.xml'));
+  } catch {
+    return false;
+  }
 }

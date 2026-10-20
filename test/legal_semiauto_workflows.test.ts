@@ -80,6 +80,19 @@ async function reasoningModelContext() {
     llmGetters: { getDeepSeek: () => null, getGemini: () => null, getRelay: () => ({ chat: { completions: { create } } }) } } };
 }
 
+async function traceableDeliveryInput(orgId: string, conclusion: string, caseId?: string, caseName = '有来源的交付测试案') {
+  const cases = await import('../server/org/legal_cases');
+  const { verifyCitation } = await import('../server/legal/kb');
+  const caseFile = caseId ? cases.getCase(orgId, caseId)! : cases.createCase(orgId, 'vitest', { title: caseName });
+  const source = cases.addMaterial(orgId, 'vitest', caseFile.id, { type: 'evidence', title: '虚构原始合同及签收记录', source: 'manual',
+    content: '虚构合同及签收记录记载原告已经供货，被告签收后尚未支付剩余货款，违约金需要另行核算。' })!;
+  return { caseId: caseFile.id, factDate: '2026-01-15', reasoningLinks: [{ issue: '虚构交易欠付款项与违约金的审查', ruleCitation: '《民法典》第五百八十五条',
+    ruleQuote: verifyCitation('《民法典》第五百八十五条').sourceText!, fact: source.content,
+    evidence: [{ materialId: source.id, quote: source.content, locator: '测试材料第1段' }],
+    application: '需要结合合同约定及实际损失核算，付款及违约责任须以完整证据核实为条件。', conclusion,
+    limitations: '仅测试关联来源，不判断法律适用或证据真实性；实际意见需要律师复核。' }] };
+}
+
 describe('semi-automated legal workflows', () => {
   it('drafts plaintiff litigation packets with manual filing gates', async () => {
     const registry = createLegalRegistry();
@@ -523,6 +536,7 @@ describe('semi-automated legal workflows', () => {
 
       const delivery = await registry.execute('legal_finalize_delivery_package', {
         factDate:'2026-01-15',
+        ...await traceableDeliveryInput(orgId, '被告应承担违约责任。', caseId),
         orgId,
         userId: 'vitest',
         caseId,
@@ -634,7 +648,7 @@ describe('semi-automated legal workflows', () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('creates archived legal reasoning matrices for syllogism-style case analysis', async () => {
+  it('keeps an unlinked reasoning template partial without creating a case', async () => {
     const registry = createLegalRegistry();
     const orgId = `test-legal-reasoning-${Date.now()}`;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_reasoning_'));
@@ -656,10 +670,11 @@ describe('semi-automated legal workflows', () => {
         outputDir: dir,
       });
 
-      expect(output).toContain('法律分析三段论底稿已生成');
+      expect(output).toContain('法律分析未完成');
+      expect(decodeToolResult(output).receipt).toMatchObject({ ok: false, status: 'partial', reasoningLinked: false });
       expect(output).toContain('现行有效法律预检：通过');
       expect(output).toContain('底稿文件');
-      expect(output).toContain('案件空间：已归档');
+      expect(output).toContain('案件空间：未归档');
 
       const matrixPath = path.join(dir, 'legal-reasoning-matrix.md');
       expect(fs.existsSync(matrixPath)).toBe(true);
@@ -669,16 +684,12 @@ describe('semi-automated legal workflows', () => {
       expect(markdown).toContain('小前提：待证事实、证据材料、举证质证');
       expect(markdown).toContain('结论：涵摄、文书表达、风险');
       expect(markdown).toContain('最高人民法院 > 高级人民法院 > 中级人民法院 > 基层人民法院');
-      expect(markdown).toContain('legal_finalize_delivery_package');
+      expect(markdown).toContain('正式交付核验');
+      expect(markdown).toContain('来源关联检查：未通过');
+      expect(markdown).toContain('待逐项匹配法条');
 
       const LegalCases = await import('../server/org/legal_cases');
-      const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
-      expect(caseFile?.materials.some(material => (
-        material.source === 'tool'
-        && material.type === 'note'
-        && material.title.includes('法律分析三段论底稿')
-        && material.localPath === matrixPath
-      ))).toBe(true);
+      expect(LegalCases.listCases(orgId, caseName, 100)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -686,61 +697,50 @@ describe('semi-automated legal workflows', () => {
 
   it('archives contract and bid work products into the case workspace', async () => {
     const registry = createLegalRegistry();
-    const orgId = `test-legal-contract-bid-${Date.now()}`;
+    const orgId = 'test-legal-contract-bid-' + Date.now();
     const caseName = '合同标书闭环测试案';
-
-    const review = await registry.execute('legal_review_contract', {
-      orgId,
-      userId: 'vitest',
-      caseName,
-      caseType: '合同审查',
-      contract: [
-        '建设工程施工合同',
-        '发包人逾期付款的，承包人每日按合同总价30%收取违约金。',
-        '任一方可单方解除合同，无需通知对方。',
-      ].join('\n'),
+    const { upsertUserPreferredLLM } = await import('../server/llm/user_preferences');
+    const { contractStructuredReply } = await import('./legal_contract_fixture');
+    const { bidStructuredReply } = await import('./legal_bid_fixture');
+    upsertUserPreferredLLM('vitest', { provider: 'relay', model: 'synthetic-contract-bid-positive', selectionMode: 'pinned', allowCloudFallback: false });
+    const create = vi.fn((request: any, options: any) => {
+      const prompt = String(request.messages.find((message: any) => message.role === 'user')?.content || '');
+      const body = '本次仅依据已提供原文形成拟议工作稿；付款条件、签章、资质与实际履行尚待核对，未提供不表示没有约定，不作正式核验通过。';
+      const content = /^指定栏目：/m.test(prompt) ? contractStructuredReply(prompt, body) : bidStructuredReply(prompt, body);
+      return sdkCompletion(request, { choices: [{ message: { content }, finish_reason: 'stop' }] }, 0, options.signal);
     });
-    expect(review).toContain('案件归档与交付边界');
-    expect(review).toContain('案件空间：已归档');
-    expect(review).toContain('legal_finalize_delivery_package');
-
-    const draft = await registry.execute('legal_draft_contract', {
-      orgId,
-      userId: 'vitest',
-      caseName,
-      caseType: '合同起草',
-      type: '建设工程施工合同',
-      details: '项目名称：测试工程；工期：90日；价款：待填写；需要违约责任和付款节点。',
-    });
-    expect(draft).toContain('合同起草');
-    expect(draft).toContain('案件空间：已归档');
-
-    const bid = await registry.execute('legal_generate_bid', {
-      orgId,
-      userId: 'vitest',
-      caseName,
-      caseType: '投标/招标文件响应',
-      projectName: '测试工程投标项目',
-      requirements: '招标要求：提交商务标、技术标、项目管理机构、施工组织设计、授权委托书和报价清单。',
-    });
-    expect(bid).toContain('投标书');
-    expect(bid).toContain('案件空间：已归档');
-    expect(bid).toContain('三段论核心基础');
-
+    const context = { userId: 'vitest', authenticated: true, authRole: 'user', localExecution: true,
+      executionBoundary: 'trusted_local' as const, source: 'legal-direct-tool',
+      llmGetters: { getDeepSeek: () => null, getGemini: () => null, getRelay: () => ({ chat: { completions: { create } } }) } };
+    const common = { orgId, userId: 'vitest', caseName };
+    const reviewArgs = { ...common, caseType: '合同审查', contract: '建设工程施工合同\n发包人逾期付款的，承包人每日按合同总价30%收取违约金。\n任一方可单方解除合同，无需通知对方。' };
+    const draftArgs = { ...common, caseType: '合同起草', type: '建设工程施工合同', details: '项目名称：测试工程；工期：90日；价款：待填写；需要违约责任和付款节点。' };
+    const bidArgs = { ...common, caseType: '投标/招标文件响应', projectName: '测试工程投标项目', requirements: '招标要求：提交商务标、技术标、项目管理机构、施工组织设计、授权委托书和报价清单。' };
+    const review = decodeToolResult(await registry.execute('legal_review_contract', reviewArgs, context));
+    expect(review.receipt).toMatchObject({ ok: true, status: 'reviewed', persisted: true });
+    expect(review.content).toContain('案件归档与交付边界');
+    expect(review.content).toContain('案件空间：已归档');
+    const draft = decodeToolResult(await registry.execute('legal_draft_contract', draftArgs, context));
+    expect(draft.receipt).toMatchObject({ ok: true, status: 'generated', persisted: true });
+    expect(draft.content).toContain('建设工程施工合同工作稿');
+    expect(draft.content).toContain('案件空间：已归档');
+    const bid = decodeToolResult(await registry.execute('legal_generate_bid', bidArgs, context));
+    expect(bid.receipt).toMatchObject({ ok: true, status: 'generated', persisted: true });
+    expect(bid.content).toContain('投标响应工作底稿'); expect(bid.content).toContain('案件空间：已归档');
+    expect(bid.content).toContain('正式交付核验'); expect(bid.content).not.toContain('三段论核心基础');
+    expect(create).toHaveBeenCalledTimes(8);
     const LegalCases = await import('../server/org/legal_cases');
     const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
-    expect(caseFile?.materials.some(material => (
-      material.type === 'contract'
-      && material.title.includes('合同审查报告')
-    ))).toBe(true);
-    expect(caseFile?.materials.some(material => (
-      material.type === 'contract'
-      && material.title.includes('合同起草底稿')
-    ))).toBe(true);
-    expect(caseFile?.materials.some(material => (
-      material.type === 'note'
-      && material.title.includes('投标书工作底稿')
-    ))).toBe(true);
+    expect(caseFile?.materials.some(material => material.type === 'contract' && material.title.includes('合同审查报告'))).toBe(true);
+    expect(caseFile?.materials.some(material => material.type === 'contract' && material.title.includes('合同起草底稿'))).toBe(true);
+    expect(caseFile?.materials.some(material => material.type === 'note' && material.title.includes('投标书工作底稿'))).toBe(true);
+    for (const [tool, args] of [['legal_review_contract', reviewArgs], ['legal_draft_contract', draftArgs], ['legal_generate_bid', bidArgs]] as const) {
+      const missingName = caseName + '-无模型-' + tool;
+      const incomplete = decodeToolResult(await registry.execute(tool, { ...args, caseName: missingName }));
+      expect(incomplete.receipt).toMatchObject({ ok: false, status: 'partial', persisted: false });
+      expect(LegalCases.listCases(orgId, missingName, 10, 'vitest')).toHaveLength(0);
+    }
+    expect(create).toHaveBeenCalledTimes(8);
   });
 
   it('preflights draft legal work products before formal delivery', async () => {
@@ -861,40 +861,44 @@ describe('semi-automated legal workflows', () => {
 
   it('generates bid work products directly from local tender files', async () => {
     const registry = createLegalRegistry();
-    const orgId = `test-legal-bid-file-${Date.now()}`;
+    const orgId = 'test-legal-bid-file-' + Date.now();
     const caseName = '招标文件直读闭环测试案';
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumi_legal_bid_file_'));
     const tenderPath = path.join(dir, 'tender-requirements.txt');
-
+    const { upsertUserPreferredLLM } = await import('../server/llm/user_preferences');
+    const { bidStructuredReply } = await import('./legal_bid_fixture');
+    upsertUserPreferredLLM('vitest', { provider: 'relay', model: 'synthetic-local-tender-positive', selectionMode: 'pinned', allowCloudFallback: false });
+    const create = vi.fn((request: any, options: any) => {
+      const prompt = String(request.messages.find((message: any) => message.role === 'user')?.content || '');
+      const content = bidStructuredReply(prompt, '仅按给定原件编制本节拟议响应；资质、业绩、报价及签章尚待核验，付款和实施方案仍需责任人确认，不等于已经投标。');
+      return sdkCompletion(request, { choices: [{ message: { content }, finish_reason: 'stop' }] }, 0, options.signal);
+    });
+    const context = { userId: 'vitest', authenticated: true, authRole: 'user', localExecution: true,
+      executionBoundary: 'trusted_local' as const, source: 'legal-direct-tool',
+      llmGetters: { getDeepSeek: () => null, getGemini: () => null, getRelay: () => ({ chat: { completions: { create } } }) } };
     try {
-      fs.writeFileSync(tenderPath, [
-        '招标要求：提交商务标、技术标、项目管理机构、施工组织设计。',
-        '评分标准：企业资质、类似业绩、技术方案、报价清单、授权委托书。',
-        '合同条款：需响应付款节点、违约责任、工期、质量标准。',
-      ].join('\n'), 'utf8');
-
-      const output = await registry.execute('legal_generate_bid', {
-        orgId,
-        userId: 'vitest',
-        caseName,
-        caseType: '投标/招标文件响应',
-        projectName: '直读招标文件测试项目',
-        filePath: tenderPath,
-      });
-
-      expect(output).toContain('直读招标文件测试项目');
-      expect(output).toContain('招标文件来源');
-      expect(output).toContain('tender-requirements.txt');
-      expect(output).toContain('案件空间：已归档');
-
+      const originalText = '招标要求：提交商务标、技术标、项目管理机构、施工组织设计。\n评分标准：企业资质、类似业绩、技术方案、报价清单、授权委托书。\n合同条款：需响应付款节点、违约责任、工期、质量标准。';
+      fs.writeFileSync(tenderPath, originalText, 'utf8');
+      const args = { orgId, userId: 'vitest', caseName, caseType: '投标/招标文件响应', projectName: '直读招标文件测试项目', filePath: tenderPath };
+      const result = decodeToolResult(await registry.execute('legal_generate_bid', args, context));
+      expect(result.receipt).toMatchObject({ ok: true, status: 'generated', persisted: true });
+      const output = result.content;
+      expect(output).toContain('直读招标文件测试项目'); expect(output).toContain('招标文件来源');
+      expect(output).toContain('tender-requirements.txt'); expect(output).toContain('案件空间：已归档');
+      expect(output).toContain(originalText); expect(fs.readFileSync(tenderPath, 'utf8')).toBe(originalText);
+      const docxPath = output.match(/- DOCX 文件：([^\r\n]+)/)![1];
+      const artifact = fs.readFileSync(docxPath);
+      expect(artifact.length).toBeGreaterThan(256); expect(artifact.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+      expect(create).toHaveBeenCalledTimes(6);
       const LegalCases = await import('../server/org/legal_cases');
       const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
-      expect(caseFile?.materials.some(material => (
-        material.type === 'note'
-        && material.title.includes('投标书工作底稿')
-        && material.content.includes('招标文件来源')
-        && material.content.includes('tender-requirements.txt')
-      ))).toBe(true);
+      expect(caseFile?.materials.some(material => material.type === 'note' && material.title.includes('投标书工作底稿')
+        && material.content.includes('招标文件来源') && material.content.includes('tender-requirements.txt'))).toBe(true);
+      const missingName = caseName + '-无模型';
+      const incomplete = decodeToolResult(await registry.execute('legal_generate_bid', { ...args, caseName: missingName }));
+      expect(incomplete.receipt).toMatchObject({ ok: false, status: 'partial', persisted: false });
+      expect(LegalCases.listCases(orgId, missingName, 10, 'vitest')).toHaveLength(0);
+      expect(incomplete.content).toContain(originalText); expect(create).toHaveBeenCalledTimes(6);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1082,6 +1086,7 @@ describe('semi-automated legal workflows', () => {
 
       const output = await registry.execute('legal_finalize_delivery_package', {
         factDate:'2026-01-15',
+        ...await traceableDeliveryInput(orgId, '被告应支付货款并承担违约责任。', undefined, '正式交付测试案'),
         orgId,
         userId: 'vitest',
         caseName: '正式交付测试案',
@@ -1147,7 +1152,8 @@ describe('semi-automated legal workflows', () => {
 
       expect(output).toContain('正式交付包未生成');
       expect(output).toContain('推理底稿结构不完整');
-      expect(output).toContain('legal_case_reasoning_matrix');
+      expect(output).toContain('来源关联未通过');
+      expect(output).toContain('法律分析底稿');
       expect(fs.existsSync(path.join(dir, '00_reasoning-gate-blocked.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, '02_citation-verification-report.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, '03_source-register.md'))).toBe(true);
@@ -1256,6 +1262,7 @@ describe('semi-automated legal workflows', () => {
     try {
       const output = await registry.execute('legal_finalize_delivery_package', {
         factDate:'2026-01-15',
+        ...await traceableDeliveryInput(orgId, '被告应承担违约责任。', undefined, '本案案号豁免测试案'),
         orgId,
         userId: 'vitest',
         caseName: '本案案号豁免测试案',
@@ -1293,8 +1300,13 @@ describe('semi-automated legal workflows', () => {
     const caseName = '归档三段论复用测试案';
 
     try {
+      const LegalCases = await import('../server/org/legal_cases');
+      const sourceCase = LegalCases.createCase(orgId, 'vitest', { title: caseName, factDate: '2026-01-15' });
+      LegalCases.addMaterial(orgId, 'vitest', sourceCase.id, { type: 'evidence', source: 'manual', title: '虚构原始合同及签收记录', content: '原告已供货，被告签收后未支付剩余货款，违约金约定与实际损失待核实。' });
+      const model = await reasoningModelContext();
       await registry.execute('legal_case_reasoning_matrix', {
         factDate:'2026-01-15',
+        caseId: sourceCase.id,
         orgId,
         userId: 'vitest',
         caseName,
@@ -1305,9 +1317,9 @@ describe('semi-automated legal workflows', () => {
         issues: ['被告是否应支付货款和违约金'],
         legalAuthorities: '引用《民法典》第五百八十五条。',
         outputDir: reasoningDir,
-      });
+      }, model.context);
+      expect(model.create).toHaveBeenCalledTimes(2);
 
-      const LegalCases = await import('../server/org/legal_cases');
       const caseFile = LegalCases.listCases(orgId, caseName, 1)[0];
       expect(caseFile?.id).toBeTruthy();
 
@@ -1322,7 +1334,8 @@ describe('semi-automated legal workflows', () => {
         includeDocx: false,
         content: [
           '# 代理词草稿',
-          '根据《民法典》第五百八十五条，原告请求被告支付货款并承担违约责任。',
+          '根据《民法典》第五百八十五条进行条件分析。',
+          caseFile.materials.find(m => m.reasoningLinks?.length)!.reasoningLinks![0].conclusion,
         ].join('\n'),
       });
 

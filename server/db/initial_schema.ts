@@ -90,6 +90,7 @@ export const INITIAL_SCHEMA_SQL = `
         agentId TEXT,
         title TEXT DEFAULT '',
         status TEXT DEFAULT 'active',
+        surface TEXT NOT NULL DEFAULT 'chat',
         summary TEXT DEFAULT '',
         summaryChain TEXT DEFAULT '[]',
         lastSummaryMessageCount INTEGER DEFAULT -1,

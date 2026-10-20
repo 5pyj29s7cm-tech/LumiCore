@@ -28,6 +28,7 @@ vi.mock('../server/stt/adapter', async original => ({
     let result: (input: any) => any;
     const session = {
       end: vi.fn(), sendAudio: vi.fn(), updateEndpointing: vi.fn(), onError: vi.fn(),
+      onReady: (callback: () => void) => callback(),
       onResult: (handler: any) => { result = handler; },
       final: (text: string) => result({ text, isFinal: true }),
     };

@@ -73,6 +73,15 @@ function waitForRequestEvent<T extends Record<string, any>>(
   });
 }
 
+async function bindSelectedFixtureTool(context: any) {
+  // runWithTools includes tool selection/entry; this held-tool fixture must use its real lazy owner.
+  const binding = await context.prepareSelectedToolCall();
+  Object.assign(context, binding);
+  expect(binding.taskId).toMatch(/^task_/u);
+  expect(binding.turnRowId).toBeTruthy();
+  expect(getConversationActionTurn({ userId: context.userId, conversationId: context.conversationId, requestId: context.requestId }))
+    .toMatchObject({ id: binding.turnRowId, taskId: binding.taskId, status: 'leased' });
+}
 describe('chat status/stop/repeat control chain', () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const userId = `chat-control-chain-${suffix}`;
@@ -113,6 +122,7 @@ describe('chat status/stop/repeat control chain', () => {
         };
       }
       expect(context.requestId).toBe(longRequestId);
+      await bindSelectedFixtureTool(context);
       expect(signal).toBeInstanceOf(AbortSignal);
       releaseStarted();
       return new Promise(resolve => {
@@ -236,7 +246,7 @@ describe('chat status/stop/repeat control chain', () => {
       requestId: longRequestId,
       finalized: true,
       blocked: false,
-      reason: 'request_cancelled',
+      reason: 'cancelled',
     });
     expect(stopTerminal).toMatchObject({
       requestId: stopRequestId,
@@ -354,6 +364,7 @@ describe('chat status/stop/repeat control chain', () => {
       const signal = args[2]?.signal as AbortSignal | undefined;
       const context = args[11];
       expect(context.requestId).toBe(directAbortRequestId);
+      await bindSelectedFixtureTool(context);
       markDirectStarted();
       return new Promise(resolve => {
         const finishCancelled = () => resolve({
@@ -403,7 +414,7 @@ describe('chat status/stop/repeat control chain', () => {
       requestId: directAbortRequestId,
       finalized: true,
       blocked: false,
-      reason: 'request_cancelled',
+      reason: 'cancelled',
     });
     expect(events.filter(item => (
       item.event === 'agent:response'
@@ -426,6 +437,7 @@ describe('chat status/stop/repeat control chain', () => {
     let liveSignal: AbortSignal | undefined;
     mocks.runWithTools.mockImplementationOnce(async (...args: any[]) => {
       expect(args[11].requestId).toBe(liveId);
+      await bindSelectedFixtureTool(args[11]);
       liveSignal = args[2].signal;
       return new Promise(resolve => {
         const finish = () => resolve({ text: 'Task was cancelled before the model response could be applied.', toolCalls: [], usageRecords: [] });
@@ -433,7 +445,7 @@ describe('chat status/stop/repeat control chain', () => {
       });
     });
     const story = 'A small cloud drifted quietly across the sky.';
-    mocks.makeLLMCallStreaming.mockResolvedValueOnce({ text: story, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } });
+    mocks.runWithTools.mockResolvedValueOnce({ text: story, toolCalls: [], usageRecords: [] });
     const liveTerminal = waitForRequestEvent<Record<string, any>>(client, 'agent:response', liveId);
     let queuedTerminal: Promise<Record<string, any>> | undefined;
     try {
@@ -447,7 +459,7 @@ describe('chat status/stop/repeat control chain', () => {
       expect(await stopTerminal).toMatchObject({ reason: 'cancelled_by_user' });
       expect(liveSignal!.aborted).toBe(true);
       expect(getChatSidecarCancellationTarget(resource, stopId)).toBe(liveId);
-      expect(await liveTerminal).toMatchObject({ reason: 'request_cancelled' });
+      expect(await liveTerminal).toMatchObject({ reason: 'cancelled' });
       expect(await queuedTerminal).toMatchObject({ finalized: true, blocked: false, text: story });
     } finally {
       await cancelConversationExecution(resource, liveId);

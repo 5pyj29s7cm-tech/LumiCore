@@ -43,6 +43,7 @@ export function createStream(
 
   const resultCallbacks: Array<(result: STTResult) => void> = [];
   const errorCallbacks: Array<(err: Error) => void> = [];
+  const readyCallbacks: Array<() => void> = [];
   const audioQueue: Buffer[] = [];
   let sessionReady = false;
   let sessionUpdateSent = false;
@@ -121,7 +122,9 @@ export function createStream(
 
       switch (msg.type) {
         case 'session.created':
+          if (sessionReady) break;
           sessionReady = true;
+          if (!ending && !errorNotified) readyCallbacks.forEach(callback => callback());
           recordSuccess(PROVIDER);
           logger.info('[Qwen-ASR] Session ready');
           // Flush queued audio
@@ -248,6 +251,10 @@ export function createStream(
     },
     onError(callback) {
       errorCallbacks.push(callback);
+    },
+    onReady(callback) {
+      readyCallbacks.push(callback);
+      if (sessionReady && !closed && !ending && !errorNotified) callback();
     },
   };
 }

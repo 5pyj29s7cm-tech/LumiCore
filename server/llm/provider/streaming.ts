@@ -17,26 +17,6 @@ import { executeWithProviderOutboundEvidence } from './outbound_evidence';
 import { formatGeminiRequest, parseGeminiResponse } from './gemini';
 import { formatAnthropicRequest } from './anthropic';
 
-/**
- * Do not replay a relay request when the gateway has already told us that the
- * credential, account, or route is invalid. Those failures need to remain
- * visible to the normal route policy; only a response-format/streaming fault
- * should be transparently retried as a non-stream request.
- */
-export function isRelayNonRetryableStreamingError(error: unknown): boolean {
-  const status = Number((error as any)?.status || (error as any)?.response?.status || 0);
-  if ([401, 402, 403, 404, 429].includes(status)) return true;
-  const values: string[] = [];
-  let current: any = error;
-  for (let depth = 0; current && depth < 5; depth += 1) {
-    for (const value of [current?.message, current?.type, current?.code, current?.error?.message, current?.error?.type]) {
-      if (value !== undefined && value !== null) values.push(String(value));
-    }
-    current = current?.cause;
-  }
-  return /(?:unauthori[sz]ed|forbidden|invalid\s+(?:api\s*)?key|quota|insufficient\s+balance|overdue|payment\s+required|access\s+denied)/i.test(values.join(' | '));
-}
-
 export async function makeLLMCallStreamingDirect(
   messages: NormalizedMessage[],
   toolDeclarations: ToolDeclaration[],
@@ -84,16 +64,7 @@ export async function makeLLMCallStreamingDirect(
       ...outboundSourceSlot,
     });
 
-    // Some official relay deployments accept the OpenAI-compatible request
-    // but currently fail their SSE path with an empty first frame followed by
-    // `chat_stream_error`.  Keep track of semantic output so a transport
-    // failure after partial output is never replayed into the conversation.
-    let relayStreamSemanticSeen = false;
-    let relayStreamFrameSeen = false;
-
     const consumeStream = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
-      relayStreamSemanticSeen = false;
-      relayStreamFrameSeen = false;
       const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
       const accumulatedText: string[] = [];
       const accumulatedReasoning: string[] = [];
@@ -112,7 +83,6 @@ export async function makeLLMCallStreamingDirect(
         while (true) {
           const next = await supervisor.next(iterator);
           if (next.done) break;
-          relayStreamFrameSeen = true;
           const chunk = next.value;
           if (config.provider === 'relay' && chunk?.error) {
             const relayError = chunk.error;
@@ -133,7 +103,6 @@ export async function makeLLMCallStreamingDirect(
             if (delta.content) {
               accumulatedText.push(delta.content);
               if (String(delta.content).trim()) {
-                relayStreamSemanticSeen = true;
                 supervisor.markSemanticContent();
               }
               legacyProtocolFilter.emit(delta.content);
@@ -154,7 +123,6 @@ export async function makeLLMCallStreamingDirect(
                 if (tc.function?.name) acc.name = tc.function.name;
                 if (tc.function?.arguments) acc.args += tc.function.arguments;
                 if (tc.id || tc.function?.name || tc.function?.arguments) {
-                  relayStreamSemanticSeen = true;
                   supervisor.markSemanticContent();
                 }
               }
@@ -189,12 +157,8 @@ export async function makeLLMCallStreamingDirect(
       }
     };
 
-    /**
-     * Retry the same request without SSE when the relay's streaming protocol
-     * itself is the failure.  This runs inside the same cloud-resilience
-     * attempt, so a successful fallback records one successful provider call
-     * and does not open the relay circuit because of the expected stream quirk.
-     */
+    // Execute the explicitly selected JSON transport once; stream failures
+    // remain visible to the existing caller and routing policy.
     const consumeRelayNonStreaming = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
       const supervisor = new ModelAttemptSupervisor(operationSignal, config.attemptTimeouts);
       const nonStreamingParams = { ...params, stream: false };
@@ -220,37 +184,9 @@ export async function makeLLMCallStreamingDirect(
       }
     };
 
-    const executeRelayStreamWithFallback = async (operationSignal?: AbortSignal): Promise<NormalizedLLMResponse> => {
-      try {
-        return await consumeStream(operationSignal);
-      } catch (streamError) {
-        // Never replay a request after visible or structured output has been
-        // emitted, and never mask caller cancellation with a second request.
-        // The official gateway has returned parser/SDK errors with an almost
-        // empty error object (the useful `chat_stream_error` only appeared in
-        // the raw SSE body).  Requiring a recognised message or a frame here
-        // therefore made the recovery branch unreachable in production.  A
-        // relay failure before any semantic output is, by definition, safe to
-        // retry as a transport-shape fallback; keep only cancellation,
-        // credential/quota and partial-output guards as hard exclusions.
-        if (config.provider !== 'relay'
-          || relayStreamSemanticSeen
-          || operationSignal?.aborted
-          || config.signal?.aborted
-          || isRelayNonRetryableStreamingError(streamError)) {
-          throw streamError;
-        }
-        console.warn('[LLM] Official relay streaming failed before semantic output; retrying non-stream transport.', {
-          frameSeen: relayStreamFrameSeen,
-          error: streamError instanceof Error ? streamError.message : String(streamError),
-        });
-        return consumeRelayNonStreaming(operationSignal);
-      }
-    };
-
     const executeStream = () => withCloudResilience(
       config.provider === 'relay'
-        ? (relayStreamingEnabled ? executeRelayStreamWithFallback : consumeRelayNonStreaming)
+        ? (relayStreamingEnabled ? consumeStream : consumeRelayNonStreaming)
         : consumeStream,
       {
         provider: config.provider,

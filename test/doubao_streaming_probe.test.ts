@@ -25,16 +25,19 @@ function acknowledgement(): Buffer {
 
 class FakeWebSocket extends EventEmitter {
   static OPEN = 1;
+  static latest: FakeWebSocket;
+  static autoAcknowledge = true;
   readyState = FakeWebSocket.OPEN;
 
   constructor(url: string, options: { headers?: Record<string, string> }) {
     super();
+    FakeWebSocket.latest = this;
     connections.push({ url, options });
     queueMicrotask(() => this.emit('open'));
   }
 
   send(): void {
-    queueMicrotask(() => this.emit('message', acknowledgement()));
+    if (FakeWebSocket.autoAcknowledge) queueMicrotask(() => this.emit('message', acknowledgement()));
   }
 
   close(): void {
@@ -48,12 +51,42 @@ vi.mock('ws', () => ({ WebSocket: FakeWebSocket }));
 describe('Doubao streaming ASR live-probe contract', () => {
   beforeEach(() => {
     connections.length = 0;
+    FakeWebSocket.autoAcknowledge = true;
     process.env.DOUBAO_SPEECH_KEY = 'uuid-api-key-value';
   });
 
   afterEach(() => {
     delete process.env.DOUBAO_SPEECH_KEY;
     vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('exposes the existing stream acknowledgement before allowing input', async () => {
+    FakeWebSocket.autoAcknowledge = false;
+    const { createStream } = await import('../server/stt/providers/ark_stream');
+    const session = createStream(); const socket = FakeWebSocket.latest;
+    const ready = vi.fn(); session.onReady!(ready);
+    await Promise.resolve(); expect(ready).not.toHaveBeenCalled();
+    socket.emit('message', acknowledgement()); expect(ready).toHaveBeenCalledOnce();
+    socket.emit('message', acknowledgement()); expect(ready).toHaveBeenCalledOnce();
+    const late = vi.fn(); session.onReady!(late); expect(late).toHaveBeenCalledOnce();
+    session.abort!();
+  });
+
+  it.each(['abort', 'finish', 'error', 'close'])('does not report stream readiness after %s', async reason => {
+    FakeWebSocket.autoAcknowledge = false;
+    const { createStream } = await import('../server/stt/providers/ark_stream');
+    const session = createStream(); const socket = FakeWebSocket.latest;
+    const ready = vi.fn(); const error = vi.fn(); session.onReady!(ready); session.onError(error);
+    await Promise.resolve();
+    if (reason === 'abort') session.abort!();
+    else if (reason === 'finish') session.end();
+    else if (reason === 'error') socket.emit('error', new Error('Unauthorized 401'));
+    else socket.emit('close', 1006, Buffer.alloc(0));
+    socket.emit('message', acknowledgement()); session.onReady!(ready);
+    expect(ready).not.toHaveBeenCalled();
+    if (reason === 'error' || reason === 'close') expect(error).toHaveBeenCalledOnce();
+    session.abort!();
   });
 
   it('waits for a provider acknowledgement and uses only new-console auth headers', async () => {

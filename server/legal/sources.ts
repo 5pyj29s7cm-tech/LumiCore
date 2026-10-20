@@ -921,19 +921,10 @@ export async function searchTenderSources(params: {
 
 // ── 全国法院被执行人信息 (zhixing.court.gov.cn) ───────────────────────
 
-export interface EnforcementRecord {
-  caseNumber: string;
-  court: string;
-  filingDate: string;
-  subjectName: string;
-  subjectType: string;
-  executionTarget: string;
-  status: string;
-  url: string;
-}
-
-export async function searchEnforcementRecords(_subjectName: string): Promise<EnforcementRecord[]> {
-  throw new Error(
+export async function searchEnforcementRecords(subjectName: string, options: { localOnly?: boolean } = {}): Promise<ExternalSourceReceipt> {
+  const receipt = await queryQichachaMcp(subjectName, 'enforcement', options.localOnly);
+  if (!receipt) throw new Error(
     'Enforcement records require an authorized webpage query and imported source evidence; no enforcement source has been obtained. An empty result cannot be inferred.',
   );
+  return receipt;
 }

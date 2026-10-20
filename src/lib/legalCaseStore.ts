@@ -1,3 +1,5 @@
+import { apiJson } from '../services/apiClient';
+import type { LegalWorkflowRun } from '../../shared/legal_workflow_receipts';
 import { getLocale } from '../i18n/runtime';
 import { chinaLegalCopy } from '../i18n/regions/cn/legal';
 
@@ -11,6 +13,9 @@ export interface LegalCaseMaterial {
   title: string;
   createdAt: string;
   content?: string;
+  fileName?: string;
+  localPath?: string;
+  createdBy?: string;
   source?: 'manual' | 'meeting' | 'notice' | 'tool' | 'import' | 'feishu';
 }
 
@@ -23,12 +28,19 @@ export interface LegalCaseFile {
   court: string;
   judge: string;
   stage: LegalCaseStage;
+  factDate?: string;
   hearingDate: string;
   judgmentDate: string;
   appealDeadline: string;
   enforcementDeadline: string;
   notes: string;
+  clientPartyName?: string;
+  clientRole?: string;
+  objective?: string;
+  workflowRuns?: LegalWorkflowRun[];
   materials: LegalCaseMaterial[];
+  removedMaterialIds?: string[];
+  assetTraceWorkflow?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -75,6 +87,14 @@ function scopedLegalStateKey(base: string): string {
   return scope.domain === 'work' ? `${key}:org:${encodeURIComponent(scope.orgId)}` : key;
 }
 
+const deletedPersonalCaseCache = new Map<string, Set<string>>();
+function personalDeletedCaseIds(): Set<string> {
+  const key = scopedLegalStateKey(LEGAL_CASES_STORAGE);
+  let removed = deletedPersonalCaseCache.get(key);
+  if (!removed) { removed = new Set(); deletedPersonalCaseCache.set(key, removed); }
+  return removed;
+}
+
 function newId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -86,10 +106,15 @@ export function createEmptyLegalCase(): LegalCaseFile {
     title: '',
     caseNumber: '',
     party: '',
+    clientPartyName: '',
+    clientRole: '',
+    objective: '',
+    removedMaterialIds: [],
     cause: '',
     court: '',
     judge: '',
     stage: 'consultation',
+    factDate: '',
     hearingDate: '',
     judgmentDate: '',
     appealDeadline: '',
@@ -103,6 +128,7 @@ export function createEmptyLegalCase(): LegalCaseFile {
 
 function normalizeCaseFile(value: any): LegalCaseFile | null {
   if (!value || typeof value !== 'object' || !value.id) return null;
+  const removedMaterialIds: string[] = Array.isArray(value.removedMaterialIds) ? [...new Set<string>(value.removedMaterialIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200))] : [];
   return {
     id: String(value.id),
     title: String(value.title || ''),
@@ -112,19 +138,29 @@ function normalizeCaseFile(value: any): LegalCaseFile | null {
     court: String(value.court || ''),
     judge: String(value.judge || ''),
     stage: (['consultation', 'filing', 'trial', 'judgment', 'enforcement', 'closed'].includes(value.stage) ? value.stage : 'consultation') as LegalCaseStage,
+    factDate: String(value.factDate || ''),
     hearingDate: String(value.hearingDate || ''),
     judgmentDate: String(value.judgmentDate || ''),
     appealDeadline: String(value.appealDeadline || ''),
     enforcementDeadline: String(value.enforcementDeadline || ''),
     notes: String(value.notes || ''),
+    ...(Object.hasOwn(value, 'clientPartyName') ? { clientPartyName: String(value.clientPartyName || '') } : {}),
+    clientRole: String(value.clientRole || ''),
+    objective: String(value.objective || ''),
+    workflowRuns: Array.isArray(value.workflowRuns) ? value.workflowRuns.filter((run: LegalWorkflowRun) => !run.materialIds.some(id => removedMaterialIds.includes(id))) : undefined,
+    removedMaterialIds,
     materials: Array.isArray(value.materials) ? value.materials.map((item: any) => ({
       id: String(item?.id || newId('mat')),
       type: (['consultation', 'evidence', 'pleading', 'judgment', 'contract', 'note'].includes(item?.type) ? item.type : 'note') as LegalCaseMaterialType,
       title: String(item?.title || chinaLegalCopy().material),
       createdAt: String(item?.createdAt || new Date().toISOString()),
       content: item?.content ? String(item.content) : undefined,
+      fileName: item?.fileName ? String(item.fileName) : undefined,
+      localPath: item?.localPath ? String(item.localPath) : undefined,
+      createdBy: item?.createdBy ? String(item.createdBy) : undefined,
       source: item?.source,
-    })) : [],
+    })).filter((item: LegalCaseMaterial) => !removedMaterialIds.includes(item.id)) : [],
+    assetTraceWorkflow: value.assetTraceWorkflow && typeof value.assetTraceWorkflow === 'object' ? value.assetTraceWorkflow : undefined,
     createdAt: String(value.createdAt || new Date().toISOString()),
     updatedAt: String(value.updatedAt || value.createdAt || new Date().toISOString()),
   };
@@ -136,7 +172,7 @@ export function readLegalCaseFiles(): LegalCaseFile[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(scopedLegalStateKey(LEGAL_CASES_STORAGE)) || '[]');
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeCaseFile).filter(Boolean) as LegalCaseFile[];
+    return parsed.map(normalizeCaseFile).filter((file): file is LegalCaseFile => file !== null && !personalDeletedCaseIds().has(file.id));
   } catch {
     return [];
   }
@@ -163,7 +199,7 @@ export function getLegalConsultationCaseId(): string {
 }
 
 export function setActiveLegalCaseId(caseId: string) {
-  if (!canUseStorage() || !legalAccountId) return;
+  if (!canUseStorage() || !legalAccountId || getActiveLegalCaseId() === caseId) return;
   writeLegalCaseChoice(ACTIVE_LEGAL_CASE_STORAGE, caseId);
   emitLegalCasesChanged();
 }
@@ -179,7 +215,7 @@ export function clearLegalConsultationCaseId() {
 export function writeLegalCaseFiles(cases: LegalCaseFile[], activeCaseId?: string) {
   if (!canUseStorage() || !legalAccountId) throw new Error('Sign in before saving personal cases');
   if (currentLegalStorageScope().domain === 'work') return;
-  localStorage.setItem(scopedLegalStateKey(LEGAL_CASES_STORAGE), JSON.stringify(cases));
+  localStorage.setItem(scopedLegalStateKey(LEGAL_CASES_STORAGE), JSON.stringify(cases.filter(item => !personalDeletedCaseIds().has(item.id))));
   if (typeof activeCaseId === 'string') writeLegalCaseChoice(ACTIVE_LEGAL_CASE_STORAGE, activeCaseId);
   emitLegalCasesChanged();
 }
@@ -243,6 +279,90 @@ export function addLegalCaseMaterial(
 export function getLegalCaseLabel(caseFile: LegalCaseFile | null): string {
   if (!caseFile) return '';
   return caseFile.title || caseFile.party || caseFile.caseNumber || chinaLegalCopy().unnamedCase;
+}
+
+export function mergePersonalLegalCaseRuntimeSnapshot(snapshot: unknown): LegalCaseFile | null {
+  if (!legalAccountId || currentLegalStorageScope().domain !== 'personal') return null;
+  const incoming = normalizeCaseFile(snapshot);
+  if (!incoming || personalDeletedCaseIds().has(incoming.id)) return null;
+  const cases = readLegalCaseFiles();
+  const current = cases.find(item => item.id === incoming.id) || null;
+  if (!current) {
+    writeLegalCaseFiles([incoming, ...cases]);
+    return incoming;
+  }
+
+  const runtimeIsNewer = incoming.updatedAt >= current.updatedAt;
+  const removedMaterialIds = [...new Set([...(current.removedMaterialIds || []), ...(incoming.removedMaterialIds || [])])];
+  const currentById = new Map(current.materials.map(material => [material.id, material]));
+  const runtimeById = new Map(incoming.materials.map(material => [material.id, material]));
+  const mergedMaterials = [
+    ...incoming.materials.map(material => {
+      const existing = currentById.get(material.id);
+      if (!existing) return material;
+      if (!runtimeIsNewer && existing.source !== 'tool') return existing;
+      return {
+        ...existing,
+        ...material,
+        fileName: material.fileName || existing.fileName,
+        localPath: material.localPath || existing.localPath,
+      };
+    }),
+    ...current.materials.filter(material => !runtimeById.has(material.id)),
+  ].filter(material => !removedMaterialIds.includes(material.id));
+  // A reply from another case must not switch the user's current selection.
+  // Preserve edits made locally after this runtime snapshot was produced.
+  const merged = { ...current, ...(runtimeIsNewer ? incoming : {}),
+    factDate: runtimeIsNewer && Object.hasOwn(snapshot as object, 'factDate') ? incoming.factDate : current.factDate,
+    materials: mergedMaterials, removedMaterialIds,
+    workflowRuns: (runtimeIsNewer ? incoming.workflowRuns : current.workflowRuns)?.filter(run => !run.materialIds.some(id => removedMaterialIds.includes(id))) };
+  if (JSON.stringify(merged) === JSON.stringify(current)) return current;
+  writeLegalCaseFiles(cases.map(item => item.id === current.id ? merged : item));
+  return merged;
+}
+
+function capturePersonalCaseOwner(signal?: AbortSignal): () => void {
+  const account = legalAccountId, key = scopedLegalStateKey(LEGAL_CASES_STORAGE);
+  return () => {
+    signal?.throwIfAborted();
+    if (!account || account !== legalAccountId || currentLegalStorageScope().domain !== 'personal'
+      || key !== scopedLegalStateKey(LEGAL_CASES_STORAGE)) throw new DOMException('Case account changed', 'AbortError');
+  };
+}
+
+export async function refreshPersonalLegalCasesFromRuntime(signal?: AbortSignal): Promise<LegalCaseFile[]> {
+  const assertCurrent = capturePersonalCaseOwner(signal); assertCurrent();
+  const data = await apiJson('/api/legal/client-case-sync', { signal });
+  assertCurrent();
+  if (!Array.isArray(data?.cases) || !Array.isArray(data?.removedCaseIds)) throw new Error('Invalid personal case snapshot');
+  const removed = personalDeletedCaseIds();
+  for (const id of data.removedCaseIds) if (typeof id === 'string' && id.length > 0 && id.length <= 200) removed.add(id);
+  const current = readLegalCaseFiles();
+  const stored = JSON.parse(localStorage.getItem(scopedLegalStateKey(LEGAL_CASES_STORAGE)) || '[]');
+  if (Array.isArray(stored) && stored.some((item: any) => removed.has(String(item?.id || '')))) writeLegalCaseFiles(current);
+  for (const snapshot of data.cases) mergePersonalLegalCaseRuntimeSnapshot(snapshot);
+  return readLegalCaseFiles();
+}
+
+export async function syncPersonalLegalCaseToRuntime(caseFile: LegalCaseFile, signal?: AbortSignal): Promise<void> {
+  const assertCurrent = capturePersonalCaseOwner(signal); assertCurrent();
+  if (personalDeletedCaseIds().has(caseFile.id)) return;
+  const data = await apiJson('/api/legal/client-case-sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+    body: JSON.stringify({ case: caseFile, activate: getActiveLegalCaseId() === caseFile.id }),
+  });
+  assertCurrent();
+  if (data?.case?.id !== caseFile.id) throw new Error('Invalid personal case synchronization receipt');
+  mergePersonalLegalCaseRuntimeSnapshot(data.case);
+}
+
+export async function deletePersonalLegalCaseFromRuntime(caseId: string, signal?: AbortSignal): Promise<void> {
+  const assertCurrent = capturePersonalCaseOwner(signal); assertCurrent();
+  if (!caseId) return;
+  const data = await apiJson('/api/legal/client-case-sync/' + encodeURIComponent(caseId), { method: 'DELETE', signal });
+  assertCurrent();
+  if (data?.caseId !== caseId || data?.tombstoned !== true) throw new Error('Invalid personal case deletion receipt');
+  personalDeletedCaseIds().add(caseId);
+  writeLegalCaseFiles(readLegalCaseFiles());
 }
 
 export function getLegalConsultationCase(): LegalCaseFile | null {

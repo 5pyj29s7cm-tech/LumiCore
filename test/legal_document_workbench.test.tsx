@@ -13,12 +13,21 @@ const fixture = vi.hoisted(() => ({ net: vi.fn(), user: 'owner', domain: 'work',
 vi.mock('../src/contexts/AppContext', () => ({ useApp: () => ({ user: { uid: fixture.user }, workDomain: fixture.domain, orgConnection: { orgId: fixture.org, connected: fixture.connected, orgRole: 'owner' } }) }));
 vi.mock('../src/lib/useT', () => ({ useT: () => ({ langCode: fixture.language, legalCaseStrategy: 'strategy', legalCaseStrategyAnalyze: 'analyze-strategy', legalCaseStrategyPlaceholder: 'strategy-facts', legalCaseStrategyTitle: 'Strategy', legalCaseStrategyDesc: 'Description', legalVerifyCitation: 'citations', legalVerifyCitationVerify: 'verify-citations', legalVerifyCitationPlaceholder: 'citation-text', legalVerifyCitationTitle: 'Citation verification', legalImportJudgment: 'import-judgment', legalImportJudgmentTitle: 'Import judgment' }) }));
 vi.mock('../src/i18n/uiMessages', () => ({ uiMessage: (key: string) => key.split('.')[1], formatUiMessage: (key: string, values: any) => key.split('.')[1] + ' ' + Object.values(values).join(' ') }));
-vi.mock('../src/services/apiClient', async () => ({ apiJson: (await import('./source_expression')).extractSourceExpression('src/services/apiClient.ts', 'apiJson', { apiFetch: fixture.net }) }));
+vi.mock('../src/services/apiClient', async () => {
+  const request = (await import('./source_expression')).extractSourceExpression('src/services/apiClient.ts', 'apiJson', { apiFetch: fixture.net });
+  return { apiJson: async (url: string, init?: RequestInit) => {
+    if (url === '/api/legal/client-case-sync') {
+      if (init?.method === 'POST') return { case: JSON.parse(String(init.body)).case };
+      return { cases: (await import('../src/lib/legalCaseStore')).readLegalCaseFiles(), removedCaseIds: [] };
+    }
+    return request(url, init);
+  } };
+});
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 const reply = (body: any, status = 200) => ({ ok: status < 400, status, json: async () => body });
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
 const caseFile = (id = 'a', title = id) => ({ id, title, cause: 'contract', court: 'court', stage: 'trial', materials: [] } as any);
-beforeEach(() => { localStorage.clear(); setLegalCaseAccount('owner'); fixture.connected = true; fixture.user = 'owner'; fixture.domain = 'work'; fixture.org = 'org-a'; fixture.language = 'en'; fixture.net.mockResolvedValue(reply({ text: 'Completed document' })); vi.stubGlobal('fetch', fixture.net); });
+beforeEach(() => { localStorage.clear(); setLegalCaseAccount('owner'); fixture.connected = true; fixture.user = 'owner'; fixture.domain = 'work'; fixture.org = 'org-a'; fixture.language = 'en'; fixture.net.mockResolvedValue(reply({ text: 'Completed document', receipt: { ok: true, status: 'observed' }, verification: { status: 'verified' } })); vi.stubGlobal('fetch', fixture.net); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 
 describe.each(['bid', 'contract'])('%s document workbench', kind => {
@@ -101,9 +110,9 @@ it('uses only the latest organization refresh, preserves edits from older reads,
 
 it('shares personal list and active-case synchronization across local and storage events', () => {
   fixture.domain = 'personal'; writeLegalCaseFiles([hubCase('Personal A'), hubCase('Personal B')], 'missing'); const view = render(hubPage());
-  expect(screen.getByRole('heading', { name: 'Personal A' })).toBeTruthy(); expect(localStorage.getItem(`${ACTIVE_LEGAL_CASE_STORAGE}:user:owner`)).toBe('Personal A');
+  expect(screen.getByRole('heading', { name: 'Personal A' })).toBeTruthy(); expect(localStorage.getItem(`${ACTIVE_LEGAL_CASE_STORAGE}:user:owner`)).toBe('missing');
   act(() => writeLegalCaseFiles([hubCase('Personal B')], 'Personal B')); expect(screen.getByRole('heading', { name: 'Personal B' })).toBeTruthy();
-  localStorage.setItem('lumi_legal_cases_v1:user:owner', '[]'); act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'lumi_legal_cases_v1:user:owner' }))); expect(screen.queryByRole('heading', { name: 'Personal B' })).toBeNull(); expect(getActiveLegalCaseId()).toBe('');
+  localStorage.setItem('lumi_legal_cases_v1:user:owner', '[]'); act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'lumi_legal_cases_v1:user:owner' }))); expect(screen.queryByRole('heading', { name: 'Personal B' })).toBeNull(); expect(getActiveLegalCaseId()).toBe('Personal B');
   act(() => window.dispatchEvent(new Event(LEGAL_CASES_CHANGED_EVENT))); expect(fixture.net).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'new-case' })); fireEvent.change(screen.getByPlaceholderText('example-alpha-v-beta-sales'), { target: { value: 'Personal draft' } });
   fixture.connected = false; view.rerender(hubPage()); expect(screen.getByDisplayValue('Personal draft')).toBeTruthy();
@@ -194,9 +203,9 @@ describe.each(['search', 'trace'])('%s research ownership and archive', kind => 
   const archive = () => fireEvent.click(screen.getByRole('button', { name: 'archive-to-case' }));
   it('locks duplicate searches, rejects failed reports and retries with the original request scope', async () => {
     render(page()); fireEvent.change(text(), { target: { value: 'Research subject' } }); const pending = deferred(); fixture.net.mockReturnValueOnce(pending.promise); act(() => { start(); start(); }); expect(fixture.net).toHaveBeenCalledTimes(1);
-    const args = JSON.parse(fixture.net.mock.calls[0][1].body).args; expect(args).toMatchObject({ caseId: 'Case A', persistCase: true, [kind === 'search' ? 'query' : 'name']: 'Research subject' }); if (kind === 'search') expect(args.orgId).toBe('org-a');
+    const args = JSON.parse(fixture.net.mock.calls[0][1].body).args; expect(args).toMatchObject({ caseId: 'Case A', persistCase: kind === 'search', [kind === 'search' ? 'query' : 'name']: 'Research subject' }); if (kind === 'search') expect(args.orgId).toBe('org-a');
     await act(async () => pending.resolve(reply({ error: 'research denied' }, 403))); expect(screen.queryByText('result-ready')).toBeNull(); expect(screen.queryByRole('button', { name: 'archive-to-case' })).toBeNull(); expect(fixture.net).toHaveBeenCalledTimes(1);
-    start(); await screen.findByText('result-ready'); expect(fixture.net.mock.calls.filter(([url]) => String(url).includes('legal_equity_penetration'))).toHaveLength(kind === 'trace' ? 1 : 0);
+    start(); await screen.findByText('result-ready'); expect(fixture.net.mock.calls.filter(([url]) => String(url).includes('legal_equity_penetration'))).toHaveLength(0);
   });
   it.each(['case', 'organization', 'account', 'close'])('drops old reports and stops remaining tools on %s changes', async change => {
     const pending = deferred(); fixture.net.mockReturnValueOnce(pending.promise); const view = render(page()); fireEvent.change(text(), { target: { value: 'Private draft' } }); start(); const signal = fixture.net.mock.calls[0][1].signal;

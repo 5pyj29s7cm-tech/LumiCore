@@ -1,3 +1,4 @@
+import { hasVerifiedCompanyLookupEvidence } from './result_policy_evidence';
 import { toolRecordSucceeded } from '../tools/receipt_payload';
 export { toolRecordSucceeded } from '../tools/receipt_payload';
 import crypto from 'node:crypto';
@@ -578,7 +579,8 @@ export function taskCompletionFromReceipts(
 ): { complete: boolean; blocker: string; records: ToolExecutionRecord[] } {
   const records = coalesceToolExecutionRecords(taskReceiptsToRecords(receipts));
   const contract = buildActionEvidenceContract(goal);
-  const complete = contract.applies && hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn);
+  const complete = contract.applies ? hasCoreActionEvidence(contract, records, goal, taskCapsule, currentTurn)
+    : hasVerifiedCompanyLookupEvidence(records, { ...currentTurn, taskText: goal }, true);
   const failures = [...records].reverse().filter(record => !toolRecordSucceeded(record));
   // A later policy/routing rejection is useful diagnostic evidence, but it
   // must not replace the domain failure that actually stopped the task. Keep
